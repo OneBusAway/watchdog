@@ -61,3 +61,15 @@ var (
 		Help: "Whether the number of vehicles in the API response matches the number of vehicles in the static GTFS-RT file (1 = match, 0 = no match)",
 	}, []string{"agency_id", "server_id"})
 )
+
+var (
+	InvalidVehiclePositions = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "invalid_vehicle_positions_count_gtfs_rt",
+		Help: "Number of invalid vehicle positions (invalid lat/lon) in the GTFS-RT feed",
+	}, []string{"gtfs_rt_url", "server_id"})
+
+	ValidVehiclePositionsPercent = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "valid_vehicle_positions_percent_gtfs_rt",
+		Help: "Percentage of valid vehicle positions in the GTFS-RT feed",
+	}, []string{"gtfs_rt_url", "server_id"})
+)
