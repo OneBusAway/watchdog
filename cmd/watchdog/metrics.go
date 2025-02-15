@@ -43,6 +43,11 @@ func (app *application) startMetricsCollection() {
 					if err != nil {
 						app.logger.Error("Failed to check vehicle count match metric", "error", err)
 					}
+
+					_, _, err = metrics.CheckArrivalsAccuracy(server)
+					if err != nil {
+						app.logger.Error("Failed to check arrivals accuracy metric", "error", err)
+					}
 				}
 			}
 		}
