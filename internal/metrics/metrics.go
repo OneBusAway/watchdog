@@ -67,4 +67,9 @@ var (
 		Name: "schedule_trip_route",
 		Help: "Gives the number of scheduled trips for the given route",
 	}, []string{"server_id", "route_id"})
+
+	ScheduleTripForRouteMatch = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "schedule_trip_route_match",
+		Help: "Whether the number of scheduled trips for the given route matches the number of scheduled routes in static GTFS-RT file (1 = match, 0 = no match)",
+	}, []string{"server_id", "route_id"})
 )
