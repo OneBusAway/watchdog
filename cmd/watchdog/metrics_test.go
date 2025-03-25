@@ -405,4 +405,54 @@ func TestScheduleTripForRoute(t *testing.T) {
 			t.Errorf("Expected ScheduleTripForRoute metric to be 3, got %v", scheduledTripForRoute)
 		}
 	})
+
+	t.Run("Error", func(t *testing.T) {
+		ts := setupObaServer(t, `{
+            "code": 200,
+            "currentTime": 1234567890000,
+            "text": "OK",
+            "version": 2,
+            "data": {
+                "entry": {
+                    "routeId": "100",
+                    "trips": [
+                        {"id": "trip1"},
+                        {"id": "trip2"},
+                        {"id": "trip3"}
+                    ]
+                }
+            }
+        }`, http.StatusInternalServerError)
+		defer ts.Close()
+
+		server := createTestServer(ts.URL, "Test Server", 999, "test-key", "", "", "", "")
+
+		_, err := metrics.GetScheduledTripRoute(server, "100")
+
+		if err == nil {
+			t.Fatal("Expected an error but got nil")
+		}
+	})
+
+	t.Run("nil Response", func(t *testing.T) {
+		ts := setupObaServer(t, `{
+            "code": 200,
+            "currentTime": 1234567890000,
+            "text": "OK",
+            "version": 2,
+            "data": {}
+        }`, http.StatusOK)
+		defer ts.Close()
+
+		server := createTestServer(ts.URL, "Test Server", 999, "test-key", "", "", "", "")
+
+		count, err := metrics.GetScheduledTripRoute(server, "100")
+		if err != nil {
+			t.Fatalf("Expected no error, got %v", err)
+		}
+
+		if count != 0 {
+			t.Fatalf("Expected count to be 0, got %d", count)
+		}
+	})
 }
