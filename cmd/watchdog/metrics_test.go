@@ -232,127 +232,227 @@ func TestCheckVehicleCountMatch(t *testing.T) {
 
 // OBASdk tests
 func TestGetAgenciesWithCoverage(t *testing.T) {
-    t.Run("NilResponse", func(t *testing.T) {
-        ts := setupObaServer(t, `{}`, http.StatusOK)
-        defer ts.Close()
+	t.Run("NilResponse", func(t *testing.T) {
+		ts := setupObaServer(t, `{}`, http.StatusOK)
+		defer ts.Close()
 
-        server := models.ObaServer{
-            Name:       "Test Server",
-            ID:         999,
-            ObaBaseURL: ts.URL,
-            ObaApiKey:  "test-key",
-        }
+		server := models.ObaServer{
+			Name:       "Test Server",
+			ID:         999,
+			ObaBaseURL: ts.URL,
+			ObaApiKey:  "test-key",
+		}
 
-        count, err := metrics.GetAgenciesWithCoverage(server)
-        if err != nil {
-            t.Fatalf("Expected no error, got %v", err)
-        }
+		count, err := metrics.GetAgenciesWithCoverage(server)
+		if err != nil {
+			t.Fatalf("Expected no error, got %v", err)
+		}
 
-        if count != 0 {
-            t.Fatalf("Expected count to be 0, got %d", count)
-        }
-    })
+		if count != 0 {
+			t.Fatalf("Expected count to be 0, got %d", count)
+		}
+	})
 
-    t.Run("SuccessfulResponse", func(t *testing.T) {
-        ts := setupObaServer(t, `{"data": {"list": [{"agencyId": "1"}, {"agencyId": "2"}]}}`, http.StatusOK)
-        defer ts.Close()
+	t.Run("SuccessfulResponse", func(t *testing.T) {
+		ts := setupObaServer(t, `{"data": {"list": [{"agencyId": "1"}, {"agencyId": "2"}]}}`, http.StatusOK)
+		defer ts.Close()
 
-        server := models.ObaServer{
-            Name:       "Test Server",
-            ID:         999,
-            ObaBaseURL: ts.URL,
-            ObaApiKey:  "test-key",
-        }
+		server := models.ObaServer{
+			Name:       "Test Server",
+			ID:         999,
+			ObaBaseURL: ts.URL,
+			ObaApiKey:  "test-key",
+		}
 
-        count, err := metrics.GetAgenciesWithCoverage(server)
-        if err != nil {
-            t.Fatalf("Expected no error, got %v", err)
-        }
+		count, err := metrics.GetAgenciesWithCoverage(server)
+		if err != nil {
+			t.Fatalf("Expected no error, got %v", err)
+		}
 
-        if count != 2 {
-            t.Fatalf("Expected count to be 2, got %d", count)
-        }
-    })
+		if count != 2 {
+			t.Fatalf("Expected count to be 2, got %d", count)
+		}
+	})
 
-    t.Run("ErrorResponse", func(t *testing.T) {
-        ts := setupObaServer(t, `{"error": "Internal Server Error"}`, http.StatusInternalServerError)
-        defer ts.Close()
+	t.Run("ErrorResponse", func(t *testing.T) {
+		ts := setupObaServer(t, `{"error": "Internal Server Error"}`, http.StatusInternalServerError)
+		defer ts.Close()
 
-        server := models.ObaServer{
-            Name:       "Test Server",
-            ID:         999,
-            ObaBaseURL: ts.URL,
-            ObaApiKey:  "test-key",
-        }
+		server := models.ObaServer{
+			Name:       "Test Server",
+			ID:         999,
+			ObaBaseURL: ts.URL,
+			ObaApiKey:  "test-key",
+		}
 
-        _, err := metrics.GetAgenciesWithCoverage(server)
-        if err == nil {
-            t.Fatal("Expected an error but got nil")
-        }
-    })
+		_, err := metrics.GetAgenciesWithCoverage(server)
+		if err == nil {
+			t.Fatal("Expected an error but got nil")
+		}
+	})
 }
 
-
 func TestVehiclesForAgencyAPI(t *testing.T) {
-    t.Run("NilResponse", func(t *testing.T) {
-        ts := setupObaServer(t, `{"data": {"list": []}}`, http.StatusOK)
-        defer ts.Close()
+	t.Run("NilResponse", func(t *testing.T) {
+		ts := setupObaServer(t, `{"data": {"list": []}}`, http.StatusOK)
+		defer ts.Close()
 
-        server := models.ObaServer{
-            Name:       "Test Server",
-            ID:         999,
-            ObaBaseURL: ts.URL,
-            ObaApiKey:  "test-key",
-            AgencyID:   "test-agency",
-        }
+		server := models.ObaServer{
+			Name:       "Test Server",
+			ID:         999,
+			ObaBaseURL: ts.URL,
+			ObaApiKey:  "test-key",
+			AgencyID:   "test-agency",
+		}
 
-        count, err := metrics.VehiclesForAgencyAPI(server)
-        if err != nil {
-            t.Fatalf("Expected no error, got %v", err)
-        }
+		count, err := metrics.VehiclesForAgencyAPI(server)
+		if err != nil {
+			t.Fatalf("Expected no error, got %v", err)
+		}
 
-        if count != 0 {
-            t.Fatalf("Expected count to be 0, got %d", count)
-        }
-    })
+		if count != 0 {
+			t.Fatalf("Expected count to be 0, got %d", count)
+		}
+	})
 
-    t.Run("SuccessfulResponse", func(t *testing.T) {
-        ts := setupObaServer(t, `{"data": {"list": [{"vehicleId": "1"}, {"vehicleId": "2"}]}}`, http.StatusOK)
-        defer ts.Close()
+	t.Run("SuccessfulResponse", func(t *testing.T) {
+		ts := setupObaServer(t, `{"data": {"list": [{"vehicleId": "1"}, {"vehicleId": "2"}]}}`, http.StatusOK)
+		defer ts.Close()
 
-        server := models.ObaServer{
-            Name:       "Test Server",
-            ID:         999,
-            ObaBaseURL: ts.URL,
-            ObaApiKey:  "test-key",
-            AgencyID:   "test-agency",
-        }
+		server := models.ObaServer{
+			Name:       "Test Server",
+			ID:         999,
+			ObaBaseURL: ts.URL,
+			ObaApiKey:  "test-key",
+			AgencyID:   "test-agency",
+		}
 
-        count, err := metrics.VehiclesForAgencyAPI(server)
-        if err != nil {
-            t.Fatalf("Expected no error, got %v", err)
-        }
+		count, err := metrics.VehiclesForAgencyAPI(server)
+		if err != nil {
+			t.Fatalf("Expected no error, got %v", err)
+		}
 
-        if count != 2 {
-            t.Fatalf("Expected count to be 2, got %d", count)
-        }
-    })
+		if count != 2 {
+			t.Fatalf("Expected count to be 2, got %d", count)
+		}
+	})
 
-    t.Run("ErrorResponse", func(t *testing.T) {
-        ts := setupObaServer(t, `{"error": "Internal Server Error"}`, http.StatusInternalServerError)
-        defer ts.Close()
+	t.Run("ErrorResponse", func(t *testing.T) {
+		ts := setupObaServer(t, `{"error": "Internal Server Error"}`, http.StatusInternalServerError)
+		defer ts.Close()
 
-        server := models.ObaServer{
-            Name:       "Test Server",
-            ID:         999,
-            ObaBaseURL: ts.URL,
-            ObaApiKey:  "test-key",
-            AgencyID:   "test-agency",
-        }
+		server := models.ObaServer{
+			Name:       "Test Server",
+			ID:         999,
+			ObaBaseURL: ts.URL,
+			ObaApiKey:  "test-key",
+			AgencyID:   "test-agency",
+		}
 
-        _, err := metrics.VehiclesForAgencyAPI(server)
-        if err == nil {
-            t.Fatal("Expected an error but got nil")
-        }
-    })
+		_, err := metrics.VehiclesForAgencyAPI(server)
+		if err == nil {
+			t.Fatal("Expected an error but got nil")
+		}
+	})
+}
+
+func TestScheduleTripForRoute(t *testing.T) {
+	t.Run("Success", func(t *testing.T) {
+
+		ts := setupObaServer(t, `{
+            "code": 200,
+            "currentTime": 1234567890000,
+            "text": "OK",
+            "version": 2,
+            "data": {
+                "entry": {
+                    "routeId": "100",
+                    "trips": [
+                        {"id": "trip1"},
+                        {"id": "trip2"},
+                        {"id": "trip3"}
+                    ]
+                }
+            }
+        }`, http.StatusOK)
+		defer ts.Close()
+
+		// Create server with mock URL
+		server := createTestServer(ts.URL, "Test Server", 999, "test-key", "", "", "", "")
+
+		// Call the function that updates the metric
+		count, err := metrics.GetScheduledTripRoute(server, "100")
+		if err != nil {
+			t.Errorf("GetScheduledTripRoute failed: %v", err)
+		}
+
+		// Check the returned count
+		if count != 3 {
+			t.Errorf("Expected trip count to be 3, got %v", count)
+		}
+
+		// Check the metric value
+		labels := map[string]string{
+			"server_id": "999",
+			"route_id":  "100",
+		}
+		scheduledTripForRoute, err := getMetricValue(metrics.ScheduleTripForRoute, labels)
+		if err != nil {
+			t.Errorf("Failed to get ScheduleTripForRoute metric value: %v", err)
+		}
+
+		if scheduledTripForRoute != 3 {
+			t.Errorf("Expected ScheduleTripForRoute metric to be 3, got %v", scheduledTripForRoute)
+		}
+	})
+
+	t.Run("Error", func(t *testing.T) {
+		ts := setupObaServer(t, `{
+            "code": 200,
+            "currentTime": 1234567890000,
+            "text": "OK",
+            "version": 2,
+            "data": {
+                "entry": {
+                    "routeId": "100",
+                    "trips": [
+                        {"id": "trip1"},
+                        {"id": "trip2"},
+                        {"id": "trip3"}
+                    ]
+                }
+            }
+        }`, http.StatusInternalServerError)
+		defer ts.Close()
+
+		server := createTestServer(ts.URL, "Test Server", 999, "test-key", "", "", "", "")
+
+		_, err := metrics.GetScheduledTripRoute(server, "100")
+
+		if err == nil {
+			t.Fatal("Expected an error but got nil")
+		}
+	})
+
+	t.Run("nil Response", func(t *testing.T) {
+		ts := setupObaServer(t, `{
+            "code": 200,
+            "currentTime": 1234567890000,
+            "text": "OK",
+            "version": 2,
+            "data": {}
+        }`, http.StatusOK)
+		defer ts.Close()
+
+		server := createTestServer(ts.URL, "Test Server", 999, "test-key", "", "", "", "")
+
+		count, err := metrics.GetScheduledTripRoute(server, "100")
+		if err != nil {
+			t.Fatalf("Expected no error, got %v", err)
+		}
+
+		if count != 0 {
+			t.Fatalf("Expected count to be 0, got %d", count)
+		}
+	})
 }
