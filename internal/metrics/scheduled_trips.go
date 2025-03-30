@@ -25,7 +25,7 @@ func GetScheduledTripRoute(server models.ObaServer, routeID string) (int, error)
 		return 0, err
 	}
 
-	if response == nil {
+	if response == nil || response.Data.Entry.Trips == nil {
 		return 0, nil
 	}
 
