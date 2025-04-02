@@ -249,9 +249,9 @@ graph TD
 graph TD
     A[Start: After Fetching Vehicle Counts] --> B{Get `realtime_vehicle_positions_count_gtfs_rt`};
     B --> C{Get `vehicle_count_api`};
-    C --> D{Compare Counts (with potential tolerance/logic)};
-    D -- Match --> E(Set `vehicle_count_match` Gauge to 1);
-    D -- No Match --> F(Set `vehicle_count_match` Gauge to 0);
+    C --> D{Compare Counts with potential tolerance/logic};
+    D -- Match --> E[Set `vehicle_count_match` Gauge to 1];
+    D -- No Match --> F[Set `vehicle_count_match` Gauge to 0];
     E --> G[End];
     F --> G;
 ```
