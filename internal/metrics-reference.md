@@ -78,8 +78,7 @@ These metrics ensure consistent representation of transit agencies across data s
     * Monitors the completeness of static GTFS data. Unexpected changes can indicate missing agencies in updates, GTFS parsing issues, or incomplete feeds.
     * Example: If a region normally has 5 agencies and this metric drops to 4, it signals an immediate need to investigate which agency is missing.
 
-```
-mermaid
+```mermaid
 graph TD
     A[Start: Periodic Check] --> B{Fetch GTFS Data};
     B --> C{Count Unique Agencies};
@@ -100,8 +99,7 @@ graph TD
     * Discrepancies compared to `oba_agencies_in_static_gtfs` can point to API configuration errors, data synchronization problems, or incomplete server deployments.
     * Helps confirm successful addition or removal of agencies during system updates.
 
-```
-mermaid
+```mermaid
 graph TD
     A[Start: Periodic Check] --> B{Call API `/agencies-with-coverage`};
     B --> C{Parse Response & Count Agencies};
@@ -123,8 +121,7 @@ graph TD
     * Directly flags inconsistencies between static data and the API, which could lead to missing transit options in apps or user confusion.
     * Essential for ensuring data integrity across the transit information ecosystem.
 
-```
-mermaid
+```mermaid
 graph TD
     A[Start: After Fetching Agency Counts] --> B{Get `oba_agencies_in_static_gtfs`};
     B --> C{Get `oba_agencies_in_coverage_endpoint`};
@@ -153,8 +150,7 @@ These metrics monitor the validity period of transit schedule data. Implemented 
     * Crucial for preventing service disruptions due to expired schedules. Riders might see outdated info, or trip planning might fail.
     * Acts as an early warning system. Agencies often need 2-4 weeks lead time for schedule updates, so low values trigger the update process.
 
-```
-mermaid
+```mermaid
 graph TD
     A[Start: Periodic Check] --> B{Fetch GTFS Bundle Data};
     B --> C{Extract All Service End Dates};
@@ -176,8 +172,7 @@ graph TD
     * Provides a complete picture of schedule validity, especially when different agencies or routes have varying update cycles.
     * Useful for long-term data planning and identifying schedules with unusually long or short validity periods.
 
-```
-mermaid
+```mermaid
 graph TD
     A[Start: Periodic Check] --> B{Fetch GTFS Bundle Data};
     B --> C{Extract All Service End Dates};
@@ -206,8 +201,7 @@ These metrics verify the flow and consistency of real-time vehicle location data
     * Monitors the health of the real-time data feed. Significant drops can indicate vehicle hardware failures (GPS/transmitters), feed processing issues, or network problems.
     * Provides operators insight into the operational status of their real-time tracking systems.
 
-```
-mermaid
+```mermaid
 graph TD
     A[Start: Periodic Check] --> B{Fetch GTFS-RT Feed};
     B --> C{Count Number of Vehicle Positions};
@@ -228,8 +222,7 @@ graph TD
     * Monitors the availability of vehicle data through the primary API interface used by apps.
     * Allows comparison against the raw GTFS-RT feed count to check API processing. Differences can indicate API errors, filtering issues, or sync delays.
 
-```
-mermaid
+```mermaid
 graph TD
     A[Start: Periodic Check] --> B{Call OBA API for Vehicle Count};
     B --> C{Parse Response & Get Vehicle Count};
@@ -252,8 +245,7 @@ graph TD
     * Ensures consistency between the raw real-time feed and the API output.
     * Inconsistent counts can lead to riders seeing different vehicle locations or availability depending on the app they use.
 
-```
-mermaid
+```mermaid
 graph TD
     A[Start: After Fetching Vehicle Counts] --> B{Get `realtime_vehicle_positions_count_gtfs_rt`};
     B --> C{Get `vehicle_count_api`};
@@ -285,8 +277,7 @@ This category monitors the basic availability of the OBA system. Implemented in:
     * Fundamental check for API availability. If this metric is 0, most other data checks are likely to fail.
     * Often the first metric checked when troubleshooting system-wide outages affecting trip planners or real-time apps.
 
-```
-mermaid
+```mermaid
 graph TD
     A[Start: Periodic Check] --> B{Ping OBA API Server};
     B -- Success --> C(Set `oba_api_status` Gauge to 1);
