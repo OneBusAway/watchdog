@@ -1,0 +1,15 @@
+version: "3.8"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      CONFIG_AUTH_USER: admin
+      CONFIG_AUTH_PASS: password
+      CONFIG_URL: "https://example.com/config.json"
+    ports:
+      - "4000:4000" # Maps port 4000 in the container to 4000 on the host
+    command: ["/bin/server", "--config-url", "http://example.com/config.json"]
+
