@@ -61,3 +61,51 @@ var (
 		Help: "Whether the number of vehicles in the API response matches the number of vehicles in the static GTFS-RT file (1 = match, 0 = no match)",
 	}, []string{"agency_id", "server_id"})
 )
+
+var (
+	ScheduleRouteForStop = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "schedule_route_stop",
+		Help: "Gives the number of scheduled routes for the given stop",
+	}, []string{"server_id", "stop_id"})
+)
+
+var (
+	PredictArrivalRate = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "predict_arrival_ratio",
+			Help: "Ratio of predicted to total arrivals",
+		},
+		[]string{"agency_id", "stop_id"},
+	)
+
+	PerfectPredictionRate = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "perfect_prediction_rate",
+			Help: "Percentage of perfect predictions",
+		},
+		[]string{"agency_id", "stop_id"},
+	)
+
+	AlertLowDataAvailability = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "alert_low_data_availability",
+			Help: "1 if real-time data availability < 50%",
+		},
+		[]string{"agency_id", "stop_id"},
+	)
+
+	AlertPoorPredictionAccuracy = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "alert_poor_prediction_accuracy",
+			Help: "1 if perfect prediction accuracy < 10%",
+		},
+		[]string{"agency_id", "stop_id"},
+	)
+)
+
+func init() {
+	prometheus.MustRegister(PredictArrivalRate)
+	prometheus.MustRegister(PerfectPredictionRate)
+	prometheus.MustRegister(AlertLowDataAvailability)
+	prometheus.MustRegister(AlertPoorPredictionAccuracy)
+}
