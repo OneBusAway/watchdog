@@ -2,9 +2,11 @@ package metrics
 
 import (
 	"context"
+	"strconv"
+
 	onebusaway "github.com/OneBusAway/go-sdk"
 	"github.com/OneBusAway/go-sdk/option"
-	"strconv"
+	"github.com/getsentry/sentry-go"
 	"watchdog.onebusaway.org/internal/models"
 )
 
@@ -18,6 +20,7 @@ func ServerPing(server models.ObaServer) {
 	response, err := client.CurrentTime.Get(ctx)
 
 	if err != nil {
+		sentry.CaptureException(err)
 		// Update status metric
 		ObaApiStatus.WithLabelValues(
 			strconv.Itoa(server.ID),

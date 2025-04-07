@@ -28,3 +28,8 @@ go.work.sum
 
 # cache files
 /cache/*
+
+profile.cov
+
+# ignore the binary
+watchdog
