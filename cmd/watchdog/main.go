@@ -29,6 +29,7 @@ const version = "1.0.0"
 // Define an application struct to hold the dependencies for our HTTP handlers, helpers,
 // and middleware. At the moment this only contains a copy of the config struct and a
 // logger, but it will grow to include a lot more as our build progresses.
+
 type application struct {
 	config server.Config
 	logger *slog.Logger
@@ -51,14 +52,16 @@ func main() {
 	configAuthUser := os.Getenv("CONFIG_AUTH_USER")
 	configAuthPass := os.Getenv("CONFIG_AUTH_PASS")
 
-	if (*configFile != "" && *configURL != "") || (*configFile != "" && len(flag.Args()) > 0) || (*configURL != "" && len(flag.Args()) > 0) {
-		fmt.Println("Error: Only one of --config-file or --config-url can be specified.")
+	var err error
+	
+	if err = validateConfigFlags(configFile, configURL); err != nil{
+		fmt.Println("Error:",err)
 		flag.Usage()
 		os.Exit(1)
 	}
 
 	var servers []models.ObaServer
-	var err error
+	
 
 	if *configFile != "" {
 		servers, err = loadConfigFromFile(*configFile)
@@ -87,27 +90,13 @@ func main() {
 	setupSentry()
 
 	cacheDir := "cache"
-
-	if _, err := os.Stat(cacheDir); os.IsNotExist(err) {
-		if err := os.MkdirAll(cacheDir, os.ModePerm); err != nil {
-			logger.Error("Failed to create cache directory", "error", err)
-			os.Exit(1)
-		}
+	if err = createCacheDirectory(cacheDir, logger); err != nil {
+		logger.Error("Failed to create cache directory", "error", err)
+		os.Exit(1)
 	}
 
 	// Download GTFS bundles for all servers on startup
-	for _, server := range servers {
-		hash := sha1.Sum([]byte(server.GtfsUrl))
-		hashStr := hex.EncodeToString(hash[:])
-		cachePath := filepath.Join(cacheDir, fmt.Sprintf("server_%d_%s.zip", server.ID, hashStr))
-
-		_, err := utils.DownloadGTFSBundle(server.GtfsUrl, cacheDir, server.ID, hashStr)
-		if err != nil {
-			logger.Error("Failed to download GTFS bundle", "server_id", server.ID, "error", err)
-		} else {
-			logger.Info("Successfully downloaded GTFS bundle", "server_id", server.ID, "path", cachePath)
-		}
-	}
+	downloadGTFSBundles(servers, cacheDir, logger)
 
 	app := &application{
 		config: cfg,
@@ -117,45 +106,13 @@ func main() {
 	app.startMetricsCollection()
 
 	// Cron job to download GTFS bundles for all servers every 24 hours
-	go func() {
-		for {
-			time.Sleep(24 * time.Hour)
-			for _, server := range servers {
-				hash := sha1.Sum([]byte(server.GtfsUrl))
-				hashStr := hex.EncodeToString(hash[:])
-				cachePath := filepath.Join(cacheDir, fmt.Sprintf("server_%d_%s.zip", server.ID, hashStr))
-
-				_, err := utils.DownloadGTFSBundle(server.GtfsUrl, cacheDir, server.ID, hashStr)
-				if err != nil {
-					logger.Error("Failed to download GTFS bundle", "server_id", server.ID, "error", err)
-				} else {
-					logger.Info("Successfully updated GTFS bundle", "server_id", server.ID, "path", cachePath)
-				}
-			}
-		}
-	}()
+	go refreshGTFSBundles(servers, cacheDir, logger , 24 * time.Hour)
 
 	// If a remote URL is specified, refresh the configuration every minute
 	if *configURL != "" {
-		go func() {
-			for {
-				time.Sleep(time.Minute)
-				newServers, err := loadConfigFromURL(*configURL, configAuthUser, configAuthPass)
-				if err != nil {
-					logger.Error("Failed to refresh remote config", "error", err)
-					continue
-				}
-
-				app.mu.Lock()
-				cfg.Servers = newServers
-				app.mu.Unlock()
-
-				logger.Info("Successfully refreshed server configuration")
-			}
-		}()
+		go refreshConfig(*configURL, configAuthUser, configAuthPass, app, logger, time.Minute)
 	}
 
-	// Use the httprouter instance returned by app.routes() as the server handler.
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
 		Handler:      app.routes(),
@@ -171,6 +128,82 @@ func main() {
 	logger.Error(err.Error())
 	os.Exit(1)
 }
+
+// validateConfigFlags checks that only one of --config-file, --config-url, or an additional argument is provided.
+func validateConfigFlags(configFile, configURL *string) error{
+	if (*configFile != "" && *configURL != "") || (*configFile != "" && len(flag.Args()) > 0) || (*configURL != "" && len(flag.Args()) > 0) {
+		return fmt.Errorf("only one of --config-file or --config-url can be specified")
+	}
+	return nil
+}
+
+
+// createCacheDirectory ensures the cache directory exists, creating it if necessary.
+func createCacheDirectory(cacheDir string , logger *slog.Logger) error{
+	stat, err := os.Stat(cacheDir); 
+
+	if err != nil {
+		if os.IsNotExist(err){
+			if err := os.MkdirAll(cacheDir, os.ModePerm); err != nil {
+				return err
+			}
+			return nil
+		}
+		return err
+		
+	}
+	if !stat.IsDir() {
+		return fmt.Errorf("%s is not a directory", cacheDir)
+	}
+	return nil
+}
+
+// downloadGTFSBundles downloads GTFS bundles for each server and caches them locally.
+func downloadGTFSBundles(servers []models.ObaServer, cacheDir string, logger *slog.Logger) {
+	for _, server := range servers {
+		hash := sha1.Sum([]byte(server.GtfsUrl))
+		hashStr := hex.EncodeToString(hash[:])
+		cachePath := filepath.Join(cacheDir, fmt.Sprintf("server_%d_%s.zip", server.ID, hashStr))
+
+		_, err := utils.DownloadGTFSBundle(server.GtfsUrl, cacheDir, server.ID, hashStr)
+		if err != nil {
+			logger.Error("Failed to download GTFS bundle", "server_id", server.ID, "error", err)
+		} else {
+			logger.Info("Successfully downloaded GTFS bundle", "server_id", server.ID, "path", cachePath)
+		}
+	}
+}
+
+// refreshGTFSBundles periodically downloads GTFS bundles at the specified interval.
+func refreshGTFSBundles(servers []models.ObaServer, cacheDir string, logger *slog.Logger , interval time.Duration) {
+	for {
+		time.Sleep(interval)
+		downloadGTFSBundles(servers, cacheDir, logger)
+	}
+}
+
+// refreshConfig periodically fetches remote config and updates the application servers.
+func refreshConfig(configURL, configAuthUser, configAuthPass string, app *application, logger *slog.Logger , interval time.Duration) {
+	for {
+		time.Sleep(interval)
+		newServers, err := loadConfigFromURL(configURL, configAuthUser, configAuthPass)
+		if err != nil {
+			logger.Error("Failed to refresh remote config", "error", err)
+			continue
+		}
+
+		app.updateConfig(newServers)
+		logger.Info("Successfully refreshed server configuration")
+	}
+}
+
+// updateConfig safely updates the application's server configuration.
+func (app *application) updateConfig(newServers []models.ObaServer) {
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	app.config.Servers = newServers
+}
+
 
 func loadConfigFromFile(filePath string) ([]models.ObaServer, error) {
 	data, err := os.ReadFile(filePath)
