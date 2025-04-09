@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: watchdog
+  labels:
+    app: watchdog
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: watchdog
+  template:
+    metadata:
+      labels:
+        app: watchdog
+    spec:
+      containers:
+      - name: watchdog
+        image: sid091/my-images:latest  
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: config-volume
+          mountPath: /app/config
+          readOnly: true
+        env:
+        - name: CONFIG_AUTH_USER
+          value: ""
+        - name: CONFIG_AUTH_PASS
+          value: ""
+        args:
+        - "--config-file"
+        - "/app/config/oba_server_config.json"
+      volumes:
+      - name: config-volume
+        configMap:
+          name: watchdog-config

@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: watchdog-config
+data:
+  # Configuration file for OBA servers
+  oba_server_config.json: |
+    [
+      {
+        "name": "Test Server",
+        "id": 1,
+        "oba_base_url": "https://test.example.com",
+        "oba_api_key": "test-key",
+        "gtfs_url": "https://gtfs.example.com",
+        "trip_update_url": "https://trip.example.com",
+        "vehicle_position_url": "https://vehicle.example.com",
+        "gtfs_rt_api_key": "api-key",
+        "gtfs_rt_api_value": "api-value",
+        "agency_id": "test-agency"
+      }
+    ]

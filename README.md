@@ -104,6 +104,89 @@ docker run -d \
   --config-url http://example.com/config.json
 ```
 
+# Kubernetes Deployment
+
+This section provides instructions to deploy the `watchdog` application using Kubernetes manifests.
+
+## Steps to Deploy Watchdog
+
+### 1. Create a Kind Cluster
+
+Run the following command to create a Kubernetes cluster using Kind:
+
+```bash
+kind create cluster --name watchdog-kind
+```
+
+This will create a cluster named `watchdog-kind` and set the `kubectl` context to `kind-watchdog-kind`.
+
+Verify the cluster information:
+
+```bash
+kubectl cluster-info --context kind-watchdog-kind
+```
+
+### 2. Create a Namespace
+
+Create a namespace for the `watchdog` application:
+
+```bash
+kubectl create namespace watchdog
+```
+
+### 3. Apply Kubernetes Manifests
+
+Deploy the ConfigMap, Deployment, and Service resources:
+
+```bash
+kubectl apply -f k8s/configmap.yaml -n watchdog
+kubectl apply -f k8s/deployment.yaml -n watchdog
+kubectl apply -f k8s/service.yaml -n watchdog
+```
+
+### 4. Verify Deployment
+
+Check the status of the pods in the `watchdog` namespace:
+
+```bash
+kubectl get pods -n watchdog
+```
+
+You should see output similar to:
+
+```
+NAME                        READY   STATUS    RESTARTS   AGE
+watchdog-5f4c467b49-hb6wk   1/1     Running   0          36s
+watchdog-5f4c467b49-mdzbk   1/1     Running   0          36s
+```
+
+List all resources in the `watchdog` namespace:
+
+```bash
+kubectl get all -n watchdog
+```
+
+### 5. Access the Service
+
+The `watchdog` service is exposed as a `ClusterIP` service on port `8080`. If the `Service` type is `ClusterIP`, you can use `kubectl port-forward` to access the service locally:
+
+```bash
+kubectl port-forward svc/watchdog 8080:8080 -n watchdog
+```
+
+This will forward the service to `localhost:8080`.
+
+### 6. Delete the Cluster
+
+When you're done, delete the Kind cluster:
+
+```bash
+kind delete cluster --name watchdog-kind
+```
+
+This will clean up all resources and remove the cluster.
+
+
 # Testing
 
 ```

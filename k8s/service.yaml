@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: watchdog
+  labels:
+    app: watchdog
+spec:
+  ports:
+  - port: 8080
+    targetPort: 8080
+  selector:
+    app: watchdog
+  type: ClusterIP # Change to "NodePort" or "LoadBalancer" for external excess 
