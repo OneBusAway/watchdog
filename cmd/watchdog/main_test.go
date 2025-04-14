@@ -145,3 +145,12 @@ func parseFlags() (string, string, error) {
 
 	return *configFile, *configURL, nil
 }
+
+func TestSetupSentry(t *testing.T) {
+	t.Run("Valid DSN", func(t *testing.T) {
+		os.Setenv("SENTRY_DSN", "https://public@sentry.example.com/1")
+		defer os.Unsetenv("SENTRY_DSN")
+
+		setupSentry()
+	})
+}

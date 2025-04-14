@@ -8,8 +8,6 @@ Golang-based Watchdog service for OBA REST API servers
 
 Go 1.23 or higher
 
-
-
 ## Configuration
 
 The watchdog service can be configured using either:

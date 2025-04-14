@@ -50,6 +50,26 @@ func TestGetLastCachedFile(t *testing.T) {
 	if err == nil {
 		t.Error("Expected an error for a server with no cached files, but got nil")
 	}
+	t.Run("Invalid Cache Directory Read", func(t *testing.T) {
+		invalidDir := "/invalid/cache/dir"
+		_, err := GetLastCachedFile(invalidDir, 1)
+		if err == nil {
+			t.Errorf("Expected error for os.ReadDir failure, got none")
+		}
+	})
+
+	t.Run("Empty Cache Directory", func(t *testing.T) {
+		emptyDir, err := os.MkdirTemp("", "emptycache")
+		if err != nil {
+			t.Fatalf("Failed to create empty temporary directory: %v", err)
+		}
+		defer os.RemoveAll(emptyDir)
+
+		_, err = GetLastCachedFile(emptyDir, 2)
+		if err == nil {
+			t.Errorf("Expected error for empty cache directory, but got none")
+		}
+	})
 }
 
 func createFileWithModTime(t *testing.T, path string, modTime time.Time) {
@@ -115,4 +135,31 @@ func TestDownloadGTFSBundle(t *testing.T) {
 	if cachePath != expectedFilePath {
 		t.Errorf("Expected cache path to be %s, got %s", expectedFilePath, cachePath)
 	}
+
+	t.Run("Invalid URL", func(t *testing.T) {
+		invalidURL := "http://invalid-url"
+		_, err := DownloadGTFSBundle(invalidURL, tmpDir, 3, "invalidhash")
+		if err == nil {
+			t.Errorf("Expected error for invalid URL, got none")
+		}
+	})
+
+	t.Run("Invalid Cache Directory", func(t *testing.T) {
+		invalidDir := "/invalid/cache/dir"
+		_, err := DownloadGTFSBundle(mockServer.URL, invalidDir, 4, "invalidhash")
+		if err == nil {
+			t.Errorf("Expected error for invalid cache directory, got none")
+		}
+	})
+	t.Run("IO Copy Failure", func(t *testing.T) {
+		mockServerFailure := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Length", "100")
+		}))
+		defer mockServerFailure.Close()
+
+		_, err := DownloadGTFSBundle(mockServerFailure.URL, tmpDir, 5, "hashIOFail")
+		if err == nil {
+			t.Errorf("Expected error for io.Copy failure, got none")
+		}
+	})
 }
