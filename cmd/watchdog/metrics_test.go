@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"watchdog.onebusaway.org/internal/metrics"
 )
 
@@ -38,4 +39,16 @@ func TestMetricsEndpoint(t *testing.T) {
 	if !strings.Contains(string(body), "oba_api_status") {
 		t.Error("metrics response doesn't contain oba_api_status metric")
 	}
+}
+
+func TestCollectMetricsForServer(t *testing.T) {
+	app := newTestApplication(t)
+	
+	prometheus.DefaultRegisterer = prometheus.NewRegistry()
+	
+	testServer := app.config.Servers[0]
+	
+	app.collectMetricsForServer(testServer)
+	
+	getMetricsForTesting(t, metrics.ObaApiStatus)
 }
