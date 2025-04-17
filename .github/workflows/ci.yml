@@ -16,7 +16,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.23'
+        go-version: '1.23.5'
         cache: true
     
     - name: Download dependencies
@@ -31,3 +31,41 @@ jobs:
     - uses: shogo82148/actions-goveralls@v1
       with:
         path-to-profile: profile.cov
+
+  k8s-test:
+    name: Validate K8s Manifests
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+    
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Install kubectl
+      uses: azure/setup-kubectl@v3
+      
+    - name: Setup Kind
+      uses: helm/kind-action@v1.8.0
+      
+    - name: Create namespace
+      run: kubectl create namespace watchdog-ns
+      
+    - name: Apply ConfigMap
+      run: kubectl apply -f k8s/configmap.yaml -n watchdog-ns
+      
+    - name: Apply Deployment
+      run: kubectl apply -f k8s/deployment.yaml -n watchdog-ns
+      
+    - name: Apply Service
+      run: kubectl apply -f k8s/service.yaml -n watchdog-ns
+        
+    - name: Run K8s tests
+      run: |
+        cd k8s/tests/
+        go test -v ./...
