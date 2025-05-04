@@ -34,9 +34,11 @@ const (
 	apiKey          = "org.onebusaway.iphone"
 )
 
-func FetchObaAPIMetrics(slugID string) error {
-	client := &http.Client{
-		Timeout: 10 * time.Second,
+func FetchObaAPIMetrics(slugID string, client *http.Client) error {
+	if client == nil {
+		client = &http.Client{
+			Timeout: 10 * time.Second,
+		}
 	}
 
 	url := fmt.Sprintf(baseURLTemplate, slugID)
