@@ -53,7 +53,7 @@ func (app *application) collectMetricsForServer(server models.ObaServer) {
 		app.logger.Error("Failed to check vehicle count match metric", "error", err)
 	}
 
-	err = metrics.FetchObaAPIMetrics(server.AgencyID, nil)
+	err = metrics.FetchObaAPIMetrics(server.AgencyID, server.ObaBaseURL, server.ObaApiKey, nil)
 
 	if err != nil {
 		app.logger.Error("Failed to fetch OBA API metrics", "error", err)

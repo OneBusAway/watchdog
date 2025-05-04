@@ -9,13 +9,13 @@ interactions:
         content_length: 0
         transfer_encoding: []
         trailer: {}
-        host: api.unitrans.onebusawaycloud.com
+        host: oba-api.onrender.com
         remote_addr: ""
         request_uri: ""
         body: ""
         form: {}
         headers: {}
-        url: https://api.unitrans.onebusawaycloud.com/api/where/metrics.json?key=org.onebusaway.iphone
+        url: https://oba-api.onrender.com/api/where/metrics.json?key=org.onebusaway.iphone
         method: GET
       response:
         proto: HTTP/2.0
@@ -25,22 +25,22 @@ interactions:
         trailer: {}
         content_length: -1
         uncompressed: true
-        body: '{"code":200,"currentTime":1746317392588,"data":{"entry":{"agenciesWithCoverageCount":1,"agencyIDs":["unitrans"],"realtimeRecordsTotal":{"unitrans":5},"realtimeTripCountsMatched":{"unitrans":5},"realtimeTripCountsUnmatched":{"unitrans":2},"realtimeTripIDsUnmatched":{"unitrans":["O_29_outbound_1710","K_29_outbound_1710"]},"scheduledTripsCount":{"unitrans":5},"stopIDsMatchedCount":{"unitrans":160},"stopIDsUnmatched":{"unitrans":[]},"stopIDsUnmatchedCount":{"unitrans":0},"timeSinceLastRealtimeUpdate":{"unitrans":40}},"references":{"agencies":[],"routes":[],"situations":[],"stopTimes":[],"stops":[],"trips":[]}},"text":"OK","version":2}'
+        body: '{"code":200,"currentTime":1746323809556,"data":{"entry":{"agenciesWithCoverageCount":1,"agencyIDs":["unitrans"],"realtimeRecordsTotal":{"unitrans":3},"realtimeTripCountsMatched":{"unitrans":3},"realtimeTripCountsUnmatched":{"unitrans":0},"realtimeTripIDsUnmatched":{"unitrans":[]},"scheduledTripsCount":{"unitrans":5},"stopIDsMatchedCount":{"unitrans":5},"stopIDsUnmatched":{"unitrans":[]},"stopIDsUnmatchedCount":{"unitrans":0},"timeSinceLastRealtimeUpdate":{"unitrans":24}},"references":{"agencies":[],"routes":[],"situations":[],"stopTimes":[],"stops":[],"trips":[]}},"text":"OK","version":2}'
         headers:
             Alt-Svc:
                 - h3=":443"; ma=86400
             Cf-Cache-Status:
                 - DYNAMIC
             Cf-Ray:
-                - 93a3c596fee42e37-MRS
+                - 93a46240fc09e597-MRS
             Content-Language:
                 - en-US
             Content-Type:
                 - application/json;charset=ISO-8859-1
             Date:
-                - Sun, 04 May 2025 00:09:52 GMT
+                - Sun, 04 May 2025 01:56:49 GMT
             Rndr-Id:
-                - 2fba0022-b9be-4c67
+                - 0543ef43-586f-45b4
             Server:
                 - cloudflare
             Vary:
@@ -49,4 +49,4 @@ interactions:
                 - Render
         status: 200 OK
         code: 200
-        duration: 818.988709ms
+        duration: 633.898732ms

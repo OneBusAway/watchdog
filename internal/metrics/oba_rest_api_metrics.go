@@ -29,21 +29,16 @@ type OBAMetrics struct {
 	} `json:"data"`
 }
 
-const (
-	baseURLTemplate = "https://api.%s.onebusawaycloud.com/api/where/metrics.json"
-	apiKey          = "org.onebusaway.iphone"
-)
-
-func FetchObaAPIMetrics(slugID string, client *http.Client) error {
+func FetchObaAPIMetrics(slugID string, serverBaseUrl string, apiKey string, client *http.Client) error {
 	if client == nil {
 		client = &http.Client{
 			Timeout: 10 * time.Second,
 		}
 	}
 
-	url := fmt.Sprintf(baseURLTemplate, slugID)
+	url := fmt.Sprintf("%s/api/where/metrics.json?key=%s", serverBaseUrl, apiKey)
 
-	url = fmt.Sprintf("%s?key=%s", url, apiKey)
+	fmt.Printf("Fetching metrics from %s\n", url)
 
 	resp, err := client.Get(url)
 	if err != nil {
@@ -53,7 +48,7 @@ func FetchObaAPIMetrics(slugID string, client *http.Client) error {
 
 	if resp.StatusCode != http.StatusOK {
 		if resp.StatusCode == http.StatusNotFound {
-			return fmt.Errorf("server %s does not support metrics API", slugID)
+			return fmt.Errorf("server %s does not support metrics API", serverBaseUrl)
 		}
 		return fmt.Errorf("unexpected status code from %s: %d", url, resp.StatusCode)
 	}
