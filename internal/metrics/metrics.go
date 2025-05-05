@@ -61,3 +61,70 @@ var (
 		Help: "Whether the number of vehicles in the API response matches the number of vehicles in the static GTFS-RT file (1 = match, 0 = no match)",
 	}, []string{"agency_id", "server_id"})
 )
+
+// OBA REST API 2.6.0 >= Metrics
+var (
+	ObaAgenciesWithCoverage = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "oba_agencies_with_coverage_count",
+			Help: "Number of agencies with coverage",
+		},
+		[]string{"server"},
+	)
+
+	ObaRealtimeRecords = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "oba_realtime_records_total",
+			Help: "Total number of realtime records",
+		},
+		[]string{"server", "agency"},
+	)
+
+	ObaRealtimeTripsMatched = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "oba_realtime_trips_matched_count",
+			Help: "Number of matched realtime trips",
+		},
+		[]string{"server", "agency"},
+	)
+
+	ObaRealtimeTripsUnmatched = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "oba_realtime_trips_unmatched_count",
+			Help: "Number of unmatched realtime trips",
+		},
+		[]string{"server", "agency"},
+	)
+
+	ObaScheduledTrips = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "oba_scheduled_trips_count",
+			Help: "Number of scheduled trips",
+		},
+		[]string{"server", "agency"},
+	)
+
+	ObaStopsMatched = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "oba_stops_matched_count",
+			Help: "Number of matched stops",
+		},
+		[]string{"server", "agency"},
+	)
+
+	ObaStopsUnmatched = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "oba_stops_unmatched_count",
+			Help: "Number of unmatched stops",
+		},
+		[]string{"server", "agency"},
+	)
+
+	ObaTimeSinceUpdate = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "oba_time_since_last_update_seconds",
+			Help: "Time since last realtime update in seconds",
+		},
+		[]string{"server", "agency"},
+	)
+)

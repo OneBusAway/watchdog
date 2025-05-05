@@ -1,0 +1,52 @@
+---
+version: 2
+interactions:
+    - id: 0
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        transfer_encoding: []
+        trailer: {}
+        host: oba-api.onrender.com
+        remote_addr: ""
+        request_uri: ""
+        body: ""
+        form: {}
+        headers: {}
+        url: https://oba-api.onrender.com/api/where/metrics.json?key=org.onebusaway.iphone
+        method: GET
+      response:
+        proto: HTTP/2.0
+        proto_major: 2
+        proto_minor: 0
+        transfer_encoding: []
+        trailer: {}
+        content_length: -1
+        uncompressed: true
+        body: '{"code":200,"currentTime":1746323809556,"data":{"entry":{"agenciesWithCoverageCount":1,"agencyIDs":["unitrans"],"realtimeRecordsTotal":{"unitrans":3},"realtimeTripCountsMatched":{"unitrans":3},"realtimeTripCountsUnmatched":{"unitrans":0},"realtimeTripIDsUnmatched":{"unitrans":[]},"scheduledTripsCount":{"unitrans":5},"stopIDsMatchedCount":{"unitrans":5},"stopIDsUnmatched":{"unitrans":[]},"stopIDsUnmatchedCount":{"unitrans":0},"timeSinceLastRealtimeUpdate":{"unitrans":24}},"references":{"agencies":[],"routes":[],"situations":[],"stopTimes":[],"stops":[],"trips":[]}},"text":"OK","version":2}'
+        headers:
+            Alt-Svc:
+                - h3=":443"; ma=86400
+            Cf-Cache-Status:
+                - DYNAMIC
+            Cf-Ray:
+                - 93a46240fc09e597-MRS
+            Content-Language:
+                - en-US
+            Content-Type:
+                - application/json;charset=ISO-8859-1
+            Date:
+                - Sun, 04 May 2025 01:56:49 GMT
+            Rndr-Id:
+                - 0543ef43-586f-45b4
+            Server:
+                - cloudflare
+            Vary:
+                - Accept-Encoding
+            X-Render-Origin-Server:
+                - Render
+        status: 200 OK
+        code: 200
+        duration: 633.898732ms
