@@ -1,30 +1,34 @@
 # Build stage
-FROM golang:1.23-bookworm AS builder
+FROM golang:1.23-alpine AS builder
 
 WORKDIR /usr/src/app
 
-# pre-copy/cache go.mod for pre-downloading dependencies and only redownloading them in subsequent builds if they change
+# Install git for go mod download
+RUN apk add --no-cache git
+
+# Pre-copy go.mod and go.sum for better caching
 COPY go.mod go.sum ./
 RUN go mod download && go mod verify
 
+# Copy source code
 COPY . .
-RUN CGO_ENABLED=0 go build -v -o . ./...
+
+# Build the application
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o watchdog ./cmd/watchdog
 
 # Final stage
-FROM debian:bookworm-slim
+FROM alpine:3.19
 
-RUN apt-get update && \
-    apt-get install -y ca-certificates tzdata
+# Install only necessary packages
+RUN apk add --no-cache ca-certificates tzdata wget
 
-# Add non-root user
-RUN addgroup --system watchdog && adduser --system --group --no-create-home watchdog
+# Create non-root user and group
+RUN addgroup -S watchdog && adduser -S watchdog -G watchdog
 
-# Set working directory
 WORKDIR /app
 
 # Copy binary from builder
-COPY --from=builder /usr/src/app/watchdog .
-RUN chown -R watchdog:watchdog /app
+COPY --from=builder --chown=watchdog:watchdog /usr/src/app/watchdog .
 
 # Use non-root user
 USER watchdog
