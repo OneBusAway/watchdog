@@ -33,3 +33,6 @@ profile.cov
 
 # ignore the binary
 watchdog
+
+# Avoid Committing Configuration File
+config.json
