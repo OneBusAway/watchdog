@@ -49,6 +49,19 @@ The JSON configuration file should contain an array of `ObaServer` objects, each
 ]
 ```
 
+### Local Configuration Setup
+
+1. Either copy or rename `config.json.template` to `config.json` in the same folder.
+2. Update `config.json` with your OBA server values.
+
+Note: The `config.json` file is ignored by Git to prevent accidental commits of sensitive configuration data.
+
+### Remote Configuration Setup
+
+1. Create a `config.json` file based on the `config.json.template` format.
+2. Fill in your OBA server values in `config.json`.
+3. Host it publicly and point the app to its URL.
+
 ## Sentry Configuration
 
 To enable Sentry error tracking, set the `SENTRY_DSN` environment variable with your Sentry DSN.
@@ -60,8 +73,6 @@ export SENTRY_DSN="your_sentry_dsn"
 # Running
 
 #### **Using a Local Configuration File**
-
-Update the `config.json` file with your actual OBA server configuration, then run the following command:
 
 ```bash
 go run ./cmd/watchdog/ --config-file ./config.json
