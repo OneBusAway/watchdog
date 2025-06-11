@@ -18,6 +18,7 @@ func (app *application) routes() http.Handler {
 	router.HandlerFunc(http.MethodGet, "/v1/healthcheck", app.healthcheckHandler)
 	router.Handler(http.MethodGet, "/metrics", promhttp.Handler())
 
-	// Return the httprouter instance.
-	return router
+	// Wrap router with Sentry middleware
+	// Return wrapped httprouter instance.
+	return sentryMiddleware(router)
 }
