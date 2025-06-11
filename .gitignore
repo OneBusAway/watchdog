@@ -32,7 +32,7 @@ go.work.sum
 profile.cov
 
 # ignore the binary
-watchdog
+/watchdog
 
 # Avoid Committing Configuration File
 config.json
