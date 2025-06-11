@@ -4,7 +4,7 @@ go 1.23.5
 
 require (
 	github.com/OneBusAway/go-sdk v0.1.0-alpha.13
-	github.com/getsentry/sentry-go v0.31.1
+	github.com/getsentry/sentry-go v0.33.0
 	github.com/jamespfennell/gtfs v0.1.24
 	github.com/julienschmidt/httprouter v1.3.0
 	github.com/prometheus/client_golang v1.20.5
