@@ -18,6 +18,7 @@ import (
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/server"
 	"watchdog.onebusaway.org/internal/utils"
+	"watchdog.onebusaway.org/internal/report"
 )
 
 // Declare a string containing the application version number. Later in the book we'll
@@ -86,6 +87,12 @@ func main() {
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
+	report.SetupSentry()
+	defer report.FlushSentry()
+
+
+	reporter := report.NewReporter(cfg.Env, version)
+	reporter.ConfigureScope()
 
 	cacheDir := "cache"
 	if err = createCacheDirectory(cacheDir, logger); err != nil {
@@ -122,7 +129,10 @@ func main() {
 
 	logger.Info("starting server", "addr", srv.Addr, "env", cfg.Env)
 	err = srv.ListenAndServe()
-	sentry.CaptureException(err)
+	reporter.ReportIfProd(err, map[string]interface{}{
+	"addr": srv.Addr,
+	"env":  cfg.Env,
+	}, sentry.LevelFatal)
 	logger.Error(err.Error())
 	os.Exit(1)
 }
