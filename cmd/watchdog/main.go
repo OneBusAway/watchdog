@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"net/http"
 	"os"
@@ -87,8 +86,6 @@ func main() {
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	setupSentry()
-	defer sentry.Flush(2 * time.Second)
 
 	cacheDir := "cache"
 	if err = createCacheDirectory(cacheDir, logger); err != nil {
@@ -254,17 +251,3 @@ func loadConfigFromURL(url, authUser, authPass string) ([]models.ObaServer, erro
 	return servers, nil
 }
 
-func setupSentry() {
-
-	if err := sentry.Init(sentry.ClientOptions{
-		Dsn:              os.Getenv("SENTRY_DSN"),
-		EnableTracing:    true,
-		Debug:            true,
-		TracesSampleRate: 1.0,
-	}); err != nil {
-		log.Fatalf("sentry.Init: %s", err)
-	}
-
-	sentry.CaptureMessage("Watchdog started")
-
-}
