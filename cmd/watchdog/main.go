@@ -88,6 +88,7 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	setupSentry()
+	defer sentry.Flush(2 * time.Second)
 
 	cacheDir := "cache"
 	if err = createCacheDirectory(cacheDir, logger); err != nil {
@@ -263,8 +264,6 @@ func setupSentry() {
 	}); err != nil {
 		log.Fatalf("sentry.Init: %s", err)
 	}
-
-	defer sentry.Flush(2 * time.Second)
 
 	sentry.CaptureMessage("Watchdog started")
 
