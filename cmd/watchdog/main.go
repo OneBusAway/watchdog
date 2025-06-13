@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"net/http"
 	"os"
@@ -19,6 +18,7 @@ import (
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/server"
 	"watchdog.onebusaway.org/internal/utils"
+	"watchdog.onebusaway.org/internal/report"
 )
 
 // Declare a string containing the application version number. Later in the book we'll
@@ -87,8 +87,12 @@ func main() {
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	setupSentry()
-	defer sentry.Flush(2 * time.Second)
+	report.SetupSentry()
+	defer report.FlushSentry()
+
+
+	reporter := report.NewReporter(cfg.Env, version)
+	reporter.ConfigureScope()
 
 	cacheDir := "cache"
 	if err = createCacheDirectory(cacheDir, logger); err != nil {
@@ -125,7 +129,10 @@ func main() {
 
 	logger.Info("starting server", "addr", srv.Addr, "env", cfg.Env)
 	err = srv.ListenAndServe()
-	sentry.CaptureException(err)
+	reporter.ReportIfProd(err, map[string]interface{}{
+	"addr": srv.Addr,
+	"env":  cfg.Env,
+	}, sentry.LevelFatal)
 	logger.Error(err.Error())
 	os.Exit(1)
 }
@@ -254,17 +261,3 @@ func loadConfigFromURL(url, authUser, authPass string) ([]models.ObaServer, erro
 	return servers, nil
 }
 
-func setupSentry() {
-
-	if err := sentry.Init(sentry.ClientOptions{
-		Dsn:              os.Getenv("SENTRY_DSN"),
-		EnableTracing:    true,
-		Debug:            true,
-		TracesSampleRate: 1.0,
-	}); err != nil {
-		log.Fatalf("sentry.Init: %s", err)
-	}
-
-	sentry.CaptureMessage("Watchdog started")
-
-}
