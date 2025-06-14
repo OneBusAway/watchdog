@@ -33,6 +33,7 @@ const version = "1.0.0"
 type application struct {
 	config server.Config
 	logger *slog.Logger
+	reporter *report.Reporter
 	mu     sync.RWMutex
 }
 
@@ -60,13 +61,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	report.SetupSentry()
+	defer report.FlushSentry()
+
+	reporter := report.NewReporter(cfg.Env, version)
+	reporter.ConfigureScope()
+
 	var servers []models.ObaServer
 	
 
 	if *configFile != "" {
-		servers, err = loadConfigFromFile(*configFile)
+		servers, err = loadConfigFromFile(*configFile , reporter)
 	} else if *configURL != "" {
-		servers, err = loadConfigFromURL(*configURL, configAuthUser, configAuthPass)
+		servers, err = loadConfigFromURL(*configURL, configAuthUser, configAuthPass , reporter)
 	} else {
 		fmt.Println("Error: No configuration provided. Use --config-file or --config-url.")
 		flag.Usage()
@@ -87,35 +94,31 @@ func main() {
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	report.SetupSentry()
-	defer report.FlushSentry()
 
-
-	reporter := report.NewReporter(cfg.Env, version)
-	reporter.ConfigureScope()
 
 	cacheDir := "cache"
-	if err = createCacheDirectory(cacheDir, logger); err != nil {
+	if err = createCacheDirectory(cacheDir, logger , reporter); err != nil {
 		logger.Error("Failed to create cache directory", "error", err)
 		os.Exit(1)
 	}
 
 	// Download GTFS bundles for all servers on startup
-	downloadGTFSBundles(servers, cacheDir, logger)
+	downloadGTFSBundles(servers, cacheDir, logger , reporter)
 
 	app := &application{
 		config: cfg,
 		logger: logger,
+		reporter: reporter,
 	}
 
 	app.startMetricsCollection()
 
 	// Cron job to download GTFS bundles for all servers every 24 hours
-	go refreshGTFSBundles(servers, cacheDir, logger , 24 * time.Hour)
+	go refreshGTFSBundles(servers, cacheDir, logger , 24 * time.Hour , reporter)
 
 	// If a remote URL is specified, refresh the configuration every minute
 	if *configURL != "" {
-		go refreshConfig(*configURL, configAuthUser, configAuthPass, app, logger, time.Minute)
+		go refreshConfig(*configURL, configAuthUser, configAuthPass, app, logger, time.Minute , reporter)
 	}
 
 	srv := &http.Server{
@@ -129,10 +132,8 @@ func main() {
 
 	logger.Info("starting server", "addr", srv.Addr, "env", cfg.Env)
 	err = srv.ListenAndServe()
-	reporter.ReportIfProd(err, map[string]interface{}{
-	"addr": srv.Addr,
-	"env":  cfg.Env,
-	}, sentry.LevelFatal)
+	reporter.ReportError(err, sentry.LevelFatal)
+	report.FlushSentry()
 	logger.Error(err.Error())
 	os.Exit(1)
 }
@@ -147,12 +148,18 @@ func validateConfigFlags(configFile, configURL *string) error{
 
 
 // createCacheDirectory ensures the cache directory exists, creating it if necessary.
-func createCacheDirectory(cacheDir string , logger *slog.Logger) error{
+func createCacheDirectory(cacheDir string , logger *slog.Logger , reporter *report.Reporter) error{
 	stat, err := os.Stat(cacheDir); 
 
 	if err != nil {
 		if os.IsNotExist(err){
 			if err := os.MkdirAll(cacheDir, os.ModePerm); err != nil {
+				reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+        Level: sentry.LevelError,
+				ExtraContext: map[string]interface{}{
+        	"cache_dir": cacheDir,
+    		},
+    		})
 				return err
 			}
 			return nil
@@ -161,13 +168,20 @@ func createCacheDirectory(cacheDir string , logger *slog.Logger) error{
 		
 	}
 	if !stat.IsDir() {
-		return fmt.Errorf("%s is not a directory", cacheDir)
+		err := fmt.Errorf("%s is not a directory", cacheDir)
+    reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+        Level: sentry.LevelError,
+				ExtraContext: map[string]interface{}{
+        	"cache_dir": cacheDir,
+    		},
+    })
+    return err
 	}
 	return nil
 }
 
 // downloadGTFSBundles downloads GTFS bundles for each server and caches them locally.
-func downloadGTFSBundles(servers []models.ObaServer, cacheDir string, logger *slog.Logger) {
+func downloadGTFSBundles(servers []models.ObaServer, cacheDir string, logger *slog.Logger , reporter *report.Reporter) {
 	for _, server := range servers {
 		hash := sha1.Sum([]byte(server.GtfsUrl))
 		hashStr := hex.EncodeToString(hash[:])
@@ -175,6 +189,15 @@ func downloadGTFSBundles(servers []models.ObaServer, cacheDir string, logger *sl
 
 		_, err := utils.DownloadGTFSBundle(server.GtfsUrl, cacheDir, server.ID, hashStr)
 		if err != nil {
+			reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: map[string]string{
+					"server_id": fmt.Sprintf("%d", server.ID),
+			},
+			ExtraContext: map[string]interface{}{
+					"gtfs_url": server.GtfsUrl,
+			},
+			Level: sentry.LevelError,
+			})
 			logger.Error("Failed to download GTFS bundle", "server_id", server.ID, "error", err)
 		} else {
 			logger.Info("Successfully downloaded GTFS bundle", "server_id", server.ID, "path", cachePath)
@@ -183,19 +206,25 @@ func downloadGTFSBundles(servers []models.ObaServer, cacheDir string, logger *sl
 }
 
 // refreshGTFSBundles periodically downloads GTFS bundles at the specified interval.
-func refreshGTFSBundles(servers []models.ObaServer, cacheDir string, logger *slog.Logger , interval time.Duration) {
+func refreshGTFSBundles(servers []models.ObaServer, cacheDir string, logger *slog.Logger , interval time.Duration , reporter *report.Reporter) {
 	for {
 		time.Sleep(interval)
-		downloadGTFSBundles(servers, cacheDir, logger)
+		downloadGTFSBundles(servers, cacheDir, logger , reporter)
 	}
 }
 
 // refreshConfig periodically fetches remote config and updates the application servers.
-func refreshConfig(configURL, configAuthUser, configAuthPass string, app *application, logger *slog.Logger , interval time.Duration) {
+func refreshConfig(configURL, configAuthUser, configAuthPass string, app *application, logger *slog.Logger , interval time.Duration , reporter *report.Reporter) {
 	for {
 		time.Sleep(interval)
-		newServers, err := loadConfigFromURL(configURL, configAuthUser, configAuthPass)
+		newServers, err := loadConfigFromURL(configURL, configAuthUser, configAuthPass , reporter)
 		if err != nil {
+			reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+				Tags: map[string]string{
+						"config_url": configURL,
+				},
+				Level: sentry.LevelError,
+			})
 			logger.Error("Failed to refresh remote config", "error", err)
 			continue
 		}
@@ -213,24 +242,42 @@ func (app *application) updateConfig(newServers []models.ObaServer) {
 }
 
 
-func loadConfigFromFile(filePath string) ([]models.ObaServer, error) {
+func loadConfigFromFile(filePath string , reporter *report.Reporter) ([]models.ObaServer, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
+		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+    Tags: map[string]string{
+        "file_path": filePath,
+    },
+    Level: sentry.LevelError,
+		})
 		return nil, fmt.Errorf("failed to read config file: %v", err)
 	}
 
 	var servers []models.ObaServer
 	if err := json.Unmarshal(data, &servers); err != nil {
+		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+    Tags: map[string]string{
+        "file_path": filePath,
+    },
+    Level: sentry.LevelError,
+		})
 		return nil, fmt.Errorf("failed to unmarshal JSON: %v", err)
 	}
 
 	return servers, nil
 }
 
-func loadConfigFromURL(url, authUser, authPass string) ([]models.ObaServer, error) {
+func loadConfigFromURL(url, authUser, authPass string , reporter *report.Reporter) ([]models.ObaServer, error) {
 	client := &http.Client{}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
+		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: map[string]string{
+					"config_url": url,
+			},
+			Level: sentry.LevelError,
+		})
 		return nil, fmt.Errorf("failed to create request: %v", err)
 	}
 
@@ -240,21 +287,46 @@ func loadConfigFromURL(url, authUser, authPass string) ([]models.ObaServer, erro
 
 	resp, err := client.Do(req)
 	if err != nil {
+		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: map[string]string{
+					"config_url": url,
+			},
+			Level: sentry.LevelError,
+		})
 		return nil, fmt.Errorf("failed to fetch remote config: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("remote config returned status: %d", resp.StatusCode)
+		statusErr := fmt.Errorf("remote config returned status: %d", resp.StatusCode)
+		reporter.ReportErrorWithSentryOptions(statusErr, report.SentryReportOptions{
+			Tags: map[string]string{
+				"config_url": url,
+			},
+			Level: sentry.LevelError,
+		})
+		return nil, statusErr
 	}
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
+		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: map[string]string{
+					"config_url": url,
+			},
+			Level: sentry.LevelError,
+		})
 		return nil, fmt.Errorf("failed to read remote config: %v", err)
 	}
 
 	var servers []models.ObaServer
 	if err := json.Unmarshal(data, &servers); err != nil {
+		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: map[string]string{
+					"config_url": url,
+			},
+			Level: sentry.LevelError,
+		})
 		return nil, fmt.Errorf("failed to unmarshal JSON: %v", err)
 	}
 
