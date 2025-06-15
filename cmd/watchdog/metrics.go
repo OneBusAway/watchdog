@@ -1,10 +1,13 @@
 package main
 
 import (
+	"fmt"
 	"time"
 
+	"github.com/getsentry/sentry-go"
 	"watchdog.onebusaway.org/internal/metrics"
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/report"
 	"watchdog.onebusaway.org/internal/utils"
 )
 
@@ -33,29 +36,73 @@ func (app *application) collectMetricsForServer(server models.ObaServer) {
 	cachePath, err := utils.GetLastCachedFile("cache", server.ID)
 	if err != nil {
 		app.logger.Error("Failed to get last cached file", "error", err)
+		app.reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: map[string]string{
+				"server_id":   fmt.Sprintf("%d", server.ID),
+				"server_name": server.Name,
+			},
+			Level: sentry.LevelError,
+		})
 		return
 	}
 
 	_, _, err = metrics.CheckBundleExpiration(cachePath, app.logger, time.Now(), server)
 	if err != nil {
 		app.logger.Error("Failed to check GTFS bundle expiration", "error", err)
+		app.reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: map[string]string{
+				"server_id":   fmt.Sprintf("%d", server.ID),
+				"server_name": server.Name,
+			},
+			ExtraContext: map[string]interface{}{
+				"cache_file": cachePath,
+			},
+			Level: sentry.LevelError,
+		})
 	}
 
 	err = metrics.CheckAgenciesWithCoverageMatch(cachePath, app.logger, server)
 
 	if err != nil {
 		app.logger.Error("Failed to check agencies with coverage match metric", "error", err)
+		app.reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: map[string]string{
+				"server_id":   fmt.Sprintf("%d", server.ID),
+				"server_name": server.Name,
+			},
+			ExtraContext: map[string]interface{}{
+				"cache_file": cachePath,
+			},
+			Level: sentry.LevelError,
+		})
 	}
 
 	err = metrics.CheckVehicleCountMatch(server)
 
 	if err != nil {
 		app.logger.Error("Failed to check vehicle count match metric", "error", err)
+		app.reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: map[string]string{
+				"server_id":   fmt.Sprintf("%d", server.ID),
+				"server_name": server.Name,
+			},
+			Level: sentry.LevelError,
+		})
 	}
 
 	err = metrics.FetchObaAPIMetrics(server.AgencyID, server.ObaBaseURL, server.ObaApiKey, nil)
 
 	if err != nil {
 		app.logger.Error("Failed to fetch OBA API metrics", "error", err)
+		app.reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: map[string]string{
+				"server_id":   fmt.Sprintf("%d", server.ID),
+				"server_name": server.Name,
+			},
+			ExtraContext: map[string]interface{}{
+				"oba_base_url": server.ObaBaseURL,
+			},
+			Level: sentry.LevelError,
+		})
 	}
 }

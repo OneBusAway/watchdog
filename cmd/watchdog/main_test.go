@@ -15,9 +15,11 @@ import (
 	"time"
 
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/report"
 )
 
 func TestLoadConfigFromFile(t *testing.T) {
+	reporter := report.NewReporter("test", "development")
 	t.Run("ValidConfig", func(t *testing.T) {
 		content := `[{
 		"name": "Test Server", "id": 1,
@@ -40,7 +42,7 @@ func TestLoadConfigFromFile(t *testing.T) {
 		}
 		tmpFile.Close()
 
-		servers, err := loadConfigFromFile(tmpFile.Name())
+		servers, err := loadConfigFromFile(tmpFile.Name() , reporter)
 		if err != nil {
 			t.Fatalf("loadConfigFromFile failed: %v", err)
 		}
@@ -79,14 +81,14 @@ func TestLoadConfigFromFile(t *testing.T) {
 		}
 		tmpFile.Close()
 
-		_, err = loadConfigFromFile(tmpFile.Name())
+		_, err = loadConfigFromFile(tmpFile.Name() , reporter)
 		if err == nil {
 			t.Errorf("Expected error with invalid JSON, got none")
 		}
 	})
 
 	t.Run("NonExistentFile", func(t *testing.T) {
-		_, err := loadConfigFromFile("non-existent-file.json")
+		_, err := loadConfigFromFile("non-existent-file.json" , reporter)
 		if err == nil {
 			t.Errorf("Expected error for non-existent file, got none")
 		}
@@ -94,6 +96,7 @@ func TestLoadConfigFromFile(t *testing.T) {
 }
 
 func TestLoadConfigFromURL(t *testing.T) {
+	reporter := report.NewReporter("test", "development")
 	t.Run("ValidResponse", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -110,7 +113,7 @@ func TestLoadConfigFromURL(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		servers, err := loadConfigFromURL(ts.URL, "user", "pass")
+		servers, err := loadConfigFromURL(ts.URL, "user", "pass" , reporter)
 		if err != nil {
 			t.Fatalf("loadConfigFromURL failed: %v", err)
 		}
@@ -140,7 +143,7 @@ func TestLoadConfigFromURL(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		_, err := loadConfigFromURL(ts.URL, "", "")
+		_, err := loadConfigFromURL(ts.URL, "", "" , reporter)
 		if err == nil {
 			t.Errorf("Expected error with 500 response, got none")
 		}
@@ -153,13 +156,13 @@ func TestLoadConfigFromURL(t *testing.T) {
 		}))
 		defer ts.Close()
 		
-		_, err := loadConfigFromURL(ts.URL, "", "")
+		_, err := loadConfigFromURL(ts.URL, "", "" , reporter)
 		if err == nil {
 			t.Errorf("Expected error for invalid JSON response, got none")
 		}
 	})
 	t.Run("InvalidURL", func(t *testing.T) {
-		_, err := loadConfigFromURL("://invalid-url", "", "")
+		_, err := loadConfigFromURL("://invalid-url", "", "" , reporter)
 		if err == nil || !strings.Contains(err.Error(), "failed to create request") {
 			t.Errorf("Expected request creation error, got: %v", err)
 		}
@@ -295,12 +298,13 @@ func TestUpdateConfig(t *testing.T) {
 
 func TestCreateCacheDirectory(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	
+	reporter := report.NewReporter("test", "development")
+
 	t.Run("Creates new directory", func(t *testing.T) {
 			baseTempDir := t.TempDir()
 			tempDir := filepath.Join(baseTempDir, "test-cache")
 			
-			err := createCacheDirectory(tempDir, logger)
+			err := createCacheDirectory(tempDir, logger , reporter)
 			if err != nil {
 					t.Fatalf("Failed to create cache directory: %v", err)
 			}
@@ -322,7 +326,7 @@ func TestCreateCacheDirectory(t *testing.T) {
 					t.Fatalf("Failed to create test directory: %v", err)
 			}
 			
-			err := createCacheDirectory(tempDir, logger)
+			err := createCacheDirectory(tempDir, logger , reporter)
 			if err != nil {
 					t.Errorf("Failed on existing directory: %v", err)
 			}
@@ -338,7 +342,7 @@ func TestCreateCacheDirectory(t *testing.T) {
 					file.Close()
 			}
 			
-			err := createCacheDirectory(filePath, logger)
+			err := createCacheDirectory(filePath, logger , reporter)
 			if err == nil {
 					t.Error("Expected error when path is a file, but got nil")
 			}
@@ -351,7 +355,8 @@ func TestRefreshConfig(t *testing.T) {
 	app := newTestApplication(t)
 	
 	testLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	
+	reporter := report.NewReporter("test", "development")
+
 	var serverHitCount int
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			serverHitCount++
@@ -378,7 +383,7 @@ func TestRefreshConfig(t *testing.T) {
 	originalConfig := make([]models.ObaServer, len(app.config.Servers))
 	copy(originalConfig, app.config.Servers)
 	
-	go refreshConfig(mockServer.URL, "testuser", "testpass", app, testLogger, 100*time.Millisecond)
+	go refreshConfig(mockServer.URL, "testuser", "testpass", app, testLogger, 100*time.Millisecond , reporter)
 	
 	time.Sleep(200 * time.Millisecond)
 	
@@ -414,19 +419,21 @@ func TestDownloadGTFSBundles(t *testing.T) {
 	
 	tempDir := t.TempDir()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	reporter := report.NewReporter("test", "development")
 	
-	downloadGTFSBundles(servers, tempDir, logger)
+	downloadGTFSBundles(servers, tempDir, logger , reporter)
 	
 }
 
 func TestRefreshGTFSBundles(t *testing.T) {
 	var logBuffer bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	
+	reporter := report.NewReporter("test", "development")
+
 	servers := []models.ObaServer{{ID: 1, Name: "Test Server", GtfsUrl: "http://example.com/gtfs.zip"}}
 	cacheDir := t.TempDir()
 	
-	go refreshGTFSBundles(servers, cacheDir, logger, 10*time.Millisecond)
+	go refreshGTFSBundles(servers, cacheDir, logger, 10*time.Millisecond , reporter)
 	
 	time.Sleep(15*time.Millisecond)
 	
