@@ -16,9 +16,9 @@ import (
 
 	"github.com/getsentry/sentry-go"
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/report"
 	"watchdog.onebusaway.org/internal/server"
 	"watchdog.onebusaway.org/internal/utils"
-	"watchdog.onebusaway.org/internal/report"
 )
 
 // Declare a string containing the application version number. Later in the book we'll
@@ -31,10 +31,10 @@ const version = "1.0.0"
 // logger, but it will grow to include a lot more as our build progresses.
 
 type application struct {
-	config server.Config
-	logger *slog.Logger
+	config   server.Config
+	logger   *slog.Logger
 	reporter *report.Reporter
-	mu     sync.RWMutex
+	mu       sync.RWMutex
 }
 
 func main() {
@@ -54,9 +54,9 @@ func main() {
 	configAuthPass := os.Getenv("CONFIG_AUTH_PASS")
 
 	var err error
-	
-	if err = validateConfigFlags(configFile, configURL); err != nil{
-		fmt.Println("Error:",err)
+
+	if err = validateConfigFlags(configFile, configURL); err != nil {
+		fmt.Println("Error:", err)
 		flag.Usage()
 		os.Exit(1)
 	}
@@ -68,12 +68,11 @@ func main() {
 	reporter.ConfigureScope()
 
 	var servers []models.ObaServer
-	
 
 	if *configFile != "" {
-		servers, err = loadConfigFromFile(*configFile , reporter)
+		servers, err = loadConfigFromFile(*configFile, reporter)
 	} else if *configURL != "" {
-		servers, err = loadConfigFromURL(*configURL, configAuthUser, configAuthPass , reporter)
+		servers, err = loadConfigFromURL(*configURL, configAuthUser, configAuthPass, reporter)
 	} else {
 		fmt.Println("Error: No configuration provided. Use --config-file or --config-url.")
 		flag.Usage()
@@ -94,31 +93,29 @@ func main() {
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-
-
 	cacheDir := "cache"
-	if err = createCacheDirectory(cacheDir, logger , reporter); err != nil {
+	if err = createCacheDirectory(cacheDir, logger, reporter); err != nil {
 		logger.Error("Failed to create cache directory", "error", err)
 		os.Exit(1)
 	}
 
 	// Download GTFS bundles for all servers on startup
-	downloadGTFSBundles(servers, cacheDir, logger , reporter)
+	downloadGTFSBundles(servers, cacheDir, logger, reporter)
 
 	app := &application{
-		config: cfg,
-		logger: logger,
+		config:   cfg,
+		logger:   logger,
 		reporter: reporter,
 	}
 
 	app.startMetricsCollection()
 
 	// Cron job to download GTFS bundles for all servers every 24 hours
-	go refreshGTFSBundles(servers, cacheDir, logger , 24 * time.Hour , reporter)
+	go refreshGTFSBundles(servers, cacheDir, logger, 24*time.Hour, reporter)
 
 	// If a remote URL is specified, refresh the configuration every minute
 	if *configURL != "" {
-		go refreshConfig(*configURL, configAuthUser, configAuthPass, app, logger, time.Minute , reporter)
+		go refreshConfig(*configURL, configAuthUser, configAuthPass, app, logger, time.Minute, reporter)
 	}
 
 	srv := &http.Server{
@@ -139,49 +136,48 @@ func main() {
 }
 
 // validateConfigFlags checks that only one of --config-file, --config-url, or an additional argument is provided.
-func validateConfigFlags(configFile, configURL *string) error{
+func validateConfigFlags(configFile, configURL *string) error {
 	if (*configFile != "" && *configURL != "") || (*configFile != "" && len(flag.Args()) > 0) || (*configURL != "" && len(flag.Args()) > 0) {
 		return fmt.Errorf("only one of --config-file or --config-url can be specified")
 	}
 	return nil
 }
 
-
 // createCacheDirectory ensures the cache directory exists, creating it if necessary.
-func createCacheDirectory(cacheDir string , logger *slog.Logger , reporter *report.Reporter) error{
-	stat, err := os.Stat(cacheDir); 
+func createCacheDirectory(cacheDir string, logger *slog.Logger, reporter *report.Reporter) error {
+	stat, err := os.Stat(cacheDir)
 
 	if err != nil {
-		if os.IsNotExist(err){
+		if os.IsNotExist(err) {
 			if err := os.MkdirAll(cacheDir, os.ModePerm); err != nil {
 				reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-        Level: sentry.LevelError,
-				ExtraContext: map[string]interface{}{
-        	"cache_dir": cacheDir,
-    		},
-    		})
+					Level: sentry.LevelError,
+					ExtraContext: map[string]interface{}{
+						"cache_dir": cacheDir,
+					},
+				})
 				return err
 			}
 			return nil
 		}
 		return err
-		
+
 	}
 	if !stat.IsDir() {
 		err := fmt.Errorf("%s is not a directory", cacheDir)
-    reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-        Level: sentry.LevelError,
-				ExtraContext: map[string]interface{}{
-        	"cache_dir": cacheDir,
-    		},
-    })
-    return err
+		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Level: sentry.LevelError,
+			ExtraContext: map[string]interface{}{
+				"cache_dir": cacheDir,
+			},
+		})
+		return err
 	}
 	return nil
 }
 
 // downloadGTFSBundles downloads GTFS bundles for each server and caches them locally.
-func downloadGTFSBundles(servers []models.ObaServer, cacheDir string, logger *slog.Logger , reporter *report.Reporter) {
+func downloadGTFSBundles(servers []models.ObaServer, cacheDir string, logger *slog.Logger, reporter *report.Reporter) {
 	for _, server := range servers {
 		hash := sha1.Sum([]byte(server.GtfsUrl))
 		hashStr := hex.EncodeToString(hash[:])
@@ -190,13 +186,13 @@ func downloadGTFSBundles(servers []models.ObaServer, cacheDir string, logger *sl
 		_, err := utils.DownloadGTFSBundle(server.GtfsUrl, cacheDir, server.ID, hashStr)
 		if err != nil {
 			reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{
+				Tags: map[string]string{
 					"server_id": fmt.Sprintf("%d", server.ID),
-			},
-			ExtraContext: map[string]interface{}{
+				},
+				ExtraContext: map[string]interface{}{
 					"gtfs_url": server.GtfsUrl,
-			},
-			Level: sentry.LevelError,
+				},
+				Level: sentry.LevelError,
 			})
 			logger.Error("Failed to download GTFS bundle", "server_id", server.ID, "error", err)
 		} else {
@@ -206,22 +202,22 @@ func downloadGTFSBundles(servers []models.ObaServer, cacheDir string, logger *sl
 }
 
 // refreshGTFSBundles periodically downloads GTFS bundles at the specified interval.
-func refreshGTFSBundles(servers []models.ObaServer, cacheDir string, logger *slog.Logger , interval time.Duration , reporter *report.Reporter) {
+func refreshGTFSBundles(servers []models.ObaServer, cacheDir string, logger *slog.Logger, interval time.Duration, reporter *report.Reporter) {
 	for {
 		time.Sleep(interval)
-		downloadGTFSBundles(servers, cacheDir, logger , reporter)
+		downloadGTFSBundles(servers, cacheDir, logger, reporter)
 	}
 }
 
 // refreshConfig periodically fetches remote config and updates the application servers.
-func refreshConfig(configURL, configAuthUser, configAuthPass string, app *application, logger *slog.Logger , interval time.Duration , reporter *report.Reporter) {
+func refreshConfig(configURL, configAuthUser, configAuthPass string, app *application, logger *slog.Logger, interval time.Duration, reporter *report.Reporter) {
 	for {
 		time.Sleep(interval)
-		newServers, err := loadConfigFromURL(configURL, configAuthUser, configAuthPass , reporter)
+		newServers, err := loadConfigFromURL(configURL, configAuthUser, configAuthPass, reporter)
 		if err != nil {
 			reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 				Tags: map[string]string{
-						"config_url": configURL,
+					"config_url": configURL,
 				},
 				Level: sentry.LevelError,
 			})
@@ -241,15 +237,14 @@ func (app *application) updateConfig(newServers []models.ObaServer) {
 	app.config.Servers = newServers
 }
 
-
-func loadConfigFromFile(filePath string , reporter *report.Reporter) ([]models.ObaServer, error) {
+func loadConfigFromFile(filePath string, reporter *report.Reporter) ([]models.ObaServer, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-    Tags: map[string]string{
-        "file_path": filePath,
-    },
-    Level: sentry.LevelError,
+			Tags: map[string]string{
+				"file_path": filePath,
+			},
+			Level: sentry.LevelError,
 		})
 		return nil, fmt.Errorf("failed to read config file: %v", err)
 	}
@@ -257,10 +252,10 @@ func loadConfigFromFile(filePath string , reporter *report.Reporter) ([]models.O
 	var servers []models.ObaServer
 	if err := json.Unmarshal(data, &servers); err != nil {
 		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-    Tags: map[string]string{
-        "file_path": filePath,
-    },
-    Level: sentry.LevelError,
+			Tags: map[string]string{
+				"file_path": filePath,
+			},
+			Level: sentry.LevelError,
 		})
 		return nil, fmt.Errorf("failed to unmarshal JSON: %v", err)
 	}
@@ -268,13 +263,13 @@ func loadConfigFromFile(filePath string , reporter *report.Reporter) ([]models.O
 	return servers, nil
 }
 
-func loadConfigFromURL(url, authUser, authPass string , reporter *report.Reporter) ([]models.ObaServer, error) {
+func loadConfigFromURL(url, authUser, authPass string, reporter *report.Reporter) ([]models.ObaServer, error) {
 	client := &http.Client{}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
-					"config_url": url,
+				"config_url": url,
 			},
 			Level: sentry.LevelError,
 		})
@@ -289,7 +284,7 @@ func loadConfigFromURL(url, authUser, authPass string , reporter *report.Reporte
 	if err != nil {
 		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
-					"config_url": url,
+				"config_url": url,
 			},
 			Level: sentry.LevelError,
 		})
@@ -312,7 +307,7 @@ func loadConfigFromURL(url, authUser, authPass string , reporter *report.Reporte
 	if err != nil {
 		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
-					"config_url": url,
+				"config_url": url,
 			},
 			Level: sentry.LevelError,
 		})
@@ -323,7 +318,7 @@ func loadConfigFromURL(url, authUser, authPass string , reporter *report.Reporte
 	if err := json.Unmarshal(data, &servers); err != nil {
 		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
-					"config_url": url,
+				"config_url": url,
 			},
 			Level: sentry.LevelError,
 		})
@@ -332,4 +327,3 @@ func loadConfigFromURL(url, authUser, authPass string , reporter *report.Reporte
 
 	return servers, nil
 }
-

@@ -20,7 +20,6 @@ func SetupSentry() {
 	sentry.CaptureMessage("Watchdog started")
 }
 
-
 func FlushSentry() {
 	sentry.Flush(2 * time.Second)
 }

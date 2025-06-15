@@ -7,7 +7,6 @@ import (
 	"github.com/getsentry/sentry-go"
 )
 
-
 // Reporter provides methods to configure Sentry and report errors
 // with environment-specific metadata (like env, version, arch, etc.).
 type Reporter struct {
@@ -29,7 +28,7 @@ func (r *Reporter) ConfigureScope() {
 		scope.SetTag("env", r.Env)
 		scope.SetTag("app_version", r.Version)
 		scope.SetTag("go_version", runtime.Version())
-		scope.SetTag("goarch", runtime.GOARCH) 
+		scope.SetTag("goarch", runtime.GOARCH)
 		scope.SetContext("host_info", map[string]interface{}{
 			"hostname": r.getHostname(),
 		})
@@ -45,7 +44,6 @@ func (r *Reporter) getHostname() string {
 	}
 	return hostname
 }
-
 
 // ReportError reports the error to Sentry with the given severity level
 // If no level is provided, it defaults to sentry.LevelError.
@@ -64,7 +62,6 @@ func (r *Reporter) ReportError(err error, levels ...sentry.Level) {
 		sentry.CaptureException(err)
 	})
 }
-
 
 // SentryReportOptions provides optional data for reporting.
 type SentryReportOptions struct {
