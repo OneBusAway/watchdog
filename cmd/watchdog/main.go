@@ -186,9 +186,7 @@ func downloadGTFSBundles(servers []models.ObaServer, cacheDir string, logger *sl
 		_, err := utils.DownloadGTFSBundle(server.GtfsUrl, cacheDir, server.ID, hashStr)
 		if err != nil {
 			reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-				Tags: map[string]string{
-					"server_id": fmt.Sprintf("%d", server.ID),
-				},
+				Tags: utils.MakeMap("server_id", fmt.Sprintf("%d", server.ID)),
 				ExtraContext: map[string]interface{}{
 					"gtfs_url": server.GtfsUrl,
 				},
@@ -216,9 +214,7 @@ func refreshConfig(configURL, configAuthUser, configAuthPass string, app *applic
 		newServers, err := loadConfigFromURL(configURL, configAuthUser, configAuthPass, reporter)
 		if err != nil {
 			reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-				Tags: map[string]string{
-					"config_url": configURL,
-				},
+				Tags:  utils.MakeMap("config_url", configURL),
 				Level: sentry.LevelError,
 			})
 			logger.Error("Failed to refresh remote config", "error", err)
@@ -241,9 +237,7 @@ func loadConfigFromFile(filePath string, reporter *report.Reporter) ([]models.Ob
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{
-				"file_path": filePath,
-			},
+			Tags:  utils.MakeMap("file_path", filePath),
 			Level: sentry.LevelError,
 		})
 		return nil, fmt.Errorf("failed to read config file: %v", err)
@@ -252,9 +246,7 @@ func loadConfigFromFile(filePath string, reporter *report.Reporter) ([]models.Ob
 	var servers []models.ObaServer
 	if err := json.Unmarshal(data, &servers); err != nil {
 		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{
-				"file_path": filePath,
-			},
+			Tags:  utils.MakeMap("file_path", filePath),
 			Level: sentry.LevelError,
 		})
 		return nil, fmt.Errorf("failed to unmarshal JSON: %v", err)
@@ -268,9 +260,7 @@ func loadConfigFromURL(url, authUser, authPass string, reporter *report.Reporter
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{
-				"config_url": url,
-			},
+			Tags:  utils.MakeMap("config_url", url),
 			Level: sentry.LevelError,
 		})
 		return nil, fmt.Errorf("failed to create request: %v", err)
@@ -283,9 +273,7 @@ func loadConfigFromURL(url, authUser, authPass string, reporter *report.Reporter
 	resp, err := client.Do(req)
 	if err != nil {
 		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{
-				"config_url": url,
-			},
+			Tags:  utils.MakeMap("config_url", url),
 			Level: sentry.LevelError,
 		})
 		return nil, fmt.Errorf("failed to fetch remote config: %v", err)
@@ -295,9 +283,7 @@ func loadConfigFromURL(url, authUser, authPass string, reporter *report.Reporter
 	if resp.StatusCode != http.StatusOK {
 		statusErr := fmt.Errorf("remote config returned status: %d", resp.StatusCode)
 		reporter.ReportErrorWithSentryOptions(statusErr, report.SentryReportOptions{
-			Tags: map[string]string{
-				"config_url": url,
-			},
+			Tags:  utils.MakeMap("config_url", url),
 			Level: sentry.LevelError,
 		})
 		return nil, statusErr
@@ -306,9 +292,7 @@ func loadConfigFromURL(url, authUser, authPass string, reporter *report.Reporter
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{
-				"config_url": url,
-			},
+			Tags:  utils.MakeMap("config_url", url),
 			Level: sentry.LevelError,
 		})
 		return nil, fmt.Errorf("failed to read remote config: %v", err)
@@ -317,9 +301,7 @@ func loadConfigFromURL(url, authUser, authPass string, reporter *report.Reporter
 	var servers []models.ObaServer
 	if err := json.Unmarshal(data, &servers); err != nil {
 		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{
-				"config_url": url,
-			},
+			Tags:  utils.MakeMap("config_url", url),
 			Level: sentry.LevelError,
 		})
 		return nil, fmt.Errorf("failed to unmarshal JSON: %v", err)
