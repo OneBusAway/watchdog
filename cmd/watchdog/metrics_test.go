@@ -43,12 +43,12 @@ func TestMetricsEndpoint(t *testing.T) {
 
 func TestCollectMetricsForServer(t *testing.T) {
 	app := newTestApplication(t)
-	
+
 	prometheus.DefaultRegisterer = prometheus.NewRegistry()
-	
+
 	testServer := app.config.Servers[0]
-	
+
 	app.collectMetricsForServer(testServer)
-	
+
 	getMetricsForTesting(t, metrics.ObaApiStatus)
 }
