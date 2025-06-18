@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"watchdog.onebusaway.org/internal/report"
+	"watchdog.onebusaway.org/internal/utils"
 )
 
 type OBAMetrics struct {
@@ -29,7 +32,7 @@ type OBAMetrics struct {
 	} `json:"data"`
 }
 
-func FetchObaAPIMetrics(slugID string, serverBaseUrl string, apiKey string, client *http.Client) error {
+func FetchObaAPIMetrics(slugID string, serverBaseUrl string, apiKey string, client *http.Client, reporter *report.Reporter) error {
 	if client == nil {
 		client = &http.Client{
 			Timeout: 10 * time.Second,
@@ -42,20 +45,46 @@ func FetchObaAPIMetrics(slugID string, serverBaseUrl string, apiKey string, clie
 
 	resp, err := client.Get(url)
 	if err != nil {
-		return fmt.Errorf("failed to fetch metrics from %s: %v", url, err)
+		err = fmt.Errorf("failed to fetch metrics from %s: %v", url, err)
+		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: map[string]string{
+				"slug_id": slugID,
+			},
+			ExtraContext: map[string]interface{}{
+				"url": url,
+			},
+		})
+		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		var wrappedErr error
 		if resp.StatusCode == http.StatusNotFound {
-			return fmt.Errorf("server %s does not support metrics API", serverBaseUrl)
+			wrappedErr = fmt.Errorf("server %s does not support metrics API", serverBaseUrl)
 		}
-		return fmt.Errorf("unexpected status code from %s: %d", url, resp.StatusCode)
+		wrappedErr = fmt.Errorf("unexpected status code from %s: %d", url, resp.StatusCode)
+		reporter.ReportErrorWithSentryOptions(wrappedErr, report.SentryReportOptions{
+			Tags: utils.MakeMap("slug_id", slugID),
+			ExtraContext: map[string]interface{}{
+				"url":         url,
+				"status_code": resp.StatusCode,
+			},
+		})
+
+		return wrappedErr
 	}
 
 	var metrics OBAMetrics
 	if err := json.NewDecoder(resp.Body).Decode(&metrics); err != nil {
-		return fmt.Errorf("failed to decode metrics from %s: %v", url, err)
+		err = fmt.Errorf("failed to decode metrics from %s: %v", url, err)
+		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: utils.MakeMap("slug_id", slugID),
+			ExtraContext: map[string]interface{}{
+				"url": url,
+			},
+		})
+		return err
 	}
 
 	ObaApiStatus.WithLabelValues(slugID, url).Set(1)

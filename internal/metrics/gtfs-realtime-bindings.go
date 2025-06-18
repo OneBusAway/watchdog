@@ -10,20 +10,30 @@ import (
 
 	onebusaway "github.com/OneBusAway/go-sdk"
 	"github.com/OneBusAway/go-sdk/option"
-	"github.com/getsentry/sentry-go"
 	"github.com/jamespfennell/gtfs"
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/report"
+	"watchdog.onebusaway.org/internal/utils"
 )
 
-func CountVehiclePositions(server models.ObaServer) (int, error) {
+func CountVehiclePositions(server models.ObaServer, reporter *report.Reporter) (int, error) {
 	parsedURL, err := url.Parse(server.VehiclePositionUrl)
 	if err != nil {
-		return 0, fmt.Errorf("failed to parse GTFS-RT URL: %v", err)
+		err = fmt.Errorf("failed to parse GTFS-RT URL: %v", err)
+		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+			ExtraContext: map[string]interface{}{
+				"vehicle_position_url": server.VehiclePositionUrl,
+			},
+		})
+		return 0, err
 	}
 
 	req, err := http.NewRequest("GET", parsedURL.String(), nil)
 	if err != nil {
-		return 0, fmt.Errorf("failed to create HTTP request: %v", err)
+		err = fmt.Errorf("failed to create HTTP request: %v", err)
+		reporter.ReportError(err)
+		return 0, err
 	}
 	if server.GtfsRtApiKey != "" && server.GtfsRtApiValue != "" {
 		req.Header.Set(server.GtfsRtApiKey, server.GtfsRtApiValue)
@@ -32,19 +42,29 @@ func CountVehiclePositions(server models.ObaServer) (int, error) {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		sentry.CaptureException(err)
-		return 0, fmt.Errorf("failed to fetch GTFS-RT feed: %v", err)
+		err = fmt.Errorf("failed to fetch GTFS-RT feed: %v", err)
+		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+			ExtraContext: map[string]interface{}{
+				"vehicle_position_url": server.VehiclePositionUrl,
+			},
+		})
+		return 0, err
 	}
 	defer resp.Body.Close()
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return 0, fmt.Errorf("failed to read GTFS-RT feed: %v", err)
+		err = fmt.Errorf("failed to read GTFS-RT feed: %v", err)
+		reporter.ReportError(err)
+		return 0, err
 	}
 
 	realtimeData, err := gtfs.ParseRealtime(data, &gtfs.ParseRealtimeOptions{})
 	if err != nil {
-		return 0, fmt.Errorf("failed to parse GTFS-RT feed: %v", err)
+		err = fmt.Errorf("failed to parse GTFS-RT feed: %v", err)
+		reporter.ReportError(err)
+		return 0, err
 	}
 
 	count := len(realtimeData.Vehicles)
@@ -57,7 +77,7 @@ func CountVehiclePositions(server models.ObaServer) (int, error) {
 	return count, nil
 }
 
-func VehiclesForAgencyAPI(server models.ObaServer) (int, error) {
+func VehiclesForAgencyAPI(server models.ObaServer, reporter *report.Reporter) (int, error) {
 
 	client := onebusaway.NewClient(
 		option.WithAPIKey(server.ObaApiKey),
@@ -69,7 +89,12 @@ func VehiclesForAgencyAPI(server models.ObaServer) (int, error) {
 	response, err := client.VehiclesForAgency.List(ctx, server.AgencyID, onebusaway.VehiclesForAgencyListParams{})
 
 	if err != nil {
-		sentry.CaptureException(err)
+		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: map[string]string{
+				"server_id": strconv.Itoa(server.ID),
+				"agency_id": server.AgencyID,
+			},
+		})
 		return 0, err
 	}
 
@@ -82,15 +107,23 @@ func VehiclesForAgencyAPI(server models.ObaServer) (int, error) {
 	return len(response.Data.List), nil
 }
 
-func CheckVehicleCountMatch(server models.ObaServer) error {
-	gtfsRtVehicleCount, err := CountVehiclePositions(server)
+func CheckVehicleCountMatch(server models.ObaServer, reporter *report.Reporter) error {
+	gtfsRtVehicleCount, err := CountVehiclePositions(server, reporter)
 	if err != nil {
-		return fmt.Errorf("failed to count vehicle positions from GTFS-RT: %v", err)
+		err := fmt.Errorf("failed to count vehicle positions from GTFS-RT: %v", err)
+		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+		})
+		return err
 	}
 
-	apiVehicleCount, err := VehiclesForAgencyAPI(server)
+	apiVehicleCount, err := VehiclesForAgencyAPI(server, reporter)
 	if err != nil {
-		return fmt.Errorf("failed to count vehicle positions from API: %v", err)
+		err := fmt.Errorf("failed to count vehicle positions from API: %v", err)
+		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+		})
+		return err
 	}
 
 	match := 0

@@ -7,15 +7,24 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/getsentry/sentry-go"
 	"github.com/jamespfennell/gtfs"
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/report"
+	"watchdog.onebusaway.org/internal/utils"
 )
 
 // CheckBundleExpiration calculates the number of days remaining until the GTFS bundle expires.
-func CheckBundleExpiration(cachePath string, logger *slog.Logger, currentTime time.Time, server models.ObaServer) (int, int, error) {
+func CheckBundleExpiration(cachePath string, logger *slog.Logger, currentTime time.Time, server models.ObaServer, reporter *report.Reporter) (int, int, error) {
 
 	file, err := os.Open(cachePath)
 	if err != nil {
+		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+			ExtraContext: map[string]interface{}{
+				"cache_path": cachePath,
+			},
+		})
 		return 0, 0, err
 	}
 	defer file.Close()
@@ -23,21 +32,47 @@ func CheckBundleExpiration(cachePath string, logger *slog.Logger, currentTime ti
 	// Convert the file into a byte slice
 	fileInfo, err := file.Stat()
 	if err != nil {
+		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+			ExtraContext: map[string]interface{}{
+				"cache_path": cachePath,
+			},
+		})
 		return 0, 0, err
 	}
 	fileBytes := make([]byte, fileInfo.Size())
 	_, err = file.Read(fileBytes)
 	if err != nil {
+		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+			ExtraContext: map[string]interface{}{
+				"cache_path": cachePath,
+			},
+		})
 		return 0, 0, err
 	}
 
 	staticData, err := gtfs.ParseStatic(fileBytes, gtfs.ParseStaticOptions{})
 	if err != nil {
+		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+			ExtraContext: map[string]interface{}{
+				"cache_path": cachePath,
+			},
+		})
 		return 0, 0, err
 	}
 
 	if len(staticData.Services) == 0 {
-		return 0, 0, fmt.Errorf("no services found in GTFS bundle")
+		errMsg := fmt.Errorf("no services found in GTFS bundle")
+		reporter.ReportErrorWithSentryOptions(errMsg, report.SentryReportOptions{
+			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+			ExtraContext: map[string]interface{}{
+				"cache_path": cachePath,
+			},
+			Level: sentry.LevelWarning,
+		})
+		return 0, 0, errMsg
 	}
 
 	// Get the earliest and latest expiration dates
