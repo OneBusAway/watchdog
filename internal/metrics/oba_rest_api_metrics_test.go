@@ -1,11 +1,13 @@
 package metrics
 
 import (
-	"gopkg.in/dnaeon/go-vcr.v4/pkg/recorder"
 	"net/http"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"gopkg.in/dnaeon/go-vcr.v4/pkg/recorder"
+	"watchdog.onebusaway.org/internal/report"
 )
 
 func TestFetchObaAPIMetrics_WithVCR(t *testing.T) {
@@ -39,6 +41,8 @@ func TestFetchObaAPIMetrics_WithVCR(t *testing.T) {
 		},
 	}
 
+	reporter := report.NewReporter("test", "development")
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var client *http.Client
@@ -56,7 +60,7 @@ func TestFetchObaAPIMetrics_WithVCR(t *testing.T) {
 				}
 			}
 
-			err := FetchObaAPIMetrics(tt.slugID, tt.serverUrl, tt.apiKey, client)
+			err := FetchObaAPIMetrics(tt.slugID, tt.serverUrl, tt.apiKey, client, reporter)
 
 			if tt.wantErr {
 				if err == nil {

@@ -7,9 +7,11 @@ import (
 	"testing"
 
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/report"
 )
 
 func TestCheckAgenciesWithCoverage(t *testing.T) {
+	reporter := report.NewReporter("test", "development")
 	// Test case: Successful execution
 
 	t.Run("Success", func(t *testing.T) {
@@ -21,7 +23,7 @@ func TestCheckAgenciesWithCoverage(t *testing.T) {
 
 		testServer := createTestServer(ts.URL, "Test Server", 999, "test-key", "http://example.com", "test-api-value", "test-api-key", "1")
 
-		err := CheckAgenciesWithCoverageMatch(fixturePath, logger, testServer)
+		err := CheckAgenciesWithCoverageMatch(fixturePath, logger, testServer, reporter)
 		if err != nil {
 			t.Fatalf("CheckAgenciesWithCoverageMatch failed: %v", err)
 		}
@@ -41,7 +43,7 @@ func TestCheckAgenciesWithCoverage(t *testing.T) {
 		logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 		testServer := createTestServer("http://example.com", "Test Server", 999, "test-key", "http://example.com", "test-api-value", "test-api-key", "1")
 
-		err := CheckAgenciesWithCoverageMatch("invalid/path/to/gtfs.zip", logger, testServer)
+		err := CheckAgenciesWithCoverageMatch("invalid/path/to/gtfs.zip", logger, testServer, reporter)
 		if err == nil {
 			t.Fatal("Expected an error but got nil")
 		}
@@ -54,7 +56,7 @@ func TestCheckAgenciesWithCoverage(t *testing.T) {
 		logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 		testServer := createTestServer("http://example.com", "Test Server", 999, "test-key", "http://example.com", "test-api-value", "test-api-key", "1")
 
-		err := CheckAgenciesWithCoverageMatch(fixturePath, logger, testServer)
+		err := CheckAgenciesWithCoverageMatch(fixturePath, logger, testServer, reporter)
 		if err == nil {
 			t.Fatal("Expected an error but got nil")
 		}
@@ -67,7 +69,7 @@ func TestCheckAgenciesWithCoverage(t *testing.T) {
 		logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 		testServer := createTestServer("http://example.com", "Test Server", 999, "test-key", "http://example.com", "test-api-value", "test-api-key", "1")
 
-		err := CheckAgenciesWithCoverageMatch(fixturePath, logger, testServer)
+		err := CheckAgenciesWithCoverageMatch(fixturePath, logger, testServer, reporter)
 		if err == nil {
 			t.Fatal("Expected an error but got nil")
 		}
@@ -77,6 +79,7 @@ func TestCheckAgenciesWithCoverage(t *testing.T) {
 
 // OBASdk tests
 func TestGetAgenciesWithCoverage(t *testing.T) {
+	reporter := report.NewReporter("test", "development")
 	t.Run("NilResponse", func(t *testing.T) {
 		ts := setupObaServer(t, `{}`, http.StatusOK)
 		defer ts.Close()
@@ -88,7 +91,7 @@ func TestGetAgenciesWithCoverage(t *testing.T) {
 			ObaApiKey:  "test-key",
 		}
 
-		count, err := GetAgenciesWithCoverage(server)
+		count, err := GetAgenciesWithCoverage(server, reporter)
 		if err != nil {
 			t.Fatalf("Expected no error, got %v", err)
 		}
@@ -109,7 +112,7 @@ func TestGetAgenciesWithCoverage(t *testing.T) {
 			ObaApiKey:  "test-key",
 		}
 
-		count, err := GetAgenciesWithCoverage(server)
+		count, err := GetAgenciesWithCoverage(server, reporter)
 		if err != nil {
 			t.Fatalf("Expected no error, got %v", err)
 		}
@@ -130,7 +133,7 @@ func TestGetAgenciesWithCoverage(t *testing.T) {
 			ObaApiKey:  "test-key",
 		}
 
-		_, err := GetAgenciesWithCoverage(server)
+		_, err := GetAgenciesWithCoverage(server, reporter)
 		if err == nil {
 			t.Fatal("Expected an error but got nil")
 		}

@@ -2,15 +2,17 @@ package metrics
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 
 	onebusaway "github.com/OneBusAway/go-sdk"
 	"github.com/OneBusAway/go-sdk/option"
-	"github.com/getsentry/sentry-go"
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/report"
+	"watchdog.onebusaway.org/internal/utils"
 )
 
-func ServerPing(server models.ObaServer) {
+func ServerPing(server models.ObaServer, reporter *report.Reporter) {
 	client := onebusaway.NewClient(
 		option.WithAPIKey(server.ObaApiKey),
 		option.WithBaseURL(server.ObaBaseURL),
@@ -20,7 +22,13 @@ func ServerPing(server models.ObaServer) {
 	response, err := client.CurrentTime.Get(ctx)
 
 	if err != nil {
-		sentry.CaptureException(err)
+		err := fmt.Errorf("failed to ping OBA server %s: %v", server.ObaBaseURL, err)
+		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+			ExtraContext: map[string]interface{}{
+				"oba_base_url": server.ObaBaseURL,
+			},
+		})
 		// Update status metric
 		ObaApiStatus.WithLabelValues(
 			strconv.Itoa(server.ID),

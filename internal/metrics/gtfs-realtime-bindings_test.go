@@ -6,9 +6,11 @@ import (
 
 	"github.com/jamespfennell/gtfs"
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/report"
 )
 
 func TestCountVehiclePositions(t *testing.T) {
+	reporter := report.NewReporter("test", "development")
 	t.Run("Valid GTFS-RT response", func(t *testing.T) {
 		mockServer := setupGtfsRtServer(t, "gtfs_rt_feed_vehicles.pb")
 		defer mockServer.Close()
@@ -20,7 +22,7 @@ func TestCountVehiclePositions(t *testing.T) {
 			GtfsRtApiValue:     "test-key",
 		}
 
-		count, err := CountVehiclePositions(server)
+		count, err := CountVehiclePositions(server, reporter)
 		if err != nil {
 			t.Fatalf("Expected no error, got %v", err)
 		}
@@ -35,7 +37,7 @@ func TestCountVehiclePositions(t *testing.T) {
 			VehiclePositionUrl: "http://nonexistent.local/gtfs-rt",
 		}
 
-		_, err := CountVehiclePositions(server)
+		_, err := CountVehiclePositions(server, reporter)
 		if err == nil {
 			t.Fatal("Expected an error, got nil")
 		}
@@ -47,7 +49,7 @@ func TestCountVehiclePositions(t *testing.T) {
 			VehiclePositionUrl: "://invalid-url",
 		}
 
-		_, err := CountVehiclePositions(server)
+		_, err := CountVehiclePositions(server, reporter)
 		if err == nil {
 			t.Fatal("Expected an error due to invalid URL, got nil")
 		}
@@ -55,6 +57,7 @@ func TestCountVehiclePositions(t *testing.T) {
 }
 
 func TestVehiclesForAgencyAPI(t *testing.T) {
+	reporter := report.NewReporter("test", "development")
 	t.Run("NilResponse", func(t *testing.T) {
 		ts := setupObaServer(t, `{"data": {"list": []}}`, http.StatusOK)
 		defer ts.Close()
@@ -67,7 +70,7 @@ func TestVehiclesForAgencyAPI(t *testing.T) {
 			AgencyID:   "test-agency",
 		}
 
-		count, err := VehiclesForAgencyAPI(server)
+		count, err := VehiclesForAgencyAPI(server, reporter)
 		if err != nil {
 			t.Fatalf("Expected no error, got %v", err)
 		}
@@ -89,7 +92,7 @@ func TestVehiclesForAgencyAPI(t *testing.T) {
 			AgencyID:   "test-agency",
 		}
 
-		count, err := VehiclesForAgencyAPI(server)
+		count, err := VehiclesForAgencyAPI(server, reporter)
 		if err != nil {
 			t.Fatalf("Expected no error, got %v", err)
 		}
@@ -111,7 +114,7 @@ func TestVehiclesForAgencyAPI(t *testing.T) {
 			AgencyID:   "test-agency",
 		}
 
-		_, err := VehiclesForAgencyAPI(server)
+		_, err := VehiclesForAgencyAPI(server, reporter)
 		if err == nil {
 			t.Fatal("Expected an error but got nil")
 		}
@@ -119,6 +122,7 @@ func TestVehiclesForAgencyAPI(t *testing.T) {
 }
 
 func TestCheckVehicleCountMatch(t *testing.T) {
+	reporter := report.NewReporter("test", "development")
 	t.Run("Success", func(t *testing.T) {
 		gtfsRtServer := setupGtfsRtServer(t, "gtfs_rt_feed_vehicles.pb")
 
@@ -129,7 +133,7 @@ func TestCheckVehicleCountMatch(t *testing.T) {
 
 		testServer := createTestServer(obaServer.URL, "Test Server", 999, "test-key", gtfsRtServer.URL, "test-api-value", "test-api-key", "1")
 
-		err := CheckVehicleCountMatch(testServer)
+		err := CheckVehicleCountMatch(testServer, reporter)
 		if err != nil {
 			t.Fatalf("CheckVehicleCountMatch failed: %v", err)
 		}
@@ -151,7 +155,7 @@ func TestCheckVehicleCountMatch(t *testing.T) {
 
 		testServer := createTestServer("http://example.com", "Test Server", 999, "test-key", gtfsRtServer.URL, "test-api-value", "test-api-key", "1")
 
-		err := CheckVehicleCountMatch(testServer)
+		err := CheckVehicleCountMatch(testServer, reporter)
 		if err == nil {
 			t.Fatal("Expected an error but got nil")
 		}
@@ -167,7 +171,7 @@ func TestCheckVehicleCountMatch(t *testing.T) {
 
 		testServer := createTestServer(obaServer.URL, "Test Server", 999, "test-key", gtfsRtServer.URL, "test-api-value", "test-api-key", "1")
 
-		err := CheckVehicleCountMatch(testServer)
+		err := CheckVehicleCountMatch(testServer, reporter)
 		if err == nil {
 			t.Fatal("Expected an error but got nil")
 		}
