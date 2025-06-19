@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"io"
@@ -11,8 +11,8 @@ import (
 
 func TestHealthcheckHandler(t *testing.T) {
 	// Create a new instance of our application struct which uses the mock env
-	app := &application{
-		config: server.Config{
+	app := &Application{
+		Config: server.Config{
 			Env: "testing",
 		},
 	}
@@ -45,7 +45,7 @@ func TestHealthcheckHandler(t *testing.T) {
 	expectedStrings := []string{
 		"status: available",
 		"environment: testing",
-		"version: " + version,
+		"version: " + app.Version,
 	}
 
 	for _, str := range expectedStrings {
