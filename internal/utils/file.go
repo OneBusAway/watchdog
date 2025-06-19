@@ -2,10 +2,14 @@ package utils
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/getsentry/sentry-go"
+	"watchdog.onebusaway.org/internal/report"
 )
 
 func GetLastCachedFile(cacheDir string, serverID int) (string, error) {
@@ -37,4 +41,37 @@ func GetLastCachedFile(cacheDir string, serverID int) (string, error) {
 	}
 
 	return filepath.Join(cacheDir, lastModFile), nil
+}
+
+// CreateCacheDirectory ensures the cache directory exists, creating it if necessary.
+func CreateCacheDirectory(cacheDir string, logger *slog.Logger, reporter *report.Reporter) error {
+	stat, err := os.Stat(cacheDir)
+
+	if err != nil {
+		if os.IsNotExist(err) {
+			if err := os.MkdirAll(cacheDir, os.ModePerm); err != nil {
+				reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+					Level: sentry.LevelError,
+					ExtraContext: map[string]interface{}{
+						"cache_dir": cacheDir,
+					},
+				})
+				return err
+			}
+			return nil
+		}
+		return err
+
+	}
+	if !stat.IsDir() {
+		err := fmt.Errorf("%s is not a directory", cacheDir)
+		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Level: sentry.LevelError,
+			ExtraContext: map[string]interface{}{
+				"cache_dir": cacheDir,
+			},
+		})
+		return err
+	}
+	return nil
 }
