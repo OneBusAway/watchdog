@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/getsentry/sentry-go"
@@ -28,12 +27,6 @@ const version = "1.0.0"
 // and middleware. At the moment this only contains a copy of the config struct and a
 // logger, but it will grow to include a lot more as our build progresses.
 
-type application struct {
-	config   server.Config
-	logger   *slog.Logger
-	reporter *report.Reporter
-	mu       sync.RWMutex
-}
 
 func main() {
 	var cfg server.Config
