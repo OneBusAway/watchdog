@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"watchdog.onebusaway.org/internal/models"
-	"watchdog.onebusaway.org/internal/report"
 )
 
 func TestDownloadGTFSBundles(t *testing.T) {
@@ -25,21 +24,19 @@ func TestDownloadGTFSBundles(t *testing.T) {
 
 	tempDir := t.TempDir()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	reporter := report.NewReporter("test", "development")
 
-	DownloadGTFSBundles(servers, tempDir, logger, reporter)
+	DownloadGTFSBundles(servers, tempDir, logger)
 
 }
 
 func TestRefreshGTFSBundles(t *testing.T) {
 	var logBuffer bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	reporter := report.NewReporter("test", "development")
 
 	servers := []models.ObaServer{{ID: 1, Name: "Test Server", GtfsUrl: "http://example.com/gtfs.zip"}}
 	cacheDir := t.TempDir()
 
-	go RefreshGTFSBundles(servers, cacheDir, logger, 10*time.Millisecond, reporter)
+	go RefreshGTFSBundles(servers, cacheDir, logger, 10*time.Millisecond)
 
 	time.Sleep(15 * time.Millisecond)
 

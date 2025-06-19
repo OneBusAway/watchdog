@@ -26,12 +26,12 @@ func ValidateConfigFlags(configFile, configURL *string) error {
 }
 
 // refreshConfig periodically fetches remote config and updates the application servers.
-func RefreshConfig(configURL, configAuthUser, configAuthPass string, app *app.Application, logger *slog.Logger, interval time.Duration, reporter *report.Reporter) {
+func RefreshConfig(configURL, configAuthUser, configAuthPass string, app *app.Application, logger *slog.Logger, interval time.Duration) {
 	for {
 		time.Sleep(interval)
-		newServers, err := LoadConfigFromURL(configURL, configAuthUser, configAuthPass, reporter)
+		newServers, err := LoadConfigFromURL(configURL, configAuthUser, configAuthPass)
 		if err != nil {
-			reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 				Tags:  utils.MakeMap("config_url", configURL),
 				Level: sentry.LevelError,
 			})
@@ -44,10 +44,10 @@ func RefreshConfig(configURL, configAuthUser, configAuthPass string, app *app.Ap
 	}
 }
 
-func LoadConfigFromFile(filePath string, reporter *report.Reporter) ([]models.ObaServer, error) {
+func LoadConfigFromFile(filePath string) ([]models.ObaServer, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags:  utils.MakeMap("file_path", filePath),
 			Level: sentry.LevelError,
 		})
@@ -56,7 +56,7 @@ func LoadConfigFromFile(filePath string, reporter *report.Reporter) ([]models.Ob
 
 	var servers []models.ObaServer
 	if err := json.Unmarshal(data, &servers); err != nil {
-		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags:  utils.MakeMap("file_path", filePath),
 			Level: sentry.LevelError,
 		})
@@ -66,11 +66,11 @@ func LoadConfigFromFile(filePath string, reporter *report.Reporter) ([]models.Ob
 	return servers, nil
 }
 
-func LoadConfigFromURL(url, authUser, authPass string, reporter *report.Reporter) ([]models.ObaServer, error) {
+func LoadConfigFromURL(url, authUser, authPass string) ([]models.ObaServer, error) {
 	client := &http.Client{}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags:  utils.MakeMap("config_url", url),
 			Level: sentry.LevelError,
 		})
@@ -83,7 +83,7 @@ func LoadConfigFromURL(url, authUser, authPass string, reporter *report.Reporter
 
 	resp, err := client.Do(req)
 	if err != nil {
-		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags:  utils.MakeMap("config_url", url),
 			Level: sentry.LevelError,
 		})
@@ -93,7 +93,7 @@ func LoadConfigFromURL(url, authUser, authPass string, reporter *report.Reporter
 
 	if resp.StatusCode != http.StatusOK {
 		statusErr := fmt.Errorf("remote config returned status: %d", resp.StatusCode)
-		reporter.ReportErrorWithSentryOptions(statusErr, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(statusErr, report.SentryReportOptions{
 			Tags:  utils.MakeMap("config_url", url),
 			Level: sentry.LevelError,
 		})
@@ -102,7 +102,7 @@ func LoadConfigFromURL(url, authUser, authPass string, reporter *report.Reporter
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags:  utils.MakeMap("config_url", url),
 			Level: sentry.LevelError,
 		})
@@ -111,7 +111,7 @@ func LoadConfigFromURL(url, authUser, authPass string, reporter *report.Reporter
 
 	var servers []models.ObaServer
 	if err := json.Unmarshal(data, &servers); err != nil {
-		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags:  utils.MakeMap("config_url", url),
 			Level: sentry.LevelError,
 		})

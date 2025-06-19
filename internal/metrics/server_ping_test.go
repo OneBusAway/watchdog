@@ -4,19 +4,16 @@ import (
 	"net/http"
 	"testing"
 	"time"
-
-	"watchdog.onebusaway.org/internal/report"
 )
 
 func TestCheckServer(t *testing.T) {
-	reporter := report.NewReporter("test", "development")
 	t.Run("Successful response", func(t *testing.T) {
 		ts := setupObaServer(t, `{"code":200,"currentTime":1234567890000,"text":"OK","version":2,"data":{"entry":{"readableTime":"Test Time"}}}`, http.StatusOK)
 		defer ts.Close()
 
 		testServer := createTestServer(ts.URL, "Test Server", 999, "test-key", "http://example.com", "test-api-value", "test-api-key", "1")
 
-		ServerPing(testServer, reporter)
+		ServerPing(testServer)
 		time.Sleep(100 * time.Millisecond)
 
 		metricValue, err := getMetricValue(ObaApiStatus, map[string]string{
@@ -38,7 +35,7 @@ func TestCheckServer(t *testing.T) {
 
 		testServer := createTestServer(ts.URL, "Test Server No Time", 998, "test-key", "http://example.com", "test-api-value", "test-api-key", "1")
 
-		ServerPing(testServer, reporter)
+		ServerPing(testServer)
 		time.Sleep(100 * time.Millisecond)
 
 		metricValue, err := getMetricValue(ObaApiStatus, map[string]string{
@@ -55,10 +52,9 @@ func TestCheckServer(t *testing.T) {
 	})
 
 	t.Run("HTTP request failure", func(t *testing.T) {
-		reporter := report.NewReporter("test", "development")
 		testServer := createTestServer("http://invalid.url", "Test Server Invalid", 997, "test-key", "http://example.com", "test-api-value", "test-api-key", "1")
 
-		ServerPing(testServer, reporter)
+		ServerPing(testServer)
 		time.Sleep(100 * time.Millisecond)
 
 		metricValue, err := getMetricValue(ObaApiStatus, map[string]string{

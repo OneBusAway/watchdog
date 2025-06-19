@@ -15,11 +15,11 @@ import (
 )
 
 // CheckBundleExpiration calculates the number of days remaining until the GTFS bundle expires.
-func CheckBundleExpiration(cachePath string, logger *slog.Logger, currentTime time.Time, server models.ObaServer, reporter *report.Reporter) (int, int, error) {
+func CheckBundleExpiration(cachePath string, logger *slog.Logger, currentTime time.Time, server models.ObaServer) (int, int, error) {
 
 	file, err := os.Open(cachePath)
 	if err != nil {
-		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
 			ExtraContext: map[string]interface{}{
 				"cache_path": cachePath,
@@ -32,7 +32,7 @@ func CheckBundleExpiration(cachePath string, logger *slog.Logger, currentTime ti
 	// Convert the file into a byte slice
 	fileInfo, err := file.Stat()
 	if err != nil {
-		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
 			ExtraContext: map[string]interface{}{
 				"cache_path": cachePath,
@@ -43,7 +43,7 @@ func CheckBundleExpiration(cachePath string, logger *slog.Logger, currentTime ti
 	fileBytes := make([]byte, fileInfo.Size())
 	_, err = file.Read(fileBytes)
 	if err != nil {
-		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
 			ExtraContext: map[string]interface{}{
 				"cache_path": cachePath,
@@ -54,7 +54,7 @@ func CheckBundleExpiration(cachePath string, logger *slog.Logger, currentTime ti
 
 	staticData, err := gtfs.ParseStatic(fileBytes, gtfs.ParseStaticOptions{})
 	if err != nil {
-		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
 			ExtraContext: map[string]interface{}{
 				"cache_path": cachePath,
@@ -65,7 +65,7 @@ func CheckBundleExpiration(cachePath string, logger *slog.Logger, currentTime ti
 
 	if len(staticData.Services) == 0 {
 		errMsg := fmt.Errorf("no services found in GTFS bundle")
-		reporter.ReportErrorWithSentryOptions(errMsg, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(errMsg, report.SentryReportOptions{
 			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
 			ExtraContext: map[string]interface{}{
 				"cache_path": cachePath,

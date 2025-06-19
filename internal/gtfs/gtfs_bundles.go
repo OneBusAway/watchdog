@@ -18,7 +18,7 @@ import (
 )
 
 // DownloadGTFSBundles downloads GTFS bundles for each server and caches them locally.
-func DownloadGTFSBundles(servers []models.ObaServer, cacheDir string, logger *slog.Logger, reporter *report.Reporter) {
+func DownloadGTFSBundles(servers []models.ObaServer, cacheDir string, logger *slog.Logger) {
 	for _, server := range servers {
 		hash := sha1.Sum([]byte(server.GtfsUrl))
 		hashStr := hex.EncodeToString(hash[:])
@@ -26,7 +26,7 @@ func DownloadGTFSBundles(servers []models.ObaServer, cacheDir string, logger *sl
 
 		_, err := DownloadGTFSBundle(server.GtfsUrl, cacheDir, server.ID, hashStr)
 		if err != nil {
-			reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 				Tags: utils.MakeMap("server_id", fmt.Sprintf("%d", server.ID)),
 				ExtraContext: map[string]interface{}{
 					"gtfs_url": server.GtfsUrl,
@@ -41,10 +41,10 @@ func DownloadGTFSBundles(servers []models.ObaServer, cacheDir string, logger *sl
 }
 
 // RefreshGTFSBundles periodically downloads GTFS bundles at the specified interval.
-func RefreshGTFSBundles(servers []models.ObaServer, cacheDir string, logger *slog.Logger, interval time.Duration, reporter *report.Reporter) {
+func RefreshGTFSBundles(servers []models.ObaServer, cacheDir string, logger *slog.Logger, interval time.Duration) {
 	for {
 		time.Sleep(interval)
-		DownloadGTFSBundles(servers, cacheDir, logger, reporter)
+		DownloadGTFSBundles(servers, cacheDir, logger)
 	}
 }
 

@@ -32,11 +32,11 @@ func (app *Application) StartMetricsCollection() {
 }
 
 func (app *Application) CollectMetricsForServer(server models.ObaServer) {
-	metrics.ServerPing(server, app.Reporter)
+	metrics.ServerPing(server)
 	cachePath, err := utils.GetLastCachedFile("cache", server.ID)
 	if err != nil {
 		app.Logger.Error("Failed to get last cached file", "error", err)
-		app.Reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"server_id":   fmt.Sprintf("%d", server.ID),
 				"server_name": server.Name,
@@ -46,10 +46,10 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		return
 	}
 
-	_, _, err = metrics.CheckBundleExpiration(cachePath, app.Logger, time.Now(), server, app.Reporter)
+	_, _, err = metrics.CheckBundleExpiration(cachePath, app.Logger, time.Now(), server)
 	if err != nil {
 		app.Logger.Error("Failed to check GTFS bundle expiration", "error", err)
-		app.Reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"server_id":   fmt.Sprintf("%d", server.ID),
 				"server_name": server.Name,
@@ -61,11 +61,11 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		})
 	}
 
-	err = metrics.CheckAgenciesWithCoverageMatch(cachePath, app.Logger, server, app.Reporter)
+	err = metrics.CheckAgenciesWithCoverageMatch(cachePath, app.Logger, server)
 
 	if err != nil {
 		app.Logger.Error("Failed to check agencies with coverage match metric", "error", err)
-		app.Reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"server_id":   fmt.Sprintf("%d", server.ID),
 				"server_name": server.Name,
@@ -77,11 +77,11 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		})
 	}
 
-	err = metrics.CheckVehicleCountMatch(server, app.Reporter)
+	err = metrics.CheckVehicleCountMatch(server)
 
 	if err != nil {
 		app.Logger.Error("Failed to check vehicle count match metric", "error", err)
-		app.Reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"server_id":   fmt.Sprintf("%d", server.ID),
 				"server_name": server.Name,
@@ -90,11 +90,11 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		})
 	}
 
-	err = metrics.FetchObaAPIMetrics(server.AgencyID, server.ObaBaseURL, server.ObaApiKey, nil, app.Reporter)
+	err = metrics.FetchObaAPIMetrics(server.AgencyID, server.ObaBaseURL, server.ObaApiKey, nil)
 
 	if err != nil {
 		app.Logger.Error("Failed to fetch OBA API metrics", "error", err)
-		app.Reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"server_id":   fmt.Sprintf("%d", server.ID),
 				"server_name": server.Name,

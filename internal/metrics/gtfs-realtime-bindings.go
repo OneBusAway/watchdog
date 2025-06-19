@@ -16,11 +16,11 @@ import (
 	"watchdog.onebusaway.org/internal/utils"
 )
 
-func CountVehiclePositions(server models.ObaServer, reporter *report.Reporter) (int, error) {
+func CountVehiclePositions(server models.ObaServer) (int, error) {
 	parsedURL, err := url.Parse(server.VehiclePositionUrl)
 	if err != nil {
 		err = fmt.Errorf("failed to parse GTFS-RT URL: %v", err)
-		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
 			ExtraContext: map[string]interface{}{
 				"vehicle_position_url": server.VehiclePositionUrl,
@@ -32,7 +32,7 @@ func CountVehiclePositions(server models.ObaServer, reporter *report.Reporter) (
 	req, err := http.NewRequest("GET", parsedURL.String(), nil)
 	if err != nil {
 		err = fmt.Errorf("failed to create HTTP request: %v", err)
-		reporter.ReportError(err)
+		report.ReportError(err)
 		return 0, err
 	}
 	if server.GtfsRtApiKey != "" && server.GtfsRtApiValue != "" {
@@ -43,7 +43,7 @@ func CountVehiclePositions(server models.ObaServer, reporter *report.Reporter) (
 	resp, err := client.Do(req)
 	if err != nil {
 		err = fmt.Errorf("failed to fetch GTFS-RT feed: %v", err)
-		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
 			ExtraContext: map[string]interface{}{
 				"vehicle_position_url": server.VehiclePositionUrl,
@@ -56,14 +56,14 @@ func CountVehiclePositions(server models.ObaServer, reporter *report.Reporter) (
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		err = fmt.Errorf("failed to read GTFS-RT feed: %v", err)
-		reporter.ReportError(err)
+		report.ReportError(err)
 		return 0, err
 	}
 
 	realtimeData, err := gtfs.ParseRealtime(data, &gtfs.ParseRealtimeOptions{})
 	if err != nil {
 		err = fmt.Errorf("failed to parse GTFS-RT feed: %v", err)
-		reporter.ReportError(err)
+		report.ReportError(err)
 		return 0, err
 	}
 
@@ -77,7 +77,7 @@ func CountVehiclePositions(server models.ObaServer, reporter *report.Reporter) (
 	return count, nil
 }
 
-func VehiclesForAgencyAPI(server models.ObaServer, reporter *report.Reporter) (int, error) {
+func VehiclesForAgencyAPI(server models.ObaServer) (int, error) {
 
 	client := onebusaway.NewClient(
 		option.WithAPIKey(server.ObaApiKey),
@@ -89,7 +89,7 @@ func VehiclesForAgencyAPI(server models.ObaServer, reporter *report.Reporter) (i
 	response, err := client.VehiclesForAgency.List(ctx, server.AgencyID, onebusaway.VehiclesForAgencyListParams{})
 
 	if err != nil {
-		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"server_id": strconv.Itoa(server.ID),
 				"agency_id": server.AgencyID,
@@ -107,20 +107,20 @@ func VehiclesForAgencyAPI(server models.ObaServer, reporter *report.Reporter) (i
 	return len(response.Data.List), nil
 }
 
-func CheckVehicleCountMatch(server models.ObaServer, reporter *report.Reporter) error {
-	gtfsRtVehicleCount, err := CountVehiclePositions(server, reporter)
+func CheckVehicleCountMatch(server models.ObaServer) error {
+	gtfsRtVehicleCount, err := CountVehiclePositions(server)
 	if err != nil {
 		err := fmt.Errorf("failed to count vehicle positions from GTFS-RT: %v", err)
-		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
 		})
 		return err
 	}
 
-	apiVehicleCount, err := VehiclesForAgencyAPI(server, reporter)
+	apiVehicleCount, err := VehiclesForAgencyAPI(server)
 	if err != nil {
 		err := fmt.Errorf("failed to count vehicle positions from API: %v", err)
-		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
 		})
 		return err

@@ -32,7 +32,7 @@ type OBAMetrics struct {
 	} `json:"data"`
 }
 
-func FetchObaAPIMetrics(slugID string, serverBaseUrl string, apiKey string, client *http.Client, reporter *report.Reporter) error {
+func FetchObaAPIMetrics(slugID string, serverBaseUrl string, apiKey string, client *http.Client) error {
 	if client == nil {
 		client = &http.Client{
 			Timeout: 10 * time.Second,
@@ -46,7 +46,7 @@ func FetchObaAPIMetrics(slugID string, serverBaseUrl string, apiKey string, clie
 	resp, err := client.Get(url)
 	if err != nil {
 		err = fmt.Errorf("failed to fetch metrics from %s: %v", url, err)
-		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"slug_id": slugID,
 			},
@@ -64,7 +64,7 @@ func FetchObaAPIMetrics(slugID string, serverBaseUrl string, apiKey string, clie
 			wrappedErr = fmt.Errorf("server %s does not support metrics API", serverBaseUrl)
 		}
 		wrappedErr = fmt.Errorf("unexpected status code from %s: %d", url, resp.StatusCode)
-		reporter.ReportErrorWithSentryOptions(wrappedErr, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(wrappedErr, report.SentryReportOptions{
 			Tags: utils.MakeMap("slug_id", slugID),
 			ExtraContext: map[string]interface{}{
 				"url":         url,
@@ -78,7 +78,7 @@ func FetchObaAPIMetrics(slugID string, serverBaseUrl string, apiKey string, clie
 	var metrics OBAMetrics
 	if err := json.NewDecoder(resp.Body).Decode(&metrics); err != nil {
 		err = fmt.Errorf("failed to decode metrics from %s: %v", url, err)
-		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: utils.MakeMap("slug_id", slugID),
 			ExtraContext: map[string]interface{}{
 				"url": url,

@@ -10,8 +10,6 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"watchdog.onebusaway.org/internal/report"
 )
 
 func TestGetLastCachedFile(t *testing.T) {
@@ -90,13 +88,12 @@ func createFileWithModTime(t *testing.T, path string, modTime time.Time) {
 
 func TestCreateCacheDirectory(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	reporter := report.NewReporter("test", "development")
 
 	t.Run("Creates new directory", func(t *testing.T) {
 		baseTempDir := t.TempDir()
 		tempDir := filepath.Join(baseTempDir, "test-cache")
 
-		err := CreateCacheDirectory(tempDir, logger, reporter)
+		err := CreateCacheDirectory(tempDir, logger)
 		if err != nil {
 			t.Fatalf("Failed to create cache directory: %v", err)
 		}
@@ -118,7 +115,7 @@ func TestCreateCacheDirectory(t *testing.T) {
 			t.Fatalf("Failed to create test directory: %v", err)
 		}
 
-		err := CreateCacheDirectory(tempDir, logger, reporter)
+		err := CreateCacheDirectory(tempDir, logger)
 		if err != nil {
 			t.Errorf("Failed on existing directory: %v", err)
 		}
@@ -134,7 +131,7 @@ func TestCreateCacheDirectory(t *testing.T) {
 			file.Close()
 		}
 
-		err := CreateCacheDirectory(filePath, logger, reporter)
+		err := CreateCacheDirectory(filePath, logger)
 		if err == nil {
 			t.Error("Expected error when path is a file, but got nil")
 		}

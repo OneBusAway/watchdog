@@ -15,12 +15,10 @@ import (
 
 	"watchdog.onebusaway.org/internal/app"
 	"watchdog.onebusaway.org/internal/models"
-	"watchdog.onebusaway.org/internal/report"
 	"watchdog.onebusaway.org/internal/server"
 )
 
 func TestLoadConfigFromFile(t *testing.T) {
-	reporter := report.NewReporter("test", "development")
 	t.Run("ValidConfig", func(t *testing.T) {
 		content := `[{
 		"name": "Test Server", "id": 1,
@@ -43,7 +41,7 @@ func TestLoadConfigFromFile(t *testing.T) {
 		}
 		tmpFile.Close()
 
-		servers, err := LoadConfigFromFile(tmpFile.Name(), reporter)
+		servers, err := LoadConfigFromFile(tmpFile.Name())
 		if err != nil {
 			t.Fatalf("loadConfigFromFile failed: %v", err)
 		}
@@ -82,14 +80,14 @@ func TestLoadConfigFromFile(t *testing.T) {
 		}
 		tmpFile.Close()
 
-		_, err = LoadConfigFromFile(tmpFile.Name(), reporter)
+		_, err = LoadConfigFromFile(tmpFile.Name())
 		if err == nil {
 			t.Errorf("Expected error with invalid JSON, got none")
 		}
 	})
 
 	t.Run("NonExistentFile", func(t *testing.T) {
-		_, err := LoadConfigFromFile("non-existent-file.json", reporter)
+		_, err := LoadConfigFromFile("non-existent-file.json")
 		if err == nil {
 			t.Errorf("Expected error for non-existent file, got none")
 		}
@@ -97,7 +95,6 @@ func TestLoadConfigFromFile(t *testing.T) {
 }
 
 func TestLoadConfigFromURL(t *testing.T) {
-	reporter := report.NewReporter("test", "development")
 	t.Run("ValidResponse", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -114,7 +111,7 @@ func TestLoadConfigFromURL(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		servers, err := LoadConfigFromURL(ts.URL, "user", "pass", reporter)
+		servers, err := LoadConfigFromURL(ts.URL, "user", "pass")
 		if err != nil {
 			t.Fatalf("loadConfigFromURL failed: %v", err)
 		}
@@ -144,7 +141,7 @@ func TestLoadConfigFromURL(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		_, err := LoadConfigFromURL(ts.URL, "", "", reporter)
+		_, err := LoadConfigFromURL(ts.URL, "", "")
 		if err == nil {
 			t.Errorf("Expected error with 500 response, got none")
 		}
@@ -157,13 +154,13 @@ func TestLoadConfigFromURL(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		_, err := LoadConfigFromURL(ts.URL, "", "", reporter)
+		_, err := LoadConfigFromURL(ts.URL, "", "")
 		if err == nil {
 			t.Errorf("Expected error for invalid JSON response, got none")
 		}
 	})
 	t.Run("InvalidURL", func(t *testing.T) {
-		_, err := LoadConfigFromURL("://invalid-url", "", "", reporter)
+		_, err := LoadConfigFromURL("://invalid-url", "", "")
 		if err == nil || !strings.Contains(err.Error(), "failed to create request") {
 			t.Errorf("Expected request creation error, got: %v", err)
 		}
@@ -271,7 +268,6 @@ func TestRefreshConfig(t *testing.T) {
 	app := newTestApplication(t)
 
 	testLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	reporter := report.NewReporter("test", "development")
 
 	var serverHitCount int
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -299,7 +295,7 @@ func TestRefreshConfig(t *testing.T) {
 	originalConfig := make([]models.ObaServer, len(app.Config.Servers))
 	copy(originalConfig, app.Config.Servers)
 
-	go RefreshConfig(mockServer.URL, "testuser", "testpass", app, testLogger, 100*time.Millisecond, reporter)
+	go RefreshConfig(mockServer.URL, "testuser", "testpass", app, testLogger, 100*time.Millisecond)
 
 	time.Sleep(200 * time.Millisecond)
 

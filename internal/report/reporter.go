@@ -7,37 +7,22 @@ import (
 	"github.com/getsentry/sentry-go"
 )
 
-// Reporter provides methods to configure Sentry and report errors
-// with environment-specific metadata (like env, version, arch, etc.).
-type Reporter struct {
-	Env     string // The environment name (e.g., "development", "production", "staging")
-	Version string // The application version
-}
-
-// NewReporter constructs a new Reporter with the given environment and version.
-func NewReporter(env, version string) *Reporter {
-	return &Reporter{
-		Env:     env,
-		Version: version,
-	}
-}
-
 // ConfigureScope sets global Sentry scope tags and context related to the runtime and host.
-func (r *Reporter) ConfigureScope() {
+func ConfigureScope(env, version string) {
 	sentry.ConfigureScope(func(scope *sentry.Scope) {
-		scope.SetTag("env", r.Env)
-		scope.SetTag("app_version", r.Version)
+		scope.SetTag("env", env)
+		scope.SetTag("app_version", version)
 		scope.SetTag("go_version", runtime.Version())
 		scope.SetTag("goarch", runtime.GOARCH)
 		scope.SetContext("host_info", map[string]interface{}{
-			"hostname": r.getHostname(),
+			"hostname": getHostname(),
 		})
 	})
 }
 
 // getHostname retrieves the system hostname.
 // If the hostname cannot be determined, it returns "unknown".
-func (r *Reporter) getHostname() string {
+func getHostname() string {
 	hostname, err := os.Hostname()
 	if err != nil {
 		return "unknown"
@@ -47,7 +32,7 @@ func (r *Reporter) getHostname() string {
 
 // ReportError reports the error to Sentry with the given severity level
 // If no level is provided, it defaults to sentry.LevelError.
-func (r *Reporter) ReportError(err error, levels ...sentry.Level) {
+func ReportError(err error, levels ...sentry.Level) {
 	if err == nil {
 		return
 	}
@@ -71,7 +56,7 @@ type SentryReportOptions struct {
 }
 
 // ReportErrorWithSentryOptions reports the error with additional options (tags, context, level).
-func (r *Reporter) ReportErrorWithSentryOptions(err error, opts SentryReportOptions) {
+func ReportErrorWithSentryOptions(err error, opts SentryReportOptions) {
 	if err == nil {
 		return
 	}

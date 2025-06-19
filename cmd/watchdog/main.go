@@ -27,7 +27,6 @@ const version = "1.0.0"
 // and middleware. At the moment this only contains a copy of the config struct and a
 // logger, but it will grow to include a lot more as our build progresses.
 
-
 func main() {
 	var cfg server.Config
 
@@ -55,15 +54,14 @@ func main() {
 	report.SetupSentry()
 	defer report.FlushSentry()
 
-	reporter := report.NewReporter(cfg.Env, version)
-	reporter.ConfigureScope()
+	report.ConfigureScope(cfg.Env, version)
 
 	var servers []models.ObaServer
 
 	if *configFile != "" {
-		servers, err = config.LoadConfigFromFile(*configFile, reporter)
+		servers, err = config.LoadConfigFromFile(*configFile)
 	} else if *configURL != "" {
-		servers, err = config.LoadConfigFromURL(*configURL, configAuthUser, configAuthPass, reporter)
+		servers, err = config.LoadConfigFromURL(*configURL, configAuthUser, configAuthPass)
 	} else {
 		fmt.Println("Error: No configuration provided. Use --config-file or --config-url.")
 		flag.Usage()
@@ -85,28 +83,28 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	cacheDir := "cache"
-	if err = utils.CreateCacheDirectory(cacheDir, logger, reporter); err != nil {
+	if err = utils.CreateCacheDirectory(cacheDir, logger); err != nil {
 		logger.Error("Failed to create cache directory", "error", err)
 		os.Exit(1)
 	}
 
 	// Download GTFS bundles for all servers on startup
-	gtfs.DownloadGTFSBundles(servers, cacheDir, logger, reporter)
+	gtfs.DownloadGTFSBundles(servers, cacheDir, logger)
 
 	app := &app.Application{
-		Config:   cfg,
-		Logger:   logger,
-		Reporter: reporter,
+		Config:  cfg,
+		Logger:  logger,
+		Version: version,
 	}
 
 	app.StartMetricsCollection()
 
 	// Cron job to download GTFS bundles for all servers every 24 hours
-	go gtfs.RefreshGTFSBundles(servers, cacheDir, logger, 24*time.Hour, reporter)
+	go gtfs.RefreshGTFSBundles(servers, cacheDir, logger, 24*time.Hour)
 
 	// If a remote URL is specified, refresh the configuration every minute
 	if *configURL != "" {
-		go config.RefreshConfig(*configURL, configAuthUser, configAuthPass, app, logger, time.Minute, reporter)
+		go config.RefreshConfig(*configURL, configAuthUser, configAuthPass, app, logger, time.Minute)
 	}
 
 	srv := &http.Server{
@@ -120,7 +118,7 @@ func main() {
 
 	logger.Info("starting server", "addr", srv.Addr, "env", cfg.Env)
 	err = srv.ListenAndServe()
-	reporter.ReportError(err, sentry.LevelFatal)
+	report.ReportError(err, sentry.LevelFatal)
 	report.FlushSentry()
 	logger.Error(err.Error())
 	os.Exit(1)
