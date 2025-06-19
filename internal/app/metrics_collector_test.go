@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"io"
@@ -18,7 +18,7 @@ func TestMetricsEndpoint(t *testing.T) {
 	// Register the metric without starting the collection routine
 	metrics.ObaApiStatus.WithLabelValues("1", "https://test.example.com").Set(1)
 	// Create a test server
-	ts := httptest.NewServer(app.routes())
+	ts := httptest.NewServer(app.Routes())
 	defer ts.Close()
 	// Make a request to the metrics endpoint
 	resp, err := http.Get(ts.URL + "/metrics")
@@ -46,9 +46,9 @@ func TestCollectMetricsForServer(t *testing.T) {
 
 	prometheus.DefaultRegisterer = prometheus.NewRegistry()
 
-	testServer := app.config.Servers[0]
+	testServer := app.Config.Servers[0]
 
-	app.collectMetricsForServer(testServer)
+	app.CollectMetricsForServer(testServer)
 
 	getMetricsForTesting(t, metrics.ObaApiStatus)
 }
