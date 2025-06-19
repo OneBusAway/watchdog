@@ -4,12 +4,14 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"watchdog.onebusaway.org/internal/report"
 )
 
 func TestGetLastCachedFile(t *testing.T) {
@@ -86,80 +88,56 @@ func createFileWithModTime(t *testing.T, path string, modTime time.Time) {
 	}
 }
 
-func TestDownloadGTFSBundle(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "cache")
-	if err != nil {
-		t.Fatalf("Failed to create temporary directory: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+func TestCreateCacheDirectory(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	reporter := report.NewReporter("test", "development")
 
-	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("mock GTFS data"))
-	}))
-	defer mockServer.Close()
+	t.Run("Creates new directory", func(t *testing.T) {
+		baseTempDir := t.TempDir()
+		tempDir := filepath.Join(baseTempDir, "test-cache")
 
-	serverID := 1
-	hash := sha1.Sum([]byte(mockServer.URL))
-	hashStr := hex.EncodeToString(hash[:])
-	cachePath, err := DownloadGTFSBundle(mockServer.URL, tmpDir, serverID, hashStr)
-	if err != nil {
-		t.Fatalf("DownloadGTFSBundle failed: %v", err)
-	}
+		err := CreateCacheDirectory(tempDir, logger, reporter)
+		if err != nil {
+			t.Fatalf("Failed to create cache directory: %v", err)
+		}
 
-	expectedFileName := fmt.Sprintf("server_%d_%s.zip", serverID, hashStr)
-	expectedFilePath := filepath.Join(tmpDir, expectedFileName)
-	if cachePath != expectedFilePath {
-		t.Errorf("Expected cache path to be %s, got %s", expectedFilePath, cachePath)
-	}
-
-	fileContent, err := os.ReadFile(cachePath)
-	if err != nil {
-		t.Fatalf("Failed to read downloaded file: %v", err)
-	}
-
-	expectedContent := "mock GTFS data"
-	if string(fileContent) != expectedContent {
-		t.Errorf("Expected file content to be %s, got %s", expectedContent, string(fileContent))
-	}
-
-	serverID = 2
-	hash = sha1.Sum([]byte(mockServer.URL))
-	hashStr = hex.EncodeToString(hash[:])
-	cachePath, err = DownloadGTFSBundle(mockServer.URL, tmpDir, serverID, hashStr)
-	if err != nil {
-		t.Fatalf("DownloadGTFSBundle failed: %v", err)
-	}
-
-	expectedFileName = fmt.Sprintf("server_%d_%s.zip", serverID, hashStr)
-	expectedFilePath = filepath.Join(tmpDir, expectedFileName)
-	if cachePath != expectedFilePath {
-		t.Errorf("Expected cache path to be %s, got %s", expectedFilePath, cachePath)
-	}
-
-	t.Run("Invalid URL", func(t *testing.T) {
-		invalidURL := "http://invalid-url"
-		_, err := DownloadGTFSBundle(invalidURL, tmpDir, 3, "invalidhash")
-		if err == nil {
-			t.Errorf("Expected error for invalid URL, got none")
+		stat, err := os.Stat(tempDir)
+		if err != nil {
+			t.Fatalf("Failed to stat directory: %v", err)
+		}
+		if !stat.IsDir() {
+			t.Error("Cache directory was created but is not a directory")
 		}
 	})
 
-	t.Run("Invalid Cache Directory", func(t *testing.T) {
-		invalidDir := "/invalid/cache/dir"
-		_, err := DownloadGTFSBundle(mockServer.URL, invalidDir, 4, "invalidhash")
-		if err == nil {
-			t.Errorf("Expected error for invalid cache directory, got none")
-		}
-	})
-	t.Run("IO Copy Failure", func(t *testing.T) {
-		mockServerFailure := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Length", "100")
-		}))
-		defer mockServerFailure.Close()
+	t.Run("Handles existing directory", func(t *testing.T) {
+		baseTempDir := t.TempDir()
+		tempDir := filepath.Join(baseTempDir, "test-cache")
 
-		_, err := DownloadGTFSBundle(mockServerFailure.URL, tmpDir, 5, "hashIOFail")
-		if err == nil {
-			t.Errorf("Expected error for io.Copy failure, got none")
+		if err := os.MkdirAll(tempDir, os.ModePerm); err != nil {
+			t.Fatalf("Failed to create test directory: %v", err)
+		}
+
+		err := CreateCacheDirectory(tempDir, logger, reporter)
+		if err != nil {
+			t.Errorf("Failed on existing directory: %v", err)
 		}
 	})
+
+	t.Run("Fails: if path is a file", func(t *testing.T) {
+		baseTempDir := t.TempDir()
+		filePath := filepath.Join(baseTempDir, "test-file")
+
+		if file, err := os.Create(filePath); err != nil {
+			t.Fatalf("Failed to create test file: %v", err)
+		} else {
+			file.Close()
+		}
+
+		err := CreateCacheDirectory(filePath, logger, reporter)
+		if err == nil {
+			t.Error("Expected error when path is a file, but got nil")
+		}
+	})
+
 }
