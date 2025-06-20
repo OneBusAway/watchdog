@@ -15,10 +15,10 @@ import (
 	"watchdog.onebusaway.org/internal/report"
 )
 
-func CheckAgenciesWithCoverage(cachePath string, logger *slog.Logger, server models.ObaServer, reporter *report.Reporter) (int, error) {
+func CheckAgenciesWithCoverage(cachePath string, logger *slog.Logger, server models.ObaServer) (int, error) {
 	file, err := os.Open(cachePath)
 	if err != nil {
-		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"server_id": strconv.Itoa(server.ID),
 			},
@@ -39,7 +39,7 @@ func CheckAgenciesWithCoverage(cachePath string, logger *slog.Logger, server mod
 	fileBytes := make([]byte, fileInfo.Size())
 	_, err = file.Read(fileBytes)
 	if err != nil {
-		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"server_id": strconv.Itoa(server.ID),
 			},
@@ -53,7 +53,7 @@ func CheckAgenciesWithCoverage(cachePath string, logger *slog.Logger, server mod
 	staticData, err := gtfs.ParseStatic(fileBytes, gtfs.ParseStaticOptions{})
 	if err != nil {
 		if err != nil {
-			reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 				Tags: map[string]string{
 					"server_id": strconv.Itoa(server.ID),
 				},
@@ -67,7 +67,7 @@ func CheckAgenciesWithCoverage(cachePath string, logger *slog.Logger, server mod
 	}
 
 	if len(staticData.Agencies) == 0 {
-		reporter.ReportErrorWithSentryOptions(fmt.Errorf("no agencies found in GTFS bundle"), report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(fmt.Errorf("no agencies found in GTFS bundle"), report.SentryReportOptions{
 			Tags: map[string]string{
 				"server_id": strconv.Itoa(server.ID),
 			},
@@ -86,7 +86,7 @@ func CheckAgenciesWithCoverage(cachePath string, logger *slog.Logger, server mod
 	return len(staticData.Agencies), nil
 }
 
-func GetAgenciesWithCoverage(server models.ObaServer, reporter *report.Reporter) (int, error) {
+func GetAgenciesWithCoverage(server models.ObaServer) (int, error) {
 	client := onebusaway.NewClient(
 		option.WithAPIKey(server.ObaApiKey),
 		option.WithBaseURL(server.ObaBaseURL),
@@ -97,7 +97,7 @@ func GetAgenciesWithCoverage(server models.ObaServer, reporter *report.Reporter)
 	response, err := client.AgenciesWithCoverage.List(ctx)
 
 	if err != nil {
-		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"server_id":    strconv.Itoa(server.ID),
 				"oba_base_url": server.ObaBaseURL,
@@ -117,13 +117,13 @@ func GetAgenciesWithCoverage(server models.ObaServer, reporter *report.Reporter)
 	return len(response.Data.List), nil
 }
 
-func CheckAgenciesWithCoverageMatch(cachePath string, logger *slog.Logger, server models.ObaServer, reporter *report.Reporter) error {
-	staticGtfsAgenciesCount, err := CheckAgenciesWithCoverage(cachePath, logger, server, reporter)
+func CheckAgenciesWithCoverageMatch(cachePath string, logger *slog.Logger, server models.ObaServer) error {
+	staticGtfsAgenciesCount, err := CheckAgenciesWithCoverage(cachePath, logger, server)
 	if err != nil {
 		return err
 	}
 
-	coverageAgenciesCount, err := GetAgenciesWithCoverage(server, reporter)
+	coverageAgenciesCount, err := GetAgenciesWithCoverage(server)
 
 	matchValue := 0
 	if coverageAgenciesCount == staticGtfsAgenciesCount {
