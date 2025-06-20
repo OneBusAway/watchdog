@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"log/slog"
@@ -6,12 +6,11 @@ import (
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"watchdog.onebusaway.org/internal/server"
-
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/server"
 )
 
-func newTestApplication(t *testing.T) *application {
+func newTestApplication(t *testing.T) *Application {
 	t.Helper()
 
 	obaServer := models.NewObaServer(
@@ -35,9 +34,9 @@ func newTestApplication(t *testing.T) *application {
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	return &application{
-		config: *cfg,
-		logger: logger,
+	return &Application{
+		Config: *cfg,
+		Logger: logger,
 	}
 }
 

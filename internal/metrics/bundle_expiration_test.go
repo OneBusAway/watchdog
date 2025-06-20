@@ -5,8 +5,6 @@ import (
 	"os"
 	"testing"
 	"time"
-
-	"watchdog.onebusaway.org/internal/report"
 )
 
 func TestCheckBundleExpiration(t *testing.T) {
@@ -16,8 +14,7 @@ func TestCheckBundleExpiration(t *testing.T) {
 	testServer := createTestServer("www.example.com", "Test Server", 999, "", "www.example.com", "test-api-value", "test-api-key", "1")
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	reporter := report.NewReporter("test", "development")
-	earliest, latest, err := CheckBundleExpiration(fixturePath, logger, fixedTime, testServer, reporter)
+	earliest, latest, err := CheckBundleExpiration(fixturePath, logger, fixedTime, testServer)
 	if err != nil {
 		t.Fatalf("CheckBundleExpiration failed: %v", err)
 	}

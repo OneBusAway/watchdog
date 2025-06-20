@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"fmt"
@@ -11,7 +11,7 @@ import (
 	"watchdog.onebusaway.org/internal/utils"
 )
 
-func (app *application) startMetricsCollection() {
+func (app *Application) StartMetricsCollection() {
 
 	ticker := time.NewTicker(30 * time.Second)
 	go func() {
@@ -19,24 +19,24 @@ func (app *application) startMetricsCollection() {
 			select {
 			case <-ticker.C:
 
-				app.mu.Lock()
-				servers := app.config.Servers
-				app.mu.Unlock()
+				app.Mu.Lock()
+				servers := app.Config.Servers
+				app.Mu.Unlock()
 
 				for _, server := range servers {
-					app.collectMetricsForServer(server)
+					app.CollectMetricsForServer(server)
 				}
 			}
 		}
 	}()
 }
 
-func (app *application) collectMetricsForServer(server models.ObaServer) {
-	metrics.ServerPing(server, app.reporter)
+func (app *Application) CollectMetricsForServer(server models.ObaServer) {
+	metrics.ServerPing(server)
 	cachePath, err := utils.GetLastCachedFile("cache", server.ID)
 	if err != nil {
-		app.logger.Error("Failed to get last cached file", "error", err)
-		app.reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		app.Logger.Error("Failed to get last cached file", "error", err)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"server_id":   fmt.Sprintf("%d", server.ID),
 				"server_name": server.Name,
@@ -46,10 +46,10 @@ func (app *application) collectMetricsForServer(server models.ObaServer) {
 		return
 	}
 
-	_, _, err = metrics.CheckBundleExpiration(cachePath, app.logger, time.Now(), server, app.reporter)
+	_, _, err = metrics.CheckBundleExpiration(cachePath, app.Logger, time.Now(), server)
 	if err != nil {
-		app.logger.Error("Failed to check GTFS bundle expiration", "error", err)
-		app.reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		app.Logger.Error("Failed to check GTFS bundle expiration", "error", err)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"server_id":   fmt.Sprintf("%d", server.ID),
 				"server_name": server.Name,
@@ -61,11 +61,11 @@ func (app *application) collectMetricsForServer(server models.ObaServer) {
 		})
 	}
 
-	err = metrics.CheckAgenciesWithCoverageMatch(cachePath, app.logger, server, app.reporter)
+	err = metrics.CheckAgenciesWithCoverageMatch(cachePath, app.Logger, server)
 
 	if err != nil {
-		app.logger.Error("Failed to check agencies with coverage match metric", "error", err)
-		app.reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		app.Logger.Error("Failed to check agencies with coverage match metric", "error", err)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"server_id":   fmt.Sprintf("%d", server.ID),
 				"server_name": server.Name,
@@ -77,11 +77,11 @@ func (app *application) collectMetricsForServer(server models.ObaServer) {
 		})
 	}
 
-	err = metrics.CheckVehicleCountMatch(server, app.reporter)
+	err = metrics.CheckVehicleCountMatch(server)
 
 	if err != nil {
-		app.logger.Error("Failed to check vehicle count match metric", "error", err)
-		app.reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		app.Logger.Error("Failed to check vehicle count match metric", "error", err)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"server_id":   fmt.Sprintf("%d", server.ID),
 				"server_name": server.Name,
@@ -90,11 +90,11 @@ func (app *application) collectMetricsForServer(server models.ObaServer) {
 		})
 	}
 
-	err = metrics.FetchObaAPIMetrics(server.AgencyID, server.ObaBaseURL, server.ObaApiKey, nil, app.reporter)
+	err = metrics.FetchObaAPIMetrics(server.AgencyID, server.ObaBaseURL, server.ObaApiKey, nil)
 
 	if err != nil {
-		app.logger.Error("Failed to fetch OBA API metrics", "error", err)
-		app.reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		app.Logger.Error("Failed to fetch OBA API metrics", "error", err)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"server_id":   fmt.Sprintf("%d", server.ID),
 				"server_name": server.Name,

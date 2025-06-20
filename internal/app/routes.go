@@ -1,13 +1,15 @@
-package main
+package app
 
 import (
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"net/http"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"watchdog.onebusaway.org/internal/middleware"
 
 	"github.com/julienschmidt/httprouter"
 )
 
-func (app *application) routes() http.Handler {
+func (app *Application) Routes() http.Handler {
 	// Initialize a new httprouter router instance.
 	router := httprouter.New()
 
@@ -20,5 +22,5 @@ func (app *application) routes() http.Handler {
 
 	// Wrap router with Sentry middleware
 	// Return wrapped httprouter instance.
-	return sentryMiddleware(router)
+	return middleware.SentryMiddleware(router)
 }
