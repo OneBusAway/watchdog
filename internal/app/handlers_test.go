@@ -1,11 +1,12 @@
 package app
 
 import (
-	"io"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
+
+	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/server"
 )
 
@@ -13,8 +14,10 @@ func TestHealthcheckHandler(t *testing.T) {
 	// Create a new instance of our application struct which uses the mock env
 	app := &Application{
 		Config: server.Config{
-			Env: "testing",
+			Env:     "testing",
+			Servers: []models.ObaServer{{ID: 1, Name: "Test Server"}},
 		},
+		Version: "test-version",
 	}
 
 	// Create a new httptest.ResponseRecorder which satisfies the http.ResponseWriter
@@ -36,22 +39,31 @@ func TestHealthcheckHandler(t *testing.T) {
 			status, http.StatusOK)
 	}
 
-	// Check the response body contains the expected strings
-	body, err := io.ReadAll(rr.Body)
-	if err != nil {
-		t.Fatal(err)
+	var resp struct {
+		Status      string `json:"status"`
+		Environment string `json:"environment"`
+		Version     string `json:"version"`
+		Servers     int    `json:"servers"`
+		Ready       bool   `json:"ready"`
 	}
 
-	expectedStrings := []string{
-		"status: available",
-		"environment: testing",
-		"version: " + app.Version,
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
 	}
 
-	for _, str := range expectedStrings {
-		if !strings.Contains(string(body), str) {
-			t.Errorf("handler returned unexpected body: got %v want to contain %v",
-				string(body), str)
-		}
+	if resp.Status != "available" {
+		t.Errorf("expected status 'available', got %q", resp.Status)
+	}
+	if resp.Environment != "testing" {
+		t.Errorf("expected environment 'testing', got %q", resp.Environment)
+	}
+	if resp.Version != "test-version" {
+		t.Errorf("expected version 'test-version', got %q", resp.Version)
+	}
+	if resp.Servers != 1 {
+		t.Errorf("expected servers 1, got %d", resp.Servers)
+	}
+	if !resp.Ready {
+		t.Errorf("expected ready true, got false")
 	}
 }
