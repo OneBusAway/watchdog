@@ -12,7 +12,7 @@ import (
 	"watchdog.onebusaway.org/internal/utils"
 )
 
-func ServerPing(server models.ObaServer, reporter *report.Reporter) {
+func ServerPing(server models.ObaServer) {
 	client := onebusaway.NewClient(
 		option.WithAPIKey(server.ObaApiKey),
 		option.WithBaseURL(server.ObaBaseURL),
@@ -23,7 +23,7 @@ func ServerPing(server models.ObaServer, reporter *report.Reporter) {
 
 	if err != nil {
 		err := fmt.Errorf("failed to ping OBA server %s: %v", server.ObaBaseURL, err)
-		reporter.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
 			ExtraContext: map[string]interface{}{
 				"oba_base_url": server.ObaBaseURL,

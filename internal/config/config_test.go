@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"bytes"
@@ -9,17 +9,16 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"watchdog.onebusaway.org/internal/app"
 	"watchdog.onebusaway.org/internal/models"
-	"watchdog.onebusaway.org/internal/report"
+	"watchdog.onebusaway.org/internal/server"
 )
 
 func TestLoadConfigFromFile(t *testing.T) {
-	reporter := report.NewReporter("test", "development")
 	t.Run("ValidConfig", func(t *testing.T) {
 		content := `[{
 		"name": "Test Server", "id": 1,
@@ -42,7 +41,7 @@ func TestLoadConfigFromFile(t *testing.T) {
 		}
 		tmpFile.Close()
 
-		servers, err := loadConfigFromFile(tmpFile.Name(), reporter)
+		servers, err := LoadConfigFromFile(tmpFile.Name())
 		if err != nil {
 			t.Fatalf("loadConfigFromFile failed: %v", err)
 		}
@@ -81,14 +80,14 @@ func TestLoadConfigFromFile(t *testing.T) {
 		}
 		tmpFile.Close()
 
-		_, err = loadConfigFromFile(tmpFile.Name(), reporter)
+		_, err = LoadConfigFromFile(tmpFile.Name())
 		if err == nil {
 			t.Errorf("Expected error with invalid JSON, got none")
 		}
 	})
 
 	t.Run("NonExistentFile", func(t *testing.T) {
-		_, err := loadConfigFromFile("non-existent-file.json", reporter)
+		_, err := LoadConfigFromFile("non-existent-file.json")
 		if err == nil {
 			t.Errorf("Expected error for non-existent file, got none")
 		}
@@ -96,7 +95,6 @@ func TestLoadConfigFromFile(t *testing.T) {
 }
 
 func TestLoadConfigFromURL(t *testing.T) {
-	reporter := report.NewReporter("test", "development")
 	t.Run("ValidResponse", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -113,7 +111,7 @@ func TestLoadConfigFromURL(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		servers, err := loadConfigFromURL(ts.URL, "user", "pass", reporter)
+		servers, err := LoadConfigFromURL(ts.URL, "user", "pass")
 		if err != nil {
 			t.Fatalf("loadConfigFromURL failed: %v", err)
 		}
@@ -143,7 +141,7 @@ func TestLoadConfigFromURL(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		_, err := loadConfigFromURL(ts.URL, "", "", reporter)
+		_, err := LoadConfigFromURL(ts.URL, "", "")
 		if err == nil {
 			t.Errorf("Expected error with 500 response, got none")
 		}
@@ -156,13 +154,13 @@ func TestLoadConfigFromURL(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		_, err := loadConfigFromURL(ts.URL, "", "", reporter)
+		_, err := LoadConfigFromURL(ts.URL, "", "")
 		if err == nil {
 			t.Errorf("Expected error for invalid JSON response, got none")
 		}
 	})
 	t.Run("InvalidURL", func(t *testing.T) {
-		_, err := loadConfigFromURL("://invalid-url", "", "", reporter)
+		_, err := LoadConfigFromURL("://invalid-url", "", "")
 		if err == nil || !strings.Contains(err.Error(), "failed to create request") {
 			t.Errorf("Expected request creation error, got: %v", err)
 		}
@@ -253,7 +251,7 @@ func TestValidateConfigFlags(t *testing.T) {
 			os.Args = args
 			flag.CommandLine.Parse(args[1:])
 
-			err := validateConfigFlags(configFile, configURL)
+			err := ValidateConfigFlags(configFile, configURL)
 
 			if (err != nil) != tt.expectError {
 				t.Errorf("Expected error: %v, got: %v", tt.expectError, err)
@@ -266,92 +264,10 @@ func TestValidateConfigFlags(t *testing.T) {
 	}
 }
 
-func TestUpdateConfig(t *testing.T) {
-	app := &application{}
-
-	initialServers := []models.ObaServer{
-		{ID: 1, Name: "Server 1"},
-	}
-
-	newServers := []models.ObaServer{
-		{ID: 1, Name: "Server 1 Updated"},
-		{ID: 2, Name: "Server 2"},
-	}
-
-	app.updateConfig(initialServers)
-	if len(app.config.Servers) != 1 {
-		t.Errorf("Expected 1 server, got %d", len(app.config.Servers))
-	}
-
-	app.updateConfig(newServers)
-	if len(app.config.Servers) != 2 {
-		t.Errorf("Expected 2 servers, got %d", len(app.config.Servers))
-	}
-
-	if app.config.Servers[0].Name != "Server 1 Updated" {
-		t.Errorf("Expected server name to be updated to 'Server 1 Updated', got %s", app.config.Servers[0].Name)
-	}
-}
-
-func TestCreateCacheDirectory(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	reporter := report.NewReporter("test", "development")
-
-	t.Run("Creates new directory", func(t *testing.T) {
-		baseTempDir := t.TempDir()
-		tempDir := filepath.Join(baseTempDir, "test-cache")
-
-		err := createCacheDirectory(tempDir, logger, reporter)
-		if err != nil {
-			t.Fatalf("Failed to create cache directory: %v", err)
-		}
-
-		stat, err := os.Stat(tempDir)
-		if err != nil {
-			t.Fatalf("Failed to stat directory: %v", err)
-		}
-		if !stat.IsDir() {
-			t.Error("Cache directory was created but is not a directory")
-		}
-	})
-
-	t.Run("Handles existing directory", func(t *testing.T) {
-		baseTempDir := t.TempDir()
-		tempDir := filepath.Join(baseTempDir, "test-cache")
-
-		if err := os.MkdirAll(tempDir, os.ModePerm); err != nil {
-			t.Fatalf("Failed to create test directory: %v", err)
-		}
-
-		err := createCacheDirectory(tempDir, logger, reporter)
-		if err != nil {
-			t.Errorf("Failed on existing directory: %v", err)
-		}
-	})
-
-	t.Run("Fails: if path is a file", func(t *testing.T) {
-		baseTempDir := t.TempDir()
-		filePath := filepath.Join(baseTempDir, "test-file")
-
-		if file, err := os.Create(filePath); err != nil {
-			t.Fatalf("Failed to create test file: %v", err)
-		} else {
-			file.Close()
-		}
-
-		err := createCacheDirectory(filePath, logger, reporter)
-		if err == nil {
-			t.Error("Expected error when path is a file, but got nil")
-		}
-	})
-
-}
-
 func TestRefreshConfig(t *testing.T) {
 	app := newTestApplication(t)
 
 	testLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	reporter := report.NewReporter("test", "development")
 
 	var serverHitCount int
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -376,10 +292,10 @@ func TestRefreshConfig(t *testing.T) {
 	}))
 	defer mockServer.Close()
 
-	originalConfig := make([]models.ObaServer, len(app.config.Servers))
-	copy(originalConfig, app.config.Servers)
+	originalConfig := make([]models.ObaServer, len(app.Config.Servers))
+	copy(originalConfig, app.Config.Servers)
 
-	go refreshConfig(mockServer.URL, "testuser", "testpass", app, testLogger, 100*time.Millisecond, reporter)
+	go RefreshConfig(mockServer.URL, "testuser", "testpass", app, testLogger, 100*time.Millisecond)
 
 	time.Sleep(200 * time.Millisecond)
 
@@ -387,9 +303,9 @@ func TestRefreshConfig(t *testing.T) {
 		t.Fatal("Mock server was never called")
 	}
 
-	app.mu.RLock()
-	updatedServers := app.config.Servers
-	app.mu.RUnlock()
+	app.Mu.RLock()
+	updatedServers := app.Config.Servers
+	app.Mu.RUnlock()
 
 	if len(updatedServers) == 0 {
 		t.Fatal("No servers found in updated configuration")
@@ -408,30 +324,32 @@ func TestRefreshConfig(t *testing.T) {
 	}
 }
 
-func TestDownloadGTFSBundles(t *testing.T) {
-	servers := []models.ObaServer{
-		{ID: 1, GtfsUrl: "https://example.com/gtfs.zip"},
+func newTestApplication(t *testing.T) *app.Application {
+	t.Helper()
+
+	obaServer := models.NewObaServer(
+		"Test Server",
+		1,
+		"https://test.example.com",
+		"test-key",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+	)
+
+	cfg := server.NewConfig(
+		4000,
+		"testing",
+		[]models.ObaServer{*obaServer},
+	)
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	return &app.Application{
+		Config: *cfg,
+		Logger: logger,
 	}
-
-	tempDir := t.TempDir()
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	reporter := report.NewReporter("test", "development")
-
-	downloadGTFSBundles(servers, tempDir, logger, reporter)
-
-}
-
-func TestRefreshGTFSBundles(t *testing.T) {
-	var logBuffer bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	reporter := report.NewReporter("test", "development")
-
-	servers := []models.ObaServer{{ID: 1, Name: "Test Server", GtfsUrl: "http://example.com/gtfs.zip"}}
-	cacheDir := t.TempDir()
-
-	go refreshGTFSBundles(servers, cacheDir, logger, 10*time.Millisecond, reporter)
-
-	time.Sleep(15 * time.Millisecond)
-
-	t.Log("refreshGTFSBundles executed without crashing")
 }
