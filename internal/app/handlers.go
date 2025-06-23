@@ -14,8 +14,13 @@ type HealthStatus struct {
 	Ready       bool   `json:"ready"`
 }
 
-// Declare a handler which writes a plain-text response with information about the
-// application status, operating environment and version.
+// healthcheckHandler responds with a JSON representation of the application's health status.
+//
+// The response includes the application's availability status, environment, version,
+// number of configured servers, and readiness (true if at least one server is configured).
+// If no servers are configured (i.e., the application is not ready), the handler responds
+// with HTTP 500 Internal Server Error; otherwise, it responds with HTTP 200 OK.
+
 func (app *Application) healthcheckHandler(w http.ResponseWriter, r *http.Request) {
 	app.Mu.RLock()
 	numServers := len(app.Config.Servers)
