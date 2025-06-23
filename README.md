@@ -160,8 +160,8 @@ go test ./...
 
 Follow these steps:
 
-1. Open the file `integration_config.json.template` inside the `internal/integration` package.
-2. Rename it to `integration_config.json`.
+1. Open the file `integration_servers.json.template` inside the `internal/integration` package.
+2. Rename it to `integration_servers.json`.
 3. Fill in your OBA server configuration values.
 
 Then run:
@@ -169,3 +169,5 @@ Then run:
 ```bash
 go test -tags=integration ./...
 ```
+
+Note: The `integration_servers.json` file is ignored by Git to prevent accidental commits of sensitive data.
