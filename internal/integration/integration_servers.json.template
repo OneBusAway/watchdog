@@ -1,0 +1,26 @@
+[
+  {
+    "name": "Test Server 1",
+    "id": 1,
+    "oba_base_url": "https://test1.example.com",
+    "oba_api_key": "test-key-1",
+    "gtfs_url": "https://gtfs1.example.com",
+    "trip_update_url": "https://trip1.example.com",
+    "vehicle_position_url": "https://vehicle1.example.com",
+    "gtfs_rt_api_key": "api-key-1",
+    "gtfs_rt_api_value": "api-value-1",
+    "agency_id": "agency-1"
+  },
+  {
+    "name": "Test Server 2",
+    "id": 2,
+    "oba_base_url": "https://test2.example.com",
+    "oba_api_key": "test-key-2",
+    "gtfs_url": "https://gtfs2.example.com",
+    "trip_update_url": "https://trip2.example.com",
+    "vehicle_position_url": "https://vehicle2.example.com",
+    "gtfs_rt_api_key": "api-key-2",
+    "gtfs_rt_api_value": "api-value-2",
+    "agency_id": "agency-2"
+  }
+]

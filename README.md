@@ -150,8 +150,24 @@ docker run -d \
 
 # Testing
 
-To run all unit tests:
+### To run all unit tests:
 
-```
+```bash
 go test ./...
 ```
+
+### To enable integration testing
+
+Follow these steps:
+
+1. Open the file `integration_servers.json.template` inside the `internal/integration` package.
+2. Rename it to `integration_servers.json`.
+3. Fill in your OBA server configuration values.
+
+Then run:
+
+```bash
+go test -tags=integration ./...
+```
+
+Note: The `integration_servers.json` file is ignored by Git to prevent accidental commits of sensitive data.
