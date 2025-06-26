@@ -15,18 +15,13 @@ import (
 // for all configured servers. It runs a subtest for each server in parallel,
 // and checks that the downloaded file is created without error.
 func TestDownloadGTFSBundles(t *testing.T) {
-	servers, err := loadIntegrationServers()
-	if err != nil {
-		t.Skipf("Could not load config: %v", err)
-	}
-
-	if len(servers) == 0 {
+	if len(integrationServers) == 0 {
 		t.Skip("No servers found in config")
 	}
 
 	cacheDir := t.TempDir()
 
-	for _, server := range servers {
+	for _, server := range integrationServers {
 		srv := server
 		t.Run(fmt.Sprintf("ServerID_%d", srv.ID), func(t *testing.T) {
 			t.Parallel()
