@@ -150,13 +150,13 @@ docker run -d \
 
 # Testing
 
-### To run all unit tests:
+### To run all unit test cases:
 
 ```bash
 go test ./...
 ```
 
-### To enable integration testing
+### To run integration testing
 
 Follow these steps:
 
@@ -167,7 +167,10 @@ Follow these steps:
 Then run:
 
 ```bash
-go test -tags=integration ./...
+go test -tags=integration ./internal/integration -integration-config ./integration_servers.json
 ```
 
-Note: The `integration_servers.json` file is ignored by Git to prevent accidental commits of sensitive data.
+Note:
+
+- The `integration_servers.json` file is ignored by Git to prevent accidental commits of sensitive data.
+- You can point to any config file by passing its path using the -integration-config flag.
