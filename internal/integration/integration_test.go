@@ -29,7 +29,7 @@ func TestMain(m *testing.M) {
 
 	data, err := os.ReadFile(integrationConfig)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to read config file: %v\n%v", err ,integrationConfig )
+		fmt.Fprintf(os.Stderr, "Failed to read config file: %v\n", err)
 		os.Exit(1)
 	}
 
