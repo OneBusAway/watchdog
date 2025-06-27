@@ -62,8 +62,9 @@ func FetchObaAPIMetrics(slugID string, serverBaseUrl string, apiKey string, clie
 		var wrappedErr error
 		if resp.StatusCode == http.StatusNotFound {
 			wrappedErr = fmt.Errorf("server %s does not support metrics API", serverBaseUrl)
+		} else {
+			wrappedErr = fmt.Errorf("unexpected status code from %s: %d", url, resp.StatusCode)
 		}
-		wrappedErr = fmt.Errorf("unexpected status code from %s: %d", url, resp.StatusCode)
 		report.ReportErrorWithSentryOptions(wrappedErr, report.SentryReportOptions{
 			Tags: utils.MakeMap("slug_id", slugID),
 			ExtraContext: map[string]interface{}{
