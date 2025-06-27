@@ -120,6 +120,16 @@ var (
 		[]string{"server", "agency"},
 	)
 
+	TripMatchRatio = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "oba_realtime_trip_match_ratio",
+		Help: "Ratio of matched realtime trips to total realtime trips",
+	}, []string{"server", "agency"})
+
+	StopMatchRatio = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "oba_stop_match_ratio",
+		Help: "Ratio of matched stops to total stops",
+	}, []string{"server", "agency"})
+
 	ObaTimeSinceUpdate = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "oba_time_since_last_update_seconds",

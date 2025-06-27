@@ -106,6 +106,14 @@ func FetchObaAPIMetrics(slugID string, serverBaseUrl string, apiKey string, clie
 			ObaRealtimeTripsUnmatched.WithLabelValues(slugID, agencyID).Set(float64(count))
 		}
 
+		matched := entry.RealtimeTripCountsMatched[agencyID]
+		unmatched := entry.RealtimeTripCountsUnmatched[agencyID]
+		total := matched + unmatched
+		if total > 0 {
+			ratio := float64(matched) / float64(total)
+			TripMatchRatio.WithLabelValues(slugID, agencyID).Set(ratio)
+		}
+
 		if count, ok := entry.ScheduledTripsCount[agencyID]; ok {
 			ObaScheduledTrips.WithLabelValues(slugID, agencyID).Set(float64(count))
 		}
@@ -116,6 +124,14 @@ func FetchObaAPIMetrics(slugID string, serverBaseUrl string, apiKey string, clie
 
 		if count, ok := entry.StopIDsUnmatchedCount[agencyID]; ok {
 			ObaStopsUnmatched.WithLabelValues(slugID, agencyID).Set(float64(count))
+		}
+
+		stopMatched := entry.StopIDsMatchedCount[agencyID]
+		stopUnmatched := entry.StopIDsUnmatchedCount[agencyID]
+		stopTotal := stopMatched + stopUnmatched
+		if stopTotal > 0 {
+			stopRatio := float64(stopMatched) / float64(stopTotal)
+			StopMatchRatio.WithLabelValues(slugID, agencyID).Set(stopRatio)
 		}
 
 		if seconds, ok := entry.TimeSinceLastRealtimeUpdate[agencyID]; ok {
