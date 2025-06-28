@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/report"
 	"watchdog.onebusaway.org/internal/utils"
 )
@@ -32,7 +33,7 @@ type OBAMetrics struct {
 	} `json:"data"`
 }
 
-func FetchObaAPIMetrics(slugID string, serverBaseUrl string, apiKey string, client *http.Client) error {
+func FetchObaAPIMetrics(slugID string, serverID int, serverBaseUrl string, apiKey string, client *http.Client) error {
 	if client == nil {
 		client = &http.Client{
 			Timeout: 10 * time.Second,
@@ -138,7 +139,38 @@ func FetchObaAPIMetrics(slugID string, serverBaseUrl string, apiKey string, clie
 		if seconds, ok := entry.TimeSinceLastRealtimeUpdate[agencyID]; ok {
 			ObaTimeSinceUpdate.WithLabelValues(slugID, agencyID).Set(float64(seconds))
 		}
-	}
 
+		unmatchedStopIDs := entry.StopIDsUnmatched[agencyID]
+		if len(unmatchedStopIDs) > 0 {
+			cachePath, err := utils.GetLastCachedFile("cache", serverID)
+			if err != nil {
+				report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+					Tags:         utils.MakeMap("slug_id", slugID),
+					ExtraContext: map[string]interface{}{"reason": "failed to get cached GTFS bundle"},
+				})
+				continue
+			}
+
+			stopInfoMap, err := gtfs.GetStopLocationsByIDs(cachePath, serverID, unmatchedStopIDs)
+			if err != nil {
+				report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+					Tags:         utils.MakeMap("slug_id", slugID),
+					ExtraContext: map[string]interface{}{"reason": "failed to match stop IDs to GTFS"},
+				})
+				continue
+			}
+
+			for stopID, stop := range stopInfoMap {
+				ObaUnmatchedStopLocation.WithLabelValues(
+					slugID,
+					agencyID,
+					stopID,
+					stop.Name,
+					fmt.Sprintf("%.6f", *stop.Latitude),
+					fmt.Sprintf("%.6f", *stop.Longitude),
+				).Set(1)
+			}
+		}
+	}
 	return nil
 }
