@@ -105,4 +105,15 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 			Level: sentry.LevelError,
 		})
 	}
+	err = metrics.TrackVehicleReportingFrequency(server)
+	if err != nil {
+		app.Logger.Error("Failed to track vehicle reporting frequency", "error", err)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: map[string]string{
+				"server_id": fmt.Sprintf("%d", server.ID),
+			},
+			Level: sentry.LevelError,
+		})
+	}
+
 }
