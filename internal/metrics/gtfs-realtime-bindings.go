@@ -7,10 +7,13 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 
 	onebusaway "github.com/OneBusAway/go-sdk"
 	"github.com/OneBusAway/go-sdk/option"
-	"github.com/jamespfennell/gtfs"
+	remoteGtfs "github.com/jamespfennell/gtfs"
+
+	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
 	"watchdog.onebusaway.org/internal/utils"
@@ -60,7 +63,7 @@ func CountVehiclePositions(server models.ObaServer) (int, error) {
 		return 0, err
 	}
 
-	realtimeData, err := gtfs.ParseRealtime(data, &gtfs.ParseRealtimeOptions{})
+	realtimeData, err := remoteGtfs.ParseRealtime(data, &remoteGtfs.ParseRealtimeOptions{})
 	if err != nil {
 		err = fmt.Errorf("failed to parse GTFS-RT feed: %v", err)
 		report.ReportError(err)
@@ -132,6 +135,60 @@ func CheckVehicleCountMatch(server models.ObaServer) error {
 	}
 
 	VehicleCountMatch.WithLabelValues(server.AgencyID, strconv.Itoa(server.ID)).Set(float64(match))
+
+	return nil
+}
+
+// vehicleLastSeen keeps track of the last seen time for each vehicle by server ID
+var vehicleLastSeen = make(map[int]map[string]time.Time)
+
+// TrackVehicleReportingFrequency fetches the GTFS-RT feed and updates the reporting frequency of vehicles
+// It updates the VehicleReportInterval and VehicleMessageCount metrics for each vehicle
+// It also updates the vehicleLastSeen map to track when each vehicle was last seen
+// If a vehicle's last seen time is not available, it uses the current time
+func TrackVehicleReportingFrequency(server models.ObaServer) error {
+	resp, err := gtfs.FetchGTFSRTFeed(server)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		report.ReportError(err)
+		return err
+	}
+
+	realtimeData, err := remoteGtfs.ParseRealtime(data, &remoteGtfs.ParseRealtimeOptions{})
+	if err != nil {
+		report.ReportError(err)
+		return err
+	}
+
+	serverID := server.ID
+	if vehicleLastSeen[serverID] == nil {
+		vehicleLastSeen[serverID] = make(map[string]time.Time)
+	}
+
+	now := time.Now()
+
+	for _, vehicle := range realtimeData.Vehicles {
+		if vehicle.ID == nil || vehicle.ID.ID == "" {
+			continue
+		}
+		vehicleID := vehicle.ID.ID
+
+		seenAt := now
+		if vehicle.Timestamp != nil {
+			seenAt = *vehicle.Timestamp
+		}
+
+		vehicleLastSeen[serverID][vehicleID] = seenAt
+		interval := now.Sub(seenAt).Seconds()
+
+		VehicleReportCount.WithLabelValues(vehicleID, strconv.Itoa(serverID)).Inc()
+		VehicleReportInterval.WithLabelValues(vehicleID, strconv.Itoa(serverID)).Set(interval)
+	}
 
 	return nil
 }
