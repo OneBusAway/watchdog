@@ -90,7 +90,7 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		})
 	}
 
-	err = metrics.FetchObaAPIMetrics(server.AgencyID, server.ObaBaseURL, server.ObaApiKey, nil)
+	err = metrics.FetchObaAPIMetrics(server.AgencyID, server.ID, server.ObaBaseURL, server.ObaApiKey, nil)
 
 	if err != nil {
 		app.Logger.Error("Failed to fetch OBA API metrics", "error", err)
@@ -105,4 +105,15 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 			Level: sentry.LevelError,
 		})
 	}
+	err = metrics.TrackVehicleReportingFrequency(server)
+	if err != nil {
+		app.Logger.Error("Failed to track vehicle reporting frequency", "error", err)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: map[string]string{
+				"server_id": fmt.Sprintf("%d", server.ID),
+			},
+			Level: sentry.LevelError,
+		})
+	}
+
 }

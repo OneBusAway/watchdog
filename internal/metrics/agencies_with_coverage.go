@@ -52,17 +52,14 @@ func CheckAgenciesWithCoverage(cachePath string, logger *slog.Logger, server mod
 
 	staticData, err := gtfs.ParseStatic(fileBytes, gtfs.ParseStaticOptions{})
 	if err != nil {
-		if err != nil {
-			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-				Tags: map[string]string{
-					"server_id": strconv.Itoa(server.ID),
-				},
-				ExtraContext: map[string]interface{}{
-					"cache_path": cachePath,
-				},
-			})
-			return 0, err
-		}
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: map[string]string{
+				"server_id": strconv.Itoa(server.ID),
+			},
+			ExtraContext: map[string]interface{}{
+				"cache_path": cachePath,
+			},
+		})
 		return 0, err
 	}
 
@@ -124,6 +121,10 @@ func CheckAgenciesWithCoverageMatch(cachePath string, logger *slog.Logger, serve
 	}
 
 	coverageAgenciesCount, err := GetAgenciesWithCoverage(server)
+
+	if err != nil {
+		return fmt.Errorf("error getting remote agencies with coverage data: %w", err)
+	}
 
 	matchValue := 0
 	if coverageAgenciesCount == staticGtfsAgenciesCount {
