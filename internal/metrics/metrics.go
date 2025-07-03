@@ -137,4 +137,12 @@ var (
 		},
 		[]string{"server", "agency"},
 	)
+
+	ObaUnmatchedStopLocation = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "oba_unmatched_stop_location",
+			Help: "Location info of unmatched stops from static GTFS",
+		},
+		[]string{"server", "agency", "stop_id", "stop_name", "lat", "lon"},
+	)
 )

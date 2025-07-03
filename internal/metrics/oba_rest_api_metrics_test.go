@@ -13,7 +13,8 @@ func TestFetchObaAPIMetrics_WithVCR(t *testing.T) {
 	tests := []struct {
 		name      string
 		slugID    string
-		serverUrl string
+		serverID  int
+		serverURL string
 		apiKey    string
 		useVCR    bool
 		cassette  string
@@ -23,7 +24,8 @@ func TestFetchObaAPIMetrics_WithVCR(t *testing.T) {
 		{
 			name:      "successful request",
 			slugID:    "unitrans",
-			serverUrl: "https://oba-api.onrender.com",
+			serverID:  1,
+			serverURL: "https://oba-api.onrender.com",
 			apiKey:    "org.onebusaway.iphone",
 			useVCR:    true,
 			cassette:  "oba_metrics_api_successful_request",
@@ -32,7 +34,8 @@ func TestFetchObaAPIMetrics_WithVCR(t *testing.T) {
 		{
 			name:      "not found error",
 			slugID:    "invalid-region",
-			serverUrl: "https://api.pugetsound.onebusaway.org",
+			serverID:  2,
+			serverURL: "https://api.pugetsound.onebusaway.org",
 			apiKey:    "org.onebusaway.iphone",
 			useVCR:    false,
 			wantErr:   true,
@@ -57,7 +60,7 @@ func TestFetchObaAPIMetrics_WithVCR(t *testing.T) {
 				}
 			}
 
-			err := FetchObaAPIMetrics(tt.slugID, tt.serverUrl, tt.apiKey, client)
+			err := FetchObaAPIMetrics(tt.slugID, tt.serverID, tt.serverURL, tt.apiKey, client)
 
 			if tt.wantErr {
 				if err == nil {
