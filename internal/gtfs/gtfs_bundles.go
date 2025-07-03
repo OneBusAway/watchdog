@@ -78,32 +78,8 @@ func DownloadGTFSBundle(url string, cacheDir string, serverID int, hashStr strin
 // ParseGTFSFromCache reads a GTFS bundle from the cache and parses it into a gtfs.Static object.
 // It returns the parsed static data or an error if parsing fails.
 func ParseGTFSFromCache(cachePath string, serverID int) (*gtfs.Static, error) {
-	file, err := os.Open(cachePath)
+	fileBytes, err := os.ReadFile(cachePath)
 	if err != nil {
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(serverID)),
-			ExtraContext: map[string]interface{}{
-				"cache_path": cachePath,
-			},
-		})
-		return nil, err
-	}
-	defer file.Close()
-
-	// Convert the file into a byte slice
-	fileInfo, err := file.Stat()
-	if err != nil {
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(serverID)),
-			ExtraContext: map[string]interface{}{
-				"cache_path": cachePath,
-			},
-		})
-		return nil, err
-	}
-
-	fileBytes := make([]byte, fileInfo.Size())
-	if _, err = file.Read(fileBytes); err != nil {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: utils.MakeMap("server_id", strconv.Itoa(serverID)),
 			ExtraContext: map[string]interface{}{
