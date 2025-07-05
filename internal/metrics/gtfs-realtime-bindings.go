@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
 	"strconv"
 	"time"
 
@@ -20,38 +18,8 @@ import (
 )
 
 func CountVehiclePositions(server models.ObaServer) (int, error) {
-	parsedURL, err := url.Parse(server.VehiclePositionUrl)
+	resp, err := gtfs.FetchGTFSRTFeed(server)
 	if err != nil {
-		err = fmt.Errorf("failed to parse GTFS-RT URL: %v", err)
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
-			ExtraContext: map[string]interface{}{
-				"vehicle_position_url": server.VehiclePositionUrl,
-			},
-		})
-		return 0, err
-	}
-
-	req, err := http.NewRequest("GET", parsedURL.String(), nil)
-	if err != nil {
-		err = fmt.Errorf("failed to create HTTP request: %v", err)
-		report.ReportError(err)
-		return 0, err
-	}
-	if server.GtfsRtApiKey != "" && server.GtfsRtApiValue != "" {
-		req.Header.Set(server.GtfsRtApiKey, server.GtfsRtApiValue)
-	}
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		err = fmt.Errorf("failed to fetch GTFS-RT feed: %v", err)
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
-			ExtraContext: map[string]interface{}{
-				"vehicle_position_url": server.VehiclePositionUrl,
-			},
-		})
 		return 0, err
 	}
 	defer resp.Body.Close()
