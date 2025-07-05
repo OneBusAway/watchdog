@@ -120,3 +120,128 @@ func TestDownloadGTFSBundle(t *testing.T) {
 		}
 	})
 }
+
+func TestGetStopLocationsByIDs(t *testing.T) {
+	cachePath := "../../testdata/gtfs.zip"
+	server := models.ObaServer{ID: 1, Name: "test"}
+
+	t.Run("Valid stop IDs", func(t *testing.T) {
+		stopIDs := []string{"11060", "1108"} // Make sure these exist in your test GTFS
+		stops, err := GetStopLocationsByIDs(cachePath, server.ID, stopIDs)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(stops) == 0 {
+			t.Fatalf("expected some matched stops, got 0")
+		}
+	})
+
+	t.Run("Invalid stop IDs", func(t *testing.T) {
+		stopIDs := []string{"nonexistent1", "nonexistent2"}
+		stops, err := GetStopLocationsByIDs(cachePath, server.ID, stopIDs)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(stops) != 0 {
+			t.Errorf("expected 0 matched stops, got %d", len(stops))
+		}
+	})
+}
+
+func TestParseGTFSFromCache(t *testing.T) {
+	server := models.ObaServer{ID: 1, Name: "Test"}
+
+	tests := []struct {
+		name      string
+		cachePath string
+		expectErr bool
+	}{
+		{
+			name:      "Valid GTFS file",
+			cachePath: "../../testdata/gtfs.zip",
+			expectErr: false,
+		},
+		{
+			name:      "Invalid path",
+			cachePath: "../../testdata/does-not-exist.zip",
+			expectErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			staticData, err := ParseGTFSFromCache(tc.cachePath, server.ID)
+			if tc.expectErr {
+				if err == nil {
+					t.Fatal("expected error but got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if staticData == nil {
+				t.Fatal("expected staticData to be non-nil")
+			}
+			if len(staticData.Stops) == 0 {
+				t.Error("expected at least one stop in GTFS data, got 0")
+			}
+		})
+	}
+}
+
+func TestFetchGTFSRTFeed(t *testing.T) {
+	t.Run("Success Case", func(t *testing.T) {
+		mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("X-Test-Header") != "test-value" {
+				t.Errorf("Expected header X-Test-Header to be set")
+			}
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("mock gtfs-rt response"))
+		}))
+		defer mockServer.Close()
+
+		server := models.ObaServer{
+			ID:                 1,
+			VehiclePositionUrl: mockServer.URL,
+			GtfsRtApiKey:       "X-Test-Header",
+			GtfsRtApiValue:     "test-value",
+		}
+
+		resp, err := FetchGTFSRTFeed(server)
+		if err != nil {
+			t.Fatalf("Expected no error, got: %v", err)
+		}
+		defer resp.Body.Close()
+
+		body, _ := io.ReadAll(resp.Body)
+		if string(body) != "mock gtfs-rt response" {
+			t.Errorf("Expected response body 'mock gtfs-rt response', got '%s'", body)
+		}
+	})
+
+	t.Run("Failure Case - Invalid URL", func(t *testing.T) {
+		server := models.ObaServer{
+			ID:                 2,
+			VehiclePositionUrl: "://invalid-url",
+		}
+		_, err := FetchGTFSRTFeed(server)
+		if err == nil {
+			t.Error("Expected error due to invalid URL, got nil")
+		}
+	})
+
+	t.Run("Failure Case - Closed Server", func(t *testing.T) {
+		mockServer := httptest.NewServer(nil)
+		mockServer.Close()
+
+		server := models.ObaServer{
+			ID:                 3,
+			VehiclePositionUrl: mockServer.URL,
+		}
+		_, err := FetchGTFSRTFeed(server)
+		if err == nil {
+			t.Error("Expected error when accessing closed server, got nil")
+		}
+	})
+}
