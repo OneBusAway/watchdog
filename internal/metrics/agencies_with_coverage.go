@@ -15,7 +15,7 @@ import (
 )
 
 func CheckAgenciesWithCoverage(cachePath string, logger *slog.Logger, server models.ObaServer) (int, error) {
-	staticData, err := gtfs.ParseGTFSFromCache(cachePath , server.ID)
+	staticData, err := gtfs.ParseGTFSFromCache(cachePath, server.ID)
 	if err != nil {
 		return 0, fmt.Errorf("error parsing GTFS from cache: %w", err)
 	}
