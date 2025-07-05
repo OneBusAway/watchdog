@@ -3,12 +3,11 @@ package metrics
 import (
 	"fmt"
 	"log/slog"
-	"os"
 	"strconv"
 	"time"
 
 	"github.com/getsentry/sentry-go"
-	"github.com/jamespfennell/gtfs"
+	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
 	"watchdog.onebusaway.org/internal/utils"
@@ -16,50 +15,8 @@ import (
 
 // CheckBundleExpiration calculates the number of days remaining until the GTFS bundle expires.
 func CheckBundleExpiration(cachePath string, logger *slog.Logger, currentTime time.Time, server models.ObaServer) (int, int, error) {
-
-	file, err := os.Open(cachePath)
+	staticData, err := gtfs.ParseGTFSFromCache(cachePath, server.ID)
 	if err != nil {
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
-			ExtraContext: map[string]interface{}{
-				"cache_path": cachePath,
-			},
-		})
-		return 0, 0, err
-	}
-	defer file.Close()
-
-	// Convert the file into a byte slice
-	fileInfo, err := file.Stat()
-	if err != nil {
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
-			ExtraContext: map[string]interface{}{
-				"cache_path": cachePath,
-			},
-		})
-		return 0, 0, err
-	}
-	fileBytes := make([]byte, fileInfo.Size())
-	_, err = file.Read(fileBytes)
-	if err != nil {
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
-			ExtraContext: map[string]interface{}{
-				"cache_path": cachePath,
-			},
-		})
-		return 0, 0, err
-	}
-
-	staticData, err := gtfs.ParseStatic(fileBytes, gtfs.ParseStaticOptions{})
-	if err != nil {
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
-			ExtraContext: map[string]interface{}{
-				"cache_path": cachePath,
-			},
-		})
 		return 0, 0, err
 	}
 

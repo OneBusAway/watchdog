@@ -4,63 +4,20 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"strconv"
 
 	onebusaway "github.com/OneBusAway/go-sdk"
 	"github.com/OneBusAway/go-sdk/option"
 	"github.com/getsentry/sentry-go"
-	"github.com/jamespfennell/gtfs"
+	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
 )
 
 func CheckAgenciesWithCoverage(cachePath string, logger *slog.Logger, server models.ObaServer) (int, error) {
-	file, err := os.Open(cachePath)
+	staticData, err := gtfs.ParseGTFSFromCache(cachePath , server.ID)
 	if err != nil {
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{
-				"server_id": strconv.Itoa(server.ID),
-			},
-			ExtraContext: map[string]interface{}{
-				"cache_path": cachePath,
-			},
-		})
-		return 0, err
-	}
-	defer file.Close()
-
-	fileInfo, err := file.Stat()
-	if err != nil {
-		sentry.CaptureException(err)
-		return 0, err
-	}
-
-	fileBytes := make([]byte, fileInfo.Size())
-	_, err = file.Read(fileBytes)
-	if err != nil {
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{
-				"server_id": strconv.Itoa(server.ID),
-			},
-			ExtraContext: map[string]interface{}{
-				"cache_path": cachePath,
-			},
-		})
-		return 0, err
-	}
-
-	staticData, err := gtfs.ParseStatic(fileBytes, gtfs.ParseStaticOptions{})
-	if err != nil {
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{
-				"server_id": strconv.Itoa(server.ID),
-			},
-			ExtraContext: map[string]interface{}{
-				"cache_path": cachePath,
-			},
-		})
-		return 0, err
+		return 0, fmt.Errorf("error parsing GTFS from cache: %w", err)
 	}
 
 	if len(staticData.Agencies) == 0 {
