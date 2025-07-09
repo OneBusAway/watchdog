@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -124,4 +125,44 @@ func GetStopLocationsByIDs(cachePath string, serverID int, stopIDs []string) (ma
 		}
 	}
 	return result, nil
+}
+
+// FetchGTFSRTFeed fetches the GTFS-RT feed from the specified server.
+// It returns the HTTP response or an error if the request fails.
+func FetchGTFSRTFeed(server models.ObaServer) (*http.Response, error) {
+	parsedURL, err := url.Parse(server.VehiclePositionUrl)
+	if err != nil {
+		err = fmt.Errorf("failed to parse GTFS-RT URL: %v", err)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+			ExtraContext: map[string]interface{}{
+				"vehicle_position_url": server.VehiclePositionUrl,
+			},
+		})
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", parsedURL.String(), nil)
+	if err != nil {
+		report.ReportError(err)
+		return nil, err
+	}
+	if server.GtfsRtApiKey != "" && server.GtfsRtApiValue != "" {
+		req.Header.Set(server.GtfsRtApiKey, server.GtfsRtApiValue)
+	}
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		err = fmt.Errorf("failed to fetch GTFS-RT feed: %v", err)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+			ExtraContext: map[string]interface{}{
+				"vehicle_position_url": server.VehiclePositionUrl,
+			},
+		})
+		return nil, err
+	}
+
+	return resp, nil
 }

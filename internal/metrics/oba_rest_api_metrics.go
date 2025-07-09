@@ -161,6 +161,9 @@ func FetchObaAPIMetrics(slugID string, serverID int, serverBaseUrl string, apiKe
 			}
 
 			for stopID, stop := range stopInfoMap {
+				if stop.Latitude == nil || stop.Longitude == nil {
+					continue
+				}
 				ObaUnmatchedStopLocation.WithLabelValues(
 					slugID,
 					agencyID,
