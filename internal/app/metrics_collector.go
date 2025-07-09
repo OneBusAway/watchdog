@@ -90,7 +90,7 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		})
 	}
 
-	err = metrics.FetchObaAPIMetrics(server.AgencyID, server.ObaBaseURL, server.ObaApiKey, nil)
+	err = metrics.FetchObaAPIMetrics(server.AgencyID, server.ID, server.ObaBaseURL, server.ObaApiKey, nil)
 
 	if err != nil {
 		app.Logger.Error("Failed to fetch OBA API metrics", "error", err)
