@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/models"
 )
 
@@ -24,8 +25,9 @@ func TestDownloadGTFSBundles(t *testing.T) {
 
 	tempDir := t.TempDir()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	store := geo.NewBoundingBoxStore()
 
-	DownloadGTFSBundles(servers, tempDir, logger)
+	DownloadGTFSBundles(servers, tempDir, logger, store)
 
 }
 
@@ -35,8 +37,9 @@ func TestRefreshGTFSBundles(t *testing.T) {
 
 	servers := []models.ObaServer{{ID: 1, Name: "Test Server", GtfsUrl: "http://example.com/gtfs.zip"}}
 	cacheDir := t.TempDir()
+	store := geo.NewBoundingBoxStore()
 
-	go RefreshGTFSBundles(servers, cacheDir, logger, 10*time.Millisecond)
+	go RefreshGTFSBundles(servers, cacheDir, logger, 10*time.Millisecond, store)
 
 	time.Sleep(15 * time.Millisecond)
 
