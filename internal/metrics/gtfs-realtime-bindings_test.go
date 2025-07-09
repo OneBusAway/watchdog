@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/jamespfennell/gtfs"
+	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/models"
 )
 
@@ -172,5 +173,59 @@ func TestCheckVehicleCountMatch(t *testing.T) {
 			t.Fatal("Expected an error but got nil")
 		}
 		t.Log("Received expected error:", err)
+	})
+}
+
+func TestCountInvalidVehicleCoordinates(t *testing.T) {
+	store := geo.NewBoundingBoxStore()
+	store.Set(1, geo.BoundingBox{
+		MinLat: -90, MaxLat: 90,
+		MinLon: -180, MaxLon: 180,
+	})
+
+	t.Run("Success with valid vehicle positions", func(t *testing.T) {
+		mockServer := setupGtfsRtServer(t, "gtfs_rt_feed_vehicles.pb")
+		defer mockServer.Close()
+
+		server := models.ObaServer{
+			ID:                 1,
+			VehiclePositionUrl: mockServer.URL,
+			GtfsRtApiKey:       "Authorization",
+			GtfsRtApiValue:     "test-key",
+		}
+
+		err := CountInvalidVehicleCoordinates(server, store)
+		if err != nil {
+			t.Errorf("Expected no error, got: %v", err)
+		}
+	})
+
+	t.Run("Failure with unreachable vehicle position server", func(t *testing.T) {
+		server := models.ObaServer{
+			ID:                 2,
+			VehiclePositionUrl: "http://invalid.localhost/test",
+		}
+
+		err := CountInvalidVehicleCoordinates(server, store)
+		if err == nil {
+			t.Error("Expected error due to unreachable server, got nil")
+		}
+	})
+
+	t.Run("Failure due to missing bounding box", func(t *testing.T) {
+		mockServer := setupGtfsRtServer(t, "gtfs_rt_feed_vehicles.pb")
+		defer mockServer.Close()
+
+		server := models.ObaServer{
+			ID:                 99, // no bounding box for this ID
+			VehiclePositionUrl: mockServer.URL,
+			GtfsRtApiKey:       "Authorization",
+			GtfsRtApiValue:     "test-key",
+		}
+
+		err := CountInvalidVehicleCoordinates(server, store)
+		if err == nil {
+			t.Error("Expected error due to missing bounding box, got nil")
+		}
 	})
 }
