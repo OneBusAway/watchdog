@@ -70,6 +70,14 @@ var (
 		Name: "vehicle_report_total",
 		Help: "Total number of GTFS-RT updates received from each vehicle",
 	}, []string{"vehicle_id", "server_id"})
+
+	InvalidVehicleCoordinates = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "gtfs_rt_invalid_vehicle_coordinates_total",
+			Help: "Total number of GTFS-RT vehicle position records with invalid coordinates (lat/lon or out-of-bounds)",
+		},
+		[]string{"server_id"},
+	)
 )
 
 // OBA REST API 2.6.0 >= Metrics
