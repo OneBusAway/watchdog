@@ -11,6 +11,7 @@ import (
 	"github.com/OneBusAway/go-sdk/option"
 	remoteGtfs "github.com/jamespfennell/gtfs"
 
+	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
@@ -158,5 +159,48 @@ func TrackVehicleReportingFrequency(server models.ObaServer) error {
 		VehicleReportInterval.WithLabelValues(vehicleID, strconv.Itoa(serverID)).Set(interval)
 	}
 
+	return nil
+}
+
+func CountInvalidVehicleCoordinates(server models.ObaServer, store *geo.BoundingBoxStore) error {
+	resp, err := gtfs.FetchGTFSRTFeed(server)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		report.ReportError(err)
+		return err
+	}
+
+	realtimeData, err := remoteGtfs.ParseRealtime(data, &remoteGtfs.ParseRealtimeOptions{})
+	if err != nil {
+		report.ReportError(err)
+		return err
+	}
+
+	serverID := strconv.Itoa(server.ID)
+	count := 0
+
+	_, ok := store.Get(server.ID)
+	if !ok {
+		return fmt.Errorf("no bounding box found for server ID %d", server.ID)
+	}
+
+	for _, v := range realtimeData.Vehicles {
+		if v.Position == nil || v.Position.Latitude == nil || v.Position.Longitude == nil {
+			count++
+			continue
+		}
+		lat := float64(*v.Position.Latitude)
+		lon := float64(*v.Position.Longitude)
+
+		if !store.IsValidCoordinate(server.ID, lat, lon) {
+			count++
+		}
+	}
+	InvalidVehicleCoordinates.WithLabelValues(serverID).Add(float64(count))
 	return nil
 }
