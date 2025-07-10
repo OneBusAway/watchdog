@@ -162,7 +162,10 @@ func TrackVehicleReportingFrequency(server models.ObaServer) error {
 	return nil
 }
 
-func CountInvalidVehicleCoordinates(server models.ObaServer, store *geo.BoundingBoxStore) error {
+// TrackInvalidAndOutOfBoundsVehicles updates Prometheus metrics for:
+// - Invalid coordinates (nil, 0, out of range)
+// - Out-of-bounds vehicle positions (outside agency bounding box)
+func TrackInvalidAndOutOfBoundsVehicles(server models.ObaServer, store *geo.BoundingBoxStore) error {
 	resp, err := gtfs.FetchGTFSRTFeed(server)
 	if err != nil {
 		return err
@@ -182,25 +185,35 @@ func CountInvalidVehicleCoordinates(server models.ObaServer, store *geo.Bounding
 	}
 
 	serverID := strconv.Itoa(server.ID)
-	count := 0
-
 	_, ok := store.Get(server.ID)
 	if !ok {
 		return fmt.Errorf("no bounding box found for server ID %d", server.ID)
 	}
 
+	invalidCount := 0
+	outOfBoundsCount := 0
+
 	for _, v := range realtimeData.Vehicles {
 		if v.Position == nil || v.Position.Latitude == nil || v.Position.Longitude == nil {
-			count++
+			invalidCount++
 			continue
 		}
+
 		lat := float64(*v.Position.Latitude)
 		lon := float64(*v.Position.Longitude)
 
-		if !store.IsValidCoordinate(server.ID, lat, lon) {
-			count++
+		if !geo.IsValidLatLon(lat, lon) {
+			invalidCount++
+			continue
+		}
+
+		if !store.IsInBoundingBox(server.ID, lat, lon) {
+			outOfBoundsCount++
 		}
 	}
-	InvalidVehicleCoordinates.WithLabelValues(serverID).Add(float64(count))
+
+	InvalidVehicleCoordinatesGauge.WithLabelValues(serverID).Set(float64(invalidCount))
+	OutOfBoundsVehicleCoordinatesGauge.WithLabelValues(serverID).Set(float64(outOfBoundsCount))
+
 	return nil
 }
