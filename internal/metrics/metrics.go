@@ -71,10 +71,18 @@ var (
 		Help: "Total number of GTFS-RT updates received from each vehicle",
 	}, []string{"vehicle_id", "server_id"})
 
-	InvalidVehicleCoordinates = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "gtfs_rt_invalid_vehicle_coordinates_total",
-			Help: "Total number of GTFS-RT vehicle position records with invalid coordinates (lat/lon or out-of-bounds)",
+	InvalidVehicleCoordinatesGauge = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "gtfs_rt_invalid_vehicle_coordinates",
+			Help: "Current number of GTFS-RT vehicle positions with invalid coordinates",
+		},
+		[]string{"server_id"},
+	)
+
+	OutOfBoundsVehicleCoordinatesGauge = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "gtfs_rt_out_of_bounds_vehicle_coordinates",
+			Help: "Current number of GTFS-RT vehicle positions outside bounding box",
 		},
 		[]string{"server_id"},
 	)
