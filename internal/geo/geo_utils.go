@@ -92,14 +92,19 @@ func (s *BoundingBoxStore) Get(serverID int) (BoundingBox, bool) {
 	return bbox, ok
 }
 
-// IsValidCoordinate checks if the given position is valid and inside the bounding box
-func (s *BoundingBoxStore) IsValidCoordinate(serverID int, lat, lon float64) bool {
+// IsValidLatLon checks for lat/lon validity (not nil, not 0/0, within global range)
+func IsValidLatLon(lat, lon float64) bool {
 	if lat == 0 && lon == 0 {
 		return false
 	}
 	if lat < -90 || lat > 90 || lon < -180 || lon > 180 {
 		return false
 	}
+	return true
+}
+
+// IsInBoundingBox checks if the lat/lon is inside the server's bounding box
+func (s *BoundingBoxStore) IsInBoundingBox(serverID int, lat, lon float64) bool {
 	bbox, ok := s.Get(serverID)
 	if !ok {
 		return false
