@@ -95,9 +95,10 @@ func main() {
 	gtfs.DownloadGTFSBundles(servers, cacheDir, logger, store)
 
 	app := &app.Application{
-		Config:  cfg,
-		Logger:  logger,
-		Version: version,
+		Config:           cfg,
+		Logger:           logger,
+		Version:          version,
+		BoundingBoxStore: store,
 	}
 
 	app.StartMetricsCollection()
