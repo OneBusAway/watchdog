@@ -9,7 +9,16 @@ import (
 
 const s2Level = 10 // S2 cell level with 7–10 km spatial resolution
 
-// s2ClusterID generates a stable S2-based cluster ID for a lat/lon.
+// s2ClusterID returns a stable cluster ID based on the S2 geometry library.
+// It maps a latitude and longitude to the S2 CellID at the given level,
+// which represents a region on the Earth's surface.
+//
+// S2 cells form a hierarchical decomposition of the sphere. Each level corresponds
+// to a finer resolution. For example, level 14 corresponds to 600m-wide cells,
+// and level 10 corresponds to 7–10km cells.
+//
+// Reference: Microsoft Docs on S2 cell levels and dimensions
+// https://learn.microsoft.com/en-us/kusto/query/geo-point-to-s2cell-function
 func s2ClusterID(lat, lon float64, level int) string {
 	ll := s2.LatLngFromDegrees(lat, lon)
 	cellID := s2.CellIDFromLatLng(ll).Parent(level)
