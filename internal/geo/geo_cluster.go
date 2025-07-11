@@ -7,7 +7,7 @@ import (
 	"github.com/jamespfennell/gtfs"
 )
 
-const s2Level = 10 // S2 cell level with 7–10 km spatial resolution
+const s2Level = 13 // S2 cell level with 850–1225 m spatial resolution
 
 // s2ClusterID returns a stable cluster ID based on the S2 geometry library.
 // It maps a latitude and longitude to the S2 CellID at the given level,
