@@ -79,10 +79,10 @@ var (
 		[]string{"server_id"},
 	)
 
-	OutOfBoundsVehicleCoordinatesGauge = promauto.NewGaugeVec(
+	StoppedOutOfBoundsVehiclesGauge = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "gtfs_rt_out_of_bounds_vehicle_coordinates",
-			Help: "Current number of GTFS-RT vehicle positions outside bounding box",
+			Name: "gtfs_rt_stopped_out_of_bounds_vehicles",
+			Help: "Number of vehicles outside bounding box while stopped at a stop",
 		},
 		[]string{"server_id"},
 	)

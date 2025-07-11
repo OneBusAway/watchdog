@@ -116,7 +116,7 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		})
 	}
 
-	err = metrics.TrackInvalidAndOutOfBoundsVehicles(server, app.BoundingBoxStore)
+	err = metrics.TrackInvalidVehiclesAndStoppedOutOfBounds(server, app.BoundingBoxStore)
 	if err != nil {
 		app.Logger.Error("Failed to count invalid vehicle coordinates", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
