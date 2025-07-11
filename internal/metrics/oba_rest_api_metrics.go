@@ -173,6 +173,7 @@ func FetchObaAPIMetrics(slugID string, serverID int, serverBaseUrl string, apiKe
 					fmt.Sprintf("%.6f", *stop.Longitude),
 				).Set(1)
 			}
+			ReportUnmatchedStopClusters(slugID, agencyID, stopInfoMap)
 		}
 	}
 	return nil
