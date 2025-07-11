@@ -176,7 +176,7 @@ func TestCheckVehicleCountMatch(t *testing.T) {
 	})
 }
 
-func TestTrackInvalidAndOutOfBoundsVehicles(t *testing.T) {
+func TestTrackInvalidVehiclesAndStoppedOutOfBounds(t *testing.T) {
 	store := geo.NewBoundingBoxStore()
 	store.Set(1, geo.BoundingBox{
 		MinLat: -90, MaxLat: 90,
@@ -194,7 +194,7 @@ func TestTrackInvalidAndOutOfBoundsVehicles(t *testing.T) {
 			GtfsRtApiValue:     "test-key",
 		}
 
-		err := TrackInvalidAndOutOfBoundsVehicles(server, store)
+		err := TrackInvalidVehiclesAndStoppedOutOfBounds(server, store)
 		if err != nil {
 			t.Errorf("Expected no error, got: %v", err)
 		}
@@ -206,7 +206,7 @@ func TestTrackInvalidAndOutOfBoundsVehicles(t *testing.T) {
 			VehiclePositionUrl: "http://invalid.localhost/test",
 		}
 
-		err := TrackInvalidAndOutOfBoundsVehicles(server, store)
+		err := TrackInvalidVehiclesAndStoppedOutOfBounds(server, store)
 		if err == nil {
 			t.Error("Expected error due to unreachable server, got nil")
 		}
@@ -223,7 +223,7 @@ func TestTrackInvalidAndOutOfBoundsVehicles(t *testing.T) {
 			GtfsRtApiValue:     "test-key",
 		}
 
-		err := TrackInvalidAndOutOfBoundsVehicles(server, store)
+		err := TrackInvalidVehiclesAndStoppedOutOfBounds(server, store)
 		if err == nil {
 			t.Error("Expected error due to missing bounding box, got nil")
 		}

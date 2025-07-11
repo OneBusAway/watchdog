@@ -162,10 +162,22 @@ func TrackVehicleReportingFrequency(server models.ObaServer) error {
 	return nil
 }
 
-// TrackInvalidAndOutOfBoundsVehicles updates Prometheus metrics for:
-// - Invalid coordinates (nil, 0, out of range)
-// - Out-of-bounds vehicle positions (outside agency bounding box)
-func TrackInvalidAndOutOfBoundsVehicles(server models.ObaServer, store *geo.BoundingBoxStore) error {
+// TrackInvalidVehiclesAndStoppedOutOfBounds collects and reports metrics related to vehicle position validity.
+//
+// It performs two checks on each vehicle in the GTFS-RT feed:
+//  1. Invalid coordinate check: counts vehicles with missing or out-of-range latitude/longitude.
+//  2. Bounding box check: counts vehicles that are *stopped at a stop* but located outside the bounding box.
+//
+// Bounding box validation is only applied when the vehicle status is STOPPED_AT (i.e., it is currently at a stop).
+// This is because the bounding box is derived from the static GTFS stops, not the full operating area of the vehicle.
+// A vehicle moving between stops may legitimately report positions outside this bounding box.
+// However, if a vehicle reports being *at a stop* that lies outside the bounding box built from known static stops,
+// it indicates a potential data issue (e.g., an unknown or misplaced stop).
+//
+// The results are exposed via Prometheus metrics:
+// - InvalidVehicleCoordinatesGauge: for invalid or missing coordinates
+// - StoppedOutOfBoundsVehiclesGauge: for vehicles stopped outside the bounding box
+func TrackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, store *geo.BoundingBoxStore) error {
 	resp, err := gtfs.FetchGTFSRTFeed(server)
 	if err != nil {
 		return err
@@ -207,13 +219,16 @@ func TrackInvalidAndOutOfBoundsVehicles(server models.ObaServer, store *geo.Boun
 			continue
 		}
 
-		if !store.IsInBoundingBox(server.ID, lat, lon) {
-			outOfBoundsCount++
+		// Check bounding box only if vehicle is stopped at the stop
+		if v.CurrentStatus != nil && *v.CurrentStatus == 1 {
+			if !store.IsInBoundingBox(server.ID, lat, lon) {
+				outOfBoundsCount++
+			}
 		}
 	}
 
 	InvalidVehicleCoordinatesGauge.WithLabelValues(serverID).Set(float64(invalidCount))
-	OutOfBoundsVehicleCoordinatesGauge.WithLabelValues(serverID).Set(float64(outOfBoundsCount))
+	StoppedOutOfBoundsVehiclesGauge.WithLabelValues(serverID).Set(float64(outOfBoundsCount))
 
 	return nil
 }
