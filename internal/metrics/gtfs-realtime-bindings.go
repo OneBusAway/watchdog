@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
 	"strconv"
 	"time"
 
@@ -13,6 +11,7 @@ import (
 	"github.com/OneBusAway/go-sdk/option"
 	remoteGtfs "github.com/jamespfennell/gtfs"
 
+	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
@@ -20,38 +19,8 @@ import (
 )
 
 func CountVehiclePositions(server models.ObaServer) (int, error) {
-	parsedURL, err := url.Parse(server.VehiclePositionUrl)
+	resp, err := gtfs.FetchGTFSRTFeed(server)
 	if err != nil {
-		err = fmt.Errorf("failed to parse GTFS-RT URL: %v", err)
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
-			ExtraContext: map[string]interface{}{
-				"vehicle_position_url": server.VehiclePositionUrl,
-			},
-		})
-		return 0, err
-	}
-
-	req, err := http.NewRequest("GET", parsedURL.String(), nil)
-	if err != nil {
-		err = fmt.Errorf("failed to create HTTP request: %v", err)
-		report.ReportError(err)
-		return 0, err
-	}
-	if server.GtfsRtApiKey != "" && server.GtfsRtApiValue != "" {
-		req.Header.Set(server.GtfsRtApiKey, server.GtfsRtApiValue)
-	}
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		err = fmt.Errorf("failed to fetch GTFS-RT feed: %v", err)
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
-			ExtraContext: map[string]interface{}{
-				"vehicle_position_url": server.VehiclePositionUrl,
-			},
-		})
 		return 0, err
 	}
 	defer resp.Body.Close()
@@ -189,6 +158,77 @@ func TrackVehicleReportingFrequency(server models.ObaServer) error {
 		VehicleReportCount.WithLabelValues(vehicleID, strconv.Itoa(serverID)).Inc()
 		VehicleReportInterval.WithLabelValues(vehicleID, strconv.Itoa(serverID)).Set(interval)
 	}
+
+	return nil
+}
+
+// TrackInvalidVehiclesAndStoppedOutOfBounds collects and reports metrics related to vehicle position validity.
+//
+// It performs two checks on each vehicle in the GTFS-RT feed:
+//  1. Invalid coordinate check: counts vehicles with missing or out-of-range latitude/longitude.
+//  2. Bounding box check: counts vehicles that are *stopped at a stop* but located outside the bounding box.
+//
+// Bounding box validation is only applied when the vehicle status is STOPPED_AT (i.e., it is currently at a stop).
+// This is because the bounding box is derived from the static GTFS stops, not the full operating area of the vehicle.
+// A vehicle moving between stops may legitimately report positions outside this bounding box.
+// However, if a vehicle reports being *at a stop* that lies outside the bounding box built from known static stops,
+// it indicates a potential data issue (e.g., an unknown or misplaced stop).
+//
+// The results are exposed via Prometheus metrics:
+// - InvalidVehicleCoordinatesGauge: for invalid or missing coordinates
+// - StoppedOutOfBoundsVehiclesGauge: for vehicles stopped outside the bounding box
+func TrackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, store *geo.BoundingBoxStore) error {
+	resp, err := gtfs.FetchGTFSRTFeed(server)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		report.ReportError(err)
+		return err
+	}
+
+	realtimeData, err := remoteGtfs.ParseRealtime(data, &remoteGtfs.ParseRealtimeOptions{})
+	if err != nil {
+		report.ReportError(err)
+		return err
+	}
+
+	serverID := strconv.Itoa(server.ID)
+	_, ok := store.Get(server.ID)
+	if !ok {
+		return fmt.Errorf("no bounding box found for server ID %d", server.ID)
+	}
+
+	invalidCount := 0
+	outOfBoundsCount := 0
+
+	for _, v := range realtimeData.Vehicles {
+		if v.Position == nil || v.Position.Latitude == nil || v.Position.Longitude == nil {
+			invalidCount++
+			continue
+		}
+
+		lat := float64(*v.Position.Latitude)
+		lon := float64(*v.Position.Longitude)
+
+		if !geo.IsValidLatLon(lat, lon) {
+			invalidCount++
+			continue
+		}
+
+		// Check bounding box only if vehicle is stopped at the stop
+		if v.CurrentStatus != nil && *v.CurrentStatus == 1 {
+			if !store.IsInBoundingBox(server.ID, lat, lon) {
+				outOfBoundsCount++
+			}
+		}
+	}
+
+	InvalidVehicleCoordinatesGauge.WithLabelValues(serverID).Set(float64(invalidCount))
+	StoppedOutOfBoundsVehiclesGauge.WithLabelValues(serverID).Set(float64(outOfBoundsCount))
 
 	return nil
 }
