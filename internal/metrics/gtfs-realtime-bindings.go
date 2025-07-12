@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"time"
 
@@ -108,14 +109,48 @@ func CheckVehicleCountMatch(server models.ObaServer) error {
 	return nil
 }
 
-// vehicleLastSeen keeps track of the last seen time for each vehicle by server ID
-var vehicleLastSeen = make(map[int]map[string]time.Time)
+// vehicleLastSeen stores timestamp & coordinates for speed computation
+type LastSeen struct {
+	Time time.Time
+	Lat  float64
+	Lon  float64
+}
 
-// TrackVehicleReportingFrequency fetches the GTFS-RT feed and updates the reporting frequency of vehicles
-// It updates the VehicleReportInterval and VehicleMessageCount metrics for each vehicle
-// It also updates the vehicleLastSeen map to track when each vehicle was last seen
-// If a vehicle's last seen time is not available, it uses the current time
-func TrackVehicleReportingFrequency(server models.ObaServer) error {
+
+// vehicleLastSeen stores the most recent known location and timestamp for each vehicle per server.
+//
+// The outer map key is the server ID (int), and the inner map key is the vehicle ID (string).
+// Each entry stores a `LastSeen` struct containing the last known latitude, longitude, and timestamp.
+//
+// This cache is used to:
+//   - Compute the distance between successive vehicle locations.
+//   - Estimate vehicle speed based on elapsed time between updates.
+//   - Detect anomalies in vehicle movement patterns (e.g., unrealistic jumps).
+var vehicleLastSeen = make(map[int]map[string]LastSeen)
+
+// TrackVehicleTelemetry collects and reports various telemetry metrics for vehicles in a GTFS-RT feed.
+//
+// This function performs the following tasks:
+//   1. Fetches and parses the GTFS-RT vehicle positions feed for the given OBA server.
+//   2. For each valid vehicle entry:
+//      - Tracks the number of GTFS-RT updates received (`vehicle_report_total`).
+//      - Measures the interval since the last report (`vehicle_position_report_interval_seconds`).
+//      - Computes the vehicle speed based on current and previous coordinates and timestamps.
+//      - Reports the computed speed to Prometheus (`gtfs_rt_vehicle_computed_speed`).
+//      - Compares the computed speed with the reported speed (if available) and reports the relative discrepancy
+//        (`gtfs_rt_vehicle_speed_discrepancy_ratio`).
+//
+// All metrics are labeled by `vehicle_id`, `server_id`, and `agency_id` to support detailed monitoring and alerting.
+//
+// The function maintains a local in-memory store (`vehicleLastSeen`) to cache the last known location and timestamp
+// for each vehicle per server.
+//
+// Parameters:
+//   - server: the `ObaServer` instance representing the target OBA server.
+//
+// Returns:
+//   - An error if the feed cannot be fetched or parsed, otherwise nil.
+func TrackVehicleTelemetry(server models.ObaServer) error {
 	resp, err := gtfs.FetchGTFSRTFeed(server)
 	if err != nil {
 		return err
@@ -135,8 +170,9 @@ func TrackVehicleReportingFrequency(server models.ObaServer) error {
 	}
 
 	serverID := server.ID
+	agencyID := server.AgencyID
 	if vehicleLastSeen[serverID] == nil {
-		vehicleLastSeen[serverID] = make(map[string]time.Time)
+		vehicleLastSeen[serverID] = make(map[string]LastSeen)
 	}
 
 	now := time.Now()
@@ -147,16 +183,48 @@ func TrackVehicleReportingFrequency(server models.ObaServer) error {
 		}
 		vehicleID := vehicle.ID.ID
 
+		if vehicle.Position == nil || vehicle.Position.Latitude == nil || vehicle.Position.Longitude == nil {
+			continue
+		}
+		lat := float64(*vehicle.Position.Latitude)
+		lon := float64(*vehicle.Position.Longitude)
+
 		seenAt := now
 		if vehicle.Timestamp != nil {
 			seenAt = *vehicle.Timestamp
 		}
 
-		vehicleLastSeen[serverID][vehicleID] = seenAt
 		interval := now.Sub(seenAt).Seconds()
-
 		VehicleReportCount.WithLabelValues(vehicleID, strconv.Itoa(serverID)).Inc()
 		VehicleReportInterval.WithLabelValues(vehicleID, strconv.Itoa(serverID)).Set(interval)
+
+		// Compute speed
+		prev, ok := vehicleLastSeen[serverID][vehicleID]
+		if ok {
+			timeDelta := seenAt.Sub(prev.Time).Seconds()
+			if timeDelta > 0 {
+				distance := geo.HaversineDistance(prev.Lat, prev.Lon, lat, lon)
+				computedSpeed := distance / timeDelta
+
+				VehicleSpeedGauge.WithLabelValues(vehicleID, agencyID, strconv.Itoa(serverID)).Set(computedSpeed)
+
+				// Compare with reported speed with computed speed
+				if vehicle.Position.Speed != nil {
+					reportedSpeed := float64(*vehicle.Position.Speed)
+					if reportedSpeed > 0 {
+						diffRatio := math.Abs(computedSpeed-reportedSpeed) / reportedSpeed
+						VehicleSpeedDiscrepancyRatioGauge.WithLabelValues(vehicleID, agencyID, strconv.Itoa(serverID)).Set(diffRatio)
+					}
+				}
+			}
+		}
+
+		// Save last seen data
+		vehicleLastSeen[serverID][vehicleID] = LastSeen{
+			Time: seenAt,
+			Lat:  lat,
+			Lon:  lon,
+		}
 	}
 
 	return nil
