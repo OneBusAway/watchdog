@@ -46,7 +46,7 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		return
 	}
 
-	_, _, err = metrics.CheckBundleExpiration(cachePath, app.Logger, time.Now(), server)
+	_, _, err = metrics.CheckBundleExpiration(cachePath, time.Now(), server)
 	if err != nil {
 		app.Logger.Error("Failed to check GTFS bundle expiration", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{

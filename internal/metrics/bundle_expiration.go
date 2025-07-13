@@ -2,7 +2,6 @@ package metrics
 
 import (
 	"fmt"
-	"log/slog"
 	"strconv"
 	"time"
 
@@ -14,7 +13,7 @@ import (
 )
 
 // CheckBundleExpiration calculates the number of days remaining until the GTFS bundle expires.
-func CheckBundleExpiration(cachePath string, logger *slog.Logger, currentTime time.Time, server models.ObaServer) (int, int, error) {
+func CheckBundleExpiration(cachePath string, currentTime time.Time, server models.ObaServer) (int, int, error) {
 	staticData, err := gtfs.ParseGTFSFromCache(cachePath, server.ID)
 	if err != nil {
 		return 0, 0, err

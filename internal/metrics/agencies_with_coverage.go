@@ -14,7 +14,7 @@ import (
 	"watchdog.onebusaway.org/internal/report"
 )
 
-func CheckAgenciesWithCoverage(cachePath string, logger *slog.Logger, server models.ObaServer) (int, error) {
+func CheckAgenciesWithCoverage(cachePath string, server models.ObaServer) (int, error) {
 	staticData, err := gtfs.ParseGTFSFromCache(cachePath, server.ID)
 	if err != nil {
 		return 0, fmt.Errorf("error parsing GTFS from cache: %w", err)
@@ -72,7 +72,7 @@ func GetAgenciesWithCoverage(server models.ObaServer) (int, error) {
 }
 
 func CheckAgenciesWithCoverageMatch(cachePath string, logger *slog.Logger, server models.ObaServer) error {
-	staticGtfsAgenciesCount, err := CheckAgenciesWithCoverage(cachePath, logger, server)
+	staticGtfsAgenciesCount, err := CheckAgenciesWithCoverage(cachePath, server)
 	if err != nil {
 		return err
 	}
