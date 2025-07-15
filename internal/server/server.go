@@ -34,10 +34,8 @@ func (cfg *Config) UpdateConfig(newServers []models.ObaServer) {
 // concurrent modification issues.
 // This method should be used to access the servers from other parts of the application.
 // It returns a copy of the servers slice to ensure thread safety.
-// Callers should not modify the returned slice.
-// If you need to modify the servers, use UpdateConfig instead.
 func (cfg *Config) GetServers() []models.ObaServer{
 	cfg.Mu.RLock()
 	defer cfg.Mu.RUnlock()
-	return cfg.Servers
+	return append([]models.ObaServer(nil), cfg.Servers...)
 }
