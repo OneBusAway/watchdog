@@ -10,7 +10,7 @@ import (
 type Config struct {
 	Port    int
 	Env     string
-	Mu    sync.RWMutex
+	Mu      sync.RWMutex
 	Servers []models.ObaServer
 }
 
@@ -34,7 +34,7 @@ func (cfg *Config) UpdateConfig(newServers []models.ObaServer) {
 // concurrent modification issues.
 // This method should be used to access the servers from other parts of the application.
 // It returns a copy of the servers slice to ensure thread safety.
-func (cfg *Config) GetServers() []models.ObaServer{
+func (cfg *Config) GetServers() []models.ObaServer {
 	cfg.Mu.RLock()
 	defer cfg.Mu.RUnlock()
 	return append([]models.ObaServer(nil), cfg.Servers...)
