@@ -89,22 +89,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	store := geo.NewBoundingBoxStore()
+	boundingBoxStore := geo.NewBoundingBoxStore()
 
 	// Download GTFS bundles for all servers on startup
-	gtfs.DownloadGTFSBundles(servers, cacheDir, logger, store)
+	gtfs.DownloadGTFSBundles(servers, cacheDir, logger, boundingBoxStore)
 
 	app := &app.Application{
-		Config:           cfg,
-		Logger:           logger,
-		Version:          version,
-		BoundingBoxStore: store,
+		Config:  cfg,
+		Logger:  logger,
+		Version: version,
 	}
 
-	app.StartMetricsCollection()
+	app.StartMetricsCollection(boundingBoxStore)
 
 	// Cron job to download GTFS bundles for all servers every 24 hours
-	go gtfs.RefreshGTFSBundles(servers, cacheDir, logger, 24*time.Hour, store)
+	go gtfs.RefreshGTFSBundles(servers, cacheDir, logger, 24*time.Hour, boundingBoxStore)
 
 	// If a remote URL is specified, refresh the configuration every minute
 	if *configURL != "" {

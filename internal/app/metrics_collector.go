@@ -5,13 +5,14 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
+	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/metrics"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
 	"watchdog.onebusaway.org/internal/utils"
 )
 
-func (app *Application) StartMetricsCollection() {
+func (app *Application) StartMetricsCollection(boundingBoxStore *geo.BoundingBoxStore) {
 
 	ticker := time.NewTicker(30 * time.Second)
 	go func() {
@@ -24,14 +25,14 @@ func (app *Application) StartMetricsCollection() {
 				app.Mu.Unlock()
 
 				for _, server := range servers {
-					app.CollectMetricsForServer(server)
+					app.CollectMetricsForServer(server, boundingBoxStore)
 				}
 			}
 		}
 	}()
 }
 
-func (app *Application) CollectMetricsForServer(server models.ObaServer) {
+func (app *Application) CollectMetricsForServer(server models.ObaServer, boundingBoxStore *geo.BoundingBoxStore) {
 	metrics.ServerPing(server)
 	cachePath, err := utils.GetLastCachedFile("cache", server.ID)
 	if err != nil {
@@ -116,7 +117,7 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		})
 	}
 
-	err = metrics.TrackInvalidVehiclesAndStoppedOutOfBounds(server, app.BoundingBoxStore)
+	err = metrics.TrackInvalidVehiclesAndStoppedOutOfBounds(server, boundingBoxStore)
 	if err != nil {
 		app.Logger.Error("Failed to count invalid vehicle coordinates", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
