@@ -70,6 +70,38 @@ var (
 		Name: "vehicle_report_total",
 		Help: "Total number of GTFS-RT updates received from each vehicle",
 	}, []string{"vehicle_id", "server_id"})
+
+	VehicleSpeedGauge = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "gtfs_rt_vehicle_computed_speed",
+			Help: "Computed speed of the vehicle in m/s based on GTFS-RT positions and timestamps",
+		},
+		[]string{"vehicle_id", "agency_id", "server_id"},
+	)
+
+	VehicleSpeedDiscrepancyRatioGauge = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "gtfs_rt_vehicle_speed_discrepancy_ratio",
+			Help: "Ratio between computed and reported speed (|computed - reported| / reported)",
+		},
+		[]string{"vehicle_id", "agency_id", "server_id"},
+	)
+
+	InvalidVehicleCoordinatesGauge = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "gtfs_rt_invalid_vehicle_coordinates",
+			Help: "Current number of GTFS-RT vehicle positions with invalid coordinates",
+		},
+		[]string{"server_id"},
+	)
+
+	StoppedOutOfBoundsVehiclesGauge = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "gtfs_rt_stopped_out_of_bounds_vehicles",
+			Help: "Number of vehicles outside bounding box while stopped at a stop",
+		},
+		[]string{"server_id"},
+	)
 )
 
 // OBA REST API 2.6.0 >= Metrics
