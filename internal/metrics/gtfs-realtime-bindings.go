@@ -196,8 +196,7 @@ func TrackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, store *g
 		return err
 	}
 
-	serverID := strconv.Itoa(server.ID)
-	_, ok := store.Get(server.ID)
+	boundingBox, ok := store.Get(server.ID)
 	if !ok {
 		return fmt.Errorf("no bounding box found for server ID %d", server.ID)
 	}
@@ -221,12 +220,13 @@ func TrackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, store *g
 
 		// Check bounding box only if vehicle is stopped at the stop
 		if v.CurrentStatus != nil && *v.CurrentStatus == 1 {
-			if !store.IsInBoundingBox(server.ID, lat, lon) {
+			if !boundingBox.Contains(lat, lon) {
 				outOfBoundsCount++
 			}
 		}
 	}
 
+	serverID := strconv.Itoa(server.ID)
 	InvalidVehicleCoordinatesGauge.WithLabelValues(serverID).Set(float64(invalidCount))
 	StoppedOutOfBoundsVehiclesGauge.WithLabelValues(serverID).Set(float64(outOfBoundsCount))
 
