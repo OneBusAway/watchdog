@@ -24,9 +24,6 @@ import (
 // number as a hard-coded global constant.
 const version = "1.0.0"
 
-// Define an application struct to hold the dependencies for our HTTP handlers, helpers,
-// and middleware. At the moment this only contains a copy of the config struct and a
-// logger, but it will grow to include a lot more as our build progresses.
 
 func main() {
 	var cfg server.Config
