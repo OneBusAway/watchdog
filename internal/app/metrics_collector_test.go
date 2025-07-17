@@ -8,8 +8,6 @@ import (
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"watchdog.onebusaway.org/internal/geo"
-	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/metrics"
 )
 
@@ -50,25 +48,7 @@ func TestCollectMetricsForServer(t *testing.T) {
 
 	testServer := app.Config.Servers[0]
 
-	const cachePath = "../../testdata/gtfs.zip"
-	staticData, err := gtfs.ParseGTFSFromCache(cachePath, testServer.ID)
-	if err != nil {
-		t.Fatalf("Failed to parse GTFS data: %v", err)
-	}
-	if staticData == nil {
-		t.Fatal("Parsed GTFS data is nil")
-	}
-
-	stops := staticData.Stops
-	boundingBox, err := geo.ComputeBoundingBox(stops)
-
-	if err != nil {
-		t.Fatalf("Failed to compute bounding box: %v", err)
-	}
-	boundingBoxStore := geo.NewBoundingBoxStore()
-	boundingBoxStore.Set(testServer.ID, boundingBox)
-
-	app.CollectMetricsForServer(testServer, boundingBoxStore)
+	app.CollectMetricsForServer(testServer)
 
 	getMetricsForTesting(t, metrics.ObaApiStatus)
 }
