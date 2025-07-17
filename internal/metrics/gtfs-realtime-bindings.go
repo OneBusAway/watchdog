@@ -162,6 +162,20 @@ func TrackVehicleReportingFrequency(server models.ObaServer) error {
 	return nil
 }
 
+// VehicleStatusStoppedAtStop represents the GTFS-realtime vehicle stop status
+// where the vehicle is currently stopped at the stop.
+//
+// Possible values for VehicleStopStatus are:
+//   - 0 (INCOMING_AT): Vehicle is about to arrive at the stop
+//   - 1 (STOPPED_AT): Vehicle is standing at the stop (this constant)
+//   - 2 (IN_TRANSIT_TO): Vehicle has departed and is in transit to the next stop
+//
+// These values correspond to the VehicleStopStatus enum defined in the GTFS-realtime specification.
+//
+// For more details, see:
+// https://gtfs.org/documentation/realtime/reference/#enum-vehiclestopstatus
+const VehicleStatusStoppedAtStop = 1
+
 // TrackInvalidVehiclesAndStoppedOutOfBounds collects and reports metrics related to vehicle position validity.
 //
 // It performs two checks on each vehicle in the GTFS-RT feed:
@@ -219,7 +233,7 @@ func TrackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, store *g
 		}
 
 		// Check bounding box only if vehicle is stopped at the stop
-		if v.CurrentStatus != nil && *v.CurrentStatus == 1 {
+		if v.CurrentStatus != nil && *v.CurrentStatus == VehicleStatusStoppedAtStop {
 			if !boundingBox.Contains(lat, lon) {
 				outOfBoundsCount++
 			}
