@@ -4,16 +4,18 @@ import (
 	"log/slog"
 	"sync"
 
+	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/server"
 )
 
 // Application struct holds the configuration, logger, reporter, and version for the watchdog application.
 type Application struct {
-	Config  server.Config
-	Logger  *slog.Logger
-	Mu      sync.RWMutex
-	Version string
+	Config           server.Config
+	Logger           *slog.Logger
+	Mu               sync.RWMutex
+	Version          string
+	BoundingBoxStore *geo.BoundingBoxStore
 }
 
 // updateConfig safely updates the application's server configuration.
