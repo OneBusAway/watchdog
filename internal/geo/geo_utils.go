@@ -92,7 +92,15 @@ func (s *BoundingBoxStore) Get(serverID int) (BoundingBox, bool) {
 	return bbox, ok
 }
 
-// IsValidLatLon checks for lat/lon validity (not nil, not 0/0, within global range)
+// IsValidLatLon returns true if the given latitude and longitude values
+// fall within the valid geographic coordinate bounds.
+//
+// Latitude must be between -90 and 90 degrees, and longitude must be
+// between -180 and 180 degrees.
+//
+// Note: This function treats the coordinate (0,0) as invalid, even though it
+// is a valid location in the Gulf of Guinea. This assumption is made to help
+// detect uninitialized or placeholder coordinates commonly represented as (0,0).
 func IsValidLatLon(lat, lon float64) bool {
 	if lat == 0 && lon == 0 {
 		return false
