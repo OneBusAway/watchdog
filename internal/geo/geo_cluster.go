@@ -25,11 +25,46 @@ func s2ClusterID(lat, lon float64, level int) string {
 	return fmt.Sprintf("s2_%d", uint64(cellID))
 }
 
-// GetClusterID determines the cluster ID and type based on the GTFS stop hierarchy and fallback logic.
-// For more information about the hierarchy between different GTFS location types,
-// refer to the `parent_station` section in the GTFS documentation:
-// https://gtfs.org/schedule/reference/#stopstxt
-// This function's logic follows the hierarchy defined in that specification.
+// GetClusterID determines the cluster ID and type for a GTFS stop based on its location_type
+// and its position in the parent_station hierarchy.
+//
+// This function uses GTFS stop hierarchy rules as defined in the official GTFS specification:
+// https://gtfs.org/documentation/schedule/reference/#stopstxt (see the `parent_station` section).
+//
+// It returns:
+//   - clusterID: the ID of the clustering entity (station ID or generated S2 ID).
+//   - clusterType: either "station" or "s2".
+//   - ok: false if the data is malformed or clustering could not be determined.
+//
+// ---- Per location_type behavior ----
+//
+// location_type = 0 (Stop / Platform):
+//   - The parent_station field is optional.
+//   - If it has a parent_station (Type 1 Station), the stop is clustered by the parent station's ID.
+//     - Valid: platform with parent station (Type 1).
+//     - Invalid: parent exists but is not of type 1.
+//   - If it has no parent but has lat/lon, cluster by S2 cell.
+//   - If it has no parent and no coordinates, data is malformed.
+//
+// location_type = 1 (Station):
+//   - Always clustered by its own ID.
+//   - Must not have a parent_station.
+//   - Considered root of stop hierarchy.
+//
+// location_type = 2 or 3 (Entrance/Exit or Generic Node):
+//   - Must have a parent_station of type 1 (Station).
+//     - Valid: parent is station.
+//     - Invalid: missing parent or parent not type 1, data is malformed.
+//
+// location_type = 4 (Boarding Area):
+//   - Must have a parent of type 0 (Platform/Stop).
+//   - Note: A Platform/Stop (type 0) may optionally have a parent of type 1 (Station)
+//           if defined as part of a station hierarchy.
+//     - Valid: parent is a Stop, and grandparent is a Station.
+//     - Valid fallback: parent exists, but grandparent is missing - cluster by S2 using the stop's lat/lon.
+//     - Invalid: grandparent exists but is not a Station, or coordinates are missing for fallback - data is malformed.
+//
+// Returns false if hierarchy rules are violated or required parent/coordinate data is missing.
 func GetClusterID(stop gtfs.Stop) (clusterID string, clusterType string, ok bool) {
 	switch stop.Type {
 	case 0: // Stop or Platform
