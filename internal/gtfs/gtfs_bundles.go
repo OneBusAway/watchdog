@@ -184,3 +184,30 @@ func FetchGTFSRTFeed(server models.ObaServer) (*http.Response, error) {
 
 	return resp, nil
 }
+
+// GetEarliestAndLatestServiceDates returns the earliest and latest service end dates
+// from the GTFS static data's calendar entries.
+//
+// This is used as a workaround because the GTFS library does not currently support
+// parsing `feed_info.txt`, which usually provides feed start/end dates.
+// 
+// Instead, this function infers expiration information by scanning all `calendar.txt`
+// entries (i.e., service periods), and returns the minimum and maximum `EndDate` values.
+//
+// Returns an error if no services are found in the bundle.
+func GetEarliestAndLatestServiceDates(staticData *gtfs.Static) (earliestEndDate, latestEndDate time.Time, err error) {
+	if len(staticData.Services) == 0 {
+		return time.Time{}, time.Time{}, fmt.Errorf("no services found in GTFS bundle")
+	}
+	earliestEndDate = staticData.Services[0].EndDate
+	latestEndDate = staticData.Services[0].EndDate
+	for _, service := range staticData.Services {
+		if service.EndDate.Before(earliestEndDate) {
+			earliestEndDate = service.EndDate
+		}
+		if service.EndDate.After(latestEndDate) {
+			latestEndDate = service.EndDate
+		}
+	}
+	return earliestEndDate, latestEndDate, nil
+}
