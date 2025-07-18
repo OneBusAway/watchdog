@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -74,4 +75,26 @@ func CreateCacheDirectory(cacheDir string, logger *slog.Logger) error {
 		return err
 	}
 	return nil
+}
+
+func SaveMapToFile[C comparable, V any](data map[C]V, filepath string) error {
+	file, err := os.Create(filepath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	return json.NewEncoder(file).Encode(data)
+}
+
+func LoadMapFromFile[C comparable, V any](filepath string) (map[C]V, error) {
+	file, err := os.Open(filepath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var data map[C]V
+	err = json.NewDecoder(file).Decode(&data)
+	return data, err
 }
