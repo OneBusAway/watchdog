@@ -117,7 +117,7 @@ type LastSeen struct {
 	Lon  float64
 }
 
-// vehicleLastSeen stores the most recent known location and timestamp for each vehicle per server.
+// VehicleLastSeen stores the most recent known location and timestamp for each vehicle per server.
 //
 // The outer map key is the server ID (int), and the inner map key is the vehicle ID (string).
 // Each entry stores a `LastSeen` struct containing the last known latitude, longitude, and timestamp.
@@ -127,18 +127,18 @@ type LastSeen struct {
 //   - Estimate vehicle speed based on elapsed time between updates.
 //   - Detect anomalies in vehicle movement patterns (e.g., unrealistic jumps).
 
-type vehicleLastSeen struct{
+type VehicleLastSeen struct{
 	Mu sync.RWMutex
 	Store map[int]map[string]LastSeen
 }
 
-func NewVehicleLastSeen() *vehicleLastSeen {
-	return &vehicleLastSeen{
+func NewVehicleLastSeen() *VehicleLastSeen {
+	return &VehicleLastSeen{
 		Store: make(map[int]map[string]LastSeen),
 	}
 }
 
-func (vehicleLastSeen *vehicleLastSeen) Get(serverID int, vehicleID string) (LastSeen, bool) {
+func (vehicleLastSeen *VehicleLastSeen) Get(serverID int, vehicleID string) (LastSeen, bool) {
 	vehicleLastSeen.Mu.RLock()
 	defer vehicleLastSeen.Mu.RUnlock()
 
@@ -149,7 +149,7 @@ func (vehicleLastSeen *vehicleLastSeen) Get(serverID int, vehicleID string) (Las
 	return LastSeen{}, false
 }
 
-func (vehicleLastSeen *vehicleLastSeen) Set(serverID int, vehicleID string, lastSeen LastSeen) {
+func (vehicleLastSeen *VehicleLastSeen) Set(serverID int, vehicleID string, lastSeen LastSeen) {
 	vehicleLastSeen.Mu.Lock()
 	defer vehicleLastSeen.Mu.Unlock()
 
@@ -158,6 +158,53 @@ func (vehicleLastSeen *vehicleLastSeen) Set(serverID int, vehicleID string, last
 	}
 	vehicleLastSeen.Store[serverID][vehicleID] = lastSeen
 } 
+
+func (v *VehicleLastSeen) Count(serverID int) int {
+	v.Mu.RLock()
+	defer v.Mu.RUnlock()
+
+	return len(v.Store[serverID])
+}
+
+func (vehicleLastSeen *VehicleLastSeen) ClearRoutine(ctx context.Context ,timeInterval , threshold time.Duration) {
+	ticker := time.NewTicker(timeInterval)
+	defer ticker.Stop()
+
+	for{
+		select {
+		case <-ticker.C:
+			vehicleLastSeen.clear(threshold)
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (vehicleLastSeen *VehicleLastSeen) clear(threshold time.Duration) {
+	vehicleLastSeen.Mu.Lock()
+	defer vehicleLastSeen.Mu.Unlock()
+
+	if (len(vehicleLastSeen.Store) == 0){
+		return
+	}
+
+	now := time.Now().UTC()
+
+	for serverID, vehicles := range vehicleLastSeen.Store {
+		
+		for vehicleID, lastSeen := range vehicles {
+			if lastSeen.Time.Before(now) && now.Sub(lastSeen.Time) > threshold {
+				delete(vehicleLastSeen.Store[serverID], vehicleID)
+			}
+		}
+	
+		if len(vehicleLastSeen.Store[serverID]) == 0 {
+			delete(vehicleLastSeen.Store, serverID)
+		}
+
+	}
+}
+
 
 // TrackVehicleTelemetry collects and reports various telemetry metrics for vehicles in a GTFS-RT feed.
 //
@@ -181,7 +228,7 @@ func (vehicleLastSeen *vehicleLastSeen) Set(serverID int, vehicleID string, last
 //
 // Returns:
 //   - An error if the feed cannot be fetched or parsed, otherwise nil.
-func TrackVehicleTelemetry(server models.ObaServer) error {
+func TrackVehicleTelemetry(server models.ObaServer , vehicleLastSeen *VehicleLastSeen) error {
 	resp, err := gtfs.FetchGTFSRTFeed(server)
 	if err != nil {
 		return err
@@ -203,9 +250,8 @@ func TrackVehicleTelemetry(server models.ObaServer) error {
 	serverID := server.ID
 	agencyID := server.AgencyID
 
-	vehicleLastSeen := NewVehicleLastSeen()
 
-	now := time.Now()
+	now := time.Now().UTC()
 
 	for _, vehicle := range realtimeData.Vehicles {
 		if vehicle.ID == nil || vehicle.ID.ID == "" {
@@ -256,6 +302,8 @@ func TrackVehicleTelemetry(server models.ObaServer) error {
 			Lon:  lon,
 		})
 	}
+	
+	TrackedVehiclesGauge.WithLabelValues(strconv.Itoa(serverID)).Set(float64(vehicleLastSeen.Count(serverID)),)
 
 	return nil
 }
