@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 	"strconv"
+	"sync"
 	"time"
 
 	onebusaway "github.com/OneBusAway/go-sdk"
@@ -126,7 +127,38 @@ type LastSeen struct {
 //   - Compute the distance between successive vehicle locations.
 //   - Estimate vehicle speed based on elapsed time between updates.
 //   - Detect anomalies in vehicle movement patterns (e.g., unrealistic jumps).
-var vehicleLastSeen = make(map[int]map[string]LastSeen)
+
+type vehicleLastSeen struct{
+	Mu sync.RWMutex
+	Store map[int]map[string]LastSeen
+}
+
+func NewVehicleLastSeen() *vehicleLastSeen {
+	return &vehicleLastSeen{
+		Store: make(map[int]map[string]LastSeen),
+	}
+}
+
+func (vehicleLastSeen *vehicleLastSeen) Get(serverID int, vehicleID string) (LastSeen, bool) {
+	vehicleLastSeen.Mu.RLock()
+	defer vehicleLastSeen.Mu.RUnlock()
+
+	if vehicles, ok := vehicleLastSeen.Store[serverID]; ok {
+		lastSeen, ok := vehicles[vehicleID]
+		return lastSeen, ok
+	}
+	return LastSeen{}, false
+}
+
+func (vehicleLastSeen *vehicleLastSeen) Set(serverID int, vehicleID string, lastSeen LastSeen) {
+	vehicleLastSeen.Mu.Lock()
+	defer vehicleLastSeen.Mu.Unlock()
+
+	if _, ok := vehicleLastSeen.Store[serverID]; !ok {
+		vehicleLastSeen.Store[serverID] = make(map[string]LastSeen)
+	}
+	vehicleLastSeen.Store[serverID][vehicleID] = lastSeen
+} 
 
 // TrackVehicleTelemetry collects and reports various telemetry metrics for vehicles in a GTFS-RT feed.
 //
@@ -171,9 +203,8 @@ func TrackVehicleTelemetry(server models.ObaServer) error {
 
 	serverID := server.ID
 	agencyID := server.AgencyID
-	if vehicleLastSeen[serverID] == nil {
-		vehicleLastSeen[serverID] = make(map[string]LastSeen)
-	}
+
+	vehicleLastSeen := NewVehicleLastSeen()
 
 	now := time.Now()
 
@@ -199,7 +230,7 @@ func TrackVehicleTelemetry(server models.ObaServer) error {
 		VehicleReportInterval.WithLabelValues(vehicleID, strconv.Itoa(serverID)).Set(interval)
 
 		// Compute speed
-		prev, ok := vehicleLastSeen[serverID][vehicleID]
+		prev, ok := vehicleLastSeen.Get(serverID, vehicleID)
 		if ok {
 			timeDelta := seenAt.Sub(prev.Time).Seconds()
 			if timeDelta > 0 {
@@ -220,11 +251,11 @@ func TrackVehicleTelemetry(server models.ObaServer) error {
 		}
 
 		// Save last seen data
-		vehicleLastSeen[serverID][vehicleID] = LastSeen{
+		vehicleLastSeen.Set(serverID, vehicleID, LastSeen{
 			Time: seenAt,
 			Lat:  lat,
 			Lon:  lon,
-		}
+		})
 	}
 
 	return nil
