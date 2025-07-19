@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"watchdog.onebusaway.org/internal/geo"
+	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/server"
 )
@@ -34,9 +36,29 @@ func newTestApplication(t *testing.T) *Application {
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
+	const cachePath = "../../testdata/gtfs.zip"
+	staticData, err := gtfs.ParseGTFSFromCache(cachePath, obaServer.ID)
+	if err != nil {
+		t.Fatalf("Failed to parse GTFS data: %v", err)
+	}
+	if staticData == nil {
+		t.Fatal("Parsed GTFS data is nil")
+	}
+
+	stops := staticData.Stops
+	boundingBox, err := geo.ComputeBoundingBox(stops)
+
+	if err != nil {
+		t.Fatalf("Failed to compute bounding box: %v", err)
+	}
+	boundingBoxStore := geo.NewBoundingBoxStore()
+	boundingBoxStore.Set(obaServer.ID, boundingBox)
+
 	return &Application{
 		Config: *cfg,
 		Logger: logger,
+		Version: "1.0.0",
+		BoundingBoxStore: boundingBoxStore,
 	}
 }
 

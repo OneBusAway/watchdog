@@ -11,6 +11,7 @@ import (
 	"github.com/getsentry/sentry-go"
 	"watchdog.onebusaway.org/internal/app"
 	"watchdog.onebusaway.org/internal/config"
+	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
@@ -23,9 +24,6 @@ import (
 // number as a hard-coded global constant.
 const version = "1.0.0"
 
-// Define an application struct to hold the dependencies for our HTTP handlers, helpers,
-// and middleware. At the moment this only contains a copy of the config struct and a
-// logger, but it will grow to include a lot more as our build progresses.
 
 func main() {
 	var cfg server.Config
@@ -88,19 +86,22 @@ func main() {
 		os.Exit(1)
 	}
 
+	store := geo.NewBoundingBoxStore()
+
 	// Download GTFS bundles for all servers on startup
-	gtfs.DownloadGTFSBundles(servers, cacheDir, logger)
+	gtfs.DownloadGTFSBundles(servers, cacheDir, logger, store)
 
 	app := &app.Application{
-		Config:  cfg,
-		Logger:  logger,
-		Version: version,
+		Config:           cfg,
+		Logger:           logger,
+		Version:          version,
+		BoundingBoxStore: store,
 	}
 
 	app.StartMetricsCollection()
 
 	// Cron job to download GTFS bundles for all servers every 24 hours
-	go gtfs.RefreshGTFSBundles(servers, cacheDir, logger, 24*time.Hour)
+	go gtfs.RefreshGTFSBundles(servers, cacheDir, logger, 24*time.Hour, store)
 
 	// If a remote URL is specified, refresh the configuration every minute
 	if *configURL != "" {

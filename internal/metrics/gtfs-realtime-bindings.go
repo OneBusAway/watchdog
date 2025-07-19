@@ -11,6 +11,7 @@ import (
 	"github.com/OneBusAway/go-sdk/option"
 	remoteGtfs "github.com/jamespfennell/gtfs"
 
+	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
@@ -157,6 +158,91 @@ func TrackVehicleReportingFrequency(server models.ObaServer) error {
 		VehicleReportCount.WithLabelValues(vehicleID, strconv.Itoa(serverID)).Inc()
 		VehicleReportInterval.WithLabelValues(vehicleID, strconv.Itoa(serverID)).Set(interval)
 	}
+
+	return nil
+}
+
+// VehicleStatusStoppedAtStop represents the GTFS-realtime vehicle stop status
+// where the vehicle is currently stopped at the stop.
+//
+// Possible values for VehicleStopStatus are:
+//   - 0 (INCOMING_AT): Vehicle is about to arrive at the stop
+//   - 1 (STOPPED_AT): Vehicle is standing at the stop (this constant)
+//   - 2 (IN_TRANSIT_TO): Vehicle has departed and is in transit to the next stop
+//
+// These values correspond to the VehicleStopStatus enum defined in the GTFS-realtime specification.
+//
+// For more details, see:
+// https://gtfs.org/documentation/realtime/reference/#enum-vehiclestopstatus
+const VehicleStatusStoppedAtStop = 1
+
+// TrackInvalidVehiclesAndStoppedOutOfBounds collects and reports metrics related to vehicle position validity.
+//
+// It performs two checks on each vehicle in the GTFS-RT feed:
+//  1. Invalid coordinate check: counts vehicles with missing or out-of-range latitude/longitude.
+//  2. Bounding box check: counts vehicles that are *stopped at a stop* but located outside the bounding box.
+//
+// Bounding box validation is only applied when the vehicle status is STOPPED_AT (i.e., it is currently at a stop).
+// This is because the bounding box is derived from the static GTFS stops, not the full operating area of the vehicle.
+// A vehicle moving between stops may legitimately report positions outside this bounding box.
+// However, if a vehicle reports being *at a stop* that lies outside the bounding box built from known static stops,
+// it indicates a potential data issue (e.g., an unknown or misplaced stop).
+//
+// The results are exposed via Prometheus metrics:
+// - InvalidVehicleCoordinatesGauge: for invalid or missing coordinates
+// - StoppedOutOfBoundsVehiclesGauge: for vehicles stopped outside the bounding box
+func TrackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, store *geo.BoundingBoxStore) error {
+	resp, err := gtfs.FetchGTFSRTFeed(server)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		report.ReportError(err)
+		return err
+	}
+
+	realtimeData, err := remoteGtfs.ParseRealtime(data, &remoteGtfs.ParseRealtimeOptions{})
+	if err != nil {
+		report.ReportError(err)
+		return err
+	}
+
+	boundingBox, ok := store.Get(server.ID)
+	if !ok {
+		return fmt.Errorf("no bounding box found for server ID %d", server.ID)
+	}
+
+	invalidCount := 0
+	outOfBoundsCount := 0
+
+	for _, v := range realtimeData.Vehicles {
+		if v.Position == nil || v.Position.Latitude == nil || v.Position.Longitude == nil {
+			invalidCount++
+			continue
+		}
+
+		lat := float64(*v.Position.Latitude)
+		lon := float64(*v.Position.Longitude)
+
+		if !geo.IsValidLatLon(lat, lon) {
+			invalidCount++
+			continue
+		}
+
+		// Check bounding box only if vehicle is stopped at the stop
+		if v.CurrentStatus != nil && *v.CurrentStatus == VehicleStatusStoppedAtStop {
+			if !boundingBox.Contains(lat, lon) {
+				outOfBoundsCount++
+			}
+		}
+	}
+
+	serverID := strconv.Itoa(server.ID)
+	InvalidVehicleCoordinatesGauge.WithLabelValues(serverID).Set(float64(invalidCount))
+	StoppedOutOfBoundsVehiclesGauge.WithLabelValues(serverID).Set(float64(outOfBoundsCount))
 
 	return nil
 }

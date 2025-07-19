@@ -15,13 +15,14 @@ import (
 
 	"github.com/getsentry/sentry-go"
 	"github.com/jamespfennell/gtfs"
+	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
 	"watchdog.onebusaway.org/internal/utils"
 )
 
 // DownloadGTFSBundles downloads GTFS bundles for each server and caches them locally.
-func DownloadGTFSBundles(servers []models.ObaServer, cacheDir string, logger *slog.Logger) {
+func DownloadGTFSBundles(servers []models.ObaServer, cacheDir string, logger *slog.Logger, store *geo.BoundingBoxStore) {
 	for _, server := range servers {
 		hash := sha1.Sum([]byte(server.GtfsUrl))
 		hashStr := hex.EncodeToString(hash[:])
@@ -37,17 +38,32 @@ func DownloadGTFSBundles(servers []models.ObaServer, cacheDir string, logger *sl
 				Level: sentry.LevelError,
 			})
 			logger.Error("Failed to download GTFS bundle", "server_id", server.ID, "error", err)
-		} else {
-			logger.Info("Successfully downloaded GTFS bundle", "server_id", server.ID, "path", cachePath)
+			continue
 		}
+		logger.Info("Successfully downloaded GTFS bundle", "server_id", server.ID, "path", cachePath)
+
+		staticData, err := ParseGTFSFromCache(cachePath, server.ID)
+		if err != nil {
+			logger.Error("Failed to parse GTFS bundle", "server_id", server.ID, "error", err)
+			continue
+		}
+
+		bbox, err := geo.ComputeBoundingBox(staticData.Stops)
+		if err != nil {
+			logger.Warn("Could not compute bounding box", "server_id", server.ID, "error", err)
+			continue
+		}
+
+		store.Set(server.ID, bbox)
+		logger.Info("Computed bounding box", "server_id", server.ID, "bbox", bbox)
 	}
 }
 
 // RefreshGTFSBundles periodically downloads GTFS bundles at the specified interval.
-func RefreshGTFSBundles(servers []models.ObaServer, cacheDir string, logger *slog.Logger, interval time.Duration) {
+func RefreshGTFSBundles(servers []models.ObaServer, cacheDir string, logger *slog.Logger, interval time.Duration, store *geo.BoundingBoxStore) {
 	for {
 		time.Sleep(interval)
-		DownloadGTFSBundles(servers, cacheDir, logger)
+		DownloadGTFSBundles(servers, cacheDir, logger, store)
 	}
 }
 
