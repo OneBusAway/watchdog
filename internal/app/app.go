@@ -4,6 +4,7 @@ import (
 	"log/slog"
 
 	"watchdog.onebusaway.org/internal/geo"
+	"watchdog.onebusaway.org/internal/metrics"
 	"watchdog.onebusaway.org/internal/server"
 )
 
@@ -21,4 +22,5 @@ type Application struct {
 	Logger           *slog.Logger
 	Version          string
 	BoundingBoxStore *geo.BoundingBoxStore
+	VehicleLastSeen *metrics.VehicleLastSeen
 }
