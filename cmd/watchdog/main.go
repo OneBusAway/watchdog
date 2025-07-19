@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"watchdog.onebusaway.org/internal/config"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
+	"watchdog.onebusaway.org/internal/metrics"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
 	"watchdog.onebusaway.org/internal/server"
@@ -78,6 +80,9 @@ func main() {
 
 	cfg.Servers = servers
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	cacheDir := "cache"
@@ -91,17 +96,23 @@ func main() {
 	// Download GTFS bundles for all servers on startup
 	gtfs.DownloadGTFSBundles(servers, cacheDir, logger, store)
 
+	vehicleLastSeen := metrics.NewVehicleLastSeen()
+
 	app := &app.Application{
 		Config:           cfg,
 		Logger:           logger,
 		Version:          version,
 		BoundingBoxStore: store,
+		VehicleLastSeen:vehicleLastSeen,
 	}
 
 	app.StartMetricsCollection()
 
 	// Cron job to download GTFS bundles for all servers every 24 hours
 	go gtfs.RefreshGTFSBundles(servers, cacheDir, logger, 24*time.Hour, store)
+
+	// Cron job to delete the data of vehicles that has not sent updates for 1 hour
+	go vehicleLastSeen.ClearRoutine(ctx , 15*time.Minute , time.Hour)
 
 	// If a remote URL is specified, refresh the configuration every minute
 	if *configURL != "" {
