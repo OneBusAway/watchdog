@@ -26,7 +26,6 @@ import (
 // number as a hard-coded global constant.
 const version = "1.0.0"
 
-
 func main() {
 	var cfg server.Config
 
@@ -103,7 +102,7 @@ func main() {
 		Logger:           logger,
 		Version:          version,
 		BoundingBoxStore: store,
-		VehicleLastSeen:vehicleLastSeen,
+		VehicleLastSeen:  vehicleLastSeen,
 	}
 
 	app.StartMetricsCollection()
@@ -112,7 +111,7 @@ func main() {
 	go gtfs.RefreshGTFSBundles(servers, cacheDir, logger, 24*time.Hour, store)
 
 	// Cron job to delete the data of vehicles that has not sent updates for 1 hour
-	go vehicleLastSeen.ClearRoutine(ctx , 15*time.Minute , time.Hour)
+	go vehicleLastSeen.ClearRoutine(ctx, 15*time.Minute, time.Hour)
 
 	// If a remote URL is specified, refresh the configuration every minute
 	if *configURL != "" {

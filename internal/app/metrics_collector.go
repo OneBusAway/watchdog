@@ -103,7 +103,7 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 			Level: sentry.LevelError,
 		})
 	}
-	err = metrics.TrackVehicleTelemetry(server , app.VehicleLastSeen)
+	err = metrics.TrackVehicleTelemetry(server, app.VehicleLastSeen)
 	if err != nil {
 		app.Logger.Error("Failed to track vehicle reporting frequency", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{

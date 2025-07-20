@@ -127,8 +127,8 @@ type LastSeen struct {
 //   - Estimate vehicle speed based on elapsed time between updates.
 //   - Detect anomalies in vehicle movement patterns (e.g., unrealistic jumps).
 
-type VehicleLastSeen struct{
-	Mu sync.RWMutex
+type VehicleLastSeen struct {
+	Mu    sync.RWMutex
 	Store map[int]map[string]LastSeen
 }
 
@@ -157,7 +157,7 @@ func (vehicleLastSeen *VehicleLastSeen) Set(serverID int, vehicleID string, last
 		vehicleLastSeen.Store[serverID] = make(map[string]LastSeen)
 	}
 	vehicleLastSeen.Store[serverID][vehicleID] = lastSeen
-} 
+}
 
 func (v *VehicleLastSeen) Count(serverID int) int {
 	v.Mu.RLock()
@@ -166,11 +166,11 @@ func (v *VehicleLastSeen) Count(serverID int) int {
 	return len(v.Store[serverID])
 }
 
-func (vehicleLastSeen *VehicleLastSeen) ClearRoutine(ctx context.Context ,timeInterval , threshold time.Duration) {
+func (vehicleLastSeen *VehicleLastSeen) ClearRoutine(ctx context.Context, timeInterval, threshold time.Duration) {
 	ticker := time.NewTicker(timeInterval)
 	defer ticker.Stop()
 
-	for{
+	for {
 		select {
 		case <-ticker.C:
 			vehicleLastSeen.clear(threshold)
@@ -184,27 +184,26 @@ func (vehicleLastSeen *VehicleLastSeen) clear(threshold time.Duration) {
 	vehicleLastSeen.Mu.Lock()
 	defer vehicleLastSeen.Mu.Unlock()
 
-	if (len(vehicleLastSeen.Store) == 0){
+	if len(vehicleLastSeen.Store) == 0 {
 		return
 	}
 
 	now := time.Now().UTC()
 
 	for serverID, vehicles := range vehicleLastSeen.Store {
-		
+
 		for vehicleID, lastSeen := range vehicles {
 			if lastSeen.Time.Before(now) && now.Sub(lastSeen.Time) > threshold {
 				delete(vehicleLastSeen.Store[serverID], vehicleID)
 			}
 		}
-	
+
 		if len(vehicleLastSeen.Store[serverID]) == 0 {
 			delete(vehicleLastSeen.Store, serverID)
 		}
 
 	}
 }
-
 
 // TrackVehicleTelemetry collects and reports various telemetry metrics for vehicles in a GTFS-RT feed.
 //
@@ -228,7 +227,7 @@ func (vehicleLastSeen *VehicleLastSeen) clear(threshold time.Duration) {
 //
 // Returns:
 //   - An error if the feed cannot be fetched or parsed, otherwise nil.
-func TrackVehicleTelemetry(server models.ObaServer , vehicleLastSeen *VehicleLastSeen) error {
+func TrackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLastSeen) error {
 	resp, err := gtfs.FetchGTFSRTFeed(server)
 	if err != nil {
 		return err
@@ -249,7 +248,6 @@ func TrackVehicleTelemetry(server models.ObaServer , vehicleLastSeen *VehicleLas
 
 	serverID := server.ID
 	agencyID := server.AgencyID
-
 
 	now := time.Now().UTC()
 
@@ -302,8 +300,8 @@ func TrackVehicleTelemetry(server models.ObaServer , vehicleLastSeen *VehicleLas
 			Lon:  lon,
 		})
 	}
-	
-	TrackedVehiclesGauge.WithLabelValues(strconv.Itoa(serverID)).Set(float64(vehicleLastSeen.Count(serverID)),)
+
+	TrackedVehiclesGauge.WithLabelValues(strconv.Itoa(serverID)).Set(float64(vehicleLastSeen.Count(serverID)))
 
 	return nil
 }

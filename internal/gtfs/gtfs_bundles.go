@@ -190,7 +190,7 @@ func FetchGTFSRTFeed(server models.ObaServer) (*http.Response, error) {
 //
 // This is used as a workaround because the GTFS library does not currently support
 // parsing `feed_info.txt`, which usually provides feed start/end dates.
-// 
+//
 // Instead, this function infers expiration information by scanning all `calendar.txt`
 // entries (i.e., service periods), and returns the minimum and maximum `EndDate` values.
 //
