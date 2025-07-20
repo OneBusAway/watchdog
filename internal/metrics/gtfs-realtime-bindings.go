@@ -117,7 +117,6 @@ type LastSeen struct {
 	Lon  float64
 }
 
-
 // VehicleLastSeen stores the most recent known location and timestamp for each vehicle per server.
 //
 // The outer map key is the server ID (int), and the inner map key is the vehicle ID (string).
@@ -128,8 +127,8 @@ type LastSeen struct {
 //   - Estimate vehicle speed based on elapsed time between updates.
 //   - Detect anomalies in vehicle movement patterns (e.g., unrealistic jumps).
 
-type VehicleLastSeen struct{
-	Mu sync.RWMutex
+type VehicleLastSeen struct {
+	Mu    sync.RWMutex
 	Store map[int]map[string]LastSeen
 }
 
@@ -158,7 +157,7 @@ func (vehicleLastSeen *VehicleLastSeen) Set(serverID int, vehicleID string, last
 		vehicleLastSeen.Store[serverID] = make(map[string]LastSeen)
 	}
 	vehicleLastSeen.Store[serverID][vehicleID] = lastSeen
-} 
+}
 
 func (v *VehicleLastSeen) Count(serverID int) int {
 	v.Mu.RLock()
@@ -167,11 +166,11 @@ func (v *VehicleLastSeen) Count(serverID int) int {
 	return len(v.Store[serverID])
 }
 
-func (vehicleLastSeen *VehicleLastSeen) ClearRoutine(ctx context.Context ,timeInterval , threshold time.Duration) {
+func (vehicleLastSeen *VehicleLastSeen) ClearRoutine(ctx context.Context, timeInterval, threshold time.Duration) {
 	ticker := time.NewTicker(timeInterval)
 	defer ticker.Stop()
 
-	for{
+	for {
 		select {
 		case <-ticker.C:
 			vehicleLastSeen.clear(threshold)
@@ -185,20 +184,20 @@ func (vehicleLastSeen *VehicleLastSeen) clear(threshold time.Duration) {
 	vehicleLastSeen.Mu.Lock()
 	defer vehicleLastSeen.Mu.Unlock()
 
-	if (len(vehicleLastSeen.Store) == 0){
+	if len(vehicleLastSeen.Store) == 0 {
 		return
 	}
 
 	now := time.Now().UTC()
 
 	for serverID, vehicles := range vehicleLastSeen.Store {
-		
+
 		for vehicleID, lastSeen := range vehicles {
 			if lastSeen.Time.Before(now) && now.Sub(lastSeen.Time) > threshold {
 				delete(vehicleLastSeen.Store[serverID], vehicleID)
 			}
 		}
-	
+
 		if len(vehicleLastSeen.Store[serverID]) == 0 {
 			delete(vehicleLastSeen.Store, serverID)
 		}
@@ -206,18 +205,17 @@ func (vehicleLastSeen *VehicleLastSeen) clear(threshold time.Duration) {
 	}
 }
 
-
 // TrackVehicleTelemetry collects and reports various telemetry metrics for vehicles in a GTFS-RT feed.
 //
 // This function performs the following tasks:
-//   1. Fetches and parses the GTFS-RT vehicle positions feed for the given OBA server.
-//   2. For each valid vehicle entry:
-//      - Tracks the number of GTFS-RT updates received (`vehicle_report_total`).
-//      - Measures the interval since the last report (`vehicle_position_report_interval_seconds`).
-//      - Computes the vehicle speed based on current and previous coordinates and timestamps.
-//      - Reports the computed speed to Prometheus (`gtfs_rt_vehicle_computed_speed`).
-//      - Compares the computed speed with the reported speed (if available) and reports the relative discrepancy
-//        (`gtfs_rt_vehicle_speed_discrepancy_ratio`).
+//  1. Fetches and parses the GTFS-RT vehicle positions feed for the given OBA server.
+//  2. For each valid vehicle entry:
+//     - Tracks the number of GTFS-RT updates received (`vehicle_report_total`).
+//     - Measures the interval since the last report (`vehicle_position_report_interval_seconds`).
+//     - Computes the vehicle speed based on current and previous coordinates and timestamps.
+//     - Reports the computed speed to Prometheus (`gtfs_rt_vehicle_computed_speed`).
+//     - Compares the computed speed with the reported speed (if available) and reports the relative discrepancy
+//     (`gtfs_rt_vehicle_speed_discrepancy_ratio`).
 //
 // All metrics are labeled by `vehicle_id`, `server_id`, and `agency_id` to support detailed monitoring and alerting.
 //
@@ -229,7 +227,7 @@ func (vehicleLastSeen *VehicleLastSeen) clear(threshold time.Duration) {
 //
 // Returns:
 //   - An error if the feed cannot be fetched or parsed, otherwise nil.
-func TrackVehicleTelemetry(server models.ObaServer , vehicleLastSeen *VehicleLastSeen) error {
+func TrackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLastSeen) error {
 	resp, err := gtfs.FetchGTFSRTFeed(server)
 	if err != nil {
 		return err
@@ -250,7 +248,6 @@ func TrackVehicleTelemetry(server models.ObaServer , vehicleLastSeen *VehicleLas
 
 	serverID := server.ID
 	agencyID := server.AgencyID
-
 
 	now := time.Now().UTC()
 
@@ -303,8 +300,8 @@ func TrackVehicleTelemetry(server models.ObaServer , vehicleLastSeen *VehicleLas
 			Lon:  lon,
 		})
 	}
-	
-	TrackedVehiclesGauge.WithLabelValues(strconv.Itoa(serverID)).Set(float64(vehicleLastSeen.Count(serverID)),)
+
+	TrackedVehiclesGauge.WithLabelValues(strconv.Itoa(serverID)).Set(float64(vehicleLastSeen.Count(serverID)))
 
 	return nil
 }
