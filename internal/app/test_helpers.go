@@ -55,9 +55,9 @@ func newTestApplication(t *testing.T) *Application {
 	boundingBoxStore.Set(obaServer.ID, boundingBox)
 
 	return &Application{
-		Config: *cfg,
-		Logger: logger,
-		Version: "1.0.0",
+		Config:           *cfg,
+		Logger:           logger,
+		Version:          "1.0.0",
 		BoundingBoxStore: boundingBoxStore,
 	}
 }
