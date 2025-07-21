@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -11,12 +12,15 @@ import (
 	"watchdog.onebusaway.org/internal/utils"
 )
 
-func (app *Application) StartMetricsCollection() {
+func (app *Application) StartMetricsCollection(ctx context.Context) {
 
 	ticker := time.NewTicker(30 * time.Second)
 	go func() {
+		defer ticker.Stop()
 		for {
 			select {
+			case <- ctx.Done():
+				app.Logger.Info("Stopping metrics collection routine")
 			case <-ticker.C:
 
 				servers := app.Config.GetServers()
