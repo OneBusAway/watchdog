@@ -11,8 +11,8 @@ github.com/getsentry/sentry-go v0.33.0 h1:YWyDii0KGVov3xOaamOnF0mjOrqSjBqwv48UEz
 github.com/getsentry/sentry-go v0.33.0/go.mod h1:C55omcY9ChRQIUcVcGcs+Zdy4ZpQGvNJ7JYHIoSWOtE=
 github.com/go-errors/errors v1.4.2 h1:J6MZopCL4uSllY1OfXM374weqZFFItUbrImctkmUxIA=
 github.com/go-errors/errors v1.4.2/go.mod h1:sIVyrIiJhuEF+Pj9Ebtd6P/rEYROXFi3BopGUQ5a5Og=
-github.com/golang/geo v0.0.0-20250630213057-fac2d31592dd h1:4BU/Fy2KwDucgY0al91L0wJI05rb1Y4hQKucQkybjT8=
-github.com/golang/geo v0.0.0-20250630213057-fac2d31592dd/go.mod h1:Vaw7L5b+xa3Rj4/pRtrQkymn3lSBRB/NAEdbF9YEVLA=
+github.com/golang/geo v0.0.0-20250707181242-c5087ca84cf4 h1:vCeHcs8N7MOccOOsOVIy1xcYu+kBkA4J5urTgigww7c=
+github.com/golang/geo v0.0.0-20250707181242-c5087ca84cf4/go.mod h1:AN0OjM34c3PbjAsX+QNma1nYtJtRxl+s9MZNV7S+efw=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
 github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
 github.com/jamespfennell/gtfs v0.1.24 h1:em/W8Bg88xZwX70r7FoghMiuZDn3m5oj0EfqmikU1Io=

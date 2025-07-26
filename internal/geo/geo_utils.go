@@ -5,6 +5,7 @@ import (
 	"math"
 	"sync"
 
+	"github.com/golang/geo/s2"
 	"github.com/jamespfennell/gtfs"
 )
 
@@ -118,4 +119,12 @@ func (s *BoundingBoxStore) IsInBoundingBox(serverID int, lat, lon float64) bool 
 		return false
 	}
 	return bbox.Contains(lat, lon)
+}
+
+const earthRadiusMeters = 6371000
+
+func HaversineDistance(lat1, lon1, lat2, lon2 float64) float64 {
+	p1 := s2.LatLngFromDegrees(lat1, lon1)
+	p2 := s2.LatLngFromDegrees(lat2, lon2)
+	return p1.Distance(p2).Radians() * earthRadiusMeters
 }
