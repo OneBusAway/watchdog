@@ -56,11 +56,11 @@ func main() {
 	report.ConfigureScope(cfg.Env, version)
 
 	var servers []models.ObaServer
-
+	client := app.NewPooledClient()
 	if *configFile != "" {
 		servers, err = config.LoadConfigFromFile(*configFile)
 	} else if *configURL != "" {
-		servers, err = config.LoadConfigFromURL(*configURL, configAuthUser, configAuthPass)
+		servers, err = config.LoadConfigFromURL(client,*configURL, configAuthUser, configAuthPass)
 	} else {
 		fmt.Println("Error: No configuration provided. Use --config-file or --config-url.")
 		flag.Usage()
@@ -97,12 +97,16 @@ func main() {
 
 	vehicleLastSeen := metrics.NewVehicleLastSeen()
 
+	realtimeStore := gtfs.NewRealtimeStore()
+
 	app := &app.Application{
 		Config:           cfg,
 		Logger:           logger,
+		Client: 					client,
 		Version:          version,
 		BoundingBoxStore: store,
 		VehicleLastSeen:  vehicleLastSeen,
+		RealtimeStore:    realtimeStore,
 	}
 
 	app.StartMetricsCollection(ctx)
@@ -115,7 +119,7 @@ func main() {
 
 	// If a remote URL is specified, refresh the configuration every minute
 	if *configURL != "" {
-		go config.RefreshConfig(ctx, *configURL, configAuthUser, configAuthPass, app, logger, time.Minute)
+		go config.RefreshConfig(ctx ,app.Client,*configURL, configAuthUser, configAuthPass, app, logger, time.Minute)
 	}
 
 	srv := &http.Server{
