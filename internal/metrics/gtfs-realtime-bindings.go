@@ -207,7 +207,7 @@ func TrackVehicleTelemetry(server models.ObaServer) error {
 
 				VehicleSpeedGauge.WithLabelValues(vehicleID, agencyID, strconv.Itoa(serverID)).Set(computedSpeed)
 
-				// Compare with reported speed with computed speed
+				// Compare reported speed with computed speed
 				if vehicle.Position.Speed != nil {
 					reportedSpeed := float64(*vehicle.Position.Speed)
 					if reportedSpeed > 0 {
