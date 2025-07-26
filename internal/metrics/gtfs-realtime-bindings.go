@@ -116,7 +116,6 @@ type LastSeen struct {
 	Lon  float64
 }
 
-
 // vehicleLastSeen stores the most recent known location and timestamp for each vehicle per server.
 //
 // The outer map key is the server ID (int), and the inner map key is the vehicle ID (string).
@@ -131,14 +130,14 @@ var vehicleLastSeen = make(map[int]map[string]LastSeen)
 // TrackVehicleTelemetry collects and reports various telemetry metrics for vehicles in a GTFS-RT feed.
 //
 // This function performs the following tasks:
-//   1. Fetches and parses the GTFS-RT vehicle positions feed for the given OBA server.
-//   2. For each valid vehicle entry:
-//      - Tracks the number of GTFS-RT updates received (`vehicle_report_total`).
-//      - Measures the interval since the last report (`vehicle_position_report_interval_seconds`).
-//      - Computes the vehicle speed based on current and previous coordinates and timestamps.
-//      - Reports the computed speed to Prometheus (`gtfs_rt_vehicle_computed_speed`).
-//      - Compares the computed speed with the reported speed (if available) and reports the relative discrepancy
-//        (`gtfs_rt_vehicle_speed_discrepancy_ratio`).
+//  1. Fetches and parses the GTFS-RT vehicle positions feed for the given OBA server.
+//  2. For each valid vehicle entry:
+//     - Tracks the number of GTFS-RT updates received (`vehicle_report_total`).
+//     - Measures the interval since the last report (`vehicle_position_report_interval_seconds`).
+//     - Computes the vehicle speed based on current and previous coordinates and timestamps.
+//     - Reports the computed speed to Prometheus (`gtfs_rt_vehicle_computed_speed`).
+//     - Compares the computed speed with the reported speed (if available) and reports the relative discrepancy
+//     (`gtfs_rt_vehicle_speed_discrepancy_ratio`).
 //
 // All metrics are labeled by `vehicle_id`, `server_id`, and `agency_id` to support detailed monitoring and alerting.
 //
