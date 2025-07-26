@@ -96,6 +96,9 @@ func TestLoadConfigFromFile(t *testing.T) {
 }
 
 func TestLoadConfigFromURL(t *testing.T) {
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
 	t.Run("ValidResponse", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -112,7 +115,7 @@ func TestLoadConfigFromURL(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		servers, err := LoadConfigFromURL(ts.URL, "user", "pass")
+		servers, err := LoadConfigFromURL(client,ts.URL, "user", "pass")
 		if err != nil {
 			t.Fatalf("loadConfigFromURL failed: %v", err)
 		}
@@ -142,7 +145,7 @@ func TestLoadConfigFromURL(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		_, err := LoadConfigFromURL(ts.URL, "", "")
+		_, err := LoadConfigFromURL(client, ts.URL, "", "")
 		if err == nil {
 			t.Errorf("Expected error with 500 response, got none")
 		}
@@ -155,13 +158,13 @@ func TestLoadConfigFromURL(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		_, err := LoadConfigFromURL(ts.URL, "", "")
+		_, err := LoadConfigFromURL(client, ts.URL, "", "")
 		if err == nil {
 			t.Errorf("Expected error for invalid JSON response, got none")
 		}
 	})
 	t.Run("InvalidURL", func(t *testing.T) {
-		_, err := LoadConfigFromURL("://invalid-url", "", "")
+		_, err := LoadConfigFromURL(client, "://invalid-url", "", "")
 		if err == nil || !strings.Contains(err.Error(), "failed to create request") {
 			t.Errorf("Expected request creation error, got: %v", err)
 		}
@@ -267,6 +270,7 @@ func TestValidateConfigFlags(t *testing.T) {
 
 func TestRefreshConfig(t *testing.T) {
 	app := newTestApplication(t)
+	client := app.Client
 
 	testLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
@@ -298,7 +302,7 @@ func TestRefreshConfig(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go RefreshConfig(ctx, mockServer.URL, "testuser", "testpass", app, testLogger, 100*time.Millisecond)
+	go RefreshConfig(ctx, client, mockServer.URL, "testuser", "testpass", app, testLogger, 100*time.Millisecond)
 
 	time.Sleep(200 * time.Millisecond)
 
@@ -348,9 +352,12 @@ func newTestApplication(t *testing.T) *app.Application {
 	)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-
+	client := http.Client{
+		Timeout: 10 * time.Second,
+	}
 	return &app.Application{
 		Config: *cfg,
 		Logger: logger,
+		Client: &client,
 	}
 }
