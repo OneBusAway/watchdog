@@ -303,9 +303,7 @@ func TestRefreshConfig(t *testing.T) {
 		t.Fatal("Mock server was never called")
 	}
 
-	app.Mu.RLock()
-	updatedServers := app.Config.Servers
-	app.Mu.RUnlock()
+	updatedServers := app.Config.GetServers()
 
 	if len(updatedServers) == 0 {
 		t.Fatal("No servers found in updated configuration")

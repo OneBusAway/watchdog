@@ -121,10 +121,18 @@ func (s *BoundingBoxStore) IsInBoundingBox(serverID int, lat, lon float64) bool 
 	return bbox.Contains(lat, lon)
 }
 
-const earthRadiusMeters = 6371000
+// earthRadiusInMeters represents the mean radius of the Earth in meters.
+//
+// This value (6,371,000 meters) is defined as the Earth's volumetric mean radius,
+// which is commonly used for general geospatial calculations and spherical approximations.
+//
+// Reference: NASA Planetary Fact Sheet – Earth
+// https://nssdc.gsfc.nasa.gov/planetary/factsheet/earthfact.html
+const earthRadiusInMeters = 6371000
+
 
 func HaversineDistance(lat1, lon1, lat2, lon2 float64) float64 {
 	p1 := s2.LatLngFromDegrees(lat1, lon1)
 	p2 := s2.LatLngFromDegrees(lat2, lon2)
-	return p1.Distance(p2).Radians() * earthRadiusMeters
+	return p1.Distance(p2).Radians() * earthRadiusInMeters
 }

@@ -1,11 +1,16 @@
 package server
 
-import "watchdog.onebusaway.org/internal/models"
+import (
+	"sync"
+
+	"watchdog.onebusaway.org/internal/models"
+)
 
 // Config Holds all the configuration settings for our application
 type Config struct {
 	Port    int
 	Env     string
+	Mu      sync.RWMutex
 	Servers []models.ObaServer
 }
 
@@ -16,4 +21,21 @@ func NewConfig(port int, env string, servers []models.ObaServer) *Config {
 		Env:     env,
 		Servers: servers,
 	}
+}
+
+// updateConfig safely updates the config servers.
+func (cfg *Config) UpdateConfig(newServers []models.ObaServer) {
+	cfg.Mu.Lock()
+	defer cfg.Mu.Unlock()
+	cfg.Servers = newServers
+}
+
+// GetServers safely returns a copy of the servers slice to avoid
+// concurrent modification issues.
+// This method should be used to access the servers from other parts of the application.
+// It returns a copy of the servers slice to ensure thread safety.
+func (cfg *Config) GetServers() []models.ObaServer {
+	cfg.Mu.RLock()
+	defer cfg.Mu.RUnlock()
+	return append([]models.ObaServer(nil), cfg.Servers...)
 }
