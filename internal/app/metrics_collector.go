@@ -19,9 +19,7 @@ func (app *Application) StartMetricsCollection() {
 			select {
 			case <-ticker.C:
 
-				app.Mu.Lock()
-				servers := app.Config.Servers
-				app.Mu.Unlock()
+				servers := app.Config.GetServers()
 
 				for _, server := range servers {
 					app.CollectMetricsForServer(server)

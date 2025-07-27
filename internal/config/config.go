@@ -39,7 +39,7 @@ func RefreshConfig(configURL, configAuthUser, configAuthPass string, app *app.Ap
 			continue
 		}
 
-		app.UpdateConfig(newServers)
+		app.Config.UpdateConfig(newServers)
 		logger.Info("Successfully refreshed server configuration")
 	}
 }

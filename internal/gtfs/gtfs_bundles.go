@@ -48,12 +48,14 @@ func DownloadGTFSBundles(servers []models.ObaServer, cacheDir string, logger *sl
 			continue
 		}
 
+		// compute bounding box for each downloaded GTFS bundle
 		bbox, err := geo.ComputeBoundingBox(staticData.Stops)
 		if err != nil {
 			logger.Warn("Could not compute bounding box", "server_id", server.ID, "error", err)
 			continue
 		}
 
+		// one bounding box per server
 		store.Set(server.ID, bbox)
 		logger.Info("Computed bounding box", "server_id", server.ID, "bbox", bbox)
 	}
