@@ -2,15 +2,18 @@ package app
 
 import (
 	"log/slog"
+	"net/http"
 	"sync"
 
 	"watchdog.onebusaway.org/internal/geo"
+	"watchdog.onebusaway.org/internal/gtfs"
+	"watchdog.onebusaway.org/internal/metrics"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/server"
 )
 
 // Application holds the shared dependencies for HTTP handlers, helpers, and middleware.
-// 
+//
 // Fields:
 // - Config: The application configuration.
 // - Logger: Structured logger used across the app.
@@ -22,8 +25,11 @@ type Application struct {
 	Config           server.Config
 	Logger           *slog.Logger
 	Mu               sync.RWMutex
+	Client           *http.Client
 	Version          string
 	BoundingBoxStore *geo.BoundingBoxStore
+	VehicleLastSeen  *metrics.VehicleLastSeen
+	RealtimeStore    *gtfs.RealtimeStore
 }
 
 // updateConfig safely updates the application's server configuration.

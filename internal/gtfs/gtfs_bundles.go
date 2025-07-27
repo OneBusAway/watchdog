@@ -1,6 +1,7 @@
 package gtfs
 
 import (
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
@@ -60,10 +61,18 @@ func DownloadGTFSBundles(servers []models.ObaServer, cacheDir string, logger *sl
 }
 
 // RefreshGTFSBundles periodically downloads GTFS bundles at the specified interval.
-func RefreshGTFSBundles(servers []models.ObaServer, cacheDir string, logger *slog.Logger, interval time.Duration, store *geo.BoundingBoxStore) {
+func RefreshGTFSBundles(ctx context.Context, servers []models.ObaServer, cacheDir string, logger *slog.Logger, interval time.Duration, store *geo.BoundingBoxStore) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 	for {
-		time.Sleep(interval)
-		DownloadGTFSBundles(servers, cacheDir, logger, store)
+		select {
+		case <-ctx.Done():
+			logger.Info("Stopping GTFS bundle refresh routine")
+			return
+		case <-ticker.C:
+			logger.Info("Refreshing GTFS bundles")
+			DownloadGTFSBundles(servers, cacheDir, logger, store)
+		}
 	}
 }
 
@@ -143,9 +152,15 @@ func GetStopLocationsByIDs(cachePath string, serverID int, stopIDs []string) (ma
 	return result, nil
 }
 
-// FetchGTFSRTFeed fetches the GTFS-RT feed from the specified server.
-// It returns the HTTP response or an error if the request fails.
-func FetchGTFSRTFeed(server models.ObaServer) (*http.Response, error) {
+// FetchAndStoreGTFSRTFeed fetches the GTFS-Realtime (GTFS-RT) vehicle position feed
+// from the specified server, parses the response, and stores it safely in the
+// provided RealtimeStore.
+//
+// The realtimeStore is designed to be thread-safe, and this function ensures
+// that the parsed data is written using the store’s locking mechanisms,
+// making it safe for concurrent access across goroutines.
+
+func FetchAndStoreGTFSRTFeed(server models.ObaServer, realtimeStore *RealtimeStore, client *http.Client) error {
 	parsedURL, err := url.Parse(server.VehiclePositionUrl)
 	if err != nil {
 		err = fmt.Errorf("failed to parse GTFS-RT URL: %v", err)
@@ -155,19 +170,19 @@ func FetchGTFSRTFeed(server models.ObaServer) (*http.Response, error) {
 				"vehicle_position_url": server.VehiclePositionUrl,
 			},
 		})
-		return nil, err
+		return err
 	}
 
 	req, err := http.NewRequest("GET", parsedURL.String(), nil)
 	if err != nil {
 		report.ReportError(err)
-		return nil, err
+		return err
 	}
+
 	if server.GtfsRtApiKey != "" && server.GtfsRtApiValue != "" {
 		req.Header.Set(server.GtfsRtApiKey, server.GtfsRtApiValue)
 	}
 
-	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
 		err = fmt.Errorf("failed to fetch GTFS-RT feed: %v", err)
@@ -177,8 +192,49 @@ func FetchGTFSRTFeed(server models.ObaServer) (*http.Response, error) {
 				"vehicle_position_url": server.VehiclePositionUrl,
 			},
 		})
-		return nil, err
+		return err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		report.ReportError(err)
+		return err
 	}
 
-	return resp, nil
+	realtimeData, err := gtfs.ParseRealtime(data, &gtfs.ParseRealtimeOptions{})
+	if err != nil {
+		report.ReportError(err)
+		return err
+	}
+
+	realtimeStore.Set(realtimeData)
+	return nil
+}
+
+// GetEarliestAndLatestServiceDates returns the earliest and latest service end dates
+// from the GTFS static data's calendar entries.
+//
+// This is used as a workaround because the GTFS library does not currently support
+// parsing `feed_info.txt`, which usually provides feed start/end dates.
+//
+// Instead, this function infers expiration information by scanning all `calendar.txt`
+// entries (i.e., service periods), and returns the minimum and maximum `EndDate` values.
+//
+// Returns an error if no services are found in the bundle.
+func GetEarliestAndLatestServiceDates(staticData *gtfs.Static) (earliestEndDate, latestEndDate time.Time, err error) {
+	if len(staticData.Services) == 0 {
+		return time.Time{}, time.Time{}, fmt.Errorf("no services found in GTFS bundle")
+	}
+	earliestEndDate = staticData.Services[0].EndDate
+	latestEndDate = staticData.Services[0].EndDate
+	for _, service := range staticData.Services {
+		if service.EndDate.Before(earliestEndDate) {
+			earliestEndDate = service.EndDate
+		}
+		if service.EndDate.After(latestEndDate) {
+			latestEndDate = service.EndDate
+		}
+	}
+	return earliestEndDate, latestEndDate, nil
 }

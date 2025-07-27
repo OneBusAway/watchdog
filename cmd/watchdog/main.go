@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"watchdog.onebusaway.org/internal/config"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
+	"watchdog.onebusaway.org/internal/metrics"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
 	"watchdog.onebusaway.org/internal/server"
@@ -23,7 +25,6 @@ import (
 // generate this automatically at build time, but for now we'll just store the version
 // number as a hard-coded global constant.
 const version = "1.0.0"
-
 
 func main() {
 	var cfg server.Config
@@ -55,11 +56,11 @@ func main() {
 	report.ConfigureScope(cfg.Env, version)
 
 	var servers []models.ObaServer
-
+	client := app.NewPooledClient()
 	if *configFile != "" {
 		servers, err = config.LoadConfigFromFile(*configFile)
 	} else if *configURL != "" {
-		servers, err = config.LoadConfigFromURL(*configURL, configAuthUser, configAuthPass)
+		servers, err = config.LoadConfigFromURL(client, *configURL, configAuthUser, configAuthPass)
 	} else {
 		fmt.Println("Error: No configuration provided. Use --config-file or --config-url.")
 		flag.Usage()
@@ -78,6 +79,9 @@ func main() {
 
 	cfg.Servers = servers
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	cacheDir := "cache"
@@ -91,21 +95,31 @@ func main() {
 	// Download GTFS bundles for all servers on startup
 	gtfs.DownloadGTFSBundles(servers, cacheDir, logger, store)
 
+	vehicleLastSeen := metrics.NewVehicleLastSeen()
+
+	realtimeStore := gtfs.NewRealtimeStore()
+
 	app := &app.Application{
 		Config:           cfg,
 		Logger:           logger,
+		Client:           client,
 		Version:          version,
 		BoundingBoxStore: store,
+		VehicleLastSeen:  vehicleLastSeen,
+		RealtimeStore:    realtimeStore,
 	}
 
-	app.StartMetricsCollection()
+	app.StartMetricsCollection(ctx)
 
 	// Cron job to download GTFS bundles for all servers every 24 hours
-	go gtfs.RefreshGTFSBundles(servers, cacheDir, logger, 24*time.Hour, store)
+	go gtfs.RefreshGTFSBundles(ctx, servers, cacheDir, logger, 24*time.Hour, store)
+
+	// Cron job to delete the data of vehicles that has not sent updates for 1 hour
+	go vehicleLastSeen.ClearRoutine(ctx, 15*time.Minute, time.Hour)
 
 	// If a remote URL is specified, refresh the configuration every minute
 	if *configURL != "" {
-		go config.RefreshConfig(*configURL, configAuthUser, configAuthPass, app, logger, time.Minute)
+		go config.RefreshConfig(ctx, app.Client, *configURL, configAuthUser, configAuthPass, app, logger, time.Minute)
 	}
 
 	srv := &http.Server{
