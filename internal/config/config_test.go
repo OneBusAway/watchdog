@@ -115,7 +115,7 @@ func TestLoadConfigFromURL(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		servers, err := LoadConfigFromURL(client,ts.URL, "user", "pass")
+		servers, err := LoadConfigFromURL(client, ts.URL, "user", "pass")
 		if err != nil {
 			t.Fatalf("loadConfigFromURL failed: %v", err)
 		}

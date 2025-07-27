@@ -26,9 +26,9 @@ func MakeMap(key, value string) map[string]string {
 //
 // Note: This function uses only a subset of GTFS-RT data fields when computing
 // the hash. This is sufficient and intentional for testing purposes. For example,
-// when verifying that data saved in RealtimeStore matches expected input in 
-// tests for FetchAndStoreGTFSRTFeed. If you intend to use this hashing logic in 
-// production code or for application logic, you must consider all relevant fields 
+// when verifying that data saved in RealtimeStore matches expected input in
+// tests for FetchAndStoreGTFSRTFeed. If you intend to use this hashing logic in
+// production code or for application logic, you must consider all relevant fields
 // in the GTFS-RT data structure to avoid missing meaningful differences.
 
 func HashRealtimeData(rt *gtfs.Realtime) ([32]byte, error) {

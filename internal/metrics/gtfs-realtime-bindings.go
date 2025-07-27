@@ -17,7 +17,7 @@ import (
 	"watchdog.onebusaway.org/internal/utils"
 )
 
-func CountVehiclePositions(server models.ObaServer,realtimeStore *gtfs.RealtimeStore) (int, error) {
+func CountVehiclePositions(server models.ObaServer, realtimeStore *gtfs.RealtimeStore) (int, error) {
 	if realtimeStore == nil {
 		err := fmt.Errorf("realtimeStore is nil for server %d", server.ID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -37,7 +37,7 @@ func CountVehiclePositions(server models.ObaServer,realtimeStore *gtfs.RealtimeS
 				"vehicle_position_url": server.VehiclePositionUrl,
 			},
 		})
-		return 0, err 
+		return 0, err
 	}
 	count := len(realtimeData.Vehicles)
 
@@ -326,7 +326,7 @@ const VehicleStatusStoppedAtStop = 1
 // The results are exposed via Prometheus metrics:
 // - InvalidVehicleCoordinatesGauge: for invalid or missing coordinates
 // - StoppedOutOfBoundsVehiclesGauge: for vehicles stopped outside the bounding box
-func TrackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, boundingBoxStore *geo.BoundingBoxStore,realtimeStore *gtfs.RealtimeStore) error {
+func TrackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, boundingBoxStore *geo.BoundingBoxStore, realtimeStore *gtfs.RealtimeStore) error {
 	realtimeData := realtimeStore.Get()
 	if realtimeData == nil {
 		err := fmt.Errorf("no GTFS-RT data available for server %d", server.ID)
@@ -338,7 +338,7 @@ func TrackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, bounding
 		})
 		return err
 	}
-	
+
 	boundingBox, ok := boundingBoxStore.Get(server.ID)
 	if !ok {
 		return fmt.Errorf("no bounding box found for server ID %d", server.ID)

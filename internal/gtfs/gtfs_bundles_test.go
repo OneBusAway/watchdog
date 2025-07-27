@@ -213,7 +213,7 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 			Timeout: 5 * time.Second,
 		}
 		realtimeStore := NewRealtimeStore()
-		err := FetchAndStoreGTFSRTFeed(server,realtimeStore,client)
+		err := FetchAndStoreGTFSRTFeed(server, realtimeStore, client)
 		if err != nil {
 			t.Fatalf("Expected no error, got: %v", err)
 		}
@@ -221,8 +221,8 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 			t.Fatalf("Expected realtimeStore to contain parsed GTFS-RT data, but it is nil")
 		}
 
-		data := readFixture(t , "gtfs_rt_feed_vehicles.pb")
-		realtimeData,err := gtfs.ParseRealtime(data, &gtfs.ParseRealtimeOptions{})
+		data := readFixture(t, "gtfs_rt_feed_vehicles.pb")
+		realtimeData, err := gtfs.ParseRealtime(data, &gtfs.ParseRealtimeOptions{})
 		if err != nil {
 			t.Fatalf("Failed to parse GTFS-RT data: %v", err)
 		}
@@ -230,12 +230,12 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to hash GTFS-RT data: %v", err)
 		}
-		hash , err := utils.HashRealtimeData(realtimeStore.Get())
+		hash, err := utils.HashRealtimeData(realtimeStore.Get())
 		if err != nil {
 			t.Fatalf("Failed to hash GTFS-RT data from store: %v", err)
 		}
 		if hash != expectedHash {
-			t.Errorf("Expected hash %x, got %x", expectedHash, hash )
+			t.Errorf("Expected hash %x, got %x", expectedHash, hash)
 		}
 	})
 
@@ -249,7 +249,7 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 		}
 		realtimeStore := NewRealtimeStore()
 
-		err := FetchAndStoreGTFSRTFeed(server,realtimeStore,client)
+		err := FetchAndStoreGTFSRTFeed(server, realtimeStore, client)
 		if err == nil {
 			t.Error("Expected error due to invalid URL, got nil")
 		}
@@ -267,7 +267,7 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 			Timeout: 5 * time.Second,
 		}
 		realtimeStore := NewRealtimeStore()
-		err := FetchAndStoreGTFSRTFeed(server,realtimeStore,client)
+		err := FetchAndStoreGTFSRTFeed(server, realtimeStore, client)
 		if err == nil {
 			t.Error("Expected error when accessing closed server, got nil")
 		}

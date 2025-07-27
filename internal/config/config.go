@@ -27,7 +27,7 @@ func ValidateConfigFlags(configFile, configURL *string) error {
 }
 
 // refreshConfig periodically fetches remote config and updates the application servers.
-func RefreshConfig(ctx context.Context,client *http.Client, configURL, configAuthUser, configAuthPass string, app *app.Application, logger *slog.Logger, interval time.Duration) {
+func RefreshConfig(ctx context.Context, client *http.Client, configURL, configAuthUser, configAuthPass string, app *app.Application, logger *slog.Logger, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -36,18 +36,18 @@ func RefreshConfig(ctx context.Context,client *http.Client, configURL, configAut
 			logger.Info("Stopping config refresh routine")
 			return
 		case <-ticker.C:
-		newServers, err := LoadConfigFromURL(client,configURL, configAuthUser, configAuthPass)
-		if err != nil {
-			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-				Tags:  utils.MakeMap("config_url", configURL),
-				Level: sentry.LevelError,
-			})
-			logger.Error("Failed to refresh remote config", "error", err)
-			continue
-		}
+			newServers, err := LoadConfigFromURL(client, configURL, configAuthUser, configAuthPass)
+			if err != nil {
+				report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+					Tags:  utils.MakeMap("config_url", configURL),
+					Level: sentry.LevelError,
+				})
+				logger.Error("Failed to refresh remote config", "error", err)
+				continue
+			}
 
-		app.Config.UpdateConfig(newServers)
-		logger.Info("Successfully refreshed server configuration")
+			app.Config.UpdateConfig(newServers)
+			logger.Info("Successfully refreshed server configuration")
 		}
 	}
 }
@@ -74,7 +74,7 @@ func LoadConfigFromFile(filePath string) ([]models.ObaServer, error) {
 	return servers, nil
 }
 
-func LoadConfigFromURL(client *http.Client,url, authUser, authPass string) ([]models.ObaServer, error) {
+func LoadConfigFromURL(client *http.Client, url, authUser, authPass string) ([]models.ObaServer, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{

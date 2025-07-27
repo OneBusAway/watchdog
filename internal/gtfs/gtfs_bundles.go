@@ -213,6 +213,7 @@ func FetchAndStoreGTFSRTFeed(server models.ObaServer, realtimeStore *RealtimeSto
 	realtimeStore.Set(realtimeData)
 	return nil
 }
+
 // GetEarliestAndLatestServiceDates returns the earliest and latest service end dates
 // from the GTFS static data's calendar entries.
 //
