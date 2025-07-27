@@ -19,12 +19,12 @@ func TestUpdateConfig(t *testing.T) {
 	}
 
 	app.Config.UpdateConfig(initialServers)
-	if len(app.Config.Servers) != 1 {
+	if len(app.Config.GetServers()) != 1 {
 		t.Errorf("Expected 1 server, got %d", len(app.Config.Servers))
 	}
 
 	app.Config.UpdateConfig(newServers)
-	if len(app.Config.Servers) != 2 {
+	if len(app.Config.GetServers()) != 2 {
 		t.Errorf("Expected 2 servers, got %d", len(app.Config.Servers))
 	}
 
