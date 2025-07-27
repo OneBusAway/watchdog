@@ -19,7 +19,7 @@ func (app *Application) StartMetricsCollection(ctx context.Context) {
 		defer ticker.Stop()
 		for {
 			select {
-			case <- ctx.Done():
+			case <-ctx.Done():
 				app.Logger.Info("Stopping metrics collection routine")
 				return
 			case <-ticker.C:
