@@ -20,7 +20,7 @@ func (app *Application) StartMetricsCollection(ctx context.Context) {
 		defer ticker.Stop()
 		for {
 			select {
-			case <- ctx.Done():
+			case <-ctx.Done():
 				app.Logger.Info("Stopping metrics collection routine")
 			case <-ticker.C:
 
@@ -99,7 +99,7 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 	}
 	// Fetch and store GTFS-RT feed
 	// Note : function after FetchAndStoreGTFSRTFeed is depends on this function
-	// on failure of this function we return 
+	// on failure of this function we return
 	err = gtfs.FetchAndStoreGTFSRTFeed(server, app.RealtimeStore, app.Client)
 	if err != nil {
 		app.Logger.Error("Failed to fetch and store GTFS-RT feed", "error", err)
@@ -139,7 +139,7 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		})
 	}
 
-	err = metrics.TrackInvalidVehiclesAndStoppedOutOfBounds(server, app.BoundingBoxStore , app.RealtimeStore)
+	err = metrics.TrackInvalidVehiclesAndStoppedOutOfBounds(server, app.BoundingBoxStore, app.RealtimeStore)
 	if err != nil {
 		app.Logger.Error("Failed to count invalid vehicle coordinates", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{

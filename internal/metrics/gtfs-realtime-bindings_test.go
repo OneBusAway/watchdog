@@ -15,7 +15,7 @@ import (
 
 var realtimeStore *gtfs.RealtimeStore
 
-func TestMain(m* testing.M){
+func TestMain(m *testing.M) {
 	realtimeStore = gtfs.NewRealtimeStore()
 
 	absPath, err := filepath.Abs(filepath.Join("..", "..", "testdata", "gtfs_rt_feed_vehicles.pb"))
@@ -49,7 +49,7 @@ func TestCountVehiclePositions(t *testing.T) {
 			ID:                 1,
 			VehiclePositionUrl: "Value of VehiclePositionUrl",
 		}
-		count, err := CountVehiclePositions(server,realtimeStore)
+		count, err := CountVehiclePositions(server, realtimeStore)
 		if err != nil {
 			t.Fatalf("Expected no error, got %v", err)
 		}
@@ -150,7 +150,7 @@ func TestCheckVehicleCountMatch(t *testing.T) {
 
 		testServer := createTestServer(obaServer.URL, "Test Server", 999, "test-key", "GTFS-Rt Server URL 1", "test-api-value", "test-api-key", "1")
 
-		err := CheckVehicleCountMatch(testServer,realtimeStore)
+		err := CheckVehicleCountMatch(testServer, realtimeStore)
 		if err == nil {
 			t.Fatal("Expected an error but got nil")
 		}
@@ -173,7 +173,7 @@ func TestTrackInvalidVehiclesAndStoppedOutOfBounds(t *testing.T) {
 			GtfsRtApiValue:     "test-key",
 		}
 
-		err := TrackInvalidVehiclesAndStoppedOutOfBounds(server, boundingBoxStore,realtimeStore)
+		err := TrackInvalidVehiclesAndStoppedOutOfBounds(server, boundingBoxStore, realtimeStore)
 		if err != nil {
 			t.Errorf("Expected no error, got: %v", err)
 		}
@@ -188,7 +188,7 @@ func TestTrackInvalidVehiclesAndStoppedOutOfBounds(t *testing.T) {
 			GtfsRtApiValue:     "test-key",
 		}
 
-		err := TrackInvalidVehiclesAndStoppedOutOfBounds(server, boundingBoxStore,realtimeStore)
+		err := TrackInvalidVehiclesAndStoppedOutOfBounds(server, boundingBoxStore, realtimeStore)
 		if err == nil {
 			t.Error("Expected error due to missing bounding box, got nil")
 		}

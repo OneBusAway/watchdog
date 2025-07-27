@@ -60,7 +60,7 @@ func main() {
 	if *configFile != "" {
 		servers, err = config.LoadConfigFromFile(*configFile)
 	} else if *configURL != "" {
-		servers, err = config.LoadConfigFromURL(client,*configURL, configAuthUser, configAuthPass)
+		servers, err = config.LoadConfigFromURL(client, *configURL, configAuthUser, configAuthPass)
 	} else {
 		fmt.Println("Error: No configuration provided. Use --config-file or --config-url.")
 		flag.Usage()
@@ -102,7 +102,7 @@ func main() {
 	app := &app.Application{
 		Config:           cfg,
 		Logger:           logger,
-		Client: 					client,
+		Client:           client,
 		Version:          version,
 		BoundingBoxStore: store,
 		VehicleLastSeen:  vehicleLastSeen,
@@ -112,14 +112,14 @@ func main() {
 	app.StartMetricsCollection(ctx)
 
 	// Cron job to download GTFS bundles for all servers every 24 hours
-	go gtfs.RefreshGTFSBundles(ctx ,servers, cacheDir, logger, 24*time.Hour, store)
+	go gtfs.RefreshGTFSBundles(ctx, servers, cacheDir, logger, 24*time.Hour, store)
 
 	// Cron job to delete the data of vehicles that has not sent updates for 1 hour
 	go vehicleLastSeen.ClearRoutine(ctx, 15*time.Minute, time.Hour)
 
 	// If a remote URL is specified, refresh the configuration every minute
 	if *configURL != "" {
-		go config.RefreshConfig(ctx ,app.Client,*configURL, configAuthUser, configAuthPass, app, logger, time.Minute)
+		go config.RefreshConfig(ctx, app.Client, *configURL, configAuthUser, configAuthPass, app, logger, time.Minute)
 	}
 
 	srv := &http.Server{

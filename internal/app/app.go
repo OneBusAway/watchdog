@@ -29,7 +29,7 @@ type Application struct {
 	Version          string
 	BoundingBoxStore *geo.BoundingBoxStore
 	VehicleLastSeen  *metrics.VehicleLastSeen
-	RealtimeStore		 *gtfs.RealtimeStore
+	RealtimeStore    *gtfs.RealtimeStore
 }
 
 // updateConfig safely updates the application's server configuration.

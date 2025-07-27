@@ -6,7 +6,7 @@ import (
 	remoteGtfs "github.com/jamespfennell/gtfs"
 )
 
-// RealtimeStore is used to store GTFS-RT data 
+// RealtimeStore is used to store GTFS-RT data
 // fetched once by a designated function. This avoids making multiple API calls for the same data
 // and allows other components to reuse the parsed result safely across goroutines.
 //
@@ -20,7 +20,8 @@ type RealtimeStore struct {
 // NewRealtimeStore creates and returns a new empty RealtimeStore instance.
 //
 // Usage:
-//   store := gtfs.NewRealtimeStore()
+//
+//	store := gtfs.NewRealtimeStore()
 func NewRealtimeStore() *RealtimeStore {
 	return &RealtimeStore{}
 }
