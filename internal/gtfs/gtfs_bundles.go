@@ -63,14 +63,14 @@ func DownloadGTFSBundles(servers []models.ObaServer, cacheDir string, logger *sl
 }
 
 // RefreshGTFSBundles periodically downloads GTFS bundles at the specified interval.
-func RefreshGTFSBundles(ctx context.Context ,servers []models.ObaServer, cacheDir string, logger *slog.Logger, interval time.Duration, store *geo.BoundingBoxStore) {
+func RefreshGTFSBundles(ctx context.Context, servers []models.ObaServer, cacheDir string, logger *slog.Logger, interval time.Duration, store *geo.BoundingBoxStore) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-		logger.Info("Stopping GTFS bundle refresh routine")
-		return
+			logger.Info("Stopping GTFS bundle refresh routine")
+			return
 		case <-ticker.C:
 			logger.Info("Refreshing GTFS bundles")
 			DownloadGTFSBundles(servers, cacheDir, logger, store)

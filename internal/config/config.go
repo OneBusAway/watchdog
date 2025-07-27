@@ -33,18 +33,18 @@ func RefreshConfig(ctx context.Context, configURL, configAuthUser, configAuthPas
 	for {
 		select {
 		case <-ctx.Done():
-		logger.Info("Stopping config refresh routine")
-		return
+			logger.Info("Stopping config refresh routine")
+			return
 		case <-ticker.C:
-		newServers, err := LoadConfigFromURL(configURL, configAuthUser, configAuthPass)
-		if err != nil {
-			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-				Tags:  utils.MakeMap("config_url", configURL),
-				Level: sentry.LevelError,
-			})
-			logger.Error("Failed to refresh remote config", "error", err)
-			continue
-		}
+			newServers, err := LoadConfigFromURL(configURL, configAuthUser, configAuthPass)
+			if err != nil {
+				report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+					Tags:  utils.MakeMap("config_url", configURL),
+					Level: sentry.LevelError,
+				})
+				logger.Error("Failed to refresh remote config", "error", err)
+				continue
+			}
 
 		app.Config.UpdateConfig(newServers)
 		logger.Info("Successfully refreshed server configuration")

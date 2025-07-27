@@ -108,14 +108,14 @@ func main() {
 	app.StartMetricsCollection(ctx)
 
 	// Cron job to download GTFS bundles for all servers every 24 hours
-	go gtfs.RefreshGTFSBundles(ctx ,servers, cacheDir, logger, 24*time.Hour, store)
+	go gtfs.RefreshGTFSBundles(ctx, servers, cacheDir, logger, 24*time.Hour, store)
 
 	// Cron job to delete the data of vehicles that has not sent updates for 1 hour
 	go vehicleLastSeen.ClearRoutine(ctx, 15*time.Minute, time.Hour)
 
 	// If a remote URL is specified, refresh the configuration every minute
 	if *configURL != "" {
-		go config.RefreshConfig(ctx ,*configURL, configAuthUser, configAuthPass, app, logger, time.Minute)
+		go config.RefreshConfig(ctx, *configURL, configAuthUser, configAuthPass, app, logger, time.Minute)
 	}
 
 	srv := &http.Server{

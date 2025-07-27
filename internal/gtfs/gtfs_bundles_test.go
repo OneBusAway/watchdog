@@ -41,7 +41,7 @@ func TestRefreshGTFSBundles(t *testing.T) {
 	store := geo.NewBoundingBoxStore()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go RefreshGTFSBundles(ctx ,servers, cacheDir, logger, 10*time.Millisecond, store)
+	go RefreshGTFSBundles(ctx, servers, cacheDir, logger, 10*time.Millisecond, store)
 
 	time.Sleep(15 * time.Millisecond)
 
