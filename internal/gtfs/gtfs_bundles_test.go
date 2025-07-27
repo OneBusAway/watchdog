@@ -2,6 +2,7 @@ package gtfs
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
@@ -38,8 +39,9 @@ func TestRefreshGTFSBundles(t *testing.T) {
 	servers := []models.ObaServer{{ID: 1, Name: "Test Server", GtfsUrl: "http://example.com/gtfs.zip"}}
 	cacheDir := t.TempDir()
 	store := geo.NewBoundingBoxStore()
-
-	go RefreshGTFSBundles(servers, cacheDir, logger, 10*time.Millisecond, store)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go RefreshGTFSBundles(ctx, servers, cacheDir, logger, 10*time.Millisecond, store)
 
 	time.Sleep(15 * time.Millisecond)
 

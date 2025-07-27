@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -295,7 +296,9 @@ func TestRefreshConfig(t *testing.T) {
 	originalConfig := make([]models.ObaServer, len(app.Config.Servers))
 	copy(originalConfig, app.Config.Servers)
 
-	go RefreshConfig(mockServer.URL, "testuser", "testpass", app, testLogger, 100*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go RefreshConfig(ctx, mockServer.URL, "testuser", "testpass", app, testLogger, 100*time.Millisecond)
 
 	time.Sleep(200 * time.Millisecond)
 

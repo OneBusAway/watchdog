@@ -1,7 +1,6 @@
 package metrics
 
 import (
-	"fmt"
 	"strconv"
 	"time"
 
@@ -19,29 +18,17 @@ func CheckBundleExpiration(cachePath string, currentTime time.Time, server model
 		return 0, 0, err
 	}
 
-	if len(staticData.Services) == 0 {
-		errMsg := fmt.Errorf("no services found in GTFS bundle")
-		report.ReportErrorWithSentryOptions(errMsg, report.SentryReportOptions{
+	earliestEndDate, latestEndDate, err := gtfs.GetEarliestAndLatestServiceDates(staticData)
+
+	if err != nil {
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
 			ExtraContext: map[string]interface{}{
 				"cache_path": cachePath,
 			},
 			Level: sentry.LevelWarning,
 		})
-		return 0, 0, errMsg
-	}
-
-	// Get the earliest and latest expiration dates
-	// This is workaround because the GTFS library does not support feed_info.txt
-	earliestEndDate := staticData.Services[0].EndDate
-	latestEndDate := staticData.Services[0].EndDate
-	for _, service := range staticData.Services {
-		if service.EndDate.Before(earliestEndDate) {
-			earliestEndDate = service.EndDate
-		}
-		if service.EndDate.After(latestEndDate) {
-			latestEndDate = service.EndDate
-		}
+		return 0, 0, err
 	}
 
 	daysUntilEarliestExpiration := int(earliestEndDate.Sub(currentTime).Hours() / 24)

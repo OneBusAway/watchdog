@@ -5,12 +5,13 @@ import (
 	"sync"
 
 	"watchdog.onebusaway.org/internal/geo"
+	"watchdog.onebusaway.org/internal/metrics"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/server"
 )
 
 // Application holds the shared dependencies for HTTP handlers, helpers, and middleware.
-// 
+//
 // Fields:
 // - Config: The application configuration.
 // - Logger: Structured logger used across the app.
@@ -24,6 +25,7 @@ type Application struct {
 	Mu               sync.RWMutex
 	Version          string
 	BoundingBoxStore *geo.BoundingBoxStore
+	VehicleLastSeen  *metrics.VehicleLastSeen
 }
 
 // updateConfig safely updates the application's server configuration.
