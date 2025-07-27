@@ -21,6 +21,7 @@ func (app *Application) StartMetricsCollection(ctx context.Context) {
 			select {
 			case <- ctx.Done():
 				app.Logger.Info("Stopping metrics collection routine")
+				return
 			case <-ticker.C:
 
 				servers := app.Config.GetServers()
