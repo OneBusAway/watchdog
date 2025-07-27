@@ -41,8 +41,8 @@ func s2ClusterID(lat, lon float64, level int) string {
 // location_type = 0 (Stop / Platform):
 //   - The parent_station field is optional.
 //   - If it has a parent_station (Type 1 Station), the stop is clustered by the parent station's ID.
-//     - Valid: platform with parent station (Type 1).
-//     - Invalid: parent exists but is not of type 1.
+//   - Valid: platform with parent station (Type 1).
+//   - Invalid: parent exists but is not of type 1.
 //   - If it has no parent but has lat/lon, cluster by S2 cell.
 //   - If it has no parent and no coordinates, data is malformed.
 //
@@ -53,16 +53,16 @@ func s2ClusterID(lat, lon float64, level int) string {
 //
 // location_type = 2 or 3 (Entrance/Exit or Generic Node):
 //   - Must have a parent_station of type 1 (Station).
-//     - Valid: parent is station.
-//     - Invalid: missing parent or parent not type 1, data is malformed.
+//   - Valid: parent is station.
+//   - Invalid: missing parent or parent not type 1, data is malformed.
 //
 // location_type = 4 (Boarding Area):
 //   - Must have a parent of type 0 (Platform/Stop).
 //   - Note: A Platform/Stop (type 0) may optionally have a parent of type 1 (Station)
-//           if defined as part of a station hierarchy.
-//     - Valid: parent is a Stop, and grandparent is a Station.
-//     - Valid fallback: parent exists, but grandparent is missing - cluster by S2 using the stop's lat/lon.
-//     - Invalid: grandparent exists but is not a Station, or coordinates are missing for fallback - data is malformed.
+//     if defined as part of a station hierarchy.
+//   - Valid: parent is a Stop, and grandparent is a Station.
+//   - Valid fallback: parent exists, but grandparent is missing - cluster by S2 using the stop's lat/lon.
+//   - Invalid: grandparent exists but is not a Station, or coordinates are missing for fallback - data is malformed.
 //
 // Returns false if hierarchy rules are violated or required parent/coordinate data is missing.
 func GetClusterID(stop gtfs.Stop) (clusterID string, clusterType string, ok bool) {
@@ -102,4 +102,3 @@ func GetClusterID(stop gtfs.Stop) (clusterID string, clusterType string, ok bool
 	}
 	return "", "", false
 }
-

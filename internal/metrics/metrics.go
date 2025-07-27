@@ -102,6 +102,13 @@ var (
 		},
 		[]string{"server_id"},
 	)
+	TrackedVehiclesGauge = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "gtfs_rt_tracked_vehicles_count",
+			Help: "Number of vehicles currently being tracked (i.e., have a last seen position and timestamp)",
+		},
+		[]string{"server_id"},
+	)
 )
 
 // OBA REST API 2.6.0 >= Metrics

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -26,21 +27,28 @@ func ValidateConfigFlags(configFile, configURL *string) error {
 }
 
 // refreshConfig periodically fetches remote config and updates the application servers.
-func RefreshConfig(configURL, configAuthUser, configAuthPass string, app *app.Application, logger *slog.Logger, interval time.Duration) {
+func RefreshConfig(ctx context.Context, configURL, configAuthUser, configAuthPass string, app *app.Application, logger *slog.Logger, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 	for {
-		time.Sleep(interval)
-		newServers, err := LoadConfigFromURL(configURL, configAuthUser, configAuthPass)
-		if err != nil {
-			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-				Tags:  utils.MakeMap("config_url", configURL),
-				Level: sentry.LevelError,
-			})
-			logger.Error("Failed to refresh remote config", "error", err)
-			continue
-		}
+		select {
+		case <-ctx.Done():
+			logger.Info("Stopping config refresh routine")
+			return
+		case <-ticker.C:
+			newServers, err := LoadConfigFromURL(configURL, configAuthUser, configAuthPass)
+			if err != nil {
+				report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+					Tags:  utils.MakeMap("config_url", configURL),
+					Level: sentry.LevelError,
+				})
+				logger.Error("Failed to refresh remote config", "error", err)
+				continue
+			}
 
 		app.Config.UpdateConfig(newServers)
 		logger.Info("Successfully refreshed server configuration")
+		}
 	}
 }
 
