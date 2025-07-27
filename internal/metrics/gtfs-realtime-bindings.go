@@ -336,6 +336,7 @@ func TrackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, bounding
 				"vehicle_position_url": server.VehiclePositionUrl,
 			},
 		})
+		return err
 	}
 	
 	boundingBox, ok := boundingBoxStore.Get(server.ID)
