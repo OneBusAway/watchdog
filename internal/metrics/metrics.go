@@ -203,3 +203,14 @@ var (
 		[]string{"server", "agency", "cluster_id", "cluster_type"},
 	)
 )
+
+var (
+	OutgoingLatency = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "http_outgoing_request_duration_seconds",
+			Help:    "Duration of outgoing HTTP requests to external APIs (in seconds)",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"url", "method", "status_code"},
+	)
+)
