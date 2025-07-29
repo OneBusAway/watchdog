@@ -77,7 +77,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	cfg.Servers = servers
+	cfg.UpdateConfig(servers)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
