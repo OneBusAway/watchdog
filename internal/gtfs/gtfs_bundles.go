@@ -154,9 +154,15 @@ func GetStopLocationsByIDs(cachePath string, serverID int, stopIDs []string) (ma
 	return result, nil
 }
 
-// FetchGTFSRTFeed fetches the GTFS-RT feed from the specified server.
-// It returns the HTTP response or an error if the request fails.
-func FetchGTFSRTFeed(server models.ObaServer) (*http.Response, error) {
+// FetchAndStoreGTFSRTFeed fetches the GTFS-Realtime (GTFS-RT) vehicle position feed
+// from the specified server, parses the response, and stores it safely in the
+// provided RealtimeStore.
+//
+// The realtimeStore is designed to be thread-safe, and this function ensures
+// that the parsed data is written using the store’s locking mechanisms,
+// making it safe for concurrent access across goroutines.
+
+func FetchAndStoreGTFSRTFeed(server models.ObaServer, realtimeStore *RealtimeStore, client *http.Client) error {
 	parsedURL, err := url.Parse(server.VehiclePositionUrl)
 	if err != nil {
 		err = fmt.Errorf("failed to parse GTFS-RT URL: %v", err)
@@ -166,19 +172,19 @@ func FetchGTFSRTFeed(server models.ObaServer) (*http.Response, error) {
 				"vehicle_position_url": server.VehiclePositionUrl,
 			},
 		})
-		return nil, err
+		return err
 	}
 
 	req, err := http.NewRequest("GET", parsedURL.String(), nil)
 	if err != nil {
 		report.ReportError(err)
-		return nil, err
+		return err
 	}
+
 	if server.GtfsRtApiKey != "" && server.GtfsRtApiValue != "" {
 		req.Header.Set(server.GtfsRtApiKey, server.GtfsRtApiValue)
 	}
 
-	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
 		err = fmt.Errorf("failed to fetch GTFS-RT feed: %v", err)
@@ -188,10 +194,24 @@ func FetchGTFSRTFeed(server models.ObaServer) (*http.Response, error) {
 				"vehicle_position_url": server.VehiclePositionUrl,
 			},
 		})
-		return nil, err
+		return err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		report.ReportError(err)
+		return err
 	}
 
-	return resp, nil
+	realtimeData, err := gtfs.ParseRealtime(data, &gtfs.ParseRealtimeOptions{})
+	if err != nil {
+		report.ReportError(err)
+		return err
+	}
+
+	realtimeStore.Set(realtimeData)
+	return nil
 }
 
 // GetEarliestAndLatestServiceDates returns the earliest and latest service end dates
