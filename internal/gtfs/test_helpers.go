@@ -8,19 +8,19 @@ import (
 	"testing"
 )
 
-func setupGtfsRtServer(t *testing.T, fixturePath string) *httptest.Server {
+func setupGtfsServer(t *testing.T, fixturePath string) *httptest.Server {
 	t.Helper()
 
-	gtfsRtFixturePath := getFixturePath(t, fixturePath)
+	gtfsFixturePath := getFixturePath(t, fixturePath)
 
-	gtfsRtFileData, err := os.ReadFile(gtfsRtFixturePath)
+	gtfsFileData, err := os.ReadFile(gtfsFixturePath)
 	if err != nil {
 		t.Fatalf("Failed to read GTFS-RT fixture file: %v", err)
 	}
 
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Write(gtfsRtFileData)
+		w.Write(gtfsFileData)
 	}))
 }
 
