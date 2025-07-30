@@ -48,21 +48,21 @@ func TestDownloadAndStoreGTFSBundle(t *testing.T) {
 	mockServer := setupGtfsServer(t, "gtfs.zip")
 	serverID := 1
 	staticStore := NewStaticStore()
-	t.Run("Success Response", func(t *testing.T){
+	t.Run("Success Response", func(t *testing.T) {
 		err := DownloadAndStoreGTFSBundle(mockServer.URL, serverID, staticStore)
 		if err != nil {
 			t.Fatalf("DownloadGTFSBundle failed: %v", err)
 		}
 
 		data := readFixture(t, "gtfs.zip")
-		expectedStaticData , err:= gtfs.ParseStatic(data, gtfs.ParseStaticOptions{})
+		expectedStaticData, err := gtfs.ParseStatic(data, gtfs.ParseStaticOptions{})
 		if err != nil {
 			t.Fatalf("failed to parse expected GTFS static data from fixture: %v", err)
 		}
-		if expectedStaticData == nil{
+		if expectedStaticData == nil {
 			t.Fatal("parsed expected static data is nil; expected valid GTFS data")
 		}
-		if expectedStaticData.Agencies == nil{
+		if expectedStaticData.Agencies == nil {
 			t.Fatal("expected static data has nil Agencies slice; expected it to be parsed")
 		}
 
@@ -77,28 +77,28 @@ func TestDownloadAndStoreGTFSBundle(t *testing.T) {
 		// For simplicity, we validate the content of agency.txt by comparing the agency IDs.
 		// We assume that if the agency IDs match, the GTFS static data was parsed and stored correctly.
 		// This level of verification is sufficient for this test.
-		// 
+		//
 		// Note: We rely on agency.txt as it is a required GTFS file.
 		// Make sure the test data provided includes a non-empty agency.txt file.
 
-		if (len(expectedStaticData.Agencies) != len(staticData.Agencies)){
+		if len(expectedStaticData.Agencies) != len(staticData.Agencies) {
 			t.Fatalf("expected %d agencies, got %d", len(expectedStaticData.Agencies), len(staticData.Agencies))
 		}
 		if len(expectedStaticData.Agencies) == 0 {
 			t.Fatal("expected Agencies slice is empty; can't verify content consistency")
 		}
 		expectedAgencyIDs := make(map[string]struct{})
-		for _ , agency := range expectedStaticData.Agencies{
+		for _, agency := range expectedStaticData.Agencies {
 			expectedAgencyIDs[agency.Id] = struct{}{}
 		}
-		if staticData.Agencies == nil{
+		if staticData.Agencies == nil {
 			t.Fatal("stored static data has nil Agencies slice; expected it to be populated")
 		}
 		if len(staticData.Agencies) == 0 {
 			t.Fatal("stored Agencies slice is empty; static data likely not parsed correctly")
 		}
-		for _ , agency := range staticData.Agencies{
-			if _ , ok := expectedAgencyIDs[agency.Id]; !ok {
+		for _, agency := range staticData.Agencies {
+			if _, ok := expectedAgencyIDs[agency.Id]; !ok {
 				t.Fatalf("unexpected agency ID %s found in stored static data", agency.Id)
 			}
 		}

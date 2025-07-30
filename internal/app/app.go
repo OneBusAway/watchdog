@@ -27,5 +27,5 @@ type Application struct {
 	BoundingBoxStore *geo.BoundingBoxStore
 	VehicleLastSeen  *metrics.VehicleLastSeen
 	RealtimeStore    *gtfs.RealtimeStore
-	StaticStore *gtfs.StaticStore
+	StaticStore      *gtfs.StaticStore
 }

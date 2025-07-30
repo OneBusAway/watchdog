@@ -20,7 +20,7 @@ import (
 )
 
 // DownloadGTFSBundles fetches and processes GTFS static bundles for a list of OBA servers.
-// 
+//
 // For each server, it:
 //   1. Downloads and parses the GTFS static bundle using the server's GTFS URL.
 //   2. Stores the parsed data in the provided StaticStore.
@@ -35,9 +35,9 @@ import (
 //
 // This function does not return an error; failures are handled and reported per-server.
 
-func DownloadGTFSBundles(servers []models.ObaServer, logger *slog.Logger, boundingBoxStore *geo.BoundingBoxStore , staticStore *StaticStore) {
+func DownloadGTFSBundles(servers []models.ObaServer, logger *slog.Logger, boundingBoxStore *geo.BoundingBoxStore, staticStore *StaticStore) {
 	for _, server := range servers {
-		err := DownloadAndStoreGTFSBundle(server.GtfsUrl, server.ID , staticStore)
+		err := DownloadAndStoreGTFSBundle(server.GtfsUrl, server.ID, staticStore)
 		if err != nil {
 			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 				Tags: utils.MakeMap("server_id", fmt.Sprintf("%d", server.ID)),
@@ -80,9 +80,9 @@ func DownloadGTFSBundles(servers []models.ObaServer, logger *slog.Logger, boundi
 // RefreshGTFSBundles periodically refreshes GTFS static bundles for a list of OBA servers.
 //
 // It runs in a loop, triggered at the specified interval, and performs the following:
-//   1. Logs the refresh operation.
-//   2. Calls DownloadGTFSBundles to fetch, parse, and store updated GTFS data.
-//   3. Updates geographic bounding boxes based on the downloaded data.
+//  1. Logs the refresh operation.
+//  2. Calls DownloadGTFSBundles to fetch, parse, and store updated GTFS data.
+//  3. Updates geographic bounding boxes based on the downloaded data.
 //
 // The function listens for context cancellation (`ctx.Done()`) to gracefully stop the refresh routine.
 //
@@ -124,7 +124,7 @@ func RefreshGTFSBundles(ctx context.Context, servers []models.ObaServer, logger 
 // Returns:
 //   - error: Describes what went wrong, or nil if the operation was successful.
 
-func DownloadAndStoreGTFSBundle(url string, serverID int,staticStore *StaticStore) error{
+func DownloadAndStoreGTFSBundle(url string, serverID int, staticStore *StaticStore) error {
 	resp, err := http.Get(url)
 	if err != nil {
 		err = fmt.Errorf("failed to make GET request to %s: %w", url, err)
@@ -149,7 +149,7 @@ func DownloadAndStoreGTFSBundle(url string, serverID int,staticStore *StaticStor
 		})
 		return err
 	}
-	
+
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		err = fmt.Errorf("failed to read GTFS bundle response body from %s: %w", url, err)

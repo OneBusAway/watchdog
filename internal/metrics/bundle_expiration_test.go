@@ -10,16 +10,15 @@ import (
 
 func TestCheckBundleExpiration(t *testing.T) {
 	testServer := createTestServer("www.example.com", "Test Server", 999, "", "www.example.com", "test-api-value", "test-api-key", "1")
-	
-	data := readFixture(t,"gtfs.zip")
+
+	data := readFixture(t, "gtfs.zip")
 	staticData, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
 	if err != nil {
 		t.Fatal("Faild to parse gtfs static data")
 	}
 	staticStore := gtfs.NewStaticStore()
-	staticStore.Set(testServer.ID,staticData)
+	staticStore.Set(testServer.ID, staticData)
 	fixedTime := time.Date(2025, 1, 12, 20, 16, 38, 0, time.UTC)
-
 
 	earliest, latest, err := CheckBundleExpiration(staticStore, fixedTime, testServer)
 	if err != nil {

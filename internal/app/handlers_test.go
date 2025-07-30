@@ -63,7 +63,7 @@ func TestHealthcheckHandler(t *testing.T) {
 			[]models.ObaServer{},
 		)
 		app := &Application{
-			Config: cfg,
+			Config:  cfg,
 			Version: "test-version",
 		}
 

@@ -20,7 +20,7 @@ func CheckAgenciesWithCoverage(staticStore *gtfs.StaticStore, server models.ObaS
 	if !ok {
 		err := fmt.Errorf("there is no bundle for sever %v", server.ID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+			Tags:  utils.MakeMap("server_id", strconv.Itoa(server.ID)),
 			Level: sentry.LevelWarning,
 		})
 		return 0, err
@@ -28,7 +28,7 @@ func CheckAgenciesWithCoverage(staticStore *gtfs.StaticStore, server models.ObaS
 	if staticData == nil {
 		err := fmt.Errorf("static data is nil for server %v", server.ID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+			Tags:  utils.MakeMap("server_id", strconv.Itoa(server.ID)),
 			Level: sentry.LevelWarning,
 		})
 		return 0, err
