@@ -4,10 +4,17 @@ import (
 	"testing"
 
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/server"
 )
 
 func TestUpdateConfig(t *testing.T) {
-	app := &Application{}
+	app := &Application{
+		Config: server.NewConfig(
+			4000,
+			"testing",
+			[]models.ObaServer{},
+		),
+	}
 
 	initialServers := []models.ObaServer{
 		{ID: 1, Name: "Server 1"},
