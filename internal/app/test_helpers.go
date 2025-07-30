@@ -2,8 +2,10 @@ package app
 
 import (
 	"log/slog"
+	"net/http"
 	"os"
 	"testing"
+	"time"
 
 	remoteGtfs "github.com/jamespfennell/gtfs"
 	"github.com/prometheus/client_golang/prometheus"
@@ -77,6 +79,9 @@ func newTestApplication(t *testing.T) *Application {
 	realtimeStore := gtfs.NewRealtimeStore()
 	realtimeStore.Set(realtimeData)
 
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+	}
 	return &Application{
 		Config:           cfg,
 		Logger:           logger,
@@ -84,6 +89,7 @@ func newTestApplication(t *testing.T) *Application {
 		BoundingBoxStore: boundingBoxStore,
 		StaticStore:      staticStore,
 		RealtimeStore:    realtimeStore,
+		Client:           client,
 	}
 }
 
