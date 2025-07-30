@@ -6,6 +6,9 @@ import (
 	"os"
 	"testing"
 
+	remoteGtfs "github.com/jamespfennell/gtfs"
+
+	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
 )
 
@@ -13,15 +16,22 @@ func TestCheckAgenciesWithCoverage(t *testing.T) {
 	// Test case: Successful execution
 
 	t.Run("Success", func(t *testing.T) {
-		fixturePath := getFixturePath(t, "gtfs.zip")
 		logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 		ts := setupObaServer(t, `{"code":200,"currentTime":1234567890000,"text":"OK","version":2,"data":{"list":[{"agencyId":"1"}]}}`, http.StatusOK)
 		defer ts.Close()
 
 		testServer := createTestServer(ts.URL, "Test Server", 999, "test-key", "http://example.com", "test-api-value", "test-api-key", "1")
+		
+		data := readFixture(t,"gtfs.zip")
+		staticData, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
+		if err != nil {
+			t.Fatal("faild to parse gtfs static data")
+		}
+		staticStore := gtfs.NewStaticStore()
+		staticStore.Set(testServer.ID,staticData)
 
-		err := CheckAgenciesWithCoverageMatch(fixturePath, logger, testServer)
+		err = CheckAgenciesWithCoverageMatch(staticStore, logger, testServer)
 		if err != nil {
 			t.Fatalf("CheckAgenciesWithCoverageMatch failed: %v", err)
 		}
@@ -34,44 +44,6 @@ func TestCheckAgenciesWithCoverage(t *testing.T) {
 		if agencyMatchMetric != 1 {
 			t.Errorf("Expected agency match metric to be 1, got %v", agencyMatchMetric)
 		}
-	})
-
-	// Test case: Error opening file
-	t.Run("ErrorOpeningFile", func(t *testing.T) {
-		logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-		testServer := createTestServer("http://example.com", "Test Server", 999, "test-key", "http://example.com", "test-api-value", "test-api-key", "1")
-
-		err := CheckAgenciesWithCoverageMatch("invalid/path/to/gtfs.zip", logger, testServer)
-		if err == nil {
-			t.Fatal("Expected an error but got nil")
-		}
-		t.Log("Received expected error:", err)
-	})
-
-	// Test case: Error reading file
-	t.Run("ErrorReadingFile", func(t *testing.T) {
-		fixturePath := getFixturePath(t, "empty.zip")
-		logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-		testServer := createTestServer("http://example.com", "Test Server", 999, "test-key", "http://example.com", "test-api-value", "test-api-key", "1")
-
-		err := CheckAgenciesWithCoverageMatch(fixturePath, logger, testServer)
-		if err == nil {
-			t.Fatal("Expected an error but got nil")
-		}
-		t.Log("Received expected error:", err)
-	})
-
-	// Test case: Error parsing GTFS data
-	t.Run("ErrorParsingGTFSData", func(t *testing.T) {
-		fixturePath := getFixturePath(t, "invalid_gtfs.zip")
-		logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-		testServer := createTestServer("http://example.com", "Test Server", 999, "test-key", "http://example.com", "test-api-value", "test-api-key", "1")
-
-		err := CheckAgenciesWithCoverageMatch(fixturePath, logger, testServer)
-		if err == nil {
-			t.Fatal("Expected an error but got nil")
-		}
-		t.Log("Received expected error:", err)
 	})
 }
 
