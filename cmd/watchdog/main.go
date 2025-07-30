@@ -90,29 +90,32 @@ func main() {
 		os.Exit(1)
 	}
 
-	store := geo.NewBoundingBoxStore()
-
+	boundingBoxStore := geo.NewBoundingBoxStore()
+	
+	staticStore := gtfs.NewStaticStore()
+	
 	// Download GTFS bundles for all servers on startup
-	gtfs.DownloadGTFSBundles(servers, cacheDir, logger, store)
+	gtfs.DownloadGTFSBundles(servers, logger, boundingBoxStore,staticStore)
 
 	vehicleLastSeen := metrics.NewVehicleLastSeen()
 
 	realtimeStore := gtfs.NewRealtimeStore()
 
 	app := &app.Application{
-		Config:           cfg,
+		Config:           &cfg,
 		Logger:           logger,
 		Client:           client,
 		Version:          version,
-		BoundingBoxStore: store,
+		BoundingBoxStore: boundingBoxStore,
 		VehicleLastSeen:  vehicleLastSeen,
 		RealtimeStore:    realtimeStore,
+		StaticStore:      staticStore,
 	}
 
 	app.StartMetricsCollection(ctx)
 
 	// Cron job to download GTFS bundles for all servers every 24 hours
-	go gtfs.RefreshGTFSBundles(ctx, servers, cacheDir, logger, 24*time.Hour, store)
+	go gtfs.RefreshGTFSBundles(ctx, servers, logger, 24*time.Hour, boundingBoxStore, staticStore)
 
 	// Cron job to delete the data of vehicles that has not sent updates for 1 hour
 	go vehicleLastSeen.ClearRoutine(ctx, 15*time.Minute, time.Hour)

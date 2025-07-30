@@ -12,13 +12,7 @@ import (
 
 func TestHealthcheckHandler(t *testing.T) {
 	t.Run("returns 200 OK when servers are configured", func(t *testing.T) {
-		app := &Application{
-			Config: server.Config{
-				Env:     "testing",
-				Servers: []models.ObaServer{{ID: 1, Name: "Test Server"}},
-			},
-			Version: "test-version",
-		}
+		app := newTestApplication(t)
 
 		rr := httptest.NewRecorder()
 		request, err := http.NewRequest(http.MethodGet, "/v1/healthcheck", nil)
@@ -63,11 +57,13 @@ func TestHealthcheckHandler(t *testing.T) {
 	})
 
 	t.Run("returns 500 when no servers configured", func(t *testing.T) {
+		cfg := server.NewConfig(
+			4000,
+			"testing",
+			[]models.ObaServer{},
+		)
 		app := &Application{
-			Config: server.Config{
-				Env:     "testing",
-				Servers: []models.ObaServer{},
-			},
+			Config: cfg,
 			Version: "test-version",
 		}
 

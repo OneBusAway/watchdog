@@ -20,7 +20,7 @@ import (
 //
 // This struct will expand as more components and dependencies are added during development.
 type Application struct {
-	Config           server.Config
+	Config           *server.Config
 	Logger           *slog.Logger
 	Client           *http.Client
 	Version          string

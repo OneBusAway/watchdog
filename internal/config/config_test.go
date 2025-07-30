@@ -356,7 +356,7 @@ func newTestApplication(t *testing.T) *app.Application {
 		Timeout: 10 * time.Second,
 	}
 	return &app.Application{
-		Config: *cfg,
+		Config: cfg,
 		Logger: logger,
 		Client: &client,
 	}
