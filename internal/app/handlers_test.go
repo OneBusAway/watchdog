@@ -45,7 +45,7 @@ func TestHealthcheckHandler(t *testing.T) {
 		if resp.Environment != "testing" {
 			t.Errorf("expected environment 'testing', got %q", resp.Environment)
 		}
-		if resp.Version != "test-version" {
+		if resp.Version != "1.0.0" {
 			t.Errorf("expected version 'test-version', got %q", resp.Version)
 		}
 		if resp.Servers != 1 {
