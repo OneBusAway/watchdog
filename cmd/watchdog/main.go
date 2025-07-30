@@ -91,11 +91,11 @@ func main() {
 	}
 
 	boundingBoxStore := geo.NewBoundingBoxStore()
-	
+
 	staticStore := gtfs.NewStaticStore()
-	
+
 	// Download GTFS bundles for all servers on startup
-	gtfs.DownloadGTFSBundles(servers, logger, boundingBoxStore,staticStore)
+	gtfs.DownloadGTFSBundles(servers, logger, boundingBoxStore, staticStore)
 
 	vehicleLastSeen := metrics.NewVehicleLastSeen()
 

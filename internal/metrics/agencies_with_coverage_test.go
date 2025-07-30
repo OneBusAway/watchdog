@@ -22,14 +22,14 @@ func TestCheckAgenciesWithCoverage(t *testing.T) {
 		defer ts.Close()
 
 		testServer := createTestServer(ts.URL, "Test Server", 999, "test-key", "http://example.com", "test-api-value", "test-api-key", "1")
-		
-		data := readFixture(t,"gtfs.zip")
+
+		data := readFixture(t, "gtfs.zip")
 		staticData, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
 		if err != nil {
 			t.Fatal("faild to parse gtfs static data")
 		}
 		staticStore := gtfs.NewStaticStore()
-		staticStore.Set(testServer.ID,staticData)
+		staticStore.Set(testServer.ID, staticData)
 
 		err = CheckAgenciesWithCoverageMatch(staticStore, logger, testServer)
 		if err != nil {

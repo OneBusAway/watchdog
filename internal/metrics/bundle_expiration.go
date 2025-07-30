@@ -34,7 +34,7 @@ func CheckBundleExpiration(staticStore *gtfs.StaticStore, currentTime time.Time,
 	if !ok {
 		err := fmt.Errorf("there is no bundle for sever %v", server.ID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+			Tags:  utils.MakeMap("server_id", strconv.Itoa(server.ID)),
 			Level: sentry.LevelWarning,
 		})
 		return 0, 0, err
@@ -42,7 +42,7 @@ func CheckBundleExpiration(staticStore *gtfs.StaticStore, currentTime time.Time,
 	if staticData == nil {
 		err := fmt.Errorf("static data is nil for server %v", server.ID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+			Tags:  utils.MakeMap("server_id", strconv.Itoa(server.ID)),
 			Level: sentry.LevelWarning,
 		})
 		return 0, 0, err
@@ -51,7 +51,7 @@ func CheckBundleExpiration(staticStore *gtfs.StaticStore, currentTime time.Time,
 
 	if err != nil {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+			Tags:  utils.MakeMap("server_id", strconv.Itoa(server.ID)),
 			Level: sentry.LevelWarning,
 		})
 		return 0, 0, err
