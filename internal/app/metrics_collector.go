@@ -10,7 +10,6 @@ import (
 	"watchdog.onebusaway.org/internal/metrics"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
-	"watchdog.onebusaway.org/internal/utils"
 )
 
 func (app *Application) StartMetricsCollection(ctx context.Context) {
@@ -37,20 +36,8 @@ func (app *Application) StartMetricsCollection(ctx context.Context) {
 
 func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 	metrics.ServerPing(server)
-	cachePath, err := utils.GetLastCachedFile("cache", server.ID)
-	if err != nil {
-		app.Logger.Error("Failed to get last cached file", "error", err)
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{
-				"server_id":   fmt.Sprintf("%d", server.ID),
-				"server_name": server.Name,
-			},
-			Level: sentry.LevelError,
-		})
-		return
-	}
 
-	_, _, err = metrics.CheckBundleExpiration(cachePath, time.Now(), server)
+	_, _, err := metrics.CheckBundleExpiration(app.StaticStore, time.Now().UTC(), server)
 	if err != nil {
 		app.Logger.Error("Failed to check GTFS bundle expiration", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -58,14 +45,11 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 				"server_id":   fmt.Sprintf("%d", server.ID),
 				"server_name": server.Name,
 			},
-			ExtraContext: map[string]interface{}{
-				"cache_file": cachePath,
-			},
 			Level: sentry.LevelError,
 		})
 	}
 
-	err = metrics.CheckAgenciesWithCoverageMatch(cachePath, app.Logger, server)
+	err = metrics.CheckAgenciesWithCoverageMatch(app.StaticStore, app.Logger, server)
 
 	if err != nil {
 		app.Logger.Error("Failed to check agencies with coverage match metric", "error", err)
@@ -73,9 +57,6 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 			Tags: map[string]string{
 				"server_id":   fmt.Sprintf("%d", server.ID),
 				"server_name": server.Name,
-			},
-			ExtraContext: map[string]interface{}{
-				"cache_file": cachePath,
 			},
 			Level: sentry.LevelError,
 		})
@@ -106,9 +87,6 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 			Tags: map[string]string{
 				"server_id":   fmt.Sprintf("%d", server.ID),
 				"server_name": server.Name,
-			},
-			ExtraContext: map[string]interface{}{
-				"cache_file": cachePath,
 			},
 			Level: sentry.LevelError,
 		})

@@ -2,15 +2,12 @@ package gtfs
 
 import (
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"time"
 
@@ -22,14 +19,25 @@ import (
 	"watchdog.onebusaway.org/internal/utils"
 )
 
-// DownloadGTFSBundles downloads GTFS bundles for each server and caches them locally.
-func DownloadGTFSBundles(servers []models.ObaServer, cacheDir string, logger *slog.Logger, store *geo.BoundingBoxStore) {
-	for _, server := range servers {
-		hash := sha1.Sum([]byte(server.GtfsUrl))
-		hashStr := hex.EncodeToString(hash[:])
-		cachePath := filepath.Join(cacheDir, fmt.Sprintf("server_%d_%s.zip", server.ID, hashStr))
+// DownloadGTFSBundles fetches and processes GTFS static bundles for a list of OBA servers.
+// 
+// For each server, it:
+//   1. Downloads and parses the GTFS static bundle using the server's GTFS URL.
+//   2. Stores the parsed data in the provided StaticStore.
+//   3. Computes a geographic bounding box based on the stop locations in the static data.
+//   4. Stores the bounding box in the provided BoundingBoxStore.
+//
+// Parameters:
+//   - servers: A list of OBA servers, each containing a GTFS URL and unique ID.
+//   - logger: A structured logger used to record success/failure logs for each server.
+//   - boundingBoxStore: A store for bounding boxes, one per server.
+//   - staticStore: A store for parsed GTFS static data, keyed by server ID.
+//
+// This function does not return an error; failures are handled and reported per-server.
 
-		_, err := DownloadGTFSBundle(server.GtfsUrl, cacheDir, server.ID, hashStr)
+func DownloadGTFSBundles(servers []models.ObaServer, logger *slog.Logger, boundingBoxStore *geo.BoundingBoxStore , staticStore *StaticStore) {
+	for _, server := range servers {
+		err := DownloadAndStoreGTFSBundle(server.GtfsUrl, server.ID , staticStore)
 		if err != nil {
 			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 				Tags: utils.MakeMap("server_id", fmt.Sprintf("%d", server.ID)),
@@ -41,14 +49,21 @@ func DownloadGTFSBundles(servers []models.ObaServer, cacheDir string, logger *sl
 			logger.Error("Failed to download GTFS bundle", "server_id", server.ID, "error", err)
 			continue
 		}
-		logger.Info("Successfully downloaded GTFS bundle", "server_id", server.ID, "path", cachePath)
+		logger.Info("Successfully downloaded GTFS bundle", "server_id", server.ID)
 
-		staticData, err := ParseGTFSFromCache(cachePath, server.ID)
-		if err != nil {
-			logger.Error("Failed to parse GTFS bundle", "server_id", server.ID, "error", err)
+		staticData, ok := staticStore.Get(server.ID)
+		if !ok {
+			err = fmt.Errorf("GTFS static bundle not found for server ID %d", server.ID)
+			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+				Tags: utils.MakeMap("server_id", fmt.Sprintf("%d", server.ID)),
+				ExtraContext: map[string]interface{}{
+					"gtfs_url": server.GtfsUrl,
+				},
+				Level: sentry.LevelError,
+			})
+			logger.Error("GTFS static bundle not found", "server_id", server.ID, "error", err)
 			continue
 		}
-
 		// compute bounding box for each downloaded GTFS bundle
 		bbox, err := geo.ComputeBoundingBox(staticData.Stops)
 		if err != nil {
@@ -57,13 +72,28 @@ func DownloadGTFSBundles(servers []models.ObaServer, cacheDir string, logger *sl
 		}
 
 		// one bounding box per server
-		store.Set(server.ID, bbox)
+		boundingBoxStore.Set(server.ID, bbox)
 		logger.Info("Computed bounding box", "server_id", server.ID, "bbox", bbox)
 	}
 }
 
-// RefreshGTFSBundles periodically downloads GTFS bundles at the specified interval.
-func RefreshGTFSBundles(ctx context.Context, servers []models.ObaServer, cacheDir string, logger *slog.Logger, interval time.Duration, store *geo.BoundingBoxStore) {
+// RefreshGTFSBundles periodically refreshes GTFS static bundles for a list of OBA servers.
+//
+// It runs in a loop, triggered at the specified interval, and performs the following:
+//   1. Logs the refresh operation.
+//   2. Calls DownloadGTFSBundles to fetch, parse, and store updated GTFS data.
+//   3. Updates geographic bounding boxes based on the downloaded data.
+//
+// The function listens for context cancellation (`ctx.Done()`) to gracefully stop the refresh routine.
+//
+// Parameters:
+//   - ctx: Context used to cancel the refresh routine gracefully.
+//   - servers: List of OBA servers to fetch GTFS data from.
+//   - logger: Logger for structured logging of refresh activity.
+//   - interval: Time duration between each refresh cycle.
+//   - boundingBoxstore: Store to keep geographic bounding boxes per server.
+//   - staticStore: Store to keep parsed GTFS static data per server.
+func RefreshGTFSBundles(ctx context.Context, servers []models.ObaServer, logger *slog.Logger, interval time.Duration, boundingBoxstore *geo.BoundingBoxStore, staticStore *StaticStore) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -73,34 +103,74 @@ func RefreshGTFSBundles(ctx context.Context, servers []models.ObaServer, cacheDi
 			return
 		case <-ticker.C:
 			logger.Info("Refreshing GTFS bundles")
-			DownloadGTFSBundles(servers, cacheDir, logger, store)
+			DownloadGTFSBundles(servers, logger, boundingBoxstore, staticStore)
 		}
 	}
 }
 
-func DownloadGTFSBundle(url string, cacheDir string, serverID int, hashStr string) (string, error) {
+// DownloadAndStoreGTFSBundle fetches a GTFS static bundle from the provided URL,
+// parses it, and stores the resulting static data in the given StaticStore using the serverID as the key.
+//
+// It performs the following steps:
+//   1. Makes an HTTP GET request to download the GTFS bundle.
+//   2. Reads and parses the response body as GTFS static data.
+//   3. Stores the parsed data in the StaticStore.
+//
+// Parameters:
+//   - url: The URL of the GTFS static bundle (usually a zip file).
+//   - serverID: The identifier used to store and retrieve the static data from the store.
+//   - staticStore: The in-memory store that holds GTFS static data indexed by server ID.
+//
+// Returns:
+//   - error: Describes what went wrong, or nil if the operation was successful.
+
+func DownloadAndStoreGTFSBundle(url string, serverID int,staticStore *StaticStore) error{
 	resp, err := http.Get(url)
 	if err != nil {
-		sentry.CaptureException(err)
-		return "", err
+		err = fmt.Errorf("failed to make GET request to %s: %w", url, err)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: utils.MakeMap("server_id", strconv.Itoa(serverID)),
+			ExtraContext: map[string]interface{}{
+				"url": url,
+			},
+		})
+		return err
 	}
 	defer resp.Body.Close()
 
-	cacheFileName := fmt.Sprintf("server_%d_%s.zip", serverID, hashStr)
-	cachePath := filepath.Join(cacheDir, cacheFileName)
-
-	out, err := os.Create(cachePath)
-	if err != nil {
-		return "", err
+	if resp.StatusCode != http.StatusOK {
+		err = fmt.Errorf("unexpected response status %d when downloading GTFS bundle from %s", resp.StatusCode, url)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: utils.MakeMap("server_id", strconv.Itoa(serverID)),
+			ExtraContext: map[string]interface{}{
+				"url":    url,
+				"status": resp.Status,
+			},
+		})
+		return err
 	}
-	defer out.Close()
-
-	_, err = io.Copy(out, resp.Body)
+	
+	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		err = fmt.Errorf("failed to read GTFS bundle response body from %s: %w", url, err)
+		report.ReportError(err)
+		return err
 	}
 
-	return cachePath, nil
+	staticData, err := gtfs.ParseStatic(data, gtfs.ParseStaticOptions{})
+	if err != nil {
+		err = fmt.Errorf("failed to parse GTFS static data from %s: %w", url, err)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: utils.MakeMap("server_id", strconv.Itoa(serverID)),
+			ExtraContext: map[string]interface{}{
+				"url": url,
+			},
+		})
+		return err
+	}
+
+	staticStore.Set(serverID, staticData)
+	return nil
 }
 
 // ParseGTFSFromCache reads a GTFS bundle from the cache and parses it into a gtfs.Static object.
@@ -225,6 +295,9 @@ func FetchAndStoreGTFSRTFeed(server models.ObaServer, realtimeStore *RealtimeSto
 //
 // Returns an error if no services are found in the bundle.
 func GetEarliestAndLatestServiceDates(staticData *gtfs.Static) (earliestEndDate, latestEndDate time.Time, err error) {
+	if staticData == nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("static data is nil")
+	}
 	if len(staticData.Services) == 0 {
 		return time.Time{}, time.Time{}, fmt.Errorf("no services found in GTFS bundle")
 	}
