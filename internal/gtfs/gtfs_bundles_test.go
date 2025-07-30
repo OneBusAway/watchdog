@@ -3,15 +3,10 @@ package gtfs
 import (
 	"bytes"
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -26,11 +21,10 @@ func TestDownloadGTFSBundles(t *testing.T) {
 		{ID: 1, GtfsUrl: "https://example.com/gtfs.zip"},
 	}
 
-	tempDir := t.TempDir()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	store := geo.NewBoundingBoxStore()
-
-	DownloadGTFSBundles(servers, tempDir, logger, store)
+	boundingBoxStore := geo.NewBoundingBoxStore()
+	staticStore := NewStaticStore()
+	DownloadGTFSBundles(servers, logger, boundingBoxStore, staticStore)
 
 }
 
@@ -39,93 +33,85 @@ func TestRefreshGTFSBundles(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	servers := []models.ObaServer{{ID: 1, Name: "Test Server", GtfsUrl: "http://example.com/gtfs.zip"}}
-	cacheDir := t.TempDir()
-	store := geo.NewBoundingBoxStore()
+	boundingBoxStore := geo.NewBoundingBoxStore()
+	staticStore := NewStaticStore()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go RefreshGTFSBundles(ctx, servers, cacheDir, logger, 10*time.Millisecond, store)
+	go RefreshGTFSBundles(ctx, servers, logger, 10*time.Millisecond, boundingBoxStore, staticStore)
 
 	time.Sleep(15 * time.Millisecond)
 
 	t.Log("refreshGTFSBundles executed without crashing")
 }
 
-func TestDownloadGTFSBundle(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "cache")
-	if err != nil {
-		t.Fatalf("Failed to create temporary directory: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("mock GTFS data"))
-	}))
-	defer mockServer.Close()
-
+func TestDownloadAndStoreGTFSBundle(t *testing.T) {
+	mockServer := setupGtfsServer(t, "gtfs.zip")
 	serverID := 1
-	hash := sha1.Sum([]byte(mockServer.URL))
-	hashStr := hex.EncodeToString(hash[:])
-	cachePath, err := DownloadGTFSBundle(mockServer.URL, tmpDir, serverID, hashStr)
-	if err != nil {
-		t.Fatalf("DownloadGTFSBundle failed: %v", err)
-	}
+	staticStore := NewStaticStore()
+	t.Run("Success Response", func(t *testing.T){
+		err := DownloadAndStoreGTFSBundle(mockServer.URL, serverID, staticStore)
+		if err != nil {
+			t.Fatalf("DownloadGTFSBundle failed: %v", err)
+		}
 
-	expectedFileName := fmt.Sprintf("server_%d_%s.zip", serverID, hashStr)
-	expectedFilePath := filepath.Join(tmpDir, expectedFileName)
-	if cachePath != expectedFilePath {
-		t.Errorf("Expected cache path to be %s, got %s", expectedFilePath, cachePath)
-	}
+		data := readFixture(t, "gtfs.zip")
+		expectedStaticData , err:= gtfs.ParseStatic(data, gtfs.ParseStaticOptions{})
+		if err != nil {
+			t.Fatalf("failed to parse expected GTFS static data from fixture: %v", err)
+		}
+		if expectedStaticData == nil{
+			t.Fatal("parsed expected static data is nil; expected valid GTFS data")
+		}
+		if expectedStaticData.Agencies == nil{
+			t.Fatal("expected static data has nil Agencies slice; expected it to be parsed")
+		}
 
-	fileContent, err := os.ReadFile(cachePath)
-	if err != nil {
-		t.Fatalf("Failed to read downloaded file: %v", err)
-	}
+		staticData, exists := staticStore.Get(serverID)
+		if !exists {
+			t.Fatalf("expected static data for server ID %d, but it was not found in the store", serverID)
+		}
+		if staticData == nil {
+			t.Fatal("static data retrieved from the store is nil; expected non-nil value")
+		}
 
-	expectedContent := "mock GTFS data"
-	if string(fileContent) != expectedContent {
-		t.Errorf("Expected file content to be %s, got %s", expectedContent, string(fileContent))
-	}
+		// For simplicity, we validate the content of agency.txt by comparing the agency IDs.
+		// We assume that if the agency IDs match, the GTFS static data was parsed and stored correctly.
+		// This level of verification is sufficient for this test.
+		// 
+		// Note: We rely on agency.txt as it is a required GTFS file.
+		// Make sure the test data provided includes a non-empty agency.txt file.
 
-	serverID = 2
-	hash = sha1.Sum([]byte(mockServer.URL))
-	hashStr = hex.EncodeToString(hash[:])
-	cachePath, err = DownloadGTFSBundle(mockServer.URL, tmpDir, serverID, hashStr)
-	if err != nil {
-		t.Fatalf("DownloadGTFSBundle failed: %v", err)
-	}
-
-	expectedFileName = fmt.Sprintf("server_%d_%s.zip", serverID, hashStr)
-	expectedFilePath = filepath.Join(tmpDir, expectedFileName)
-	if cachePath != expectedFilePath {
-		t.Errorf("Expected cache path to be %s, got %s", expectedFilePath, cachePath)
-	}
+		if (len(expectedStaticData.Agencies) != len(staticData.Agencies)){
+			t.Fatalf("expected %d agencies, got %d", len(expectedStaticData.Agencies), len(staticData.Agencies))
+		}
+		if len(expectedStaticData.Agencies) == 0 {
+			t.Fatal("expected Agencies slice is empty; can't verify content consistency")
+		}
+		expectedAgencyIDs := make(map[string]struct{})
+		for _ , agency := range expectedStaticData.Agencies{
+			expectedAgencyIDs[agency.Id] = struct{}{}
+		}
+		if staticData.Agencies == nil{
+			t.Fatal("stored static data has nil Agencies slice; expected it to be populated")
+		}
+		if len(staticData.Agencies) == 0 {
+			t.Fatal("stored Agencies slice is empty; static data likely not parsed correctly")
+		}
+		for _ , agency := range staticData.Agencies{
+			if _ , ok := expectedAgencyIDs[agency.Id]; !ok {
+				t.Fatalf("unexpected agency ID %s found in stored static data", agency.Id)
+			}
+		}
+	})
 
 	t.Run("Invalid URL", func(t *testing.T) {
 		invalidURL := "http://invalid-url"
-		_, err := DownloadGTFSBundle(invalidURL, tmpDir, 3, "invalidhash")
+		err := DownloadAndStoreGTFSBundle(invalidURL, 2, staticStore)
 		if err == nil {
 			t.Errorf("Expected error for invalid URL, got none")
 		}
 	})
 
-	t.Run("Invalid Cache Directory", func(t *testing.T) {
-		invalidDir := "/invalid/cache/dir"
-		_, err := DownloadGTFSBundle(mockServer.URL, invalidDir, 4, "invalidhash")
-		if err == nil {
-			t.Errorf("Expected error for invalid cache directory, got none")
-		}
-	})
-	t.Run("IO Copy Failure", func(t *testing.T) {
-		mockServerFailure := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Length", "100")
-		}))
-		defer mockServerFailure.Close()
-
-		_, err := DownloadGTFSBundle(mockServerFailure.URL, tmpDir, 5, "hashIOFail")
-		if err == nil {
-			t.Errorf("Expected error for io.Copy failure, got none")
-		}
-	})
 }
 
 func TestGetStopLocationsByIDs(t *testing.T) {
@@ -199,7 +185,7 @@ func TestParseGTFSFromCache(t *testing.T) {
 
 func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 	t.Run("Success Case", func(t *testing.T) {
-		mockServer := setupGtfsRtServer(t, "gtfs_rt_feed_vehicles.pb")
+		mockServer := setupGtfsServer(t, "gtfs_rt_feed_vehicles.pb")
 		defer mockServer.Close()
 
 		server := models.ObaServer{
