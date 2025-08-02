@@ -14,7 +14,7 @@ import (
 
 func (app *Application) StartMetricsCollection(ctx context.Context) {
 
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(time.Duration(app.Config.FetchInterval) * time.Second)
 	go func() {
 		defer ticker.Stop()
 		for {

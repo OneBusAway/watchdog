@@ -37,6 +37,8 @@ func main() {
 		configURL  = flag.String("config-url", "", "URL to a remote JSON configuration file")
 	)
 
+	flag.IntVar(&cfg.FetchInterval, "fetch-interval", 30, "Interval (in seconds) at which the application fetches data from realtime APIs and updates Prometheus metrics")
+
 	flag.Parse()
 
 	configAuthUser := os.Getenv("CONFIG_AUTH_USER")
