@@ -37,6 +37,8 @@ func main() {
 		configURL  = flag.String("config-url", "", "URL to a remote JSON configuration file")
 	)
 
+	flag.IntVar(&cfg.FetchInterval, "fetch-interval", 30, "Interval (in seconds) at which the application fetches data from realtime APIs and updates Prometheus metrics")
+
 	flag.Parse()
 
 	configAuthUser := os.Getenv("CONFIG_AUTH_USER")
@@ -56,11 +58,11 @@ func main() {
 	report.ConfigureScope(cfg.Env, version)
 
 	var servers []models.ObaServer
-
+	client := app.NewPooledClient()
 	if *configFile != "" {
 		servers, err = config.LoadConfigFromFile(*configFile)
 	} else if *configURL != "" {
-		servers, err = config.LoadConfigFromURL(*configURL, configAuthUser, configAuthPass)
+		servers, err = config.LoadConfigFromURL(client, *configURL, configAuthUser, configAuthPass)
 	} else {
 		fmt.Println("Error: No configuration provided. Use --config-file or --config-url.")
 		flag.Usage()
@@ -77,7 +79,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	cfg.Servers = servers
+	cfg.UpdateConfig(servers)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -90,32 +92,39 @@ func main() {
 		os.Exit(1)
 	}
 
-	store := geo.NewBoundingBoxStore()
+	boundingBoxStore := geo.NewBoundingBoxStore()
+
+	staticStore := gtfs.NewStaticStore()
 
 	// Download GTFS bundles for all servers on startup
-	gtfs.DownloadGTFSBundles(servers, cacheDir, logger, store)
+	gtfs.DownloadGTFSBundles(servers, logger, boundingBoxStore, staticStore)
 
 	vehicleLastSeen := metrics.NewVehicleLastSeen()
 
+	realtimeStore := gtfs.NewRealtimeStore()
+
 	app := &app.Application{
-		Config:           cfg,
+		Config:           &cfg,
 		Logger:           logger,
+		Client:           client,
 		Version:          version,
-		BoundingBoxStore: store,
+		BoundingBoxStore: boundingBoxStore,
 		VehicleLastSeen:  vehicleLastSeen,
+		RealtimeStore:    realtimeStore,
+		StaticStore:      staticStore,
 	}
 
 	app.StartMetricsCollection(ctx)
 
 	// Cron job to download GTFS bundles for all servers every 24 hours
-	go gtfs.RefreshGTFSBundles(ctx, servers, cacheDir, logger, 24*time.Hour, store)
+	go gtfs.RefreshGTFSBundles(ctx, servers, logger, 24*time.Hour, boundingBoxStore, staticStore)
 
 	// Cron job to delete the data of vehicles that has not sent updates for 1 hour
 	go vehicleLastSeen.ClearRoutine(ctx, 15*time.Minute, time.Hour)
 
 	// If a remote URL is specified, refresh the configuration every minute
 	if *configURL != "" {
-		go config.RefreshConfig(ctx, *configURL, configAuthUser, configAuthPass, app, logger, time.Minute)
+		go config.RefreshConfig(ctx, app.Client, *configURL, configAuthUser, configAuthPass, app, logger, time.Minute)
 	}
 
 	srv := &http.Server{

@@ -3,7 +3,6 @@ package metrics
 import (
 	"context"
 	"fmt"
-	"io"
 	"math"
 	"strconv"
 	"sync"
@@ -11,8 +10,6 @@ import (
 
 	onebusaway "github.com/OneBusAway/go-sdk"
 	"github.com/OneBusAway/go-sdk/option"
-	remoteGtfs "github.com/jamespfennell/gtfs"
-
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
@@ -20,27 +17,28 @@ import (
 	"watchdog.onebusaway.org/internal/utils"
 )
 
-func CountVehiclePositions(server models.ObaServer) (int, error) {
-	resp, err := gtfs.FetchGTFSRTFeed(server)
-	if err != nil {
+func CountVehiclePositions(server models.ObaServer, realtimeStore *gtfs.RealtimeStore) (int, error) {
+	if realtimeStore == nil {
+		err := fmt.Errorf("realtimeStore is nil for server %d", server.ID)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+			ExtraContext: map[string]interface{}{
+				"vehicle_position_url": server.VehiclePositionUrl,
+			},
+		})
 		return 0, err
 	}
-	defer resp.Body.Close()
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		err = fmt.Errorf("failed to read GTFS-RT feed: %v", err)
-		report.ReportError(err)
+	realtimeData := realtimeStore.Get()
+	if realtimeData == nil {
+		err := fmt.Errorf("no GTFS-RT data available for server %d", server.ID)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+			ExtraContext: map[string]interface{}{
+				"vehicle_position_url": server.VehiclePositionUrl,
+			},
+		})
 		return 0, err
 	}
-
-	realtimeData, err := remoteGtfs.ParseRealtime(data, &remoteGtfs.ParseRealtimeOptions{})
-	if err != nil {
-		err = fmt.Errorf("failed to parse GTFS-RT feed: %v", err)
-		report.ReportError(err)
-		return 0, err
-	}
-
 	count := len(realtimeData.Vehicles)
 
 	RealtimeVehiclePositions.WithLabelValues(
@@ -81,8 +79,8 @@ func VehiclesForAgencyAPI(server models.ObaServer) (int, error) {
 	return len(response.Data.List), nil
 }
 
-func CheckVehicleCountMatch(server models.ObaServer) error {
-	gtfsRtVehicleCount, err := CountVehiclePositions(server)
+func CheckVehicleCountMatch(server models.ObaServer, realtimeStore *gtfs.RealtimeStore) error {
+	gtfsRtVehicleCount, err := CountVehiclePositions(server, realtimeStore)
 	if err != nil {
 		err := fmt.Errorf("failed to count vehicle positions from GTFS-RT: %v", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -227,23 +225,16 @@ func (vehicleLastSeen *VehicleLastSeen) clear(threshold time.Duration) {
 //
 // Returns:
 //   - An error if the feed cannot be fetched or parsed, otherwise nil.
-func TrackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLastSeen) error {
-	resp, err := gtfs.FetchGTFSRTFeed(server)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		report.ReportError(err)
-		return err
-	}
-
-	realtimeData, err := remoteGtfs.ParseRealtime(data, &remoteGtfs.ParseRealtimeOptions{})
-	if err != nil {
-		report.ReportError(err)
-		return err
+func TrackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLastSeen, realtimeStore *gtfs.RealtimeStore) error {
+	realtimeData := realtimeStore.Get()
+	if realtimeData == nil {
+		err := fmt.Errorf("no GTFS-RT data available for server %d", server.ID)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+			ExtraContext: map[string]interface{}{
+				"vehicle_position_url": server.VehiclePositionUrl,
+			},
+		})
 	}
 
 	serverID := server.ID
@@ -335,26 +326,20 @@ const VehicleStatusStoppedAtStop = 1
 // The results are exposed via Prometheus metrics:
 // - InvalidVehicleCoordinatesGauge: for invalid or missing coordinates
 // - StoppedOutOfBoundsVehiclesGauge: for vehicles stopped outside the bounding box
-func TrackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, store *geo.BoundingBoxStore) error {
-	resp, err := gtfs.FetchGTFSRTFeed(server)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		report.ReportError(err)
-		return err
-	}
-
-	realtimeData, err := remoteGtfs.ParseRealtime(data, &remoteGtfs.ParseRealtimeOptions{})
-	if err != nil {
-		report.ReportError(err)
+func TrackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, boundingBoxStore *geo.BoundingBoxStore, realtimeStore *gtfs.RealtimeStore) error {
+	realtimeData := realtimeStore.Get()
+	if realtimeData == nil {
+		err := fmt.Errorf("no GTFS-RT data available for server %d", server.ID)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+			ExtraContext: map[string]interface{}{
+				"vehicle_position_url": server.VehiclePositionUrl,
+			},
+		})
 		return err
 	}
 
-	boundingBox, ok := store.Get(server.ID)
+	boundingBox, ok := boundingBoxStore.Get(server.ID)
 	if !ok {
 		return fmt.Errorf("no bounding box found for server ID %d", server.ID)
 	}

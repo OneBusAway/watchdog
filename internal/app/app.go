@@ -2,8 +2,10 @@ package app
 
 import (
 	"log/slog"
+	"net/http"
 
 	"watchdog.onebusaway.org/internal/geo"
+	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/metrics"
 	"watchdog.onebusaway.org/internal/server"
 )
@@ -18,9 +20,12 @@ import (
 //
 // This struct will expand as more components and dependencies are added during development.
 type Application struct {
-	Config           server.Config
+	Config           *server.Config
 	Logger           *slog.Logger
+	Client           *http.Client
 	Version          string
 	BoundingBoxStore *geo.BoundingBoxStore
 	VehicleLastSeen  *metrics.VehicleLastSeen
+	RealtimeStore    *gtfs.RealtimeStore
+	StaticStore      *gtfs.StaticStore
 }

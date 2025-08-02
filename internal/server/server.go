@@ -8,10 +8,11 @@ import (
 
 // Config Holds all the configuration settings for our application
 type Config struct {
-	Port    int
-	Env     string
-	Mu      sync.RWMutex
-	Servers []models.ObaServer
+	Port          int
+	Env           string
+	FetchInterval int
+	Mu            sync.RWMutex
+	Servers       []models.ObaServer
 }
 
 // NewConfig creates a new instance of a Config struct.
