@@ -140,6 +140,10 @@ func (vehicleLastSeen *VehicleLastSeen) Get(serverID int, vehicleID string) (Las
 	vehicleLastSeen.Mu.RLock()
 	defer vehicleLastSeen.Mu.RUnlock()
 
+	if vehicleLastSeen.Store == nil {
+		return LastSeen{}, false
+	}
+
 	if vehicles, ok := vehicleLastSeen.Store[serverID]; ok {
 		lastSeen, ok := vehicles[vehicleID]
 		return lastSeen, ok
@@ -226,21 +230,26 @@ func (vehicleLastSeen *VehicleLastSeen) clear(threshold time.Duration) {
 // Returns:
 //   - An error if the feed cannot be fetched or parsed, otherwise nil.
 func TrackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLastSeen, realtimeStore *gtfs.RealtimeStore) error {
+	serverID := server.ID
+	agencyID := server.AgencyID
+	now := time.Now().UTC()
+
 	realtimeData := realtimeStore.Get()
 	if realtimeData == nil {
-		err := fmt.Errorf("no GTFS-RT data available for server %d", server.ID)
+		err := fmt.Errorf("no GTFS-RT data available for server %d", serverID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
 			ExtraContext: map[string]interface{}{
 				"vehicle_position_url": server.VehiclePositionUrl,
 			},
 		})
+		return err
 	}
 
-	serverID := server.ID
-	agencyID := server.AgencyID
-
-	now := time.Now().UTC()
+	if len(realtimeData.Vehicles) == 0 {
+		TrackedVehiclesGauge.WithLabelValues(strconv.Itoa(serverID)).Set(0)
+		return nil
+	}
 
 	for _, vehicle := range realtimeData.Vehicles {
 		if vehicle.ID == nil || vehicle.ID.ID == "" {
