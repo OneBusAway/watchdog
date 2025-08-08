@@ -32,7 +32,7 @@ func CheckBundleExpiration(staticStore *gtfs.StaticStore, currentTime time.Time,
 	currentTime = currentTime.UTC()
 	staticData, ok := staticStore.Get(server.ID)
 	if !ok {
-		err := fmt.Errorf("there is no bundle for sever %v", server.ID)
+		err := fmt.Errorf("there is no bundle for server %v", server.ID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags:  utils.MakeMap("server_id", strconv.Itoa(server.ID)),
 			Level: sentry.LevelWarning,

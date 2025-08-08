@@ -14,7 +14,7 @@ func TestCheckBundleExpiration(t *testing.T) {
 	data := readFixture(t, "gtfs.zip")
 	staticData, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
 	if err != nil {
-		t.Fatal("Faild to parse gtfs static data")
+		t.Fatal("failed to parse gtfs static data")
 	}
 	staticStore := gtfs.NewStaticStore()
 	staticStore.Set(testServer.ID, staticData)
