@@ -15,8 +15,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jamespfennell/gtfs"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/utils"
 )
 
 func TestDownloadGTFSBundles(t *testing.T) {
@@ -195,15 +197,9 @@ func TestParseGTFSFromCache(t *testing.T) {
 	}
 }
 
-func TestFetchGTFSRTFeed(t *testing.T) {
+func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 	t.Run("Success Case", func(t *testing.T) {
-		mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Header.Get("X-Test-Header") != "test-value" {
-				t.Errorf("Expected header X-Test-Header to be set")
-			}
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("mock gtfs-rt response"))
-		}))
+		mockServer := setupGtfsRtServer(t, "gtfs_rt_feed_vehicles.pb")
 		defer mockServer.Close()
 
 		server := models.ObaServer{
@@ -213,15 +209,33 @@ func TestFetchGTFSRTFeed(t *testing.T) {
 			GtfsRtApiValue:     "test-value",
 		}
 
-		resp, err := FetchGTFSRTFeed(server)
+		client := &http.Client{
+			Timeout: 5 * time.Second,
+		}
+		realtimeStore := NewRealtimeStore()
+		err := FetchAndStoreGTFSRTFeed(server, realtimeStore, client)
 		if err != nil {
 			t.Fatalf("Expected no error, got: %v", err)
 		}
-		defer resp.Body.Close()
+		if realtimeStore.Get() == nil {
+			t.Fatalf("Expected realtimeStore to contain parsed GTFS-RT data, but it is nil")
+		}
 
-		body, _ := io.ReadAll(resp.Body)
-		if string(body) != "mock gtfs-rt response" {
-			t.Errorf("Expected response body 'mock gtfs-rt response', got '%s'", body)
+		data := readFixture(t, "gtfs_rt_feed_vehicles.pb")
+		realtimeData, err := gtfs.ParseRealtime(data, &gtfs.ParseRealtimeOptions{})
+		if err != nil {
+			t.Fatalf("Failed to parse GTFS-RT data: %v", err)
+		}
+		expectedHash, err := utils.HashRealtimeData(realtimeData)
+		if err != nil {
+			t.Fatalf("Failed to hash GTFS-RT data: %v", err)
+		}
+		hash, err := utils.HashRealtimeData(realtimeStore.Get())
+		if err != nil {
+			t.Fatalf("Failed to hash GTFS-RT data from store: %v", err)
+		}
+		if hash != expectedHash {
+			t.Errorf("Expected hash %x, got %x", expectedHash, hash)
 		}
 	})
 
@@ -230,7 +244,12 @@ func TestFetchGTFSRTFeed(t *testing.T) {
 			ID:                 2,
 			VehiclePositionUrl: "://invalid-url",
 		}
-		_, err := FetchGTFSRTFeed(server)
+		client := &http.Client{
+			Timeout: 5 * time.Second,
+		}
+		realtimeStore := NewRealtimeStore()
+
+		err := FetchAndStoreGTFSRTFeed(server, realtimeStore, client)
 		if err == nil {
 			t.Error("Expected error due to invalid URL, got nil")
 		}
@@ -244,7 +263,11 @@ func TestFetchGTFSRTFeed(t *testing.T) {
 			ID:                 3,
 			VehiclePositionUrl: mockServer.URL,
 		}
-		_, err := FetchGTFSRTFeed(server)
+		client := &http.Client{
+			Timeout: 5 * time.Second,
+		}
+		realtimeStore := NewRealtimeStore()
+		err := FetchAndStoreGTFSRTFeed(server, realtimeStore, client)
 		if err == nil {
 			t.Error("Expected error when accessing closed server, got nil")
 		}
