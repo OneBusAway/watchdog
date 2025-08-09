@@ -12,25 +12,36 @@ import (
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
+	"watchdog.onebusaway.org/internal/utils"
 )
 
-func CheckAgenciesWithCoverage(cachePath string, server models.ObaServer) (int, error) {
-	staticData, err := gtfs.ParseGTFSFromCache(cachePath, server.ID)
-	if err != nil {
-		return 0, fmt.Errorf("error parsing GTFS from cache: %w", err)
+func CheckAgenciesWithCoverage(staticStore *gtfs.StaticStore, server models.ObaServer) (int, error) {
+	staticData, ok := staticStore.Get(server.ID)
+	if !ok {
+		err := fmt.Errorf("there is no bundle for server %v", server.ID)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags:  utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+			Level: sentry.LevelWarning,
+		})
+		return 0, err
 	}
-
+	if staticData == nil {
+		err := fmt.Errorf("static data is nil for server %v", server.ID)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags:  utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+			Level: sentry.LevelWarning,
+		})
+		return 0, err
+	}
 	if len(staticData.Agencies) == 0 {
-		report.ReportErrorWithSentryOptions(fmt.Errorf("no agencies found in GTFS bundle"), report.SentryReportOptions{
+		err := fmt.Errorf("no agencies found in GTFS bundle for server %v", server.ID)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"server_id": strconv.Itoa(server.ID),
 			},
-			ExtraContext: map[string]interface{}{
-				"cache_path": cachePath,
-			},
 			Level: sentry.LevelWarning,
 		})
-		return 0, fmt.Errorf("no agencies found in GTFS bundle")
+		return 0, err
 	}
 
 	AgenciesInStaticGtfs.WithLabelValues(
@@ -71,8 +82,8 @@ func GetAgenciesWithCoverage(server models.ObaServer) (int, error) {
 	return len(response.Data.List), nil
 }
 
-func CheckAgenciesWithCoverageMatch(cachePath string, logger *slog.Logger, server models.ObaServer) error {
-	staticGtfsAgenciesCount, err := CheckAgenciesWithCoverage(cachePath, server)
+func CheckAgenciesWithCoverageMatch(staticStore *gtfs.StaticStore, logger *slog.Logger, server models.ObaServer) error {
+	staticGtfsAgenciesCount, err := CheckAgenciesWithCoverage(staticStore, server)
 	if err != nil {
 		return err
 	}

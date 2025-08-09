@@ -3,6 +3,7 @@ package metrics
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -22,6 +23,22 @@ func getFixturePath(t *testing.T, fixturePath string) string {
 	}
 
 	return absPath
+}
+
+func readFixture(t *testing.T, fixturePath string) []byte {
+	t.Helper()
+
+	absPath, err := filepath.Abs(filepath.Join("..", "..", "testdata", fixturePath))
+	if err != nil {
+		t.Fatalf("Failed to get absolute path to testdata/%s: %v", fixturePath, err)
+	}
+
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		t.Fatalf("Failed to read fixture file: %v", err)
+	}
+
+	return data
 }
 
 func createTestServer(url, name string, id int, apiKey string, vehiclePositionUrl string, gtfsRtApiKey string, gtfsRtApiValue string, agencyID string) models.ObaServer {
