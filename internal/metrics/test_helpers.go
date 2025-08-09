@@ -12,8 +12,8 @@ import (
 	"watchdog.onebusaway.org/internal/models"
 )
 
-// Test helper functions moved from cmd/watchdog/test_helpers.go
-
+// getFixturePath returns the absolute path to a test fixture file located in the testdata directory.
+// It fails the test immediately if the path cannot be resolved.
 func getFixturePath(t *testing.T, fixturePath string) string {
 	t.Helper()
 
@@ -25,6 +25,9 @@ func getFixturePath(t *testing.T, fixturePath string) string {
 	return absPath
 }
 
+// readFixture reads the contents of a test fixture file located in the testdata directory.
+// It returns the file contents as a byte slice.
+// It fails the test immediately if the file cannot be read.
 func readFixture(t *testing.T, fixturePath string) []byte {
 	t.Helper()
 
@@ -41,6 +44,8 @@ func readFixture(t *testing.T, fixturePath string) []byte {
 	return data
 }
 
+// createTestServer creates and returns a mock ObaServer instance with the given parameters.
+// Useful for unit testing functions that depend on server configuration.
 func createTestServer(url, name string, id int, apiKey string, vehiclePositionUrl string, gtfsRtApiKey string, gtfsRtApiValue string, agencyID string) models.ObaServer {
 	return models.ObaServer{
 		Name:               name,
@@ -54,7 +59,8 @@ func createTestServer(url, name string, id int, apiKey string, vehiclePositionUr
 	}
 }
 
-// getMetricValue is a helper function that retrieves the current value of a specific metric
+// getMetricValue retrieves the current float64 value of a Prometheus GaugeVec metric
+// for the given set of labels. Returns an error if the metric cannot be parsed.
 func getMetricValue(metric *prometheus.GaugeVec, labels map[string]string) (float64, error) {
 	// Create a collector for our specific metric
 	c := make(chan prometheus.Metric, 1)
@@ -77,6 +83,8 @@ func getMetricValue(metric *prometheus.GaugeVec, labels map[string]string) (floa
 	return metricValue, nil
 }
 
+// setupObaServer creates a new httptest.Server that responds with the given JSON string and status code.
+// Used to simulate an OBA API server for testing.
 func setupObaServer(t *testing.T, response string, statusCode int) *httptest.Server {
 	t.Helper()
 
@@ -87,6 +95,8 @@ func setupObaServer(t *testing.T, response string, statusCode int) *httptest.Ser
 	}))
 }
 
+// setupTestServer creates a new httptest.Server with the provided HTTP handler.
+// Automatically registers a cleanup function to close the server after the test ends.
 func setupTestServer(t *testing.T, handler http.Handler) *httptest.Server {
 	t.Helper()
 	ts := httptest.NewServer(handler)
