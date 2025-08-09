@@ -18,7 +18,10 @@ import (
 	"watchdog.onebusaway.org/internal/utils"
 )
 
-// validateConfigFlags checks that only one of --config-file, --config-url, or an additional argument is provided.
+// ValidateConfigFlags ensures that only one configuration source is specified:
+// either a config file "--config-file", a remote config URL "--config-url".
+//
+// Returns an error if more than one input method is specified.
 func ValidateConfigFlags(configFile, configURL *string) error {
 	if (*configFile != "" && *configURL != "") || (*configFile != "" && len(flag.Args()) > 0) || (*configURL != "" && len(flag.Args()) > 0) {
 		return fmt.Errorf("only one of --config-file or --config-url can be specified")
@@ -26,7 +29,16 @@ func ValidateConfigFlags(configFile, configURL *string) error {
 	return nil
 }
 
-// refreshConfig periodically fetches remote config and updates the application servers.
+// RefreshConfig starts a background goroutine that periodically fetches configuration
+// from a remote URL and updates the application's list of OBA servers.
+//
+// It uses the provided HTTP client to make GET requests with optional basic auth,
+// and on success, updates the application's configuration via `app.Config.UpdateConfig`.
+//
+// Errors during fetch or parse are logged and reported to Sentry, but the loop continues,
+// ensuring resiliency in the presence of transient issues.
+//
+// The routine stops gracefully when the context is canceled.
 func RefreshConfig(ctx context.Context, client *http.Client, configURL, configAuthUser, configAuthPass string, app *app.Application, logger *slog.Logger, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -52,6 +64,13 @@ func RefreshConfig(ctx context.Context, client *http.Client, configURL, configAu
 	}
 }
 
+// LoadConfigFromFile reads a JSON configuration file from disk and unmarshals it
+// into a list of OBA server configurations (`[]models.ObaServer`).
+//
+// On error, it reports issues to Sentry and returns a descriptive error.
+//
+// This function is used when the application is configured to load its server list
+// from a static file using the --config-file flag.
 func LoadConfigFromFile(filePath string) ([]models.ObaServer, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -74,6 +93,13 @@ func LoadConfigFromFile(filePath string) ([]models.ObaServer, error) {
 	return servers, nil
 }
 
+// LoadConfigFromURL fetches a JSON configuration from a remote HTTP(S) endpoint,
+// using the provided client and optional basic authentication.
+//
+// It validates the response status, reads the body, and unmarshals the configuration
+// into a slice of `models.ObaServer`.
+//
+// Errors are logged and reported to Sentry for observability.
 func LoadConfigFromURL(client *http.Client, url, authUser, authPass string) ([]models.ObaServer, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {

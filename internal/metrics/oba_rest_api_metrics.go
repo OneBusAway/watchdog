@@ -33,6 +33,29 @@ type OBAMetrics struct {
 	} `json:"data"`
 }
 
+// FetchObaAPIMetrics retrieves and records metrics from the OneBusAway metrics API
+// for a given server and updates corresponding Prometheus metrics.
+//
+// It performs an HTTP GET request to the server's `/metrics.json` endpoint using the provided
+// API key, decodes the response into structured fields, and populates Prometheus metrics such as:
+//
+//   - Number of agencies with coverage
+//   - Real-time and scheduled trip counts (matched/unmatched)
+//   - Stop ID match/unmatch counts and ratios
+//   - Trip and stop match ratios
+//   - Time since last real-time update
+//   - Locations of unmatched stops (if available)
+//
+// Parameters:
+//   - slugID: a string identifier used for metric labels.
+//   - serverID: the numeric ID of the OBA server.
+//   - serverBaseUrl: the base URL of the OBA server (e.g., https://example.org).
+//   - apiKey: the API key used to authenticate with the OBA server.
+//   - client: an optional custom HTTP client; if nil, a default client with a timeout is used.
+//
+// Returns:
+//   - error: any error encountered during request, decoding, or Prometheus reporting.
+
 func FetchObaAPIMetrics(slugID string, serverID int, serverBaseUrl string, apiKey string, client *http.Client) error {
 	if client == nil {
 		client = &http.Client{

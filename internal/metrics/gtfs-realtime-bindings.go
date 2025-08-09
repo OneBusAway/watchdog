@@ -17,6 +17,20 @@ import (
 	"watchdog.onebusaway.org/internal/utils"
 )
 
+// CountVehiclePositions returns the number of vehicles present in the GTFS-RT feed
+// for a given server, as stored in the provided RealtimeStore.
+//
+// It retrieves the GTFS-RT data for the server and reports the vehicle count to
+// the RealtimeVehiclePositions Prometheus metric.
+//
+// Parameters:
+//   - server: the ObaServer whose real-time vehicle positions are being counted.
+//   - realtimeStore: a pointer to the RealtimeStore holding GTFS-RT data.
+//
+// Returns:
+//   - int: the number of vehicle positions found in the GTFS-RT feed.
+//   - error: if the realtimeStore is nil or the data is missing.
+
 func CountVehiclePositions(server models.ObaServer, realtimeStore *gtfs.RealtimeStore) (int, error) {
 	if realtimeStore == nil {
 		err := fmt.Errorf("realtimeStore is nil for server %d", server.ID)
@@ -49,6 +63,17 @@ func CountVehiclePositions(server models.ObaServer, realtimeStore *gtfs.Realtime
 	return count, nil
 }
 
+// VehiclesForAgencyAPI calls the OneBusAway VehiclesForAgency API for the given server,
+// retrieves the list of vehicles, and reports the count to the VehicleCountAPI Prometheus metric.
+//
+// This function fetches live vehicle data from the OBA API using the agency ID.
+//
+// Parameters:
+//   - server: the ObaServer containing API credentials and agency information.
+//
+// Returns:
+//   - int: the number of vehicles returned by the API.
+//   - error: if the API call fails or returns an invalid response.
 func VehiclesForAgencyAPI(server models.ObaServer) (int, error) {
 
 	client := onebusaway.NewClient(
@@ -79,6 +104,18 @@ func VehiclesForAgencyAPI(server models.ObaServer) (int, error) {
 	return len(response.Data.List), nil
 }
 
+// CheckVehicleCountMatch compares the number of vehicles in the GTFS-RT feed with
+// the number reported by the VehiclesForAgency API for the given server.
+//
+// It sets the VehicleCountMatch Prometheus metric to 1 if the counts match, or 0 otherwise.
+// Used to detect inconsistencies between real-time GTFS-RT data and the OBA API.
+//
+// Parameters:
+//   - server: the ObaServer for which the comparison is made.
+//   - realtimeStore: a pointer to the RealtimeStore holding GTFS-RT data.
+//
+// Returns:
+//   - error: if counting vehicles from either source fails.
 func CheckVehicleCountMatch(server models.ObaServer, realtimeStore *gtfs.RealtimeStore) error {
 	gtfsRtVehicleCount, err := CountVehiclePositions(server, realtimeStore)
 	if err != nil {

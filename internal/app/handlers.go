@@ -5,7 +5,24 @@ import (
 	"net/http"
 )
 
-// HealthStatus represents the structure of the health check response.
+// HealthStatus defines the structure of the JSON response returned by the
+// application's health check endpoint (/v1/healthcheck).
+//
+// It provides metadata about the application's current operational status,
+// including availability, deployment context, versioning, and runtime readiness.
+// This structure is used to inform load balancers, orchestration tools (e.g., Kubernetes),
+// monitoring systems, and operators about the application's health and deployability.
+//
+// Fields:
+//   - Status: A high-level indicator of service availability (e.g., "available").
+//   - Environment: The current environment in which the app is running (e.g., "production", "staging","production").
+//   - Version: The application version string, useful for deployment tracking.
+//   - Servers: The number of OBA (OneBusAway) backend servers currently configured and used.
+//   - Ready: A boolean flag indicating whether the application is ready to serve traffic.
+//            The application is considered "ready" if at least one backend server is configured.
+//
+// This struct is constructed and serialized to JSON by the `healthcheckHandler`,
+// and it plays a central role in operational observability and readiness checks.
 type HealthStatus struct {
 	Status      string `json:"status"`
 	Environment string `json:"environment"`

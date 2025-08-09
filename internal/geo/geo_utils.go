@@ -1,3 +1,6 @@
+// Package geo provides utilities for geographic computations,
+// including bounding box calculation, coordinate validation,
+// and distance measurement using the Haversine formula.
 package geo
 
 import (
@@ -9,20 +12,23 @@ import (
 	"github.com/jamespfennell/gtfs"
 )
 
-// BoundingBox defines the corners of a lat/lon box
+// BoundingBox defines the geographic boundaries of a rectangular area.
 type BoundingBox struct {
-	MinLat float64
-	MaxLat float64
-	MinLon float64
-	MaxLon float64
+	MinLat float64 // Minimum latitude
+	MaxLat float64 // Maximum latitude
+	MinLon float64 // Minimum longitude
+	MaxLon float64 // Maximum longitude
 }
 
-// Contains checks whether the given latitude and longitude are within the bounding box
+// Contains reports whether the given latitude and longitude
+// are within the bounding box.
 func (b *BoundingBox) Contains(lat, lon float64) bool {
 	return lat >= b.MinLat && lat <= b.MaxLat && lon >= b.MinLon && lon <= b.MaxLon
 }
 
-// ComputeBoundingBox computes the bounding box of all stops in static GTFS
+// ComputeBoundingBox returns the bounding box enclosing all valid stops.
+//
+// It returns an error if the input slice is empty or contains no valid lat/lon pairs.
 func ComputeBoundingBox(stops []gtfs.Stop) (BoundingBox, error) {
 	if len(stops) == 0 {
 		return BoundingBox{}, fmt.Errorf("no stops to compute bounding box")
@@ -65,27 +71,30 @@ func ComputeBoundingBox(stops []gtfs.Stop) (BoundingBox, error) {
 	}, nil
 }
 
-// BoundingBoxStore stores bounding boxes for each server in memory with concurrency safety
+// BoundingBoxStore is a concurrency-safe in-memory store for
+// bounding boxes indexed by server ID.
 type BoundingBoxStore struct {
 	mu    sync.RWMutex
 	store map[int]BoundingBox
 }
 
-// NewBoundingBoxStore creates and returns a new BoundingBoxStore
+// NewBoundingBoxStore returns a new instance of BoundingBoxStore.
 func NewBoundingBoxStore() *BoundingBoxStore {
 	return &BoundingBoxStore{
 		store: make(map[int]BoundingBox),
 	}
 }
 
-// Set stores a bounding box for a specific server ID
+// Set stores the bounding box associated with the given server ID.
 func (s *BoundingBoxStore) Set(serverID int, bbox BoundingBox) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.store[serverID] = bbox
 }
 
-// Get retrieves the bounding box for a specific server ID
+// Get retrieves the bounding box associated with the given server ID.
+//
+// The second return value indicates whether a bounding box was found.
 func (s *BoundingBoxStore) Get(serverID int) (BoundingBox, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -112,7 +121,8 @@ func IsValidLatLon(lat, lon float64) bool {
 	return true
 }
 
-// IsInBoundingBox checks if the lat/lon is inside the server's bounding box
+// IsInBoundingBox checks whether the given lat/lon is within the
+// bounding box associated with the specified server ID.
 func (s *BoundingBoxStore) IsInBoundingBox(serverID int, lat, lon float64) bool {
 	bbox, ok := s.Get(serverID)
 	if !ok {
@@ -130,6 +140,10 @@ func (s *BoundingBoxStore) IsInBoundingBox(serverID int, lat, lon float64) bool 
 // https://nssdc.gsfc.nasa.gov/planetary/factsheet/earthfact.html
 const earthRadiusInMeters = 6371000
 
+// HaversineDistance returns the great-circle distance in meters between
+// two points specified by latitude and longitude.
+//
+// The result is based on the Earth's mean radius.
 func HaversineDistance(lat1, lon1, lat2, lon2 float64) float64 {
 	p1 := s2.LatLngFromDegrees(lat1, lon1)
 	p2 := s2.LatLngFromDegrees(lat2, lon2)

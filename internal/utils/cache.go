@@ -13,6 +13,10 @@ import (
 	"watchdog.onebusaway.org/internal/report"
 )
 
+// GetLastCachedFile returns the most recently modified cache file for a given server ID
+// within the specified cache directory. The cache file name is expected to follow
+// the pattern "server_<ID>_...". Returns an error if no matching file is found
+// or if reading the directory fails.
 func GetLastCachedFile(cacheDir string, serverID int) (string, error) {
 	files, err := os.ReadDir(cacheDir)
 	if err != nil {
@@ -44,7 +48,10 @@ func GetLastCachedFile(cacheDir string, serverID int) (string, error) {
 	return filepath.Join(cacheDir, lastModFile), nil
 }
 
-// CreateCacheDirectory ensures the cache directory exists, creating it if necessary.
+// CreateCacheDirectory ensures that the given cache directory exists.
+// If the directory does not exist, it attempts to create it. If the path
+// exists but is not a directory, it returns an error.
+// Errors are reported to Sentry with contextual information.
 func CreateCacheDirectory(cacheDir string, logger *slog.Logger) error {
 	stat, err := os.Stat(cacheDir)
 
@@ -77,6 +84,8 @@ func CreateCacheDirectory(cacheDir string, logger *slog.Logger) error {
 	return nil
 }
 
+// SaveMapToFile serializes the given map to a JSON file at the specified filepath.
+// Returns an error if the file cannot be created or written to.
 func SaveMapToFile[C comparable, V any](data map[C]V, filepath string) error {
 	file, err := os.Create(filepath)
 	if err != nil {
@@ -87,6 +96,8 @@ func SaveMapToFile[C comparable, V any](data map[C]V, filepath string) error {
 	return json.NewEncoder(file).Encode(data)
 }
 
+// LoadMapFromFile reads a JSON-encoded map from the specified file and returns it.
+// Returns an error if the file can't be opened or the contents can't be decoded.
 func LoadMapFromFile[C comparable, V any](filepath string) (map[C]V, error) {
 	file, err := os.Open(filepath)
 	if err != nil {
