@@ -58,14 +58,14 @@ func (app *Application) StartMetricsCollection(ctx context.Context) {
 // CollectMetricsForServer performs all metric collection and validation logic for a single OBA server.
 //
 // It sequentially runs a series of probes and validations against the given server:
-//   1. Pings the server to track basic availability.
-//   2. Checks GTFS static bundle expiration.
-//   3. Verifies agency coverage match (GTFS static vs real-time).
-//   4. Collects metrics from the OBA API endpoints.
-//   5. Fetches and stores GTFS-RT (realtime) vehicle positions feed.
-//   6. Validates consistency between expected and actual vehicle counts.
-//   7. Tracks frequency of vehicle telemetry reporting over time.
-//   8. Flags invalid vehicles and vehicles stopped outside bounds.
+//  1. Pings the server to track basic availability.
+//  2. Checks GTFS static bundle expiration.
+//  3. Verifies agency coverage match (GTFS static vs real-time).
+//  4. Collects metrics from the OBA API endpoints.
+//  5. Fetches and stores GTFS-RT (realtime) vehicle positions feed.
+//  6. Validates consistency between expected and actual vehicle counts.
+//  7. Tracks frequency of vehicle telemetry reporting over time.
+//  8. Flags invalid vehicles and vehicles stopped outside bounds.
 //
 // Errors in each step are logged and reported to Sentry with contextual tags (e.g., server name, ID),
 // but the process continues unless the GTFS-RT feed fails — in which case the function returns early,

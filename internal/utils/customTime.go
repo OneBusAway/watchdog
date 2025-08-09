@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const YYYYMMDD = "20060102"  // Date format used for (un)marshaling CustomTime
+const YYYYMMDD = "20060102" // Date format used for (un)marshaling CustomTime
 
 // CustomTime wraps time.Time to enable custom JSON marshaling/unmarshaling
 // using the "YYYYMMDD" format (e.g., "20250807").

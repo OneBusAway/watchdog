@@ -19,7 +19,7 @@ import (
 //   - Version: The application version string, useful for deployment tracking.
 //   - Servers: The number of OBA (OneBusAway) backend servers currently configured and used.
 //   - Ready: A boolean flag indicating whether the application is ready to serve traffic.
-//            The application is considered "ready" if at least one backend server is configured.
+//     The application is considered "ready" if at least one backend server is configured.
 //
 // This struct is constructed and serialized to JSON by the `healthcheckHandler`,
 // and it plays a central role in operational observability and readiness checks.
