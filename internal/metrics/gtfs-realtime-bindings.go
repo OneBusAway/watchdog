@@ -145,7 +145,7 @@ func CheckVehicleCountMatch(server models.ObaServer, realtimeStore *gtfs.Realtim
 	return nil
 }
 
-// vehicleLastSeen stores timestamp & coordinates for speed computation
+// LastSeen stores timestamp & coordinates for speed computation
 type LastSeen struct {
 	Time time.Time
 	Lat  float64
@@ -167,12 +167,19 @@ type VehicleLastSeen struct {
 	Store map[int]map[string]LastSeen
 }
 
+// NewVehicleLastSeen creates and returns a new VehicleLastSeen instance
+// with an initialized storage map. This is the constructor for VehicleLastSeen.
 func NewVehicleLastSeen() *VehicleLastSeen {
 	return &VehicleLastSeen{
 		Store: make(map[int]map[string]LastSeen),
 	}
 }
 
+// Get retrieves the LastSeen data for a specific vehicle on a given server.
+// It returns the LastSeen value and a boolean indicating whether the vehicle was found.
+//
+// serverID: ID of the server.
+// vehicleID: Unique identifier of the vehicle.
 func (vehicleLastSeen *VehicleLastSeen) Get(serverID int, vehicleID string) (LastSeen, bool) {
 	vehicleLastSeen.Mu.RLock()
 	defer vehicleLastSeen.Mu.RUnlock()
@@ -188,6 +195,11 @@ func (vehicleLastSeen *VehicleLastSeen) Get(serverID int, vehicleID string) (Las
 	return LastSeen{}, false
 }
 
+// Set stores or updates the LastSeen data for a specific vehicle on a given server.
+//
+// serverID: ID of the server.
+// vehicleID: Unique identifier of the vehicle.
+// lastSeen: LastSeen object containing the latest observation time and related data.
 func (vehicleLastSeen *VehicleLastSeen) Set(serverID int, vehicleID string, lastSeen LastSeen) {
 	vehicleLastSeen.Mu.Lock()
 	defer vehicleLastSeen.Mu.Unlock()
@@ -198,6 +210,9 @@ func (vehicleLastSeen *VehicleLastSeen) Set(serverID int, vehicleID string, last
 	vehicleLastSeen.Store[serverID][vehicleID] = lastSeen
 }
 
+// Count returns the number of tracked vehicles for a given server.
+//
+// serverID: ID of the server to count vehicles for.
 func (v *VehicleLastSeen) Count(serverID int) int {
 	v.Mu.RLock()
 	defer v.Mu.RUnlock()
@@ -205,6 +220,12 @@ func (v *VehicleLastSeen) Count(serverID int) int {
 	return len(v.Store[serverID])
 }
 
+// ClearRoutine runs a background process that periodically removes vehicles
+// whose LastSeen timestamps exceed the given threshold.
+//
+// ctx: Context for canceling the routine.
+// timeInterval: Interval at which cleanup checks are performed.
+// threshold: Duration after which a vehicle entry is considered stale and removed.
 func (vehicleLastSeen *VehicleLastSeen) ClearRoutine(ctx context.Context, timeInterval, threshold time.Duration) {
 	ticker := time.NewTicker(timeInterval)
 	defer ticker.Stop()
@@ -219,6 +240,10 @@ func (vehicleLastSeen *VehicleLastSeen) ClearRoutine(ctx context.Context, timeIn
 	}
 }
 
+// clear removes stale vehicle entries from the store that have not been
+// updated within the given threshold duration.
+//
+// threshold: Duration after which a vehicle entry is considered stale.
 func (vehicleLastSeen *VehicleLastSeen) clear(threshold time.Duration) {
 	vehicleLastSeen.Mu.Lock()
 	defer vehicleLastSeen.Mu.Unlock()
