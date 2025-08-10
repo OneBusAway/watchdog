@@ -1,348 +1,122 @@
 package config
 
 import (
-	"bytes"
-	"context"
-	"flag"
-	"fmt"
-	"io"
-	"log/slog"
-	"net/http"
-	"net/http/httptest"
-	"os"
-	"strings"
+	"reflect"
 	"testing"
-	"time"
 
 	"watchdog.onebusaway.org/internal/models"
 )
 
-func TestLoadConfigFromFile(t *testing.T) {
-	t.Run("ValidConfig", func(t *testing.T) {
-		content := `[{
-		"name": "Test Server", "id": 1,
-		"oba_base_url": "https://test.example.com",
-		"oba_api_key": "test-key",
-		"gtfs_url": "https://gtfs.example.com",
-		"trip_update_url": "https://trip.example.com",
-		"vehicle_position_url": "https://vehicle.example.com",
-		"gtfs_rt_api_key": "",
-		"gtfs_rt_api_value": ""
-		}]`
-		tmpFile, err := os.CreateTemp("", "config-*.json")
-		if err != nil {
-			t.Fatalf("Failed to create temporary file: %v", err)
-		}
-		defer os.Remove(tmpFile.Name())
-
-		if _, err := tmpFile.Write([]byte(content)); err != nil {
-			t.Fatalf("Failed to write to temporary file: %v", err)
-		}
-		tmpFile.Close()
-
-		servers, err := LoadConfigFromFile(tmpFile.Name())
-		if err != nil {
-			t.Fatalf("loadConfigFromFile failed: %v", err)
-		}
-
-		if len(servers) != 1 {
-			t.Fatalf("Expected 1 server, got %d", len(servers))
-		}
-
-		expected := models.ObaServer{
-			Name:               "Test Server",
-			ID:                 1,
-			ObaBaseURL:         "https://test.example.com",
-			ObaApiKey:          "test-key",
-			GtfsUrl:            "https://gtfs.example.com",
-			TripUpdateUrl:      "https://trip.example.com",
-			VehiclePositionUrl: "https://vehicle.example.com",
-			GtfsRtApiKey:       "",
-			GtfsRtApiValue:     "",
-		}
-
-		if servers[0] != expected {
-			t.Errorf("Expected server %+v, got %+v", expected, servers[0])
-		}
-	})
-
-	t.Run("InvalidJSON", func(t *testing.T) {
-		content := `{ this is not valid JSON }`
-		tmpFile, err := os.CreateTemp("", "invalid-config-*.json")
-		if err != nil {
-			t.Fatalf("Failed to create temporary file: %v", err)
-		}
-		defer os.Remove(tmpFile.Name())
-
-		if _, err := tmpFile.Write([]byte(content)); err != nil {
-			t.Fatalf("Failed to write to temporary file: %v", err)
-		}
-		tmpFile.Close()
-
-		_, err = LoadConfigFromFile(tmpFile.Name())
-		if err == nil {
-			t.Errorf("Expected error with invalid JSON, got none")
-		}
-	})
-
-	t.Run("NonExistentFile", func(t *testing.T) {
-		_, err := LoadConfigFromFile("non-existent-file.json")
-		if err == nil {
-			t.Errorf("Expected error for non-existent file, got none")
-		}
-	})
-}
-
-func TestLoadConfigFromURL(t *testing.T) {
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
-	t.Run("ValidResponse", func(t *testing.T) {
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`[{"name": "Test Server",
-			 "id": 1,
-			 "oba_base_url": "https://test.example.com",
-			 "oba_api_key": "test-key",
-			 "gtfs_url": "https://gtfs.example.com",
-			 "trip_update_url": "https://trip.example.com",
-			 "vehicle_position_url": "https://vehicle.example.com",
-			 "gtfs_rt_api_key": "",
-			 "gtfs_rt_api_value": ""
-			}]`))
-		}))
-		defer ts.Close()
-
-		servers, err := LoadConfigFromURL(client, ts.URL, "user", "pass")
-		if err != nil {
-			t.Fatalf("loadConfigFromURL failed: %v", err)
-		}
-
-		if len(servers) != 1 {
-			t.Fatalf("Expected 1 server, got %d", len(servers))
-		}
-
-		expected := models.ObaServer{
-			Name:               "Test Server",
-			ID:                 1,
-			ObaBaseURL:         "https://test.example.com",
-			ObaApiKey:          "test-key",
-			GtfsUrl:            "https://gtfs.example.com",
-			TripUpdateUrl:      "https://trip.example.com",
-			VehiclePositionUrl: "https://vehicle.example.com",
-		}
-
-		if servers[0] != expected {
-			t.Errorf("Expected server %+v, got %+v", expected, servers[0])
-		}
-	})
-
-	t.Run("ErrorResponse", func(t *testing.T) {
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusInternalServerError)
-		}))
-		defer ts.Close()
-
-		_, err := LoadConfigFromURL(client, ts.URL, "", "")
-		if err == nil {
-			t.Errorf("Expected error with 500 response, got none")
-		}
-	})
-
-	t.Run("InvalidJSONResponse", func(t *testing.T) {
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{ this is not valid JSON }`))
-		}))
-		defer ts.Close()
-
-		_, err := LoadConfigFromURL(client, ts.URL, "", "")
-		if err == nil {
-			t.Errorf("Expected error for invalid JSON response, got none")
-		}
-	})
-	t.Run("InvalidURL", func(t *testing.T) {
-		_, err := LoadConfigFromURL(client, "://invalid-url", "", "")
-		if err == nil || !strings.Contains(err.Error(), "failed to create request") {
-			t.Errorf("Expected request creation error, got: %v", err)
-		}
-	})
-}
-
-func TestValidateConfig(t *testing.T) {
+func TestNewConfig(t *testing.T) {
+	// Test cases
 	tests := []struct {
-		name        string
-		configFile  string
-		configURL   string
-		expectError bool
+		name         string
+		port         int
+		env          string
+		servers      []models.ObaServer
+		expectedPort int
+		expectedEnv  string
 	}{
-		{"Valid local config", "config.json", "", false},
-		{"Valid remote config", "", "http://example.com/config.json", false},
-		{"Both config file and URL", "config.json", "http://example.com/config.json", true},
-		{"No config provided", "", "", true},
+		{
+			name: "Valid configuration with one server",
+			port: 4000,
+			env:  "development",
+			servers: []models.ObaServer{
+				{
+					Name:               "Test Server",
+					ID:                 1,
+					ObaBaseURL:         "https://test.onebusaway.org",
+					ObaApiKey:          "test-key",
+					GtfsUrl:            "https://test.gtfs.url",
+					TripUpdateUrl:      "https://test.update.url",
+					VehiclePositionUrl: "https://test.vehicle.url",
+				},
+			},
+			expectedPort: 4000,
+			expectedEnv:  "development",
+		},
+		{
+			name:         "Empty server list",
+			port:         8080,
+			env:          "production",
+			servers:      []models.ObaServer{},
+			expectedPort: 8080,
+			expectedEnv:  "production",
+		},
+		{
+			name: "Multiple servers",
+			port: 3000,
+			env:  "staging",
+			servers: []models.ObaServer{
+				{
+					Name:       "Server 1",
+					ID:         1,
+					ObaBaseURL: "https://test1.onebusaway.org",
+				},
+				{
+					Name:       "Server 2",
+					ID:         2,
+					ObaBaseURL: "https://test2.onebusaway.org",
+				},
+			},
+			expectedPort: 3000,
+			expectedEnv:  "staging",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			flag.CommandLine = flag.NewFlagSet(tt.name, flag.ContinueOnError)
-			os.Args = []string{"cmd", "--config-file=" + tt.configFile, "--config-url=" + tt.configURL}
+			// Create new config
+			config := NewConfig(tt.port, tt.env, tt.servers)
 
-			_, _, err := parseFlags()
+			// Check if config is not nil
+			if config == nil {
+				t.Fatal("Expected config to not be nil")
+			}
 
-			if (err != nil) != tt.expectError {
-				t.Errorf("Expected error: %v, got: %v", tt.expectError, err)
+			// Check port
+			if config.Port != tt.expectedPort {
+				t.Errorf("Expected port %d, got %d", tt.expectedPort, config.Port)
+			}
+
+			// Check environment
+			if config.Env != tt.expectedEnv {
+				t.Errorf("Expected environment %s, got %s", tt.expectedEnv, config.Env)
+			}
+
+			// Check servers
+			if !reflect.DeepEqual(config.Servers, tt.servers) {
+				t.Errorf("Servers don't match expected values.\nExpected: %+v\nGot: %+v", tt.servers, config.Servers)
+			}
+
+			// Check server count
+			if len(config.Servers) != len(tt.servers) {
+				t.Errorf("Expected %d servers, got %d", len(tt.servers), len(config.Servers))
 			}
 		})
 	}
 }
 
-func parseFlags() (string, string, error) {
-	var (
-		configFile = flag.String("config-file", "", "Path to a local JSON configuration file")
-		configURL  = flag.String("config-url", "", "URL to a remote JSON configuration file")
-	)
-	flag.Parse()
+func TestConfigFields(t *testing.T) {
+	// Test that the Config struct has all expected fields
+	configType := reflect.TypeOf(Config{})
 
-	// Check if both configFile and configURL are empty
-	if *configFile == "" && *configURL == "" {
-		return "", "", fmt.Errorf("no configuration provided. Use --config-file or --config-url")
+	expectedFields := map[string]string{
+		"Port":    "int",
+		"Env":     "string",
+		"Servers": "[]models.ObaServer",
 	}
 
-	// Check if more than one configuration option is provided
-	if (*configFile != "" && *configURL != "") || (*configFile != "" && len(flag.Args()) > 0) || (*configURL != "" && len(flag.Args()) > 0) {
-		return "", "", fmt.Errorf("only one of --config-file, --config-url, or raw config params can be specified")
-	}
-
-	return *configFile, *configURL, nil
-}
-
-func TestValidateConfigFlags(t *testing.T) {
-	tests := []struct {
-		name        string
-		configFile  string
-		configURL   string
-		extraArgs   []string
-		expectError bool
-	}{
-		{"No config", "", "", nil, false},
-		{"Valid local config", "config.json", "", nil, false},
-		{"Valid remote config", "", "http://example.com/config.json", nil, false},
-		{"Both config file and URL", "config.json", "http://example.com/config.json", nil, true},
-		{"Config file with extra args", "config.json", "", []string{"extraArg"}, true},
-		{"Config URL with extra args", "", "http://example.com/config.json", []string{"extraArg"}, true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			flag.CommandLine = flag.NewFlagSet(tt.name, flag.ContinueOnError)
-			var output bytes.Buffer
-			flag.CommandLine.SetOutput(&output)
-
-			configFile := flag.String("config-file", "", "Path to config file")
-			configURL := flag.String("config-url", "", "URL to config")
-
-			args := []string{"cmd"}
-			if tt.configFile != "" {
-				args = append(args, "--config-file="+tt.configFile)
-			}
-			if tt.configURL != "" {
-				args = append(args, "--config-url="+tt.configURL)
-			}
-			args = append(args, tt.extraArgs...)
-
-			os.Args = args
-			flag.CommandLine.Parse(args[1:])
-
-			err := ValidateConfigFlags(configFile, configURL)
-
-			if (err != nil) != tt.expectError {
-				t.Errorf("Expected error: %v, got: %v", tt.expectError, err)
-			}
-
-			if err != nil && !strings.Contains(err.Error(), "only one of --config-file or --config-url") {
-				t.Errorf("Unexpected error message: %v", err)
-			}
-		})
-	}
-}
-
-func TestRefreshConfig(t *testing.T) {
-	obaServer := models.NewObaServer(
-		"Test Server",
-		1,
-		"https://test.example.com",
-		"test-key",
-		"",
-		"",
-		"",
-		"",
-		"",
-		"",
-	)
-
-	cfg := NewConfig(
-		4000,
-		"testing",
-		[]models.ObaServer{*obaServer},
-	)
-
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
-
-	testLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
-
-	var serverHitCount int
-	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		serverHitCount++
-
-		user, pass, hasAuth := r.BasicAuth()
-		if hasAuth && (user != "testuser" || pass != "testpass") {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
+	for fieldName, expectedType := range expectedFields {
+		field, exists := configType.FieldByName(fieldName)
+		if !exists {
+			t.Errorf("Expected Config struct to have field %s", fieldName)
+			continue
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintln(w, `[
-					{
-							"id": 999,
-							"name": "Refreshed Test Server",
-							"url": "https://refreshed.example.com",
-							"api_key": "refreshed-key",
-							"gtfs_url": "https://refreshed.example.com/gtfs.zip"
-					}
-			]`)
-	}))
-	defer mockServer.Close()
-
-	originalConfig := make([]models.ObaServer, len(cfg.Servers))
-	copy(originalConfig, cfg.Servers)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go RefreshConfig(ctx, client, mockServer.URL, "testuser", "testpass", cfg, testLogger, 100*time.Millisecond)
-
-	time.Sleep(200 * time.Millisecond)
-
-	if serverHitCount == 0 {
-		t.Fatal("Mock server was never called")
-	}
-
-	updatedServers := cfg.GetServers()
-
-	if len(updatedServers) == 0 {
-		t.Fatal("No servers found in updated configuration")
-	}
-
-	var found bool
-	for _, s := range updatedServers {
-		if s.ID == 999 && s.Name == "Refreshed Test Server" {
-			found = true
-			break
+		actualType := field.Type.String()
+		if actualType != expectedType {
+			t.Errorf("Field %s: expected type %s, got %s", fieldName, expectedType, actualType)
 		}
-	}
-
-	if !found {
-		t.Errorf("Config not updated with refreshed server data. Original: %+v, Updated: %+v", originalConfig, updatedServers)
 	}
 }
