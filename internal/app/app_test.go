@@ -3,13 +3,13 @@ package app
 import (
 	"testing"
 
+	"watchdog.onebusaway.org/internal/config"
 	"watchdog.onebusaway.org/internal/models"
-	"watchdog.onebusaway.org/internal/server"
 )
 
 func TestUpdateConfig(t *testing.T) {
 	app := &Application{
-		Config: server.NewConfig(
+		Config: config.NewConfig(
 			4000,
 			"testing",
 			[]models.ObaServer{},

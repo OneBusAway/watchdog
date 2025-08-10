@@ -17,7 +17,6 @@ import (
 	"watchdog.onebusaway.org/internal/metrics"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
-	"watchdog.onebusaway.org/internal/server"
 	"watchdog.onebusaway.org/internal/utils"
 )
 
@@ -27,7 +26,7 @@ import (
 const version = "1.0.0"
 
 func main() {
-	var cfg server.Config
+	var cfg config.Config
 
 	flag.IntVar(&cfg.Port, "port", 4000, "API server port")
 	flag.StringVar(&cfg.Env, "env", "development", "Environment (development|staging|production)")
@@ -124,7 +123,7 @@ func main() {
 
 	// If a remote URL is specified, refresh the configuration every minute
 	if *configURL != "" {
-		go config.RefreshConfig(ctx, app.Client, *configURL, configAuthUser, configAuthPass, app, logger, time.Minute)
+		go config.RefreshConfig(ctx, app.Client, *configURL, configAuthUser, configAuthPass, app.Config, logger, time.Minute)
 	}
 
 	srv := &http.Server{

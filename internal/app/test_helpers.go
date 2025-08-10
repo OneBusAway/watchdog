@@ -9,10 +9,10 @@ import (
 
 	remoteGtfs "github.com/jamespfennell/gtfs"
 	"github.com/prometheus/client_golang/prometheus"
+	"watchdog.onebusaway.org/internal/config"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
-	"watchdog.onebusaway.org/internal/server"
 )
 
 func newTestApplication(t *testing.T) *Application {
@@ -31,7 +31,7 @@ func newTestApplication(t *testing.T) *Application {
 		"",
 	)
 
-	cfg := server.NewConfig(
+	cfg := config.NewConfig(
 		4000,
 		"testing",
 		[]models.ObaServer{*obaServer},

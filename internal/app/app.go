@@ -4,10 +4,10 @@ import (
 	"log/slog"
 	"net/http"
 
+	"watchdog.onebusaway.org/internal/config"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/metrics"
-	"watchdog.onebusaway.org/internal/server"
 )
 
 // Application holds the shared dependencies for HTTP handlers, helpers, and middleware.
@@ -20,7 +20,7 @@ import (
 //
 // This struct will expand as more components and dependencies are added during development.
 type Application struct {
-	Config           *server.Config
+	Config           *config.Config
 	Logger           *slog.Logger
 	Client           *http.Client
 	Version          string

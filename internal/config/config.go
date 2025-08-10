@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
-	"watchdog.onebusaway.org/internal/app"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
 	"watchdog.onebusaway.org/internal/utils"
@@ -39,7 +38,7 @@ func ValidateConfigFlags(configFile, configURL *string) error {
 // ensuring resiliency in the presence of transient issues.
 //
 // The routine stops gracefully when the context is canceled.
-func RefreshConfig(ctx context.Context, client *http.Client, configURL, configAuthUser, configAuthPass string, app *app.Application, logger *slog.Logger, interval time.Duration) {
+func RefreshConfig(ctx context.Context, client *http.Client, configURL, configAuthUser, configAuthPass string, cfg *Config, logger *slog.Logger, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -58,7 +57,7 @@ func RefreshConfig(ctx context.Context, client *http.Client, configURL, configAu
 				continue
 			}
 
-			app.Config.UpdateConfig(newServers)
+			cfg.UpdateConfig(newServers)
 			logger.Info("Successfully refreshed server configuration")
 		}
 	}

@@ -14,9 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"watchdog.onebusaway.org/internal/app"
 	"watchdog.onebusaway.org/internal/models"
-	"watchdog.onebusaway.org/internal/server"
 )
 
 func TestLoadConfigFromFile(t *testing.T) {
@@ -269,8 +267,28 @@ func TestValidateConfigFlags(t *testing.T) {
 }
 
 func TestRefreshConfig(t *testing.T) {
-	app := newTestApplication(t)
-	client := app.Client
+	obaServer := models.NewObaServer(
+		"Test Server",
+		1,
+		"https://test.example.com",
+		"test-key",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+	)
+
+	cfg := NewConfig(
+		4000,
+		"testing",
+		[]models.ObaServer{*obaServer},
+	)
+
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
 
 	testLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
@@ -297,12 +315,12 @@ func TestRefreshConfig(t *testing.T) {
 	}))
 	defer mockServer.Close()
 
-	originalConfig := make([]models.ObaServer, len(app.Config.Servers))
-	copy(originalConfig, app.Config.Servers)
+	originalConfig := make([]models.ObaServer, len(cfg.Servers))
+	copy(originalConfig, cfg.Servers)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go RefreshConfig(ctx, client, mockServer.URL, "testuser", "testpass", app, testLogger, 100*time.Millisecond)
+	go RefreshConfig(ctx, client, mockServer.URL, "testuser", "testpass", cfg, testLogger, 100*time.Millisecond)
 
 	time.Sleep(200 * time.Millisecond)
 
@@ -310,7 +328,7 @@ func TestRefreshConfig(t *testing.T) {
 		t.Fatal("Mock server was never called")
 	}
 
-	updatedServers := app.Config.GetServers()
+	updatedServers := cfg.GetServers()
 
 	if len(updatedServers) == 0 {
 		t.Fatal("No servers found in updated configuration")
@@ -326,38 +344,5 @@ func TestRefreshConfig(t *testing.T) {
 
 	if !found {
 		t.Errorf("Config not updated with refreshed server data. Original: %+v, Updated: %+v", originalConfig, updatedServers)
-	}
-}
-
-func newTestApplication(t *testing.T) *app.Application {
-	t.Helper()
-
-	obaServer := models.NewObaServer(
-		"Test Server",
-		1,
-		"https://test.example.com",
-		"test-key",
-		"",
-		"",
-		"",
-		"",
-		"",
-		"",
-	)
-
-	cfg := server.NewConfig(
-		4000,
-		"testing",
-		[]models.ObaServer{*obaServer},
-	)
-
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	client := http.Client{
-		Timeout: 10 * time.Second,
-	}
-	return &app.Application{
-		Config: cfg,
-		Logger: logger,
-		Client: &client,
 	}
 }
