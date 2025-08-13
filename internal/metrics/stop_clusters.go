@@ -5,7 +5,7 @@ import (
 	"watchdog.onebusaway.org/internal/geo"
 )
 
-// ReportUnmatchedStopClusters groups unmatched GTFS stops using hybrid clustering
+// reportUnmatchedStopClusters groups unmatched GTFS stops using hybrid clustering
 // (station-based or S2-based) and reports the cluster counts as Prometheus metrics.
 //
 // Clustering logic:
@@ -19,7 +19,7 @@ import (
 // - slugID: a unique identifier for the server or deployment instance
 // - agencyID: the GTFS agency identifier
 // - unmatchedStops: a map of stop IDs to GTFS stop objects not matched to gtfs static data
-func ReportUnmatchedStopClusters(slugID, agencyID string, unmatchedStops map[string]gtfs.Stop) {
+func reportUnmatchedStopClusters(slugID, agencyID string, unmatchedStops map[string]gtfs.Stop) {
 	clusterCount := make(map[string]int)
 	clusterType := make(map[string]string) // station or s2
 

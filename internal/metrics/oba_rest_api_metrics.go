@@ -33,7 +33,7 @@ type OBAMetrics struct {
 	} `json:"data"`
 }
 
-// FetchObaAPIMetrics retrieves and records metrics from the OneBusAway metrics API
+// fetchObaAPIMetrics retrieves and records metrics from the OneBusAway metrics API
 // for a given server and updates corresponding Prometheus metrics.
 //
 // It performs an HTTP GET request to the server's `/metrics.json` endpoint using the provided
@@ -56,7 +56,7 @@ type OBAMetrics struct {
 // Returns:
 //   - error: any error encountered during request, decoding, or Prometheus reporting.
 
-func FetchObaAPIMetrics(slugID string, serverID int, serverBaseUrl string, apiKey string, client *http.Client) error {
+func fetchObaAPIMetrics(slugID string, serverID int, serverBaseUrl string, apiKey string, client *http.Client, staticStore *gtfs.StaticStore) error {
 	if client == nil {
 		client = &http.Client{
 			Timeout: 10 * time.Second,
@@ -165,16 +165,7 @@ func FetchObaAPIMetrics(slugID string, serverID int, serverBaseUrl string, apiKe
 
 		unmatchedStopIDs := entry.StopIDsUnmatched[agencyID]
 		if len(unmatchedStopIDs) > 0 {
-			cachePath, err := utils.GetLastCachedFile("cache", serverID)
-			if err != nil {
-				report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-					Tags:         utils.MakeMap("slug_id", slugID),
-					ExtraContext: map[string]interface{}{"reason": "failed to get cached GTFS bundle"},
-				})
-				continue
-			}
-
-			stopInfoMap, err := gtfs.GetStopLocationsByIDs(cachePath, serverID, unmatchedStopIDs)
+			stopInfoMap, err := gtfs.GetStopLocationsByIDs(serverID, unmatchedStopIDs, staticStore)
 			if err != nil {
 				report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 					Tags:         utils.MakeMap("slug_id", slugID),
@@ -196,7 +187,7 @@ func FetchObaAPIMetrics(slugID string, serverID int, serverBaseUrl string, apiKe
 					fmt.Sprintf("%.6f", *stop.Longitude),
 				).Set(1)
 			}
-			ReportUnmatchedStopClusters(slugID, agencyID, stopInfoMap)
+			reportUnmatchedStopClusters(slugID, agencyID, stopInfoMap)
 		}
 	}
 	return nil

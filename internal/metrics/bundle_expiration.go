@@ -12,7 +12,7 @@ import (
 	"watchdog.onebusaway.org/internal/utils"
 )
 
-// CheckBundleExpiration calculates the number of days remaining until the earliest and latest
+// checkBundleExpiration calculates the number of days remaining until the earliest and latest
 // service end dates in the GTFS static bundle associated with a given server.
 //
 // It retrieves the static GTFS data from the provided StaticStore using the server ID,
@@ -28,7 +28,7 @@ import (
 //   - int: days until the earliest service end date.
 //   - int: days until the latest service end date.
 //   - error: any error encountered during processing.
-func CheckBundleExpiration(staticStore *gtfs.StaticStore, currentTime time.Time, server models.ObaServer) (int, int, error) {
+func checkBundleExpiration(staticStore *gtfs.StaticStore, currentTime time.Time, server models.ObaServer) (int, int, error) {
 	currentTime = currentTime.UTC()
 	staticData, ok := staticStore.Get(server.ID)
 	if !ok {

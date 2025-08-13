@@ -12,7 +12,7 @@ import (
 	"watchdog.onebusaway.org/internal/utils"
 )
 
-// ServerPing pings the `/current-time` endpoint of the given OneBusAway server
+// serverPing pings the `/current-time` endpoint of the given OneBusAway server
 // to verify the API is reachable and returning valid data.
 //
 // If the request is successful and the response contains a valid readable time,
@@ -24,7 +24,7 @@ import (
 //
 // Returns:
 //   - None (side effects include reporting to Prometheus and Sentry).
-func ServerPing(server models.ObaServer) {
+func serverPing(server models.ObaServer) {
 	client := onebusaway.NewClient(
 		option.WithAPIKey(server.ObaApiKey),
 		option.WithBaseURL(server.ObaBaseURL),

@@ -31,7 +31,7 @@ func TestCheckAgenciesWithCoverage(t *testing.T) {
 		staticStore := gtfs.NewStaticStore()
 		staticStore.Set(testServer.ID, staticData)
 
-		err = CheckAgenciesWithCoverageMatch(staticStore, logger, testServer)
+		err = checkAgenciesWithCoverageMatch(staticStore, logger, testServer)
 		if err != nil {
 			t.Fatalf("CheckAgenciesWithCoverageMatch failed: %v", err)
 		}
@@ -60,7 +60,7 @@ func TestGetAgenciesWithCoverage(t *testing.T) {
 			ObaApiKey:  "test-key",
 		}
 
-		count, err := GetAgenciesWithCoverage(server)
+		count, err := getAgenciesWithCoverage(server)
 		if err != nil {
 			t.Fatalf("Expected no error, got %v", err)
 		}
@@ -81,7 +81,7 @@ func TestGetAgenciesWithCoverage(t *testing.T) {
 			ObaApiKey:  "test-key",
 		}
 
-		count, err := GetAgenciesWithCoverage(server)
+		count, err := getAgenciesWithCoverage(server)
 		if err != nil {
 			t.Fatalf("Expected no error, got %v", err)
 		}
@@ -102,7 +102,7 @@ func TestGetAgenciesWithCoverage(t *testing.T) {
 			ObaApiKey:  "test-key",
 		}
 
-		_, err := GetAgenciesWithCoverage(server)
+		_, err := getAgenciesWithCoverage(server)
 		if err == nil {
 			t.Fatal("Expected an error but got nil")
 		}
