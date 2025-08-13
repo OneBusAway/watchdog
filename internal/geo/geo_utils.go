@@ -9,7 +9,7 @@ import (
 	"sync"
 
 	"github.com/golang/geo/s2"
-	"github.com/jamespfennell/gtfs"
+	remoteGtfs "github.com/jamespfennell/gtfs"
 )
 
 // BoundingBox defines the geographic boundaries of a rectangular area.
@@ -26,10 +26,10 @@ func (b *BoundingBox) Contains(lat, lon float64) bool {
 	return lat >= b.MinLat && lat <= b.MaxLat && lon >= b.MinLon && lon <= b.MaxLon
 }
 
-// ComputeBoundingBox returns the bounding box enclosing all valid stops.
+// computeBoundingBox returns the bounding box enclosing all valid stops.
 //
 // It returns an error if the input slice is empty or contains no valid lat/lon pairs.
-func ComputeBoundingBox(stops []gtfs.Stop) (BoundingBox, error) {
+func computeBoundingBox(stops []remoteGtfs.Stop) (BoundingBox, error) {
 	if len(stops) == 0 {
 		return BoundingBox{}, fmt.Errorf("no stops to compute bounding box")
 	}
@@ -102,25 +102,6 @@ func (s *BoundingBoxStore) Get(serverID int) (BoundingBox, bool) {
 	return bbox, ok
 }
 
-// IsValidLatLon returns true if the given latitude and longitude values
-// fall within the valid geographic coordinate bounds.
-//
-// Latitude must be between -90 and 90 degrees, and longitude must be
-// between -180 and 180 degrees.
-//
-// Note: This function treats the coordinate (0,0) as invalid, even though it
-// is a valid location in the Gulf of Guinea. This assumption is made to help
-// detect uninitialized or placeholder coordinates commonly represented as (0,0).
-func IsValidLatLon(lat, lon float64) bool {
-	if lat == 0 && lon == 0 {
-		return false
-	}
-	if lat < -90 || lat > 90 || lon < -180 || lon > 180 {
-		return false
-	}
-	return true
-}
-
 // IsInBoundingBox checks whether the given lat/lon is within the
 // bounding box associated with the specified server ID.
 func (s *BoundingBoxStore) IsInBoundingBox(serverID int, lat, lon float64) bool {
@@ -129,6 +110,25 @@ func (s *BoundingBoxStore) IsInBoundingBox(serverID int, lat, lon float64) bool 
 		return false
 	}
 	return bbox.Contains(lat, lon)
+}
+
+// isValidLatLon returns true if the given latitude and longitude values
+// fall within the valid geographic coordinate bounds.
+//
+// Latitude must be between -90 and 90 degrees, and longitude must be
+// between -180 and 180 degrees.
+//
+// Note: This function treats the coordinate (0,0) as invalid, even though it
+// is a valid location in the Gulf of Guinea. This assumption is made to help
+// detect uninitialized or placeholder coordinates commonly represented as (0,0).
+func isValidLatLon(lat, lon float64) bool {
+	if lat == 0 && lon == 0 {
+		return false
+	}
+	if lat < -90 || lat > 90 || lon < -180 || lon > 180 {
+		return false
+	}
+	return true
 }
 
 // earthRadiusInMeters represents the mean radius of the Earth in meters.
@@ -140,11 +140,11 @@ func (s *BoundingBoxStore) IsInBoundingBox(serverID int, lat, lon float64) bool 
 // https://nssdc.gsfc.nasa.gov/planetary/factsheet/earthfact.html
 const earthRadiusInMeters = 6371000
 
-// HaversineDistance returns the great-circle distance in meters between
+// haversineDistance returns the great-circle distance in meters between
 // two points specified by latitude and longitude.
 //
 // The result is based on the Earth's mean radius.
-func HaversineDistance(lat1, lon1, lat2, lon2 float64) float64 {
+func haversineDistance(lat1, lon1, lat2, lon2 float64) float64 {
 	p1 := s2.LatLngFromDegrees(lat1, lon1)
 	p2 := s2.LatLngFromDegrees(lat2, lon2)
 	return p1.Distance(p2).Radians() * earthRadiusInMeters
