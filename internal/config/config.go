@@ -6,7 +6,7 @@ import (
 	"watchdog.onebusaway.org/internal/models"
 )
 
-// Config Holds all the configuration settings for our application
+// Config holds all the configuration settings for our application.
 type Config struct {
 	Port          int
 	Env           string
@@ -24,7 +24,7 @@ func NewConfig(port int, env string, servers []models.ObaServer) *Config {
 	}
 }
 
-// updateConfig safely updates the config servers.
+// UpdateConfig safely updates the config servers.
 func (cfg *Config) UpdateConfig(newServers []models.ObaServer) {
 	cfg.Mu.Lock()
 	defer cfg.Mu.Unlock()

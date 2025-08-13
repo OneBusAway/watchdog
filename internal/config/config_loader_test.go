@@ -40,7 +40,7 @@ func TestLoadConfigFromFile(t *testing.T) {
 		}
 		tmpFile.Close()
 
-		servers, err := LoadConfigFromFile(tmpFile.Name())
+		servers, err := loadConfigFromFile(tmpFile.Name())
 		if err != nil {
 			t.Fatalf("loadConfigFromFile failed: %v", err)
 		}
@@ -79,14 +79,14 @@ func TestLoadConfigFromFile(t *testing.T) {
 		}
 		tmpFile.Close()
 
-		_, err = LoadConfigFromFile(tmpFile.Name())
+		_, err = loadConfigFromFile(tmpFile.Name())
 		if err == nil {
 			t.Errorf("Expected error with invalid JSON, got none")
 		}
 	})
 
 	t.Run("NonExistentFile", func(t *testing.T) {
-		_, err := LoadConfigFromFile("non-existent-file.json")
+		_, err := loadConfigFromFile("non-existent-file.json")
 		if err == nil {
 			t.Errorf("Expected error for non-existent file, got none")
 		}
@@ -113,7 +113,7 @@ func TestLoadConfigFromURL(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		servers, err := LoadConfigFromURL(client, ts.URL, "user", "pass")
+		servers, err := loadConfigFromURL(client, ts.URL, "user", "pass")
 		if err != nil {
 			t.Fatalf("loadConfigFromURL failed: %v", err)
 		}
@@ -143,7 +143,7 @@ func TestLoadConfigFromURL(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		_, err := LoadConfigFromURL(client, ts.URL, "", "")
+		_, err := loadConfigFromURL(client, ts.URL, "", "")
 		if err == nil {
 			t.Errorf("Expected error with 500 response, got none")
 		}
@@ -156,13 +156,13 @@ func TestLoadConfigFromURL(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		_, err := LoadConfigFromURL(client, ts.URL, "", "")
+		_, err := loadConfigFromURL(client, ts.URL, "", "")
 		if err == nil {
 			t.Errorf("Expected error for invalid JSON response, got none")
 		}
 	})
 	t.Run("InvalidURL", func(t *testing.T) {
-		_, err := LoadConfigFromURL(client, "://invalid-url", "", "")
+		_, err := loadConfigFromURL(client, "://invalid-url", "", "")
 		if err == nil || !strings.Contains(err.Error(), "failed to create request") {
 			t.Errorf("Expected request creation error, got: %v", err)
 		}
@@ -320,7 +320,7 @@ func TestRefreshConfig(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go RefreshConfig(ctx, client, mockServer.URL, "testuser", "testpass", cfg, testLogger, 100*time.Millisecond)
+	go refreshConfig(ctx, client, mockServer.URL, "testuser", "testpass", cfg, testLogger, 100*time.Millisecond)
 
 	time.Sleep(200 * time.Millisecond)
 

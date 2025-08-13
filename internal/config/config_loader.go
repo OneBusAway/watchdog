@@ -22,13 +22,16 @@ import (
 //
 // Returns an error if more than one input method is specified.
 func ValidateConfigFlags(configFile, configURL *string) error {
+	if *configFile == "" && *configURL == "" {
+		return fmt.Errorf("no configuration provided, either --config-file or --config-url must be specified")
+	}
 	if (*configFile != "" && *configURL != "") || (*configFile != "" && len(flag.Args()) > 0) || (*configURL != "" && len(flag.Args()) > 0) {
 		return fmt.Errorf("only one of --config-file or --config-url can be specified")
 	}
 	return nil
 }
 
-// RefreshConfig starts a background goroutine that periodically fetches configuration
+// refreshConfig starts a background goroutine that periodically fetches configuration
 // from a remote URL and updates the application's list of OBA servers.
 //
 // It uses the provided HTTP client to make GET requests with optional basic auth,
@@ -38,7 +41,7 @@ func ValidateConfigFlags(configFile, configURL *string) error {
 // ensuring resiliency in the presence of transient issues.
 //
 // The routine stops gracefully when the context is canceled.
-func RefreshConfig(ctx context.Context, client *http.Client, configURL, configAuthUser, configAuthPass string, cfg *Config, logger *slog.Logger, interval time.Duration) {
+func refreshConfig(ctx context.Context, client *http.Client, configURL, configAuthUser, configAuthPass string, cfg *Config, logger *slog.Logger, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -47,7 +50,7 @@ func RefreshConfig(ctx context.Context, client *http.Client, configURL, configAu
 			logger.Info("Stopping config refresh routine")
 			return
 		case <-ticker.C:
-			newServers, err := LoadConfigFromURL(client, configURL, configAuthUser, configAuthPass)
+			newServers, err := loadConfigFromURL(client, configURL, configAuthUser, configAuthPass)
 			if err != nil {
 				report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 					Tags:  utils.MakeMap("config_url", configURL),
@@ -70,7 +73,7 @@ func RefreshConfig(ctx context.Context, client *http.Client, configURL, configAu
 //
 // This function is used when the application is configured to load its server list
 // from a static file using the --config-file flag.
-func LoadConfigFromFile(filePath string) ([]models.ObaServer, error) {
+func loadConfigFromFile(filePath string) ([]models.ObaServer, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -99,7 +102,7 @@ func LoadConfigFromFile(filePath string) ([]models.ObaServer, error) {
 // into a slice of `models.ObaServer`.
 //
 // Errors are logged and reported to Sentry for observability.
-func LoadConfigFromURL(client *http.Client, url, authUser, authPass string) ([]models.ObaServer, error) {
+func loadConfigFromURL(client *http.Client, url, authUser, authPass string) ([]models.ObaServer, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
