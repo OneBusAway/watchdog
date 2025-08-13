@@ -39,13 +39,13 @@ type HealthStatus struct {
 // with HTTP 500 Internal Server Error; otherwise, it responds with HTTP 200 OK.
 
 func (app *Application) healthcheckHandler(w http.ResponseWriter, r *http.Request) {
-	numServers := len(app.Config.GetServers())
+	numServers := len(app.ConfigService.Config.GetServers())
 
 	ready := numServers > 0 // Consider ready if at least one server is configured
 
 	status := HealthStatus{
 		Status:      "available",
-		Environment: app.Config.Env,
+		Environment: app.ConfigService.Config.Env,
 		Version:     app.Version,
 		Servers:     numServers,
 		Ready:       ready,

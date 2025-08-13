@@ -12,6 +12,7 @@ import (
 	"watchdog.onebusaway.org/internal/config"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
+	"watchdog.onebusaway.org/internal/metrics"
 	"watchdog.onebusaway.org/internal/models"
 )
 
@@ -38,6 +39,10 @@ func newTestApplication(t *testing.T) *Application {
 	)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+	}
 
 	const staticDataPath = "../../testdata/gtfs.zip"
 	fileBytes, err := os.ReadFile(staticDataPath)
@@ -79,17 +84,15 @@ func newTestApplication(t *testing.T) *Application {
 	realtimeStore := gtfs.NewRealtimeStore()
 	realtimeStore.Set(realtimeData)
 
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-	}
+	vehicleLastSeen := metrics.NewVehicleLastSeen()
+
+
 	return &Application{
-		Config:           cfg,
-		Logger:           logger,
+		ConfigService:       config.NewConfigService(logger, client, cfg),
+		GtfsService: 		     gtfs.NewGtfsService(staticStore, realtimeStore, boundingBoxStore, logger, client),
+		MetricsService:      metrics.NewMetricsService(staticStore, realtimeStore, boundingBoxStore, vehicleLastSeen, logger, client),
 		Version:          "1.0.0",
-		BoundingBoxStore: boundingBoxStore,
-		StaticStore:      staticStore,
-		RealtimeStore:    realtimeStore,
-		Client:           client,
+		Logger:              logger,
 	}
 }
 

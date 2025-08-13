@@ -10,22 +10,37 @@ import (
 	"watchdog.onebusaway.org/internal/metrics"
 )
 
-// Application holds the shared dependencies for HTTP handlers, helpers, and middleware.
-//
-// Fields:
-// - Config: The application configuration.
-// - Logger: Structured logger used across the app.
-// - Version: The current version of the application.
-// - BoundingBoxStore: Responsible for calculating and storing bounding boxes for GTFS stops.
-//
-// This struct will expand as more components and dependencies are added during development.
+// Application represents the main application structure.
+// It holds references to the configuration service, GTFS service, metrics service,
+// logger, and the application version.
+// This structure is used to wire all dependencies together and provide a clean API for the application.
+// It is initialized with the necessary services and can be used to start the application.
 type Application struct {
-	Config           *config.Config
+	ConfigService    *config.ConfigService
+	GtfsService      *gtfs.GtfsService
+	MetricsService   *metrics.MetricsService
 	Logger           *slog.Logger
-	Client           *http.Client
 	Version          string
-	BoundingBoxStore *geo.BoundingBoxStore
-	VehicleLastSeen  *metrics.VehicleLastSeen
-	RealtimeStore    *gtfs.RealtimeStore
-	StaticStore      *gtfs.StaticStore
+}
+
+// New creates and wires all dependencies for the Application.
+// Accepts config, logger, client, and version as arguments.
+func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version string) *Application {
+	
+	staticStore := gtfs.NewStaticStore()
+	realtimeStore := gtfs.NewRealtimeStore()
+	boundingBoxStore := geo.NewBoundingBoxStore()
+	vehicleLastSeen := metrics.NewVehicleLastSeen()
+
+	configService := config.NewConfigService(logger, client, cfg)
+	gtfsService := gtfs.NewGtfsService(staticStore,realtimeStore,boundingBoxStore,logger, client)
+	metricsService := metrics.NewMetricsService(staticStore,realtimeStore,boundingBoxStore,vehicleLastSeen,logger,client)
+	
+	return &Application{
+		ConfigService:    configService,
+		GtfsService:      gtfsService,
+		MetricsService:   metricsService,
+		Logger:           logger,
+		Version:          version,
+	}
 }

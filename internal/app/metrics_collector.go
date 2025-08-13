@@ -6,8 +6,6 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
-	"watchdog.onebusaway.org/internal/gtfs"
-	"watchdog.onebusaway.org/internal/metrics"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
 )
@@ -35,7 +33,7 @@ import (
 //   - On shutdown (context canceled), it logs the stop and exits the goroutine cleanly.
 func (app *Application) StartMetricsCollection(ctx context.Context) {
 
-	ticker := time.NewTicker(time.Duration(app.Config.FetchInterval) * time.Second)
+	ticker := time.NewTicker(time.Duration(app.ConfigService.Config.FetchInterval) * time.Second)
 	go func() {
 		defer ticker.Stop()
 		for {
@@ -45,7 +43,7 @@ func (app *Application) StartMetricsCollection(ctx context.Context) {
 				return
 			case <-ticker.C:
 
-				servers := app.Config.GetServers()
+				servers := app.ConfigService.Config.GetServers()
 
 				for _, server := range servers {
 					app.CollectMetricsForServer(server)
@@ -81,9 +79,9 @@ func (app *Application) StartMetricsCollection(ctx context.Context) {
 //   - Sentry reports are tagged for fast debugging and correlation in distributed systems.
 //   - Dependencies are injected (via app fields) to support testability and separation of concerns.
 func (app *Application) CollectMetricsForServer(server models.ObaServer) {
-	metrics.ServerPing(server)
+	app.MetricsService.ServerPing(server)
 
-	_, _, err := metrics.CheckBundleExpiration(app.StaticStore, time.Now().UTC(), server)
+	_, _, err := app.MetricsService.CheckBundleExpiration(time.Now().UTC(), server)
 	if err != nil {
 		app.Logger.Error("Failed to check GTFS bundle expiration", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -95,7 +93,7 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		})
 	}
 
-	err = metrics.CheckAgenciesWithCoverageMatch(app.StaticStore, app.Logger, server)
+	err = app.MetricsService.CheckAgenciesWithCoverageMatch(server)
 
 	if err != nil {
 		app.Logger.Error("Failed to check agencies with coverage match metric", "error", err)
@@ -108,7 +106,7 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		})
 	}
 
-	err = metrics.FetchObaAPIMetrics(server.AgencyID, server.ID, server.ObaBaseURL, server.ObaApiKey, app.Client)
+	err = app.MetricsService.FetchObaAPIMetrics(server.AgencyID, server.ID, server.ObaBaseURL, server.ObaApiKey)
 
 	if err != nil {
 		app.Logger.Error("Failed to fetch OBA API metrics", "error", err)
@@ -126,7 +124,7 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 	// Fetch and store GTFS-RT feed
 	// Note : function after FetchAndStoreGTFSRTFeed is depends on this function
 	// on failure of this function we return
-	err = gtfs.FetchAndStoreGTFSRTFeed(server, app.RealtimeStore, app.Client)
+	err = app.GtfsService.FetchAndStoreGTFSRTFeed(server)
 	if err != nil {
 		app.Logger.Error("Failed to fetch and store GTFS-RT feed", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -139,7 +137,7 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		return
 	}
 
-	err = metrics.CheckVehicleCountMatch(server, app.RealtimeStore)
+	err = app.MetricsService.CheckVehicleCountMatch(server)
 	if err != nil {
 		app.Logger.Error("Failed to check vehicle count match metric", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -151,7 +149,7 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		})
 	}
 
-	err = metrics.TrackVehicleTelemetry(server, app.VehicleLastSeen, app.RealtimeStore)
+	err = app.MetricsService.TrackVehicleTelemetry(server)
 	if err != nil {
 		app.Logger.Error("Failed to track vehicle reporting frequency", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -162,7 +160,7 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		})
 	}
 
-	err = metrics.TrackInvalidVehiclesAndStoppedOutOfBounds(server, app.BoundingBoxStore, app.RealtimeStore)
+	err = app.MetricsService.TrackInvalidVehiclesAndStoppedOutOfBounds(server)
 	if err != nil {
 		app.Logger.Error("Failed to count invalid vehicle coordinates", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{

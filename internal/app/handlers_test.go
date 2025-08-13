@@ -63,7 +63,10 @@ func TestHealthcheckHandler(t *testing.T) {
 			[]models.ObaServer{},
 		)
 		app := &Application{
-			Config:  cfg,
+			// note NewConfigService wants a logger and client, but they are not used in this test
+			// as healthcheckHandler does not use them.
+			// so we pass nil for them.
+			ConfigService:  config.NewConfigService(nil, nil, cfg),
 			Version: "test-version",
 		}
 
