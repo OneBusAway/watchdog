@@ -19,7 +19,7 @@ import (
 	"watchdog.onebusaway.org/internal/utils"
 )
 
-// DownloadGTFSBundles fetches and processes GTFS static bundles for a list of OBA servers.
+// downloadGTFSBundles fetches and processes GTFS static bundles for a list of OBA servers.
 //
 // For each server, it:
 //   1. Downloads and parses the GTFS static bundle using the server's GTFS URL.
@@ -35,9 +35,9 @@ import (
 //
 // This function does not return an error; failures are handled and reported per-server.
 
-func DownloadGTFSBundles(servers []models.ObaServer, logger *slog.Logger, boundingBoxStore *geo.BoundingBoxStore, staticStore *StaticStore) {
+func downloadGTFSBundles(servers []models.ObaServer, logger *slog.Logger, boundingBoxStore *geo.BoundingBoxStore, staticStore *StaticStore) {
 	for _, server := range servers {
-		err := DownloadAndStoreGTFSBundle(server.GtfsUrl, server.ID, staticStore)
+		err := downloadAndStoreGTFSBundle(server.GtfsUrl, server.ID, staticStore)
 		if err != nil {
 			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 				Tags: utils.MakeMap("server_id", fmt.Sprintf("%d", server.ID)),
@@ -77,7 +77,7 @@ func DownloadGTFSBundles(servers []models.ObaServer, logger *slog.Logger, boundi
 	}
 }
 
-// RefreshGTFSBundles periodically refreshes GTFS static bundles for a list of OBA servers.
+// refreshGTFSBundles periodically refreshes GTFS static bundles for a list of OBA servers.
 //
 // It runs in a loop, triggered at the specified interval, and performs the following:
 //  1. Logs the refresh operation.
@@ -93,7 +93,7 @@ func DownloadGTFSBundles(servers []models.ObaServer, logger *slog.Logger, boundi
 //   - interval: Time duration between each refresh cycle.
 //   - boundingBoxstore: Store to keep geographic bounding boxes per server.
 //   - staticStore: Store to keep parsed GTFS static data per server.
-func RefreshGTFSBundles(ctx context.Context, servers []models.ObaServer, logger *slog.Logger, interval time.Duration, boundingBoxstore *geo.BoundingBoxStore, staticStore *StaticStore) {
+func refreshGTFSBundles(ctx context.Context, servers []models.ObaServer, logger *slog.Logger, interval time.Duration, boundingBoxstore *geo.BoundingBoxStore, staticStore *StaticStore) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -103,12 +103,12 @@ func RefreshGTFSBundles(ctx context.Context, servers []models.ObaServer, logger 
 			return
 		case <-ticker.C:
 			logger.Info("Refreshing GTFS bundles")
-			DownloadGTFSBundles(servers, logger, boundingBoxstore, staticStore)
+			downloadGTFSBundles(servers, logger, boundingBoxstore, staticStore)
 		}
 	}
 }
 
-// DownloadAndStoreGTFSBundle fetches a GTFS static bundle from the provided URL,
+// downloadAndStoreGTFSBundle fetches a GTFS static bundle from the provided URL,
 // parses it, and stores the resulting static data in the given StaticStore using the serverID as the key.
 //
 // It performs the following steps:
@@ -124,7 +124,7 @@ func RefreshGTFSBundles(ctx context.Context, servers []models.ObaServer, logger 
 // Returns:
 //   - error: Describes what went wrong, or nil if the operation was successful.
 
-func DownloadAndStoreGTFSBundle(url string, serverID int, staticStore *StaticStore) error {
+func downloadAndStoreGTFSBundle(url string, serverID int, staticStore *StaticStore) error {
 	resp, err := http.Get(url)
 	if err != nil {
 		err = fmt.Errorf("failed to make GET request to %s: %w", url, err)
@@ -201,15 +201,19 @@ func ParseGTFSFromCache(cachePath string, serverID int) (*gtfs.Static, error) {
 	return staticData, nil
 }
 
-// GetStopLocationsByIDs retrieves stop locations by their IDs from the GTFS cache.
+// getStopLocationsByIDs retrieves stop locations by their IDs from the GTFS cache.
 // It returns a map of stop IDs to gtfs.Stop objects.
 
-func GetStopLocationsByIDs(cachePath string, serverID int, stopIDs []string) (map[string]gtfs.Stop, error) {
-	staticData, err := ParseGTFSFromCache(cachePath, serverID)
-	if err != nil {
+func getStopLocationsByIDs(serverID int, stopIDs []string, staticStore *StaticStore) (map[string]gtfs.Stop, error) {
+	staticData , ok:= staticStore.Get(serverID)
+	if !ok || staticData == nil {
+		err := fmt.Errorf("no GTFS static data found for server ID %d", serverID)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: utils.MakeMap("server_id", strconv.Itoa(serverID)),
+		})
 		return nil, err
 	}
-
+	
 	stopIDSet := make(map[string]struct{}, len(stopIDs))
 	for _, id := range stopIDs {
 		stopIDSet[id] = struct{}{}
@@ -224,7 +228,7 @@ func GetStopLocationsByIDs(cachePath string, serverID int, stopIDs []string) (ma
 	return result, nil
 }
 
-// FetchAndStoreGTFSRTFeed fetches the GTFS-Realtime (GTFS-RT) vehicle position feed
+// fetchAndStoreGTFSRTFeed fetches the GTFS-Realtime (GTFS-RT) vehicle position feed
 // from the specified server, parses the response, and stores it safely in the
 // provided RealtimeStore.
 //
@@ -232,7 +236,7 @@ func GetStopLocationsByIDs(cachePath string, serverID int, stopIDs []string) (ma
 // that the parsed data is written using the store’s locking mechanisms,
 // making it safe for concurrent access across goroutines.
 
-func FetchAndStoreGTFSRTFeed(server models.ObaServer, realtimeStore *RealtimeStore, client *http.Client) error {
+func fetchAndStoreGTFSRTFeed(server models.ObaServer, realtimeStore *RealtimeStore, client *http.Client) error {
 	parsedURL, err := url.Parse(server.VehiclePositionUrl)
 	if err != nil {
 		err = fmt.Errorf("failed to parse GTFS-RT URL: %v", err)
@@ -284,7 +288,7 @@ func FetchAndStoreGTFSRTFeed(server models.ObaServer, realtimeStore *RealtimeSto
 	return nil
 }
 
-// GetEarliestAndLatestServiceDates returns the earliest and latest service end dates
+// getEarliestAndLatestServiceDates returns the earliest and latest service end dates
 // from the GTFS static data's calendar entries.
 //
 // This is used as a workaround because the GTFS library does not currently support
@@ -294,7 +298,7 @@ func FetchAndStoreGTFSRTFeed(server models.ObaServer, realtimeStore *RealtimeSto
 // entries (i.e., service periods), and returns the minimum and maximum `EndDate` values.
 //
 // Returns an error if no services are found in the bundle.
-func GetEarliestAndLatestServiceDates(staticData *gtfs.Static) (earliestEndDate, latestEndDate time.Time, err error) {
+func getEarliestAndLatestServiceDates(staticData *gtfs.Static) (earliestEndDate, latestEndDate time.Time, err error) {
 	if staticData == nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("static data is nil")
 	}

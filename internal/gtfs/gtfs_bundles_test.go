@@ -24,7 +24,7 @@ func TestDownloadGTFSBundles(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	boundingBoxStore := geo.NewBoundingBoxStore()
 	staticStore := NewStaticStore()
-	DownloadGTFSBundles(servers, logger, boundingBoxStore, staticStore)
+	downloadGTFSBundles(servers, logger, boundingBoxStore, staticStore)
 
 }
 
@@ -37,7 +37,7 @@ func TestRefreshGTFSBundles(t *testing.T) {
 	staticStore := NewStaticStore()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go RefreshGTFSBundles(ctx, servers, logger, 10*time.Millisecond, boundingBoxStore, staticStore)
+	go refreshGTFSBundles(ctx, servers, logger, 10*time.Millisecond, boundingBoxStore, staticStore)
 
 	time.Sleep(15 * time.Millisecond)
 
@@ -49,7 +49,7 @@ func TestDownloadAndStoreGTFSBundle(t *testing.T) {
 	serverID := 1
 	staticStore := NewStaticStore()
 	t.Run("Success Response", func(t *testing.T) {
-		err := DownloadAndStoreGTFSBundle(mockServer.URL, serverID, staticStore)
+		err := downloadAndStoreGTFSBundle(mockServer.URL, serverID, staticStore)
 		if err != nil {
 			t.Fatalf("DownloadGTFSBundle failed: %v", err)
 		}
@@ -106,7 +106,7 @@ func TestDownloadAndStoreGTFSBundle(t *testing.T) {
 
 	t.Run("Invalid URL", func(t *testing.T) {
 		invalidURL := "http://invalid-url"
-		err := DownloadAndStoreGTFSBundle(invalidURL, 2, staticStore)
+		err := downloadAndStoreGTFSBundle(invalidURL, 2, staticStore)
 		if err == nil {
 			t.Errorf("Expected error for invalid URL, got none")
 		}
@@ -115,12 +115,19 @@ func TestDownloadAndStoreGTFSBundle(t *testing.T) {
 }
 
 func TestGetStopLocationsByIDs(t *testing.T) {
-	cachePath := "../../testdata/gtfs.zip"
 	server := models.ObaServer{ID: 1, Name: "test"}
+
+	data := readFixture(t, "gtfs.zip")
+	staticData, err := gtfs.ParseStatic(data, gtfs.ParseStaticOptions{})
+	if err != nil {
+		t.Fatal("failed to parse gtfs static data")
+	}
+	staticStore := NewStaticStore()
+	staticStore.Set(server.ID, staticData)
 
 	t.Run("Valid stop IDs", func(t *testing.T) {
 		stopIDs := []string{"11060", "1108"} // Make sure these exist in your test GTFS
-		stops, err := GetStopLocationsByIDs(cachePath, server.ID, stopIDs)
+		stops, err := getStopLocationsByIDs(server.ID, stopIDs,staticStore)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -131,7 +138,7 @@ func TestGetStopLocationsByIDs(t *testing.T) {
 
 	t.Run("Invalid stop IDs", func(t *testing.T) {
 		stopIDs := []string{"nonexistent1", "nonexistent2"}
-		stops, err := GetStopLocationsByIDs(cachePath, server.ID, stopIDs)
+		stops, err := getStopLocationsByIDs(server.ID, stopIDs,staticStore)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -199,7 +206,7 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 			Timeout: 5 * time.Second,
 		}
 		realtimeStore := NewRealtimeStore()
-		err := FetchAndStoreGTFSRTFeed(server, realtimeStore, client)
+		err := fetchAndStoreGTFSRTFeed(server, realtimeStore, client)
 		if err != nil {
 			t.Fatalf("Expected no error, got: %v", err)
 		}
@@ -235,7 +242,7 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 		}
 		realtimeStore := NewRealtimeStore()
 
-		err := FetchAndStoreGTFSRTFeed(server, realtimeStore, client)
+		err := fetchAndStoreGTFSRTFeed(server, realtimeStore, client)
 		if err == nil {
 			t.Error("Expected error due to invalid URL, got nil")
 		}
@@ -253,7 +260,7 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 			Timeout: 5 * time.Second,
 		}
 		realtimeStore := NewRealtimeStore()
-		err := FetchAndStoreGTFSRTFeed(server, realtimeStore, client)
+		err := fetchAndStoreGTFSRTFeed(server, realtimeStore, client)
 		if err == nil {
 			t.Error("Expected error when accessing closed server, got nil")
 		}
