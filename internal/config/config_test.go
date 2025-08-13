@@ -120,3 +120,25 @@ func TestConfigFields(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateConfig(t *testing.T) {
+	initialServers := []models.ObaServer{
+		{ID: 1, Name: "Server 1"},
+	}
+	config := NewConfig(1, "testing", initialServers)
+
+	newServers := []models.ObaServer{
+		{ID: 1, Name: "Server 1 Updated"},
+		{ID: 2, Name: "Server 2"},
+	}
+
+	config.UpdateConfig(newServers)
+
+	if len(config.GetServers()) != 2 {
+		t.Errorf("Expected 2 servers, got %d", len(config.Servers))
+	}
+
+	if config.Servers[0].Name != "Server 1 Updated" {
+		t.Errorf("Expected server name to be updated to 'Server 1 Updated', got %s", config.Servers[0].Name)
+	}
+}
