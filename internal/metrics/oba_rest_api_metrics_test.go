@@ -18,7 +18,7 @@ func TestFetchObaAPIMetrics_WithVCR(t *testing.T) {
 		t.Fatal("failed to parse gtfs static data")
 	}
 	staticStore := gtfs.NewStaticStore()
-	
+
 	tests := []struct {
 		name      string
 		slugID    string
@@ -69,7 +69,7 @@ func TestFetchObaAPIMetrics_WithVCR(t *testing.T) {
 				}
 			}
 			staticStore.Set(tt.serverID, staticData)
-			err := fetchObaAPIMetrics(tt.slugID, tt.serverID, tt.serverURL, tt.apiKey, client,staticStore)
+			err := fetchObaAPIMetrics(tt.slugID, tt.serverID, tt.serverURL, tt.apiKey, client, staticStore)
 
 			if tt.wantErr {
 				if err == nil {

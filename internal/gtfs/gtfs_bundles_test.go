@@ -127,7 +127,7 @@ func TestGetStopLocationsByIDs(t *testing.T) {
 
 	t.Run("Valid stop IDs", func(t *testing.T) {
 		stopIDs := []string{"11060", "1108"} // Make sure these exist in your test GTFS
-		stops, err := getStopLocationsByIDs(server.ID, stopIDs,staticStore)
+		stops, err := getStopLocationsByIDs(server.ID, stopIDs, staticStore)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -138,7 +138,7 @@ func TestGetStopLocationsByIDs(t *testing.T) {
 
 	t.Run("Invalid stop IDs", func(t *testing.T) {
 		stopIDs := []string{"nonexistent1", "nonexistent2"}
-		stops, err := getStopLocationsByIDs(server.ID, stopIDs,staticStore)
+		stops, err := getStopLocationsByIDs(server.ID, stopIDs, staticStore)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

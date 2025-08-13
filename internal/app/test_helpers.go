@@ -86,13 +86,12 @@ func newTestApplication(t *testing.T) *Application {
 
 	vehicleLastSeen := metrics.NewVehicleLastSeen()
 
-
 	return &Application{
-		ConfigService:       config.NewConfigService(logger, client, cfg),
-		GtfsService: 		     gtfs.NewGtfsService(staticStore, realtimeStore, boundingBoxStore, logger, client),
-		MetricsService:      metrics.NewMetricsService(staticStore, realtimeStore, boundingBoxStore, vehicleLastSeen, logger, client),
-		Version:          "1.0.0",
-		Logger:              logger,
+		ConfigService:  config.NewConfigService(logger, client, cfg),
+		GtfsService:    gtfs.NewGtfsService(staticStore, realtimeStore, boundingBoxStore, logger, client),
+		MetricsService: metrics.NewMetricsService(staticStore, realtimeStore, boundingBoxStore, vehicleLastSeen, logger, client),
+		Version:        "1.0.0",
+		Logger:         logger,
 	}
 }
 

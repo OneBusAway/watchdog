@@ -144,7 +144,6 @@ func checkVehicleCountMatch(server models.ObaServer, realtimeStore *gtfs.Realtim
 	return nil
 }
 
-
 // trackVehicleTelemetry collects and reports various telemetry metrics for vehicles in a GTFS-RT feed.
 //
 // This function performs the following tasks:

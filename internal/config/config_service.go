@@ -44,13 +44,13 @@ func LoadConfigFromFile(filePath string) ([]models.ObaServer, error) {
 			Tags:  utils.MakeMap("file_path", filePath),
 			Level: sentry.LevelError,
 		})
-		return nil ,err
+		return nil, err
 	}
-	return servers ,nil
+	return servers, nil
 }
 
 // Load config from URL and update Config.
-func LoadConfigFromURL(client *http.Client,url, authUser, authPass string) ([]models.ObaServer, error) {
+func LoadConfigFromURL(client *http.Client, url, authUser, authPass string) ([]models.ObaServer, error) {
 	servers, err := loadConfigFromURL(client, url, authUser, authPass)
 	if err != nil {
 		err := fmt.Errorf("failed to load config from URL %s: %w", url, err)
@@ -60,5 +60,5 @@ func LoadConfigFromURL(client *http.Client,url, authUser, authPass string) ([]mo
 		})
 		return nil, err
 	}
-	return servers,nil
+	return servers, nil
 }

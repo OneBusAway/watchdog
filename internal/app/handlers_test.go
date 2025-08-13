@@ -66,8 +66,8 @@ func TestHealthcheckHandler(t *testing.T) {
 			// note NewConfigService wants a logger and client, but they are not used in this test
 			// as healthcheckHandler does not use them.
 			// so we pass nil for them.
-			ConfigService:  config.NewConfigService(nil, nil, cfg),
-			Version: "test-version",
+			ConfigService: config.NewConfigService(nil, nil, cfg),
+			Version:       "test-version",
 		}
 
 		rr := httptest.NewRecorder()

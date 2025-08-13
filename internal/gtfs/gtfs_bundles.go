@@ -205,7 +205,7 @@ func ParseGTFSFromCache(cachePath string, serverID int) (*gtfs.Static, error) {
 // It returns a map of stop IDs to gtfs.Stop objects.
 
 func getStopLocationsByIDs(serverID int, stopIDs []string, staticStore *StaticStore) (map[string]gtfs.Stop, error) {
-	staticData , ok:= staticStore.Get(serverID)
+	staticData, ok := staticStore.Get(serverID)
 	if !ok || staticData == nil {
 		err := fmt.Errorf("no GTFS static data found for server ID %d", serverID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -213,7 +213,7 @@ func getStopLocationsByIDs(serverID int, stopIDs []string, staticStore *StaticSt
 		})
 		return nil, err
 	}
-	
+
 	stopIDSet := make(map[string]struct{}, len(stopIDs))
 	for _, id := range stopIDs {
 		stopIDSet[id] = struct{}{}

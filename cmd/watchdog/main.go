@@ -58,8 +58,6 @@ func main() {
 	// At this point, we are sure that all command line flags have been parsed
 	// and we can proceed with the application initialization.
 
-
-
 	// Create a new HTTP client with a connection pool
 	// This client will be reused across the application to avoid creating new connections for each request.
 	// This is particularly useful for polling APIs like GTFS-RT endpoints.
@@ -74,11 +72,11 @@ func main() {
 	if *configFile != "" {
 		servers, err = config.LoadConfigFromFile(*configFile)
 	} else if *configURL != "" {
-		servers, err = config.LoadConfigFromURL(client,*configURL, configAuthUser, configAuthPass)
+		servers, err = config.LoadConfigFromURL(client, *configURL, configAuthUser, configAuthPass)
 	}
 
 	if err != nil {
-		logger.Error("Error loading configuration","err", err)
+		logger.Error("Error loading configuration", "err", err)
 		os.Exit(1)
 	}
 
@@ -91,15 +89,13 @@ func main() {
 
 	// At this point, we have successfully loaded the configuration
 	// and have a list of OBA servers to work with.
-	
 
-	// Initialize the application struct with all services 
+	// Initialize the application struct with all services
 	// This includes the configuration service, GTFS service, and metrics service.
 	// and the required dependencies.
 	// this New() function is critical in understanding how we structure the application talk a look at it.
-	// and also take a look at service file in each package to see the dependencies and the exposed methods and function. 
-	app := app.New(&cfg,logger, client, version)
-
+	// and also take a look at service file in each package to see the dependencies and the exposed methods and function.
+	app := app.New(&cfg, logger, client, version)
 
 	// Initialize Sentry for error reporting
 	// This will allow us to capture and report errors that occur during the application's execution.
@@ -113,7 +109,6 @@ func main() {
 	defer report.FlushSentry()
 	report.ConfigureScope(cfg.Env, version)
 
-	
 	// Create a context for the application
 	// This context will be used to manage the application's lifecycle and cancel operations when needed.
 	// It allows us to gracefully shut down the application and clean up resources.
@@ -121,13 +116,10 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-
 	// From here we set up all dependencies and we are ready to start business logic.
 
-	
 	// On startup, download GTFS static bundles for all configured servers
 	app.GtfsService.DownloadGTFSBundles(servers)
-
 
 	// This function starts the metrics collection process
 	// it intialize a routine the run every FetchInterval seconds (30 seconds by default)
@@ -137,10 +129,8 @@ func main() {
 	// Cron job to download GTFS bundles for all servers every 24 hours
 	go app.GtfsService.RefreshGTFSBundles(ctx, servers, 24*time.Hour)
 
-
 	// Cron job to delete the data of vehicles that has not sent updates for 1 hour
 	go app.MetricsService.VehicleLastSeen.ClearRoutine(ctx, 15*time.Minute, time.Hour)
-
 
 	// If a remote URL is specified, refresh the configuration every minute
 	if *configURL != "" {

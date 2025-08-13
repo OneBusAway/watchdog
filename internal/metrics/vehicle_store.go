@@ -13,7 +13,6 @@ type LastSeen struct {
 	Lon  float64
 }
 
-
 // VehicleLastSeen stores the most recent known location and timestamp for each vehicle per server.
 //
 // The outer map key is the server ID (int), and the inner map key is the vehicle ID (string).
