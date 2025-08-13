@@ -224,7 +224,7 @@ func TestValidateConfigFlags(t *testing.T) {
 		extraArgs   []string
 		expectError bool
 	}{
-		{"No config", "", "", nil, false},
+		{"No config", "", "", nil, true},
 		{"Valid local config", "config.json", "", nil, false},
 		{"Valid remote config", "", "http://example.com/config.json", nil, false},
 		{"Both config file and URL", "config.json", "http://example.com/config.json", nil, true},
@@ -259,8 +259,17 @@ func TestValidateConfigFlags(t *testing.T) {
 				t.Errorf("Expected error: %v, got: %v", tt.expectError, err)
 			}
 
-			if err != nil && !strings.Contains(err.Error(), "only one of --config-file or --config-url") {
-				t.Errorf("Unexpected error message: %v", err)
+			if err != nil {
+				expected := ""
+				if tt.configFile == "" && tt.configURL == "" {
+					expected = "no configuration provided, either --config-file or --config-url must be specified"
+				} else {
+					expected = "only one of --config-file or --config-url"
+				}
+
+				if !strings.Contains(err.Error(), expected) {
+					t.Errorf("Unexpected error message: %v", err)
+				}
 			}
 		})
 	}
