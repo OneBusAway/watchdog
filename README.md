@@ -150,6 +150,36 @@ docker run -d \
   --config-url http://example.com/config.json
 ```
 
+## **Running with Docker Compose**
+
+You can run the Watchdog service along with Prometheus and Grafana for monitoring using Docker Compose.
+
+### **Start all services**
+
+```bash
+docker compose up -d
+```
+
+This will start:
+
+- **Watchdog** on port `4000`
+- **Prometheus** on port `9090`
+- **Grafana** on port `3000`
+
+### **Stop all services**
+
+```bash
+docker compose down
+```
+
+### **Restart all services**
+
+```bash
+docker compose restart
+```
+
+Grafana will automatically load the pre-provisioned Go runtime dashboard, and Prometheus will be configured to scrape Watchdog metrics.
+
 # Testing
 
 ### To run all unit test cases:
