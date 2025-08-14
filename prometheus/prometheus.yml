@@ -1,0 +1,7 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: "watchdog"
+    static_configs:
+      - targets: ["watchdog:4000"]
