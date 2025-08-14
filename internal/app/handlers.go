@@ -15,7 +15,7 @@ import (
 //
 // Fields:
 //   - Status: A high-level indicator of service availability (e.g., "available").
-//   - Environment: The current environment in which the app is running (e.g., "production", "staging","production").
+//   - Environment: The current environment in which the app is running (e.g., "development", "staging","production").
 //   - Version: The application version string, useful for deployment tracking.
 //   - Servers: The number of OBA (OneBusAway) backend servers currently configured and used.
 //   - Ready: A boolean flag indicating whether the application is ready to serve traffic.
