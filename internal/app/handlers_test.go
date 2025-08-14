@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -62,11 +63,10 @@ func TestHealthcheckHandler(t *testing.T) {
 			"testing",
 			[]models.ObaServer{},
 		)
+		logger := slog.Default()
+		client := http.Client{}
 		app := &Application{
-			// note NewConfigService wants a logger and client, but they are not used in this test
-			// as healthcheckHandler does not use them.
-			// so we pass nil for them.
-			ConfigService: config.NewConfigService(nil, nil, cfg),
+			ConfigService: config.NewConfigService(logger, &client, cfg),
 			Version:       "test-version",
 		}
 

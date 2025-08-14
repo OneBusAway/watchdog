@@ -4,8 +4,11 @@ package integration
 
 import (
 	"fmt"
+	"log/slog"
+	"net/http"
 	"testing"
 
+	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
 )
 
@@ -16,14 +19,13 @@ func TestDownloadGTFSBundles(t *testing.T) {
 	if len(integrationServers) == 0 {
 		t.Skip("No servers found in config")
 	}
-	// This is sufficient for testing DownloadGTFSBundles functionality.
-	// NewGtfsService requires a realtimeStore , boundingBoxStore, client and logger, 
-	// but DownloadGTFSBundles does not use them, It only uses staticStore.
-	// In the current test, we don't need to use them,
-	// so we set them to nil. If future changes (e.g., in downloadAndStoreGTFSBundle) require them,
-	// the test should be updated to use mock implementations.
+
 	staticStore := gtfs.NewStaticStore()
-	gtfsService := gtfs.NewGtfsService(staticStore,nil,nil,nil,nil)
+	realtimeStore := gtfs.NewRealtimeStore()
+	boundingBoxStore := geo.NewBoundingBoxStore()
+	logger := slog.Default()
+	client := &http.Client{}
+	gtfsService := gtfs.NewGtfsService(staticStore,realtimeStore,boundingBoxStore,logger,client)
 
 	for _, server := range integrationServers {
 		srv := server
