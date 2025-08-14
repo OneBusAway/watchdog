@@ -2,7 +2,9 @@
 
 [![Coverage Status](https://coveralls.io/repos/github/OneBusAway/watchdog/badge.svg?branch=main)](https://coveralls.io/github/OneBusAway/watchdog?branch=main)
 
-Golang-based Watchdog service for OBA REST API servers
+Golang-based Watchdog service for OBA REST API servers, providing deep observability by exposing a rich suite of Prometheus metrics. These metrics enable comprehensive monitoring of API uptime, GTFS Static and GTFS-RT data integrity, vehicle telemetry, agency and stop coverage, and overall operational health.
+
+You can find documentation for the currently exposed metrics along with an interpretation guide [here](./docs/METRICS.md).
 
 # Requirements
 
