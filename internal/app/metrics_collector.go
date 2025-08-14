@@ -15,7 +15,7 @@ import (
 // StartMetricsCollection begins a background goroutine that continuously collects metrics
 // from all configured OBA (OneBusAway) servers at a regular interval.
 //
-// It uses a time.Ticker based on the `FetchInterval` configured in the app's config came from "fetch-interval" command line flags.
+// It uses a time.Ticker based on the `FetchInterval` configured in the app's config that comes from "fetch-interval" command line flags.
 // The ticker triggers every `FetchInterval` seconds, allowing the application to periodically
 // collect and update metrics related to OBA servers listed in the config.
 //
