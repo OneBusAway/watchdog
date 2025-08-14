@@ -2,12 +2,13 @@ package app
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"watchdog.onebusaway.org/internal/config"
 	"watchdog.onebusaway.org/internal/models"
-	"watchdog.onebusaway.org/internal/server"
 )
 
 func TestHealthcheckHandler(t *testing.T) {
@@ -57,14 +58,16 @@ func TestHealthcheckHandler(t *testing.T) {
 	})
 
 	t.Run("returns 500 when no servers configured", func(t *testing.T) {
-		cfg := server.NewConfig(
+		cfg := config.NewConfig(
 			4000,
 			"testing",
 			[]models.ObaServer{},
 		)
+		logger := slog.Default()
+		client := http.Client{}
 		app := &Application{
-			Config:  cfg,
-			Version: "test-version",
+			ConfigService: config.NewConfigService(logger, &client, cfg),
+			Version:       "test-version",
 		}
 
 		rr := httptest.NewRecorder()

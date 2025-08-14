@@ -15,7 +15,12 @@ import (
 	"watchdog.onebusaway.org/internal/utils"
 )
 
-func CheckAgenciesWithCoverage(staticStore *gtfs.StaticStore, server models.ObaServer) (int, error) {
+// checkAgenciesWithCoverage retrieves the number of agencies in the GTFS static bundle
+// associated with the given server. It reports the count to the AgenciesInStaticGtfs Prometheus metric.
+//
+// Returns the agency count if the bundle is present and valid.
+// Returns an error if the bundle is missing, nil, or contains no agencies.
+func checkAgenciesWithCoverage(staticStore *gtfs.StaticStore, server models.ObaServer) (int, error) {
 	staticData, ok := staticStore.Get(server.ID)
 	if !ok {
 		err := fmt.Errorf("there is no bundle for server %v", server.ID)
@@ -51,7 +56,15 @@ func CheckAgenciesWithCoverage(staticStore *gtfs.StaticStore, server models.ObaS
 	return len(staticData.Agencies), nil
 }
 
-func GetAgenciesWithCoverage(server models.ObaServer) (int, error) {
+// getAgenciesWithCoverage calls the OBA `agencies-with-coverage` API endpoint
+// for the given server and returns the number of agencies in the real-time feed.
+// The count is also reported to the AgenciesWithCoverage Prometheus metric.
+//
+// This function is used to collect live data for comparison against the GTFS static bundle.
+//
+// Returns the number of real-time agencies on success.
+// Returns an error if the API call fails or the response is invalid.
+func getAgenciesWithCoverage(server models.ObaServer) (int, error) {
 	client := onebusaway.NewClient(
 		option.WithAPIKey(server.ObaApiKey),
 		option.WithBaseURL(server.ObaBaseURL),
@@ -82,13 +95,18 @@ func GetAgenciesWithCoverage(server models.ObaServer) (int, error) {
 	return len(response.Data.List), nil
 }
 
-func CheckAgenciesWithCoverageMatch(staticStore *gtfs.StaticStore, logger *slog.Logger, server models.ObaServer) error {
-	staticGtfsAgenciesCount, err := CheckAgenciesWithCoverage(staticStore, server)
+// checkAgenciesWithCoverageMatch compares the number of agencies in the GTFS static bundle
+// with the number of agencies returned by the real-time `agencies-with-coverage` API for the given server.
+// It sets the AgenciesCoverageMatch Prometheus metric to 1 if the counts match, or 0 if they differ.
+//
+// Returns an error if reading the static bundle or calling the API fails.
+func checkAgenciesWithCoverageMatch(staticStore *gtfs.StaticStore, logger *slog.Logger, server models.ObaServer) error {
+	staticGtfsAgenciesCount, err := checkAgenciesWithCoverage(staticStore, server)
 	if err != nil {
 		return err
 	}
 
-	coverageAgenciesCount, err := GetAgenciesWithCoverage(server)
+	coverageAgenciesCount, err := getAgenciesWithCoverage(server)
 
 	if err != nil {
 		return fmt.Errorf("error getting remote agencies with coverage data: %w", err)

@@ -20,7 +20,7 @@ func TestCheckBundleExpiration(t *testing.T) {
 	staticStore.Set(testServer.ID, staticData)
 	fixedTime := time.Date(2025, 1, 12, 20, 16, 38, 0, time.UTC)
 
-	earliest, latest, err := CheckBundleExpiration(staticStore, fixedTime, testServer)
+	earliest, latest, err := checkBundleExpiration(staticStore, fixedTime, testServer)
 	if err != nil {
 		t.Fatalf("CheckBundleExpiration failed: %v", err)
 	}

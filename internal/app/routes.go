@@ -9,6 +9,40 @@ import (
 	"github.com/julienschmidt/httprouter"
 )
 
+// Routes sets up the HTTP routing configuration for the application and returns the final http.Handler.
+//
+// This function initializes a new `httprouter.Router`, registers all application routes
+// with their corresponding handler functions and HTTP methods, and wraps the entire router
+// with Sentry middleware for centralized error tracking and performance monitoring.
+//
+// Registered Routes:
+//   - GET /v1/healthcheck:
+//     Provides a JSON-formatted snapshot of the application's current health and readiness status.
+//     Handled by `app.healthcheckHandler`.
+//   - GET /metrics:
+//     Exposes all Prometheus metrics collected by the application for scraping by Prometheus.
+//     Handled by `promhttp.Handler()` from the Prometheus client library.
+//
+// Middleware:
+//   - `middleware.SentryMiddleware`:
+//     Wraps the router to automatically capture any panics, errors, or performance issues
+//     and report them to Sentry with contextual request data.
+//
+// Purpose:
+//   - Centralize route registration for modularity and testability.
+//   - Establish a clear entry point for all incoming HTTP traffic.
+//   - Ensure observability via Prometheus and Sentry integrations.
+//
+// Returns:
+//   - An `http.Handler` instance that the server can use to handle incoming HTTP requests.
+//
+// Usage:
+//
+//	Typically called during application startup and passed to `http.Server`:
+//	  server := &http.Server{
+//	      Addr:    ":4000",
+//	      Handler: app.Routes(),
+//	  }
 func (app *Application) Routes() http.Handler {
 	// Initialize a new httprouter router instance.
 	router := httprouter.New()

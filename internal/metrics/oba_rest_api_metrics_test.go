@@ -6,10 +6,19 @@ import (
 	"testing"
 	"time"
 
+	remoteGtfs "github.com/jamespfennell/gtfs"
 	"gopkg.in/dnaeon/go-vcr.v4/pkg/recorder"
+	"watchdog.onebusaway.org/internal/gtfs"
 )
 
 func TestFetchObaAPIMetrics_WithVCR(t *testing.T) {
+	data := readFixture(t, "gtfs.zip")
+	staticData, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
+	if err != nil {
+		t.Fatal("failed to parse gtfs static data")
+	}
+	staticStore := gtfs.NewStaticStore()
+
 	tests := []struct {
 		name      string
 		slugID    string
@@ -59,8 +68,8 @@ func TestFetchObaAPIMetrics_WithVCR(t *testing.T) {
 					Timeout:   10 * time.Second,
 				}
 			}
-
-			err := FetchObaAPIMetrics(tt.slugID, tt.serverID, tt.serverURL, tt.apiKey, client)
+			staticStore.Set(tt.serverID, staticData)
+			err := fetchObaAPIMetrics(tt.slugID, tt.serverID, tt.serverURL, tt.apiKey, client, staticStore)
 
 			if tt.wantErr {
 				if err == nil {

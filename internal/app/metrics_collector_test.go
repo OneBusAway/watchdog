@@ -46,7 +46,7 @@ func TestCollectMetricsForServer(t *testing.T) {
 
 	prometheus.DefaultRegisterer = prometheus.NewRegistry()
 
-	testServer := app.Config.Servers[0]
+	testServer := app.ConfigService.Config.Servers[0]
 
 	app.CollectMetricsForServer(testServer)
 

@@ -13,7 +13,7 @@ func TestCheckServer(t *testing.T) {
 
 		testServer := createTestServer(ts.URL, "Test Server", 999, "test-key", "http://example.com", "test-api-value", "test-api-key", "1")
 
-		ServerPing(testServer)
+		serverPing(testServer)
 		time.Sleep(100 * time.Millisecond)
 
 		metricValue, err := getMetricValue(ObaApiStatus, map[string]string{
@@ -35,7 +35,7 @@ func TestCheckServer(t *testing.T) {
 
 		testServer := createTestServer(ts.URL, "Test Server No Time", 998, "test-key", "http://example.com", "test-api-value", "test-api-key", "1")
 
-		ServerPing(testServer)
+		serverPing(testServer)
 		time.Sleep(100 * time.Millisecond)
 
 		metricValue, err := getMetricValue(ObaApiStatus, map[string]string{
@@ -54,7 +54,7 @@ func TestCheckServer(t *testing.T) {
 	t.Run("HTTP request failure", func(t *testing.T) {
 		testServer := createTestServer("http://invalid.url", "Test Server Invalid", 997, "test-key", "http://example.com", "test-api-value", "test-api-key", "1")
 
-		ServerPing(testServer)
+		serverPing(testServer)
 		time.Sleep(100 * time.Millisecond)
 
 		metricValue, err := getMetricValue(ObaApiStatus, map[string]string{

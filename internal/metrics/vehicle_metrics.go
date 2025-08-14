@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"strconv"
-	"sync"
 	"time"
 
 	onebusaway "github.com/OneBusAway/go-sdk"
@@ -17,7 +16,21 @@ import (
 	"watchdog.onebusaway.org/internal/utils"
 )
 
-func CountVehiclePositions(server models.ObaServer, realtimeStore *gtfs.RealtimeStore) (int, error) {
+// countVehiclePositions returns the number of vehicles present in the GTFS-RT feed
+// for a given server, as stored in the provided RealtimeStore.
+//
+// It retrieves the GTFS-RT data for the server and reports the vehicle count to
+// the RealtimeVehiclePositions Prometheus metric.
+//
+// Parameters:
+//   - server: the ObaServer whose real-time vehicle positions are being counted.
+//   - realtimeStore: a pointer to the RealtimeStore holding GTFS-RT data.
+//
+// Returns:
+//   - int: the number of vehicle positions found in the GTFS-RT feed.
+//   - error: if the realtimeStore is nil or the data is missing.
+
+func countVehiclePositions(server models.ObaServer, realtimeStore *gtfs.RealtimeStore) (int, error) {
 	if realtimeStore == nil {
 		err := fmt.Errorf("realtimeStore is nil for server %d", server.ID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -49,7 +62,18 @@ func CountVehiclePositions(server models.ObaServer, realtimeStore *gtfs.Realtime
 	return count, nil
 }
 
-func VehiclesForAgencyAPI(server models.ObaServer) (int, error) {
+// vehiclesForAgencyAPI calls the OneBusAway VehiclesForAgency API for the given server,
+// retrieves the list of vehicles, and reports the count to the VehicleCountAPI Prometheus metric.
+//
+// This function fetches live vehicle data from the OBA API using the agency ID.
+//
+// Parameters:
+//   - server: the ObaServer containing API credentials and agency information.
+//
+// Returns:
+//   - int: the number of vehicles returned by the API.
+//   - error: if the API call fails or returns an invalid response.
+func vehiclesForAgencyAPI(server models.ObaServer) (int, error) {
 
 	client := onebusaway.NewClient(
 		option.WithAPIKey(server.ObaApiKey),
@@ -79,8 +103,20 @@ func VehiclesForAgencyAPI(server models.ObaServer) (int, error) {
 	return len(response.Data.List), nil
 }
 
-func CheckVehicleCountMatch(server models.ObaServer, realtimeStore *gtfs.RealtimeStore) error {
-	gtfsRtVehicleCount, err := CountVehiclePositions(server, realtimeStore)
+// checkVehicleCountMatch compares the number of vehicles in the GTFS-RT feed with
+// the number reported by the VehiclesForAgency API for the given server.
+//
+// It sets the VehicleCountMatch Prometheus metric to 1 if the counts match, or 0 otherwise.
+// Used to detect inconsistencies between real-time GTFS-RT data and the OBA API.
+//
+// Parameters:
+//   - server: the ObaServer for which the comparison is made.
+//   - realtimeStore: a pointer to the RealtimeStore holding GTFS-RT data.
+//
+// Returns:
+//   - error: if counting vehicles from either source fails.
+func checkVehicleCountMatch(server models.ObaServer, realtimeStore *gtfs.RealtimeStore) error {
+	gtfsRtVehicleCount, err := countVehiclePositions(server, realtimeStore)
 	if err != nil {
 		err := fmt.Errorf("failed to count vehicle positions from GTFS-RT: %v", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -89,7 +125,7 @@ func CheckVehicleCountMatch(server models.ObaServer, realtimeStore *gtfs.Realtim
 		return err
 	}
 
-	apiVehicleCount, err := VehiclesForAgencyAPI(server)
+	apiVehicleCount, err := vehiclesForAgencyAPI(server)
 	if err != nil {
 		err := fmt.Errorf("failed to count vehicle positions from API: %v", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -108,106 +144,7 @@ func CheckVehicleCountMatch(server models.ObaServer, realtimeStore *gtfs.Realtim
 	return nil
 }
 
-// vehicleLastSeen stores timestamp & coordinates for speed computation
-type LastSeen struct {
-	Time time.Time
-	Lat  float64
-	Lon  float64
-}
-
-// VehicleLastSeen stores the most recent known location and timestamp for each vehicle per server.
-//
-// The outer map key is the server ID (int), and the inner map key is the vehicle ID (string).
-// Each entry stores a `LastSeen` struct containing the last known latitude, longitude, and timestamp.
-//
-// This cache is used to:
-//   - Compute the distance between successive vehicle locations.
-//   - Estimate vehicle speed based on elapsed time between updates.
-//   - Detect anomalies in vehicle movement patterns (e.g., unrealistic jumps).
-
-type VehicleLastSeen struct {
-	Mu    sync.RWMutex
-	Store map[int]map[string]LastSeen
-}
-
-func NewVehicleLastSeen() *VehicleLastSeen {
-	return &VehicleLastSeen{
-		Store: make(map[int]map[string]LastSeen),
-	}
-}
-
-func (vehicleLastSeen *VehicleLastSeen) Get(serverID int, vehicleID string) (LastSeen, bool) {
-	vehicleLastSeen.Mu.RLock()
-	defer vehicleLastSeen.Mu.RUnlock()
-
-	if vehicleLastSeen.Store == nil {
-		return LastSeen{}, false
-	}
-
-	if vehicles, ok := vehicleLastSeen.Store[serverID]; ok {
-		lastSeen, ok := vehicles[vehicleID]
-		return lastSeen, ok
-	}
-	return LastSeen{}, false
-}
-
-func (vehicleLastSeen *VehicleLastSeen) Set(serverID int, vehicleID string, lastSeen LastSeen) {
-	vehicleLastSeen.Mu.Lock()
-	defer vehicleLastSeen.Mu.Unlock()
-
-	if _, ok := vehicleLastSeen.Store[serverID]; !ok {
-		vehicleLastSeen.Store[serverID] = make(map[string]LastSeen)
-	}
-	vehicleLastSeen.Store[serverID][vehicleID] = lastSeen
-}
-
-func (v *VehicleLastSeen) Count(serverID int) int {
-	v.Mu.RLock()
-	defer v.Mu.RUnlock()
-
-	return len(v.Store[serverID])
-}
-
-func (vehicleLastSeen *VehicleLastSeen) ClearRoutine(ctx context.Context, timeInterval, threshold time.Duration) {
-	ticker := time.NewTicker(timeInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			vehicleLastSeen.clear(threshold)
-		case <-ctx.Done():
-			return
-		}
-	}
-}
-
-func (vehicleLastSeen *VehicleLastSeen) clear(threshold time.Duration) {
-	vehicleLastSeen.Mu.Lock()
-	defer vehicleLastSeen.Mu.Unlock()
-
-	if len(vehicleLastSeen.Store) == 0 {
-		return
-	}
-
-	now := time.Now().UTC()
-
-	for serverID, vehicles := range vehicleLastSeen.Store {
-
-		for vehicleID, lastSeen := range vehicles {
-			if lastSeen.Time.Before(now) && now.Sub(lastSeen.Time) > threshold {
-				delete(vehicleLastSeen.Store[serverID], vehicleID)
-			}
-		}
-
-		if len(vehicleLastSeen.Store[serverID]) == 0 {
-			delete(vehicleLastSeen.Store, serverID)
-		}
-
-	}
-}
-
-// TrackVehicleTelemetry collects and reports various telemetry metrics for vehicles in a GTFS-RT feed.
+// trackVehicleTelemetry collects and reports various telemetry metrics for vehicles in a GTFS-RT feed.
 //
 // This function performs the following tasks:
 //  1. Fetches and parses the GTFS-RT vehicle positions feed for the given OBA server.
@@ -229,7 +166,7 @@ func (vehicleLastSeen *VehicleLastSeen) clear(threshold time.Duration) {
 //
 // Returns:
 //   - An error if the feed cannot be fetched or parsed, otherwise nil.
-func TrackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLastSeen, realtimeStore *gtfs.RealtimeStore) error {
+func trackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLastSeen, realtimeStore *gtfs.RealtimeStore) error {
 	serverID := server.ID
 	agencyID := server.AgencyID
 	now := time.Now().UTC()
@@ -320,7 +257,7 @@ func TrackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLast
 // https://gtfs.org/documentation/realtime/reference/#enum-vehiclestopstatus
 const VehicleStatusStoppedAtStop = 1
 
-// TrackInvalidVehiclesAndStoppedOutOfBounds collects and reports metrics related to vehicle position validity.
+// trackInvalidVehiclesAndStoppedOutOfBounds collects and reports metrics related to vehicle position validity.
 //
 // It performs two checks on each vehicle in the GTFS-RT feed:
 //  1. Invalid coordinate check: counts vehicles with missing or out-of-range latitude/longitude.
@@ -335,7 +272,7 @@ const VehicleStatusStoppedAtStop = 1
 // The results are exposed via Prometheus metrics:
 // - InvalidVehicleCoordinatesGauge: for invalid or missing coordinates
 // - StoppedOutOfBoundsVehiclesGauge: for vehicles stopped outside the bounding box
-func TrackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, boundingBoxStore *geo.BoundingBoxStore, realtimeStore *gtfs.RealtimeStore) error {
+func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, boundingBoxStore *geo.BoundingBoxStore, realtimeStore *gtfs.RealtimeStore) error {
 	realtimeData := realtimeStore.Get()
 	if realtimeData == nil {
 		err := fmt.Errorf("no GTFS-RT data available for server %d", server.ID)

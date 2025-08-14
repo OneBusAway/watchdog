@@ -49,7 +49,7 @@ func TestCountVehiclePositions(t *testing.T) {
 			ID:                 1,
 			VehiclePositionUrl: "Value of VehiclePositionUrl",
 		}
-		count, err := CountVehiclePositions(server, realtimeStore)
+		count, err := countVehiclePositions(server, realtimeStore)
 		if err != nil {
 			t.Fatalf("Expected no error, got %v", err)
 		}
@@ -73,7 +73,7 @@ func TestVehiclesForAgencyAPI(t *testing.T) {
 			AgencyID:   "test-agency",
 		}
 
-		count, err := VehiclesForAgencyAPI(server)
+		count, err := vehiclesForAgencyAPI(server)
 		if err != nil {
 			t.Fatalf("Expected no error, got %v", err)
 		}
@@ -95,7 +95,7 @@ func TestVehiclesForAgencyAPI(t *testing.T) {
 			AgencyID:   "test-agency",
 		}
 
-		count, err := VehiclesForAgencyAPI(server)
+		count, err := vehiclesForAgencyAPI(server)
 		if err != nil {
 			t.Fatalf("Expected no error, got %v", err)
 		}
@@ -117,7 +117,7 @@ func TestVehiclesForAgencyAPI(t *testing.T) {
 			AgencyID:   "test-agency",
 		}
 
-		_, err := VehiclesForAgencyAPI(server)
+		_, err := vehiclesForAgencyAPI(server)
 		if err == nil {
 			t.Fatal("Expected an error but got nil")
 		}
@@ -132,7 +132,7 @@ func TestCheckVehicleCountMatch(t *testing.T) {
 
 		testServer := createTestServer(obaServer.URL, "Test Server", 999, "test-key", "GTFS-Rt Server URL 1", "test-api-value", "test-api-key", "1")
 
-		err := CheckVehicleCountMatch(testServer, realtimeStore)
+		err := checkVehicleCountMatch(testServer, realtimeStore)
 		if err != nil {
 			t.Fatalf("CheckVehicleCountMatch failed: %v", err)
 		}
@@ -150,7 +150,7 @@ func TestCheckVehicleCountMatch(t *testing.T) {
 
 		testServer := createTestServer(obaServer.URL, "Test Server", 999, "test-key", "GTFS-Rt Server URL 1", "test-api-value", "test-api-key", "1")
 
-		err := CheckVehicleCountMatch(testServer, realtimeStore)
+		err := checkVehicleCountMatch(testServer, realtimeStore)
 		if err == nil {
 			t.Fatal("Expected an error but got nil")
 		}
@@ -173,7 +173,7 @@ func TestTrackInvalidVehiclesAndStoppedOutOfBounds(t *testing.T) {
 			GtfsRtApiValue:     "test-key",
 		}
 
-		err := TrackInvalidVehiclesAndStoppedOutOfBounds(server, boundingBoxStore, realtimeStore)
+		err := trackInvalidVehiclesAndStoppedOutOfBounds(server, boundingBoxStore, realtimeStore)
 		if err != nil {
 			t.Errorf("Expected no error, got: %v", err)
 		}
@@ -188,7 +188,7 @@ func TestTrackInvalidVehiclesAndStoppedOutOfBounds(t *testing.T) {
 			GtfsRtApiValue:     "test-key",
 		}
 
-		err := TrackInvalidVehiclesAndStoppedOutOfBounds(server, boundingBoxStore, realtimeStore)
+		err := trackInvalidVehiclesAndStoppedOutOfBounds(server, boundingBoxStore, realtimeStore)
 		if err == nil {
 			t.Error("Expected error due to missing bounding box, got nil")
 		}
