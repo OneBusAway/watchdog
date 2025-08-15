@@ -1,0 +1,45 @@
+services:
+  watchdog:
+    build:
+      context: .
+    container_name: watchdog
+    environment:
+      CONFIG_AUTH_USER: admin
+      CONFIG_AUTH_PASS: password
+    command: ["--config-file", "/app/config.json", "--port", "4000"]
+    volumes:
+      - ./config.json:/app/config.json:ro
+    ports:
+      - "4000:4000"
+    networks:
+      - observability
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - observability
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    volumes:
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - prometheus
+    networks:
+      - observability
+
+networks:
+  observability:

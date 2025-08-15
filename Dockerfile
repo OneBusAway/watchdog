@@ -30,11 +30,11 @@ RUN chown -R watchdog:watchdog /app
 USER watchdog
 
 # Expose port
-EXPOSE 8080
+EXPOSE 4000
 
 # Set healthcheck
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/v1/healthcheck || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://localhost:4000/v1/healthcheck || exit 1
 
 # Run the application
 ENTRYPOINT ["/app/watchdog"]
