@@ -154,6 +154,11 @@ docker run -d \
 
 You can run the Watchdog service along with Prometheus and Grafana for monitoring using Docker Compose.
 
+**Important:**
+
+> Make sure `config.json` exists before running any Docker commands.  
+> It must be a **file**, not a folder.
+
 ### **Start all services**
 
 ```bash
