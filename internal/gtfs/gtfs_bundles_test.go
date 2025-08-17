@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jamespfennell/gtfs"
+	remoteGtfs "github.com/jamespfennell/gtfs"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/models"
 )
@@ -54,7 +54,7 @@ func TestDownloadAndStoreGTFSBundle(t *testing.T) {
 		}
 
 		data := readFixture(t, "gtfs.zip")
-		expectedStaticData, err := gtfs.ParseStatic(data, gtfs.ParseStaticOptions{})
+		expectedStaticData, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
 		if err != nil {
 			t.Fatalf("failed to parse expected GTFS static data from fixture: %v", err)
 		}
@@ -117,7 +117,7 @@ func TestGetStopLocationsByIDs(t *testing.T) {
 	server := models.ObaServer{ID: 1, Name: "test"}
 
 	data := readFixture(t, "gtfs.zip")
-	staticBundle, err := gtfs.ParseStatic(data, gtfs.ParseStaticOptions{})
+	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
 	if err != nil {
 		t.Fatal("failed to parse gtfs static data")
 	}
@@ -215,7 +215,7 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 		}
 
 		data := readFixture(t, "gtfs_rt_feed_vehicles.pb")
-		gtfsRT, err := gtfs.ParseRealtime(data, &gtfs.ParseRealtimeOptions{})
+		gtfsRT, err := remoteGtfs.ParseRealtime(data, &remoteGtfs.ParseRealtimeOptions{})
 		if err != nil {
 			t.Fatalf("Failed to parse GTFS-RT data: %v", err)
 		}
