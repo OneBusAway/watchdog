@@ -157,7 +157,7 @@ func downloadAndStoreGTFSBundle(url string, serverID int, staticStore *StaticSto
 		return err
 	}
 
-	staticData, err := gtfs.ParseStatic(data, gtfs.ParseStaticOptions{})
+	staticBundle, err := gtfs.ParseStatic(data, gtfs.ParseStaticOptions{})
 	if err != nil {
 		err = fmt.Errorf("failed to parse GTFS static data from %s: %w", url, err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -168,7 +168,12 @@ func downloadAndStoreGTFSBundle(url string, serverID int, staticStore *StaticSto
 		})
 		return err
 	}
-
+	// StaticData is a wrapper around the GTFS static bundle
+	// that includes only the parts we use in the application.
+	// So we do not keep the whole GTFS static bundle in memory,
+	// but only the parts we need.
+	staticData := models.NewStaticData(staticBundle)
+	staticBundle = nil // drop reference, GC can collect earlier
 	staticStore.Set(serverID, staticData)
 	return nil
 }
@@ -278,12 +283,13 @@ func fetchAndStoreGTFSRTFeed(server models.ObaServer, realtimeStore *RealtimeSto
 		return err
 	}
 
-	realtimeData, err := gtfs.ParseRealtime(data, &gtfs.ParseRealtimeOptions{})
+	gtfsRT, err := gtfs.ParseRealtime(data, &gtfs.ParseRealtimeOptions{})
 	if err != nil {
 		report.ReportError(err)
 		return err
 	}
-
+	realtimeData := models.NewRealtimeData(gtfsRT)
+	gtfsRT = nil // drop reference, GC can collect earlier
 	realtimeStore.Set(realtimeData)
 	return nil
 }
@@ -298,7 +304,7 @@ func fetchAndStoreGTFSRTFeed(server models.ObaServer, realtimeStore *RealtimeSto
 // entries (i.e., service periods), and returns the minimum and maximum `EndDate` values.
 //
 // Returns an error if no services are found in the bundle.
-func getEarliestAndLatestServiceDates(staticData *gtfs.Static) (earliestEndDate, latestEndDate time.Time, err error) {
+func getEarliestAndLatestServiceDates(staticData *models.StaticData) (earliestEndDate, latestEndDate time.Time, err error) {
 	if staticData == nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("static data is nil")
 	}

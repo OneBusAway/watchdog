@@ -13,7 +13,6 @@ import (
 	"github.com/jamespfennell/gtfs"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/models"
-	"watchdog.onebusaway.org/internal/utils"
 )
 
 func TestDownloadGTFSBundles(t *testing.T) {
@@ -118,10 +117,11 @@ func TestGetStopLocationsByIDs(t *testing.T) {
 	server := models.ObaServer{ID: 1, Name: "test"}
 
 	data := readFixture(t, "gtfs.zip")
-	staticData, err := gtfs.ParseStatic(data, gtfs.ParseStaticOptions{})
+	staticBundle, err := gtfs.ParseStatic(data, gtfs.ParseStaticOptions{})
 	if err != nil {
 		t.Fatal("failed to parse gtfs static data")
 	}
+	staticData := models.NewStaticData(staticBundle)
 	staticStore := NewStaticStore()
 	staticStore.Set(server.ID, staticData)
 
@@ -215,20 +215,43 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 		}
 
 		data := readFixture(t, "gtfs_rt_feed_vehicles.pb")
-		realtimeData, err := gtfs.ParseRealtime(data, &gtfs.ParseRealtimeOptions{})
+		gtfsRT, err := gtfs.ParseRealtime(data, &gtfs.ParseRealtimeOptions{})
 		if err != nil {
 			t.Fatalf("Failed to parse GTFS-RT data: %v", err)
 		}
-		expectedHash, err := utils.HashRealtimeData(realtimeData)
-		if err != nil {
-			t.Fatalf("Failed to hash GTFS-RT data: %v", err)
+		expectedRtData := models.NewRealtimeData(gtfsRT)
+		realtimeData := realtimeStore.Get()
+		if realtimeData == nil {
+			t.Fatal("realtimeData is nil; expected non-nil GTFS-RT data")
 		}
-		hash, err := utils.HashRealtimeData(realtimeStore.Get())
-		if err != nil {
-			t.Fatalf("Failed to hash GTFS-RT data from store: %v", err)
+		
+		if len(expectedRtData.Vehicles) == 0 {
+			t.Fatalf("Make sure that data contains at least one vehicle in the GTFS-RT feed in testdata/gtfs_rt_feed_vehicles.pb")
 		}
-		if hash != expectedHash {
-			t.Errorf("Expected hash %x, got %x", expectedHash, hash)
+
+		if len(realtimeData.Vehicles) != len(expectedRtData.Vehicles) {
+			t.Fatalf("Expected %d vehicles, got %d", len(expectedRtData.Vehicles), len(realtimeData.Vehicles))
+		}
+
+		expectedMap := make(map[string]struct{})
+		for _, vehicle := range expectedRtData.Vehicles {
+			if( vehicle.ID != nil ) {
+				expectedMap[vehicle.ID.ID] = struct{}{}
+			}
+		}
+		countExpectedNilIDs := len(expectedRtData.Vehicles) - len(expectedMap)
+		countNilIDs := 0
+		for _, vehicle := range realtimeData.Vehicles {
+			if vehicle.ID != nil {
+				if _, exists := expectedMap[vehicle.ID.ID]; !exists {
+					t.Errorf("Unexpected vehicle ID %s found in GTFS-RT data", vehicle.ID.ID)
+				}
+			} else {
+				countNilIDs++
+			}
+		}
+		if countNilIDs != countExpectedNilIDs {
+			t.Errorf("Expected %d vehicles with nil IDs, got %d", countExpectedNilIDs, countNilIDs)
 		}
 	})
 

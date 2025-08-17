@@ -52,7 +52,7 @@ func (gs *GtfsService) FetchAndStoreGTFSRTFeed(server models.ObaServer) error {
 }
 
 // exported helper functions
-func GetEarliestAndLatestServiceDates(staticData *remoteGtfs.Static) (earliest, latest time.Time, err error) {
+func GetEarliestAndLatestServiceDates(staticData *models.StaticData) (earliest, latest time.Time, err error) {
 	earliestTime, latestTime, err := getEarliestAndLatestServiceDates(staticData)
 	if err != nil {
 		return time.Time{}, time.Time{}, err

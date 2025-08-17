@@ -9,11 +9,13 @@ import (
 	remoteGtfs "github.com/jamespfennell/gtfs"
 	"gopkg.in/dnaeon/go-vcr.v4/pkg/recorder"
 	"watchdog.onebusaway.org/internal/gtfs"
+	"watchdog.onebusaway.org/internal/models"
 )
 
 func TestFetchObaAPIMetrics_WithVCR(t *testing.T) {
 	data := readFixture(t, "gtfs.zip")
-	staticData, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
+	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
+	staticData := models.NewStaticData(staticBundle)
 	if err != nil {
 		t.Fatal("failed to parse gtfs static data")
 	}

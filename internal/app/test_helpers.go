@@ -49,14 +49,15 @@ func newTestApplication(t *testing.T) *Application {
 	if err != nil {
 		t.Fatalf("Failed to read GTFS fixture: %v", err)
 	}
-	staticData, err := remoteGtfs.ParseStatic(fileBytes, remoteGtfs.ParseStaticOptions{})
+	staticBundle, err := remoteGtfs.ParseStatic(fileBytes, remoteGtfs.ParseStaticOptions{})
 	if err != nil {
 		t.Fatalf("Failed to parse GTFS data: %v", err)
 	}
-	if staticData == nil {
+	if staticBundle == nil {
 		t.Fatal("Parsed GTFS data is nil")
 	}
 
+	staticData  := models.NewStaticData(staticBundle)
 	staticStore := gtfs.NewStaticStore()
 	staticStore.Set(obaServer.ID, staticData)
 
@@ -74,13 +75,14 @@ func newTestApplication(t *testing.T) *Application {
 	if err != nil {
 		t.Fatalf("Failed to read GTFS-RT fixture: %v", err)
 	}
-	realtimeData, err := remoteGtfs.ParseRealtime(data, &remoteGtfs.ParseRealtimeOptions{})
+	gtfsRT, err := remoteGtfs.ParseRealtime(data, &remoteGtfs.ParseRealtimeOptions{})
 	if err != nil {
 		t.Fatalf("Failed to parse GTFS-RT data: %v", err)
 	}
-	if realtimeData == nil {
+	if gtfsRT == nil {
 		t.Fatal("Parsed GTFS-RT data is nil")
 	}
+	realtimeData := models.NewRealtimeData(gtfsRT)
 	realtimeStore := gtfs.NewRealtimeStore()
 	realtimeStore.Set(realtimeData)
 
