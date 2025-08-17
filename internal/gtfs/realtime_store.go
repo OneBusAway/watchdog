@@ -3,7 +3,7 @@ package gtfs
 import (
 	"sync"
 
-	remoteGtfs "github.com/jamespfennell/gtfs"
+	"watchdog.onebusaway.org/internal/models"
 )
 
 // RealtimeStore is used to store GTFS-RT data
@@ -14,7 +14,7 @@ import (
 // It ensures that multiple goroutines can safely read the same data after it is set once.
 type RealtimeStore struct {
 	mu   sync.RWMutex
-	data *remoteGtfs.Realtime
+	data *models.RealtimeData
 }
 
 // NewRealtimeStore creates and returns a new empty RealtimeStore instance.
@@ -31,7 +31,7 @@ func NewRealtimeStore() *RealtimeStore {
 //
 // Parameters:
 //   - newData: The parsed GTFS-RT feed to store.
-func (s *RealtimeStore) Set(newData *remoteGtfs.Realtime) {
+func (s *RealtimeStore) Set(newData *models.RealtimeData) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.data = newData
@@ -42,7 +42,7 @@ func (s *RealtimeStore) Set(newData *remoteGtfs.Realtime) {
 //
 // Returns:
 //   - A pointer to the parsed GTFS-RT feed, or nil if not set.
-func (s *RealtimeStore) Get() *remoteGtfs.Realtime {
+func (s *RealtimeStore) Get() *models.RealtimeData {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.data
