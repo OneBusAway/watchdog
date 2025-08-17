@@ -224,7 +224,7 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 		if realtimeData == nil {
 			t.Fatal("realtimeData is nil; expected non-nil GTFS-RT data")
 		}
-		
+
 		if len(expectedRtData.Vehicles) == 0 {
 			t.Fatalf("Make sure that data contains at least one vehicle in the GTFS-RT feed in testdata/gtfs_rt_feed_vehicles.pb")
 		}
@@ -235,7 +235,7 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 
 		expectedMap := make(map[string]struct{})
 		for _, vehicle := range expectedRtData.Vehicles {
-			if( vehicle.ID != nil ) {
+			if vehicle.ID != nil {
 				expectedMap[vehicle.ID.ID] = struct{}{}
 			}
 		}

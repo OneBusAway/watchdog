@@ -57,7 +57,7 @@ func newTestApplication(t *testing.T) *Application {
 		t.Fatal("Parsed GTFS data is nil")
 	}
 
-	staticData  := models.NewStaticData(staticBundle)
+	staticData := models.NewStaticData(staticBundle)
 	staticStore := gtfs.NewStaticStore()
 	staticStore.Set(obaServer.ID, staticData)
 
