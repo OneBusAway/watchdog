@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -71,7 +72,16 @@ func (c *CachedPromHandler) refreshLoop(ctx context.Context) {
 		case <-ticker.C:
 			var buf bytes.Buffer
 			rec := &responseRecorder{buf: &buf}
-			c.h.ServeHTTP(rec, nil)
+			// Create a minimal synthetic *http.Request.
+			// Required because promhttp.HandlerFor dereferences fields like Method and URL.
+			// Passing nil would cause a panic, but this lightweight request avoids real I/O
+			// while satisfying the handler's expectations.
+			req := &http.Request{
+				Method: http.MethodGet,
+				URL:    &url.URL{Path: "/metrics"},
+				Header: make(http.Header),
+			}
+			c.h.ServeHTTP(rec, req)
 
 			c.mu.Lock()
 			c.cache = buf.Bytes()
