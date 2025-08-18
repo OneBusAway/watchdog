@@ -1,9 +1,11 @@
 package app
 
 import (
+	"context"
 	"net/http"
+	"time"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/prometheus/client_golang/prometheus"
 	"watchdog.onebusaway.org/internal/middleware"
 
 	"github.com/julienschmidt/httprouter"
@@ -43,7 +45,7 @@ import (
 //	      Addr:    ":4000",
 //	      Handler: app.Routes(),
 //	  }
-func (app *Application) Routes() http.Handler {
+func (app *Application) Routes(ctx context.Context) http.Handler {
 	// Initialize a new httprouter router instance.
 	router := httprouter.New()
 
@@ -52,7 +54,8 @@ func (app *Application) Routes() http.Handler {
 	// http.MethodPost are constants which equate to the strings "GET" and "POST"
 	// respectively.
 	router.HandlerFunc(http.MethodGet, "/v1/healthcheck", app.healthcheckHandler)
-	router.Handler(http.MethodGet, "/metrics", promhttp.Handler())
+	router.Handler(http.MethodGet, "/metrics",middleware.NewCachedPromHandler(ctx, prometheus.DefaultGatherer, 10*time.Second))
+
 
 	// Wrap router with Sentry middleware
 	// Return wrapped httprouter instance.
