@@ -9,6 +9,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/prometheus/common/expfmt"
 )
 
 // CachedPromHandler wraps promhttp.HandlerFor with a caching layer.
@@ -89,7 +90,10 @@ func (c *CachedPromHandler) refreshLoop(ctx context.Context) {
 // Why it exists:
 //   - Provides a standard http.Handler interface, so it can be plugged
 //     directly into any HTTP server or router (mux, chi, etc.).
-//   - Ensures consistent Content-Type (`text/plain; version=0.0.4`) so Prometheus accepts it.
+//   - Ensures consistent Content-Type for the Prometheus text exposition
+//     format. Instead of hardcoding ("text/plain; version=0.0.4"), we use
+//     expfmt.NewFormat(expfmt.TypeTextPlain) to stay aligned with the official
+//     Prometheus library and avoid reliance on deprecated constants.
 func (c *CachedPromHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -99,8 +103,8 @@ func (c *CachedPromHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		c.h.ServeHTTP(w, r)
 		return
 	}
-
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	// Use Prometheus-provided constant for text exposition format (version=0.0.4)
+	w.Header().Set("Content-Type", string(expfmt.NewFormat(expfmt.TypeTextPlain)))
 	_, _ = w.Write(c.cache)
 }
 
