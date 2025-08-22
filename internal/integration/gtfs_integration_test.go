@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -26,16 +27,20 @@ func TestDownloadGTFSBundles(t *testing.T) {
 	logger := slog.Default()
 	client := &http.Client{}
 	gtfsService := gtfs.NewGtfsService(staticStore,realtimeStore,boundingBoxStore,logger,client)
-
+	ctx := context.Background()
 	for _, server := range integrationServers {
 		srv := server
 		t.Run(fmt.Sprintf("ServerID_%d", srv.ID), func(t *testing.T) {
 			t.Parallel()
 
-			err := gtfsService.DownloadAndStoreGTFSBundle(srv.GtfsUrl, srv.ID)
+			staticBundle,err := gtfsService.DownloadGTFSBundle(ctx,srv.GtfsUrl, srv.ID,20)
 			if err != nil {
 				t.Errorf("failed to download GTFS bundle for server %d : %v", srv.ID, err)
-			} else {
+				err = gtfsService.StoreGTFSBundle(staticBundle,server.ID)
+				if err != nil {
+					t.Errorf("failed to store GTFS bundle for server %d : %v", srv.ID, err)
+				}
+			}else{
 				t.Logf("GTFS bundle downloaded successfully for server %d", srv.ID)
 			}
 		})
