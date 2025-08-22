@@ -65,8 +65,9 @@ func TestHealthcheckHandler(t *testing.T) {
 		)
 		logger := slog.Default()
 		client := http.Client{}
+		backoffStore := config.NewBackoffStore()
 		app := &Application{
-			ConfigService: config.NewConfigService(logger, &client, cfg),
+			ConfigService: config.NewConfigService(logger, &client, cfg,backoffStore),
 			Version:       "test-version",
 		}
 

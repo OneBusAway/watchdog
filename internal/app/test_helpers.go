@@ -87,9 +87,9 @@ func newTestApplication(t *testing.T) *Application {
 	realtimeStore.Set(realtimeData)
 
 	vehicleLastSeen := metrics.NewVehicleLastSeen()
-
+	backoffStore := config.NewBackoffStore()
 	return &Application{
-		ConfigService:  config.NewConfigService(logger, client, cfg),
+		ConfigService:  config.NewConfigService(logger, client, cfg, backoffStore),
 		GtfsService:    gtfs.NewGtfsService(staticStore, realtimeStore, boundingBoxStore, logger, client),
 		MetricsService: metrics.NewMetricsService(staticStore, realtimeStore, boundingBoxStore, vehicleLastSeen, logger, client),
 		Version:        "1.0.0",
