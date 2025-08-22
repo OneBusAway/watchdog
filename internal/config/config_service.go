@@ -15,17 +15,19 @@ import (
 
 // ConfigService holds dependencies and provides config operations.
 type ConfigService struct {
-	Logger *slog.Logger
-	Client *http.Client
-	Config *Config
+	Logger       *slog.Logger
+	Client       *http.Client
+	Config       *Config
+	BackoffStore *BackoffStore
 }
 
 // NewConfigService creates a new ConfigService instance with the provided logger and HTTP client.
-func NewConfigService(logger *slog.Logger, client *http.Client, config *Config) *ConfigService {
+func NewConfigService(logger *slog.Logger, client *http.Client, config *Config, backoffStore *BackoffStore) *ConfigService {
 	return &ConfigService{
-		Logger: logger,
-		Client: client,
-		Config: config,
+		Logger:       logger,
+		Client:       client,
+		Config:       config,
+		BackoffStore: backoffStore,
 	}
 }
 

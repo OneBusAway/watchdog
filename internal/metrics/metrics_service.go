@@ -46,8 +46,8 @@ func (ms *MetricsService) CheckBundleExpiration(currentTime time.Time, server mo
 	return checkBundleExpiration(ms.StaticStore, currentTime, server)
 }
 
-func (ms *MetricsService) ServerPing(server models.ObaServer) {
-	serverPing(server)
+func (ms *MetricsService) ServerPing(server models.ObaServer) bool {
+	return serverPing(server)
 }
 
 func (ms *MetricsService) FetchObaAPIMetrics(slugID string, serverID int, serverBaseUrl string, apiKey string) error {

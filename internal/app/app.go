@@ -31,8 +31,9 @@ func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version s
 	realtimeStore := gtfs.NewRealtimeStore()
 	boundingBoxStore := geo.NewBoundingBoxStore()
 	vehicleLastSeen := metrics.NewVehicleLastSeen()
+	backoffStore := config.NewBackoffStore()
 
-	configService := config.NewConfigService(logger, client, cfg)
+	configService := config.NewConfigService(logger, client, cfg,backoffStore)
 	gtfsService := gtfs.NewGtfsService(staticStore, realtimeStore, boundingBoxStore, logger, client)
 	metricsService := metrics.NewMetricsService(staticStore, realtimeStore, boundingBoxStore, vehicleLastSeen, logger, client)
 
