@@ -31,8 +31,8 @@ func NewConfigService(logger *slog.Logger, client *http.Client, config *Config, 
 	}
 }
 
-func (cs *ConfigService) RefreshConfig(ctx context.Context, url, authUser, authPass string, interval time.Duration) {
-	refreshConfig(ctx, cs.Client, url, authUser, authPass, cs.Config, cs.Logger, interval)
+func (cs *ConfigService) RefreshConfig(ctx context.Context, url, authUser, authPass string, interval time.Duration, maxRetries int) {
+	refreshConfig(ctx, cs.Client, url, authUser, authPass, cs.Config, cs.Logger, interval, maxRetries)
 }
 
 // exported helper functions
@@ -52,8 +52,8 @@ func LoadConfigFromFile(filePath string) ([]models.ObaServer, error) {
 }
 
 // Load config from URL and update Config.
-func LoadConfigFromURL(client *http.Client, url, authUser, authPass string) ([]models.ObaServer, error) {
-	servers, err := loadConfigFromURL(client, url, authUser, authPass)
+func LoadConfigFromURL(ctx context.Context, client *http.Client, url, authUser, authPass string, maxRetires int) ([]models.ObaServer, error) {
+	servers, err := loadConfigFromURL(ctx, client, url, authUser, authPass, maxRetires)
 	if err != nil {
 		err := fmt.Errorf("failed to load config from URL %s: %w", url, err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
