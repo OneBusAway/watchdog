@@ -26,7 +26,7 @@ func main() {
 	// This logger will be used throughout the application for logging messages.
 	// It can be configured to log to different outputs (e.g., console, file)
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-
+	logger.Info("Starting OneBusAway Watchdog", "version", version)
 	// Load environment variables for configuration
 	configAuthUser := os.Getenv("CONFIG_AUTH_USER")
 	configAuthPass := os.Getenv("CONFIG_AUTH_PASS")
@@ -58,6 +58,13 @@ func main() {
 	// At this point, we are sure that all command line flags have been parsed
 	// and we can proceed with the application initialization.
 
+	// Create a context for the application
+	// This context will be used to manage the application's lifecycle and cancel operations when needed.
+	// It allows us to gracefully shut down the application and clean up resources.
+	// we will use it to cancel and clean up routines when the application is shutting down.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// Create a new HTTP client with a connection pool
 	// This client will be reused across the application to avoid creating new connections for each request.
 	// This is particularly useful for polling APIs like GTFS-RT endpoints.
@@ -72,7 +79,7 @@ func main() {
 	if *configFile != "" {
 		servers, err = config.LoadConfigFromFile(*configFile)
 	} else if *configURL != "" {
-		servers, err = config.LoadConfigFromURL(client, *configURL, configAuthUser, configAuthPass)
+		servers, err = config.LoadConfigFromURL(ctx, client, *configURL, configAuthUser, configAuthPass, 20)
 	}
 
 	if err != nil {
@@ -109,17 +116,10 @@ func main() {
 	defer report.FlushSentry()
 	report.ConfigureScope(cfg.Env, version)
 
-	// Create a context for the application
-	// This context will be used to manage the application's lifecycle and cancel operations when needed.
-	// It allows us to gracefully shut down the application and clean up resources.
-	// we will use it to cancel and clean up routines when the application is shutting down.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	// From here we set up all dependencies and we are ready to start business logic.
 
 	// On startup, download GTFS static bundles for all configured servers
-	app.GtfsService.DownloadGTFSBundles(servers)
+	app.GtfsService.DownloadGTFSBundles(ctx, servers, 20)
 
 	// This function starts the metrics collection process
 	// it intialize a routine the run every FetchInterval seconds (30 seconds by default)
@@ -127,14 +127,14 @@ func main() {
 	app.StartMetricsCollection(ctx)
 
 	// Cron job to download GTFS bundles for all servers every 24 hours
-	go app.GtfsService.RefreshGTFSBundles(ctx, servers, 24*time.Hour)
+	go app.GtfsService.RefreshGTFSBundles(ctx, servers, 24*time.Hour, 5)
 
 	// Cron job to delete the data of vehicles that has not sent updates for 1 hour
 	go app.MetricsService.VehicleLastSeen.ClearRoutine(ctx, 15*time.Minute, time.Hour)
 
 	// If a remote URL is specified, refresh the configuration every minute
 	if *configURL != "" {
-		go app.ConfigService.RefreshConfig(ctx, *configURL, configAuthUser, configAuthPass, time.Minute)
+		go app.ConfigService.RefreshConfig(ctx, *configURL, configAuthUser, configAuthPass, time.Minute, 20)
 	}
 
 	// Start the HTTP server to serve the API and metrics endpoints
