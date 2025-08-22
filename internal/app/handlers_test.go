@@ -67,7 +67,7 @@ func TestHealthcheckHandler(t *testing.T) {
 		client := http.Client{}
 		backoffStore := config.NewBackoffStore()
 		app := &Application{
-			ConfigService: config.NewConfigService(logger, &client, cfg,backoffStore),
+			ConfigService: config.NewConfigService(logger, &client, cfg, backoffStore),
 			Version:       "test-version",
 		}
 

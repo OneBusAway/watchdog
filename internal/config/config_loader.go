@@ -55,7 +55,7 @@ func refreshConfig(ctx context.Context, client *http.Client, configURL, configAu
 					Level: sentry.LevelError,
 				})
 				logger.Error("Failed to refresh remote config", "error", err)
-			}else {
+			} else {
 				cfg.UpdateConfig(newServers)
 				logger.Info("Successfully refreshed server configuration")
 			}
