@@ -1,7 +1,10 @@
 package config
 
 import (
+	"context"
+	"fmt"
 	"math/rand/v2"
+	"net/http"
 	"sync"
 	"time"
 )
@@ -61,6 +64,30 @@ func (s *BackoffStore) ResetBackoff(serverID int) {
 	delete(s.backoffs, serverID)
 }
 
+func DoWithBackoff(ctx context.Context, client *http.Client, req *http.Request, maxRetries int) (*http.Response, error) {
+	backoffDelay := BASE_BACKOFF
+	retries := 0
+
+	for {
+		resp, err := client.Do(req)
+		if err == nil {
+			return resp, nil
+		}
+		// if maxRetries set to zero it will retry forever
+		if maxRetries > 0 && retries >= maxRetries {
+			return nil, fmt.Errorf("max retries exceeded: %w", err)
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoffDelay):
+		}
+
+		backoffDelay = calculateNewBackoffDelay(backoffDelay)
+		retries++
+	}
+}
 
 func calculateNextRetryAt(backoff time.Duration) time.Time {
 	jitter := time.Duration(rand.Float64() * float64(backoff) * JITTER_FACTOR)
