@@ -30,12 +30,12 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	realtimeData, err := remoteGtfs.ParseRealtime(data, &remoteGtfs.ParseRealtimeOptions{})
+	gtfsRT, err := remoteGtfs.ParseRealtime(data, &remoteGtfs.ParseRealtimeOptions{})
 	if err != nil {
 		fmt.Printf("Failed to parse GTFS-RT data: %v\n", err)
 		os.Exit(1)
 	}
-
+	realtimeData := models.NewRealtimeData(gtfsRT)
 	realtimeStore.Set(realtimeData)
 
 	exitCode := m.Run()

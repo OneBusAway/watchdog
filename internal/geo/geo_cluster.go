@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/golang/geo/s2"
-	"github.com/jamespfennell/gtfs"
+	remoteGtfs "github.com/jamespfennell/gtfs"
 )
 
 const s2Level = 13 // S2 cell level with 850–1225 m spatial resolution
@@ -65,7 +65,7 @@ func s2ClusterID(lat, lon float64, level int) string {
 //   - Invalid: grandparent exists but is not a Station, or coordinates are missing for fallback - data is malformed.
 //
 // Returns false if hierarchy rules are violated or required parent/coordinate data is missing.
-func getClusterID(stop gtfs.Stop) (clusterID string, clusterType string, ok bool) {
+func getClusterID(stop remoteGtfs.Stop) (clusterID string, clusterType string, ok bool) {
 	switch stop.Type {
 	case 0: // Stop or Platform
 		if stop.Parent != nil {

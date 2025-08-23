@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
-	"github.com/jamespfennell/gtfs"
+	remoteGtfs "github.com/jamespfennell/gtfs"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
@@ -157,7 +157,7 @@ func downloadAndStoreGTFSBundle(url string, serverID int, staticStore *StaticSto
 		return err
 	}
 
-	staticData, err := gtfs.ParseStatic(data, gtfs.ParseStaticOptions{})
+	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
 	if err != nil {
 		err = fmt.Errorf("failed to parse GTFS static data from %s: %w", url, err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -168,14 +168,19 @@ func downloadAndStoreGTFSBundle(url string, serverID int, staticStore *StaticSto
 		})
 		return err
 	}
-
+	// StaticData is a wrapper around the GTFS static bundle
+	// that includes only the parts we use in the application.
+	// So we do not keep the whole GTFS static bundle in memory,
+	// but only the parts we need.
+	staticData := models.NewStaticData(staticBundle)
+	staticBundle = nil // drop reference, GC can collect earlier
 	staticStore.Set(serverID, staticData)
 	return nil
 }
 
 // ParseGTFSFromCache reads a GTFS bundle from the cache and parses it into a gtfs.Static object.
 // It returns the parsed static data or an error if parsing fails.
-func ParseGTFSFromCache(cachePath string, serverID int) (*gtfs.Static, error) {
+func ParseGTFSFromCache(cachePath string, serverID int) (*remoteGtfs.Static, error) {
 	fileBytes, err := os.ReadFile(cachePath)
 	if err != nil {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -187,7 +192,7 @@ func ParseGTFSFromCache(cachePath string, serverID int) (*gtfs.Static, error) {
 		return nil, err
 	}
 
-	staticData, err := gtfs.ParseStatic(fileBytes, gtfs.ParseStaticOptions{})
+	staticData, err := remoteGtfs.ParseStatic(fileBytes, remoteGtfs.ParseStaticOptions{})
 	if err != nil {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: utils.MakeMap("server_id", strconv.Itoa(serverID)),
@@ -204,7 +209,7 @@ func ParseGTFSFromCache(cachePath string, serverID int) (*gtfs.Static, error) {
 // getStopLocationsByIDs retrieves stop locations by their IDs from the GTFS cache.
 // It returns a map of stop IDs to gtfs.Stop objects.
 
-func getStopLocationsByIDs(serverID int, stopIDs []string, staticStore *StaticStore) (map[string]gtfs.Stop, error) {
+func getStopLocationsByIDs(serverID int, stopIDs []string, staticStore *StaticStore) (map[string]remoteGtfs.Stop, error) {
 	staticData, ok := staticStore.Get(serverID)
 	if !ok || staticData == nil {
 		err := fmt.Errorf("no GTFS static data found for server ID %d", serverID)
@@ -219,7 +224,7 @@ func getStopLocationsByIDs(serverID int, stopIDs []string, staticStore *StaticSt
 		stopIDSet[id] = struct{}{}
 	}
 
-	result := make(map[string]gtfs.Stop)
+	result := make(map[string]remoteGtfs.Stop)
 	for _, stop := range staticData.Stops {
 		if _, exists := stopIDSet[stop.Id]; exists {
 			result[stop.Id] = stop
@@ -278,12 +283,13 @@ func fetchAndStoreGTFSRTFeed(server models.ObaServer, realtimeStore *RealtimeSto
 		return err
 	}
 
-	realtimeData, err := gtfs.ParseRealtime(data, &gtfs.ParseRealtimeOptions{})
+	gtfsRT, err := remoteGtfs.ParseRealtime(data, &remoteGtfs.ParseRealtimeOptions{})
 	if err != nil {
 		report.ReportError(err)
 		return err
 	}
-
+	realtimeData := models.NewRealtimeData(gtfsRT)
+	gtfsRT = nil // drop reference, GC can collect earlier
 	realtimeStore.Set(realtimeData)
 	return nil
 }
@@ -298,7 +304,7 @@ func fetchAndStoreGTFSRTFeed(server models.ObaServer, realtimeStore *RealtimeSto
 // entries (i.e., service periods), and returns the minimum and maximum `EndDate` values.
 //
 // Returns an error if no services are found in the bundle.
-func getEarliestAndLatestServiceDates(staticData *gtfs.Static) (earliestEndDate, latestEndDate time.Time, err error) {
+func getEarliestAndLatestServiceDates(staticData *models.StaticData) (earliestEndDate, latestEndDate time.Time, err error) {
 	if staticData == nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("static data is nil")
 	}

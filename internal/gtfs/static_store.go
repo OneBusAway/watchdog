@@ -3,7 +3,7 @@ package gtfs
 import (
 	"sync"
 
-	remoteGtfs "github.com/jamespfennell/gtfs"
+	"watchdog.onebusaway.org/internal/models"
 )
 
 // StaticStore is a thread-safe in-memory store for GTFS static bundles,
@@ -11,7 +11,7 @@ import (
 // using read-write locks using a sync.RWMutex.
 type StaticStore struct {
 	mu   sync.RWMutex
-	data map[int]*remoteGtfs.Static // GTFS Static bundle data of each server, indexed by server ID
+	data map[int]*models.StaticData // GTFS Static bundle data of each server, indexed by server ID
 }
 
 // NewStaticStore initializes and returns a new instance of StaticStore.
@@ -30,11 +30,11 @@ func NewStaticStore() *StaticStore {
 // Parameters:
 //   - serverID: The unique identifier for the OBA server.
 //   - newData: A pointer to the GTFS static data to store.
-func (s *StaticStore) Set(serverID int, newData *remoteGtfs.Static) {
+func (s *StaticStore) Set(serverID int, newData *models.StaticData) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.data == nil {
-		s.data = make(map[int]*remoteGtfs.Static)
+		s.data = make(map[int]*models.StaticData)
 	}
 	s.data[serverID] = newData
 }
@@ -48,7 +48,7 @@ func (s *StaticStore) Set(serverID int, newData *remoteGtfs.Static) {
 // Returns:
 //   - *remoteGtfs.Static: A pointer to the GTFS static data, if present.
 //   - bool: True if data exists for the given server ID, false otherwise.
-func (s *StaticStore) Get(serverID int) (*remoteGtfs.Static, bool) {
+func (s *StaticStore) Get(serverID int) (*models.StaticData, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	data, exists := s.data[serverID]

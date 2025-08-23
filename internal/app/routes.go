@@ -1,9 +1,11 @@
 package app
 
 import (
+	"context"
 	"net/http"
+	"time"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/prometheus/client_golang/prometheus"
 	"watchdog.onebusaway.org/internal/middleware"
 
 	"github.com/julienschmidt/httprouter"
@@ -21,7 +23,8 @@ import (
 //     Handled by `app.healthcheckHandler`.
 //   - GET /metrics:
 //     Exposes all Prometheus metrics collected by the application for scraping by Prometheus.
-//     Handled by `promhttp.Handler()` from the Prometheus client library.
+//     Handled by a cached Prometheus handler (`middleware.NewCachedPromHandler`), which
+//     reduces collection overhead by caching exposition output for a configurable duration.
 //
 // Middleware:
 //   - `middleware.SentryMiddleware`:
@@ -32,6 +35,7 @@ import (
 //   - Centralize route registration for modularity and testability.
 //   - Establish a clear entry point for all incoming HTTP traffic.
 //   - Ensure observability via Prometheus and Sentry integrations.
+//   - Improve performance and reduce Prometheus scrape overhead through cached metrics.
 //
 // Returns:
 //   - An `http.Handler` instance that the server can use to handle incoming HTTP requests.
@@ -41,9 +45,9 @@ import (
 //	Typically called during application startup and passed to `http.Server`:
 //	  server := &http.Server{
 //	      Addr:    ":4000",
-//	      Handler: app.Routes(),
+//	      Handler: app.Routes(ctx),
 //	  }
-func (app *Application) Routes() http.Handler {
+func (app *Application) Routes(ctx context.Context) http.Handler {
 	// Initialize a new httprouter router instance.
 	router := httprouter.New()
 
@@ -52,7 +56,7 @@ func (app *Application) Routes() http.Handler {
 	// http.MethodPost are constants which equate to the strings "GET" and "POST"
 	// respectively.
 	router.HandlerFunc(http.MethodGet, "/v1/healthcheck", app.healthcheckHandler)
-	router.Handler(http.MethodGet, "/metrics", promhttp.Handler())
+	router.Handler(http.MethodGet, "/metrics", middleware.NewCachedPromHandler(ctx, prometheus.DefaultGatherer, 10*time.Second))
 
 	// Wrap router with Sentry middleware
 	// Return wrapped httprouter instance.

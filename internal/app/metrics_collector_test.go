@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -18,7 +19,8 @@ func TestMetricsEndpoint(t *testing.T) {
 	// Register the metric without starting the collection routine
 	metrics.ObaApiStatus.WithLabelValues("1", "https://test.example.com").Set(1)
 	// Create a test server
-	ts := httptest.NewServer(app.Routes())
+	ctx := context.Background()
+	ts := httptest.NewServer(app.Routes(ctx))
 	defer ts.Close()
 	// Make a request to the metrics endpoint
 	resp, err := http.Get(ts.URL + "/metrics")
