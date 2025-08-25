@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/getsentry/sentry-go"
@@ -67,11 +68,20 @@ func refreshConfig(ctx context.Context, client *http.Client, configURL, configAu
 // LoadConfigFromFile reads a JSON configuration file from disk and unmarshals it
 // into a list of OBA server configurations (`[]models.ObaServer`).
 //
+// For security reasons, only files named `config.json` are allowed to be loaded.
+// Without this restriction, a user could supply any file path on the machine
+// (e.g., /etc/passwd), and the application would attempt to read it.
+//
 // On error, it reports issues to Sentry and returns a descriptive error.
 //
 // This function is used when the application is configured to load its server list
 // from a static file using the --config-file flag.
 func loadConfigFromFile(filePath string) ([]models.ObaServer, error) {
+	if filepath.Base(filePath) != "config.json" {
+		return nil, fmt.Errorf("invalid config file name: %s (only config.json is allowed)", filePath)
+	}
+
+	// #nosec G304 - file path validated by restricting to config.json
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
