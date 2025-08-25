@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -29,24 +30,20 @@ func TestLoadConfigFromFile(t *testing.T) {
 		"gtfs_rt_api_key": "",
 		"gtfs_rt_api_value": ""
 		}]`
-		tmpFile, err := os.CreateTemp("", "config-*.json")
-		if err != nil {
-			t.Fatalf("Failed to create temporary file: %v", err)
-		}
-		defer os.Remove(tmpFile.Name())
 
-		if _, err := tmpFile.Write([]byte(content)); err != nil {
-			t.Fatalf("Failed to write to temporary file: %v", err)
+		dir := t.TempDir()
+		fp := filepath.Join(dir, "config.json")
+		if err := os.WriteFile(fp, []byte(content), 0o600); err != nil {
+			t.Fatalf("write config.json: %v", err)
 		}
-		tmpFile.Close()
 
-		servers, err := loadConfigFromFile(tmpFile.Name())
+		servers, err := loadConfigFromFile(fp)
 		if err != nil {
 			t.Fatalf("loadConfigFromFile failed: %v", err)
 		}
 
 		if len(servers) != 1 {
-			t.Fatalf("Expected 1 server, got %d", len(servers))
+			t.Fatalf("expected 1 server, got %d", len(servers))
 		}
 
 		expected := models.ObaServer{
@@ -62,33 +59,29 @@ func TestLoadConfigFromFile(t *testing.T) {
 		}
 
 		if servers[0] != expected {
-			t.Errorf("Expected server %+v, got %+v", expected, servers[0])
+			t.Errorf("expected %+v, got %+v", expected, servers[0])
 		}
 	})
 
 	t.Run("InvalidJSON", func(t *testing.T) {
+		dir := t.TempDir()
+		fp := filepath.Join(dir, "config.json")
 		content := `{ this is not valid JSON }`
-		tmpFile, err := os.CreateTemp("", "invalid-config-*.json")
-		if err != nil {
-			t.Fatalf("Failed to create temporary file: %v", err)
+		if err := os.WriteFile(fp, []byte(content), 0o600); err != nil {
+			t.Fatalf("write invalid config.json: %v", err)
 		}
-		defer os.Remove(tmpFile.Name())
 
-		if _, err := tmpFile.Write([]byte(content)); err != nil {
-			t.Fatalf("Failed to write to temporary file: %v", err)
-		}
-		tmpFile.Close()
-
-		_, err = loadConfigFromFile(tmpFile.Name())
-		if err == nil {
-			t.Errorf("Expected error with invalid JSON, got none")
+		if _, err := loadConfigFromFile(fp); err == nil {
+			t.Errorf("expected error with invalid JSON, got none")
 		}
 	})
 
 	t.Run("NonExistentFile", func(t *testing.T) {
-		_, err := loadConfigFromFile("non-existent-file.json")
-		if err == nil {
-			t.Errorf("Expected error for non-existent file, got none")
+		dir := t.TempDir()
+		fp := filepath.Join(dir, "config.json")
+
+		if _, err := loadConfigFromFile(fp); err == nil {
+			t.Errorf("expected error for non-existent file, got none")
 		}
 	})
 }
