@@ -83,3 +83,55 @@ func TestDoWithBackoff(t *testing.T) {
 		})
 	}
 }
+
+func TestCalculateNewBackoffDelay(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    time.Duration
+		expected time.Duration
+	}{
+		{
+			name:     "normal case",
+			input:    1 * time.Second,
+			expected: 1 * time.Second * BACKOFF_FACTOR,
+		},
+		{
+			name:     "capped at max backoff",
+			input:    MAX_BACKOFF,
+			expected: MAX_BACKOFF,
+		},
+		{
+			name:     "above max backoff",
+			input:    MAX_BACKOFF * 2,
+			expected: MAX_BACKOFF,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := calculateNewBackoffDelay(tt.input)
+			if got != tt.expected {
+				t.Errorf("expected %v, got %v", tt.expected, got)
+			}
+		})
+	}
+}
+
+func TestCalculateNextRetryAt(t *testing.T) {
+	backoff := 1 * time.Second
+	now := time.Now().UTC()
+
+	got := calculateNextRetryAt(backoff)
+
+	if got.Before(now.Add(backoff)) {
+		t.Errorf("expected >= %v, got %v", now.Add(backoff), got)
+	}
+
+	maxWithJitter := backoff + time.Duration(float64(backoff)*JITTER_FACTOR)
+	if maxWithJitter > MAX_BACKOFF {
+		maxWithJitter = MAX_BACKOFF
+	}
+	if got.After(now.Add(maxWithJitter)) {
+		t.Errorf("expected <= %v, got %v", now.Add(maxWithJitter), got)
+	}
+}
