@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -202,34 +201,6 @@ func storeGTFSBundle(staticBundle *remoteGtfs.Static, serverID int, staticStore 
 	// one bounding box per server
 	boundingBoxStore.Set(serverID, bbox)
 	return nil
-}
-
-// ParseGTFSFromCache reads a GTFS bundle from the cache and parses it into a gtfs.Static object.
-// It returns the parsed static data or an error if parsing fails.
-func ParseGTFSFromCache(cachePath string, serverID int) (*remoteGtfs.Static, error) {
-	fileBytes, err := os.ReadFile(cachePath)
-	if err != nil {
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(serverID)),
-			ExtraContext: map[string]interface{}{
-				"cache_path": cachePath,
-			},
-		})
-		return nil, err
-	}
-
-	staticData, err := remoteGtfs.ParseStatic(fileBytes, remoteGtfs.ParseStaticOptions{})
-	if err != nil {
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(serverID)),
-			ExtraContext: map[string]interface{}{
-				"cache_path": cachePath,
-			},
-		})
-		return nil, err
-	}
-
-	return staticData, nil
 }
 
 // getStopLocationsByIDs retrieves stop locations by their IDs from the GTFS cache.

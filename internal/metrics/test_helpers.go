@@ -12,19 +12,6 @@ import (
 	"watchdog.onebusaway.org/internal/models"
 )
 
-// getFixturePath returns the absolute path to a test fixture file located in the testdata directory.
-// It fails the test immediately if the path cannot be resolved.
-func getFixturePath(t *testing.T, fixturePath string) string {
-	t.Helper()
-
-	absPath, err := filepath.Abs(filepath.Join("..", "..", "testdata", fixturePath))
-	if err != nil {
-		t.Fatalf("Failed to get absolute path to testdata/%s: %v", fixturePath, err)
-	}
-
-	return absPath
-}
-
 // readFixture reads the contents of a test fixture file located in the testdata directory.
 // It returns the file contents as a byte slice.
 // It fails the test immediately if the file cannot be read.

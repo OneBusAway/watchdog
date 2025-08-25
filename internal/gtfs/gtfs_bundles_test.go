@@ -144,48 +144,6 @@ func TestGetStopLocationsByIDs(t *testing.T) {
 	})
 }
 
-func TestParseGTFSFromCache(t *testing.T) {
-	server := models.ObaServer{ID: 1, Name: "Test"}
-
-	tests := []struct {
-		name      string
-		cachePath string
-		expectErr bool
-	}{
-		{
-			name:      "Valid GTFS file",
-			cachePath: "../../testdata/gtfs.zip",
-			expectErr: false,
-		},
-		{
-			name:      "Invalid path",
-			cachePath: "../../testdata/does-not-exist.zip",
-			expectErr: true,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			staticData, err := ParseGTFSFromCache(tc.cachePath, server.ID)
-			if tc.expectErr {
-				if err == nil {
-					t.Fatal("expected error but got nil")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if staticData == nil {
-				t.Fatal("expected staticData to be non-nil")
-			}
-			if len(staticData.Stops) == 0 {
-				t.Error("expected at least one stop in GTFS data, got 0")
-			}
-		})
-	}
-}
-
 func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 	t.Run("Success Case", func(t *testing.T) {
 		mockServer := setupGtfsServer(t, "gtfs_rt_feed_vehicles.pb")
