@@ -9,10 +9,12 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/getsentry/sentry-go"
 	remoteGtfs "github.com/jamespfennell/gtfs"
+	"watchdog.onebusaway.org/internal/config"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
@@ -35,46 +37,42 @@ import (
 //
 // This function does not return an error; failures are handled and reported per-server.
 
-func downloadGTFSBundles(servers []models.ObaServer, logger *slog.Logger, boundingBoxStore *geo.BoundingBoxStore, staticStore *StaticStore) {
+func downloadGTFSBundles(ctx context.Context, servers []models.ObaServer, logger *slog.Logger, boundingBoxStore *geo.BoundingBoxStore, staticStore *StaticStore, maxRetries int) {
+	var wg sync.WaitGroup
 	for _, server := range servers {
-		err := downloadAndStoreGTFSBundle(server.GtfsUrl, server.ID, staticStore)
-		if err != nil {
-			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-				Tags: utils.MakeMap("server_id", fmt.Sprintf("%d", server.ID)),
-				ExtraContext: map[string]interface{}{
-					"gtfs_url": server.GtfsUrl,
-				},
-				Level: sentry.LevelError,
-			})
-			logger.Error("Failed to download GTFS bundle", "server_id", server.ID, "error", err)
-			continue
-		}
-		logger.Info("Successfully downloaded GTFS bundle", "server_id", server.ID)
+		s := server
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
 
-		staticData, ok := staticStore.Get(server.ID)
-		if !ok {
-			err = fmt.Errorf("GTFS static bundle not found for server ID %d", server.ID)
-			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-				Tags: utils.MakeMap("server_id", fmt.Sprintf("%d", server.ID)),
-				ExtraContext: map[string]interface{}{
-					"gtfs_url": server.GtfsUrl,
-				},
-				Level: sentry.LevelError,
-			})
-			logger.Error("GTFS static bundle not found", "server_id", server.ID, "error", err)
-			continue
-		}
-		// compute bounding box for each downloaded GTFS bundle
-		bbox, err := geo.ComputeBoundingBox(staticData.Stops)
-		if err != nil {
-			logger.Warn("Could not compute bounding box", "server_id", server.ID, "error", err)
-			continue
-		}
+			staticBundle, err := downloadGTFSBundle(ctx, s.GtfsUrl, s.ID, maxRetries)
+			if err != nil {
+				report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+					Tags: utils.MakeMap("server_id", fmt.Sprintf("%d", server.ID)),
+					ExtraContext: map[string]interface{}{
+						"gtfs_url": s.GtfsUrl,
+					},
+					Level: sentry.LevelError,
+				})
+				logger.Error("Failed to download GTFS bundle", "server_id", s.ID, "error", err)
+				return
+			}
+			logger.Info("Successfully downloaded GTFS bundle", "server_id", s.ID)
 
-		// one bounding box per server
-		boundingBoxStore.Set(server.ID, bbox)
-		logger.Info("Computed bounding box", "server_id", server.ID, "bbox", bbox)
+			err = storeGTFSBundle(staticBundle, s.ID, staticStore, boundingBoxStore)
+			if err != nil {
+				report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+					Tags: utils.MakeMap("server_id", fmt.Sprintf("%d", s.ID)),
+					ExtraContext: map[string]interface{}{
+						"gtfs_url": s.GtfsUrl,
+					},
+					Level: sentry.LevelError,
+				})
+				logger.Error("Failed to store GTFS bundle", "server_id", s.ID, "error", err)
+			}
+		}()
 	}
+	wg.Wait()
 }
 
 // refreshGTFSBundles periodically refreshes GTFS static bundles for a list of OBA servers.
@@ -93,7 +91,7 @@ func downloadGTFSBundles(servers []models.ObaServer, logger *slog.Logger, boundi
 //   - interval: Time duration between each refresh cycle.
 //   - boundingBoxstore: Store to keep geographic bounding boxes per server.
 //   - staticStore: Store to keep parsed GTFS static data per server.
-func refreshGTFSBundles(ctx context.Context, servers []models.ObaServer, logger *slog.Logger, interval time.Duration, boundingBoxstore *geo.BoundingBoxStore, staticStore *StaticStore) {
+func refreshGTFSBundles(ctx context.Context, servers []models.ObaServer, logger *slog.Logger, interval time.Duration, boundingBoxstore *geo.BoundingBoxStore, staticStore *StaticStore, maxRetries int) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -103,7 +101,7 @@ func refreshGTFSBundles(ctx context.Context, servers []models.ObaServer, logger 
 			return
 		case <-ticker.C:
 			logger.Info("Refreshing GTFS bundles")
-			downloadGTFSBundles(servers, logger, boundingBoxstore, staticStore)
+			downloadGTFSBundles(ctx, servers, logger, boundingBoxstore, staticStore, maxRetries)
 		}
 	}
 }
@@ -122,10 +120,26 @@ func refreshGTFSBundles(ctx context.Context, servers []models.ObaServer, logger 
 //   - staticStore: The in-memory store that holds GTFS static data indexed by server ID.
 //
 // Returns:
+//   - gtfs static data
+//   - boolean severs as a sign if the request reached the server or not (server timeout or down)
 //   - error: Describes what went wrong, or nil if the operation was successful.
 
-func downloadAndStoreGTFSBundle(url string, serverID int, staticStore *StaticStore) error {
-	resp, err := http.Get(url)
+func downloadGTFSBundle(ctx context.Context, url string, serverID int, maxRetries int) (*remoteGtfs.Static, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		err = fmt.Errorf("failed to create request for %s: %w", url, err)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: utils.MakeMap("server_id", strconv.Itoa(serverID)),
+			ExtraContext: map[string]interface{}{
+				"url": url,
+			},
+		})
+		return nil, err
+	}
+
+	resp, err := config.DoWithBackoff(ctx, client, req, maxRetries)
+
 	if err != nil {
 		err = fmt.Errorf("failed to make GET request to %s: %w", url, err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -134,7 +148,7 @@ func downloadAndStoreGTFSBundle(url string, serverID int, staticStore *StaticSto
 				"url": url,
 			},
 		})
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
@@ -147,14 +161,14 @@ func downloadAndStoreGTFSBundle(url string, serverID int, staticStore *StaticSto
 				"status": resp.Status,
 			},
 		})
-		return err
+		return nil, err
 	}
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		err = fmt.Errorf("failed to read GTFS bundle response body from %s: %w", url, err)
 		report.ReportError(err)
-		return err
+		return nil, err
 	}
 
 	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
@@ -166,8 +180,13 @@ func downloadAndStoreGTFSBundle(url string, serverID int, staticStore *StaticSto
 				"url": url,
 			},
 		})
-		return err
+		return nil, err
 	}
+	return staticBundle, nil
+
+}
+
+func storeGTFSBundle(staticBundle *remoteGtfs.Static, serverID int, staticStore *StaticStore, boundingBoxStore *geo.BoundingBoxStore) error {
 	// StaticData is a wrapper around the GTFS static bundle
 	// that includes only the parts we use in the application.
 	// So we do not keep the whole GTFS static bundle in memory,
@@ -175,6 +194,13 @@ func downloadAndStoreGTFSBundle(url string, serverID int, staticStore *StaticSto
 	staticData := models.NewStaticData(staticBundle)
 	staticBundle = nil // drop reference, GC can collect earlier
 	staticStore.Set(serverID, staticData)
+	// compute bounding box for each downloaded GTFS bundle
+	bbox, err := geo.ComputeBoundingBox(staticData.Stops)
+	if err != nil {
+		return fmt.Errorf("could not compute bounding box for server_id %d: %v", serverID, err)
+	}
+	// one bounding box per server
+	boundingBoxStore.Set(serverID, bbox)
 	return nil
 }
 

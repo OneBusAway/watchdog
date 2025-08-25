@@ -24,7 +24,7 @@ import (
 //
 // Returns:
 //   - None (side effects include reporting to Prometheus and Sentry).
-func serverPing(server models.ObaServer) {
+func serverPing(server models.ObaServer) bool {
 	client := onebusaway.NewClient(
 		option.WithAPIKey(server.ObaApiKey),
 		option.WithBaseURL(server.ObaBaseURL),
@@ -46,7 +46,7 @@ func serverPing(server models.ObaServer) {
 			strconv.Itoa(server.ID),
 			server.ObaBaseURL,
 		).Set(0)
-		return
+		return false
 	}
 
 	// Check response validity
@@ -55,10 +55,11 @@ func serverPing(server models.ObaServer) {
 			strconv.Itoa(server.ID),
 			server.ObaBaseURL,
 		).Set(1)
-	} else {
-		ObaApiStatus.WithLabelValues(
-			strconv.Itoa(server.ID),
-			server.ObaBaseURL,
-		).Set(0)
+		return true
 	}
+	ObaApiStatus.WithLabelValues(
+		strconv.Itoa(server.ID),
+		server.ObaBaseURL,
+	).Set(0)
+	return false
 }

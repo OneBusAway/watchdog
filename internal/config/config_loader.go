@@ -41,27 +41,25 @@ func ValidateConfigFlags(configFile, configURL *string) error {
 // ensuring resiliency in the presence of transient issues.
 //
 // The routine stops gracefully when the context is canceled.
-func refreshConfig(ctx context.Context, client *http.Client, configURL, configAuthUser, configAuthPass string, cfg *Config, logger *slog.Logger, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+func refreshConfig(ctx context.Context, client *http.Client, configURL, configAuthUser, configAuthPass string, cfg *Config, logger *slog.Logger, interval time.Duration, maxRetries int) {
 	for {
 		select {
 		case <-ctx.Done():
 			logger.Info("Stopping config refresh routine")
 			return
-		case <-ticker.C:
-			newServers, err := loadConfigFromURL(client, configURL, configAuthUser, configAuthPass)
+		default:
+			newServers, err := loadConfigFromURL(ctx, client, configURL, configAuthUser, configAuthPass, maxRetries)
 			if err != nil {
 				report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 					Tags:  utils.MakeMap("config_url", configURL),
 					Level: sentry.LevelError,
 				})
 				logger.Error("Failed to refresh remote config", "error", err)
-				continue
+			} else {
+				cfg.UpdateConfig(newServers)
+				logger.Info("Successfully refreshed server configuration")
 			}
-
-			cfg.UpdateConfig(newServers)
-			logger.Info("Successfully refreshed server configuration")
+			time.Sleep(interval)
 		}
 	}
 }
@@ -102,7 +100,7 @@ func loadConfigFromFile(filePath string) ([]models.ObaServer, error) {
 // into a slice of `models.ObaServer`.
 //
 // Errors are logged and reported to Sentry for observability.
-func loadConfigFromURL(client *http.Client, url, authUser, authPass string) ([]models.ObaServer, error) {
+func loadConfigFromURL(ctx context.Context, client *http.Client, url, authUser, authPass string, maxRetries int) ([]models.ObaServer, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -116,7 +114,7 @@ func loadConfigFromURL(client *http.Client, url, authUser, authPass string) ([]m
 		req.SetBasicAuth(authUser, authPass)
 	}
 
-	resp, err := client.Do(req)
+	resp, err := DoWithBackoff(ctx, client, req, maxRetries)
 	if err != nil {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags:  utils.MakeMap("config_url", url),
@@ -124,6 +122,7 @@ func loadConfigFromURL(client *http.Client, url, authUser, authPass string) ([]m
 		})
 		return nil, fmt.Errorf("failed to fetch remote config: %v", err)
 	}
+
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {

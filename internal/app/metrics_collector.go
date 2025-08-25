@@ -79,7 +79,42 @@ func (app *Application) StartMetricsCollection(ctx context.Context) {
 //   - Sentry reports are tagged for fast debugging and correlation in distributed systems.
 //   - Dependencies are injected (via app fields) to support testability and separation of concerns.
 func (app *Application) CollectMetricsForServer(server models.ObaServer) {
-	app.MetricsService.ServerPing(server)
+	nextRetryAt, exists := app.ConfigService.BackoffStore.NextRetryAt(server.ID)
+	if exists && time.Now().UTC().Before(nextRetryAt) {
+		app.Logger.Info("Skipping metrics collection for server due to backoff", "server_id", server.ID, "next_retry_at", nextRetryAt)
+		report.ReportErrorWithSentryOptions(fmt.Errorf("skipping metrics collection for server %s due to backoff", server.ObaBaseURL), report.SentryReportOptions{
+			Tags: map[string]string{
+				"server_id":   fmt.Sprintf("%d", server.ID),
+				"server_name": server.Name,
+			},
+			ExtraContext: map[string]interface{}{
+				"oba_base_url": server.ObaBaseURL,
+			},
+			Level: sentry.LevelInfo,
+		})
+		return
+	}
+
+	ok := app.MetricsService.ServerPing(server)
+	if !ok {
+		app.Logger.Error("Server ping failed", "server_id", server.ID, "server_name", server.Name)
+		report.ReportErrorWithSentryOptions(fmt.Errorf("server ping failed for %s", server.ObaBaseURL), report.SentryReportOptions{
+			Tags: map[string]string{
+				"server_id":   fmt.Sprintf("%d", server.ID),
+				"server_name": server.Name,
+			},
+			ExtraContext: map[string]interface{}{
+				"oba_base_url": server.ObaBaseURL,
+			},
+			Level: sentry.LevelError,
+		})
+		app.ConfigService.BackoffStore.UpdateBackoff(server.ID)
+		app.Logger.Info("Skipping further metrics collection for server due to ping failure")
+		return
+	}
+
+	app.Logger.Info("Server ping successful", "server_id", server.ID, "server_name", server.Name)
+	app.ConfigService.BackoffStore.ResetBackoff(server.ID)
 
 	_, _, err := app.MetricsService.CheckBundleExpiration(time.Now().UTC(), server)
 	if err != nil {

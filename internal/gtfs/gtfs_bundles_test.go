@@ -23,7 +23,8 @@ func TestDownloadGTFSBundles(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	boundingBoxStore := geo.NewBoundingBoxStore()
 	staticStore := NewStaticStore()
-	downloadGTFSBundles(servers, logger, boundingBoxStore, staticStore)
+	ctx := context.Background()
+	downloadGTFSBundles(ctx, servers, logger, boundingBoxStore, staticStore, 1)
 
 }
 
@@ -36,21 +37,24 @@ func TestRefreshGTFSBundles(t *testing.T) {
 	staticStore := NewStaticStore()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go refreshGTFSBundles(ctx, servers, logger, 10*time.Millisecond, boundingBoxStore, staticStore)
+	go refreshGTFSBundles(ctx, servers, logger, 10*time.Millisecond, boundingBoxStore, staticStore, 1)
 
 	time.Sleep(15 * time.Millisecond)
 
 	t.Log("refreshGTFSBundles executed without crashing")
 }
 
-func TestDownloadAndStoreGTFSBundle(t *testing.T) {
+func TestDownloadGTFSBundle(t *testing.T) {
 	mockServer := setupGtfsServer(t, "gtfs.zip")
 	serverID := 1
-	staticStore := NewStaticStore()
+	ctx := context.Background()
 	t.Run("Success Response", func(t *testing.T) {
-		err := downloadAndStoreGTFSBundle(mockServer.URL, serverID, staticStore)
+		staticBundle, err := downloadGTFSBundle(ctx, mockServer.URL, serverID, 1)
 		if err != nil {
 			t.Fatalf("DownloadGTFSBundle failed: %v", err)
+		}
+		if staticBundle == nil {
+			t.Fatal("static data retrieved from the store is nil; expected non-nil value")
 		}
 
 		data := readFixture(t, "gtfs.zip")
@@ -65,14 +69,6 @@ func TestDownloadAndStoreGTFSBundle(t *testing.T) {
 			t.Fatal("expected static data has nil Agencies slice; expected it to be parsed")
 		}
 
-		staticData, exists := staticStore.Get(serverID)
-		if !exists {
-			t.Fatalf("expected static data for server ID %d, but it was not found in the store", serverID)
-		}
-		if staticData == nil {
-			t.Fatal("static data retrieved from the store is nil; expected non-nil value")
-		}
-
 		// For simplicity, we validate the content of agency.txt by comparing the agency IDs.
 		// We assume that if the agency IDs match, the GTFS static data was parsed and stored correctly.
 		// This level of verification is sufficient for this test.
@@ -80,8 +76,8 @@ func TestDownloadAndStoreGTFSBundle(t *testing.T) {
 		// Note: We rely on agency.txt as it is a required GTFS file.
 		// Make sure the test data provided includes a non-empty agency.txt file.
 
-		if len(expectedStaticData.Agencies) != len(staticData.Agencies) {
-			t.Fatalf("expected %d agencies, got %d", len(expectedStaticData.Agencies), len(staticData.Agencies))
+		if len(expectedStaticData.Agencies) != len(staticBundle.Agencies) {
+			t.Fatalf("expected %d agencies, got %d", len(expectedStaticData.Agencies), len(staticBundle.Agencies))
 		}
 		if len(expectedStaticData.Agencies) == 0 {
 			t.Fatal("expected Agencies slice is empty; can't verify content consistency")
@@ -90,13 +86,13 @@ func TestDownloadAndStoreGTFSBundle(t *testing.T) {
 		for _, agency := range expectedStaticData.Agencies {
 			expectedAgencyIDs[agency.Id] = struct{}{}
 		}
-		if staticData.Agencies == nil {
+		if staticBundle.Agencies == nil {
 			t.Fatal("stored static data has nil Agencies slice; expected it to be populated")
 		}
-		if len(staticData.Agencies) == 0 {
+		if len(staticBundle.Agencies) == 0 {
 			t.Fatal("stored Agencies slice is empty; static data likely not parsed correctly")
 		}
-		for _, agency := range staticData.Agencies {
+		for _, agency := range staticBundle.Agencies {
 			if _, ok := expectedAgencyIDs[agency.Id]; !ok {
 				t.Fatalf("unexpected agency ID %s found in stored static data", agency.Id)
 			}
@@ -105,7 +101,7 @@ func TestDownloadAndStoreGTFSBundle(t *testing.T) {
 
 	t.Run("Invalid URL", func(t *testing.T) {
 		invalidURL := "http://invalid-url"
-		err := downloadAndStoreGTFSBundle(invalidURL, 2, staticStore)
+		_, err := downloadGTFSBundle(ctx, invalidURL, 2, 1)
 		if err == nil {
 			t.Errorf("Expected error for invalid URL, got none")
 		}
