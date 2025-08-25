@@ -58,7 +58,8 @@ func (app *Application) Routes(ctx context.Context) http.Handler {
 	router.HandlerFunc(http.MethodGet, "/v1/healthcheck", app.healthcheckHandler)
 	router.Handler(http.MethodGet, "/metrics", middleware.NewCachedPromHandler(ctx, prometheus.DefaultGatherer, 10*time.Second))
 
-	// Wrap router with Sentry middleware
+	// Wrap router with Sentry and securityHeaders middlewares
 	// Return wrapped httprouter instance.
-	return middleware.SentryMiddleware(router)
+	handler := middleware.SentryMiddleware(router)
+	return middleware.SecurityHeaders(handler)
 }
