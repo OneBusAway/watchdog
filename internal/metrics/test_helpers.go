@@ -12,19 +12,6 @@ import (
 	"watchdog.onebusaway.org/internal/models"
 )
 
-// getFixturePath returns the absolute path to a test fixture file located in the testdata directory.
-// It fails the test immediately if the path cannot be resolved.
-func getFixturePath(t *testing.T, fixturePath string) string {
-	t.Helper()
-
-	absPath, err := filepath.Abs(filepath.Join("..", "..", "testdata", fixturePath))
-	if err != nil {
-		t.Fatalf("Failed to get absolute path to testdata/%s: %v", fixturePath, err)
-	}
-
-	return absPath
-}
-
 // readFixture reads the contents of a test fixture file located in the testdata directory.
 // It returns the file contents as a byte slice.
 // It fails the test immediately if the file cannot be read.
@@ -35,7 +22,8 @@ func readFixture(t *testing.T, fixturePath string) []byte {
 	if err != nil {
 		t.Fatalf("Failed to get absolute path to testdata/%s: %v", fixturePath, err)
 	}
-
+	// Safe: absPath is only used in local tests and not from user input.
+	// #nosec G304
 	data, err := os.ReadFile(absPath)
 	if err != nil {
 		t.Fatalf("Failed to read fixture file: %v", err)
@@ -91,15 +79,8 @@ func setupObaServer(t *testing.T, response string, statusCode int) *httptest.Ser
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(statusCode)
+		// Writing to ResponseWriter in tests, error can be safely ignored.
+		// #nosec G104
 		w.Write([]byte(response))
 	}))
-}
-
-// setupTestServer creates a new httptest.Server with the provided HTTP handler.
-// Automatically registers a cleanup function to close the server after the test ends.
-func setupTestServer(t *testing.T, handler http.Handler) *httptest.Server {
-	t.Helper()
-	ts := httptest.NewServer(handler)
-	t.Cleanup(func() { ts.Close() })
-	return ts
 }

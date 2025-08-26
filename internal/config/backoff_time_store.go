@@ -90,6 +90,8 @@ func DoWithBackoff(ctx context.Context, client *http.Client, req *http.Request, 
 }
 
 func calculateNextRetryAt(backoff time.Duration) time.Time {
+	// Adding jitter for backoff retries. Cryptographic randomness is not required.
+	// #nosec G404
 	jitter := time.Duration(rand.Float64() * float64(backoff) * JITTER_FACTOR)
 	backoff += jitter
 	if backoff > MAX_BACKOFF {
