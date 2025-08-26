@@ -84,4 +84,3 @@ func setupObaServer(t *testing.T, response string, statusCode int) *httptest.Ser
 		w.Write([]byte(response))
 	}))
 }
-

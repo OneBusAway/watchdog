@@ -164,7 +164,7 @@ func TestBackoffStore(t *testing.T) {
 		before, _ := store.NextRetryAt(serverID)
 		store.UpdateBackoff(serverID)
 		after, _ := store.NextRetryAt(serverID)
-		
+
 		if !after.After(before) {
 			t.Errorf("expected NextRetryAt to move forward after backoff increase, got before=%v after=%v", before, after)
 		}

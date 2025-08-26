@@ -56,6 +56,6 @@ func (app *Application) healthcheckHandler(w http.ResponseWriter, r *http.Reques
 		w.WriteHeader(http.StatusInternalServerError)
 	}
 	if err := json.NewEncoder(w).Encode(status); err != nil {
-    app.Logger.Warn("failed to write healthcheck response", "error", err)
+		app.Logger.Warn("failed to write healthcheck response", "error", err)
 	}
 }
