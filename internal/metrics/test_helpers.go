@@ -85,11 +85,3 @@ func setupObaServer(t *testing.T, response string, statusCode int) *httptest.Ser
 	}))
 }
 
-// setupTestServer creates a new httptest.Server with the provided HTTP handler.
-// Automatically registers a cleanup function to close the server after the test ends.
-func setupTestServer(t *testing.T, handler http.Handler) *httptest.Server {
-	t.Helper()
-	ts := httptest.NewServer(handler)
-	t.Cleanup(func() { ts.Close() })
-	return ts
-}
