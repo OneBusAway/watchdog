@@ -82,9 +82,21 @@ func TestDownloadGTFSBundle(t *testing.T) {
 		if len(expectedStaticData.Agencies) == 0 {
 			t.Fatal("expected Agencies slice is empty; can't verify content consistency")
 		}
-		expectedAgencyIDs := make(map[string]struct{})
+		expectedAgencyIDs := make(map[string]struct {
+			Name      string
+			TimeZone  string
+			AgencyUrl string
+		})
 		for _, agency := range expectedStaticData.Agencies {
-			expectedAgencyIDs[agency.Id] = struct{}{}
+			expectedAgencyIDs[agency.Id] = struct {
+				Name      string
+				TimeZone  string
+				AgencyUrl string
+			}{
+				Name:      agency.Name,
+				TimeZone:  agency.Timezone,
+				AgencyUrl: agency.Url,
+			}
 		}
 		if staticBundle.Agencies == nil {
 			t.Fatal("stored static data has nil Agencies slice; expected it to be populated")
@@ -93,8 +105,22 @@ func TestDownloadGTFSBundle(t *testing.T) {
 			t.Fatal("stored Agencies slice is empty; static data likely not parsed correctly")
 		}
 		for _, agency := range staticBundle.Agencies {
-			if _, ok := expectedAgencyIDs[agency.Id]; !ok {
-				t.Fatalf("unexpected agency ID %s found in stored static data", agency.Id)
+			agc_data, ok := expectedAgencyIDs[agency.Id]
+			if !ok {
+				t.Fatalf("unexpected agency ID %s", agency.Id)
+			}
+
+			if agc_data.Name != agency.Name {
+				t.Errorf("agency %s name mismatch: expected %s, got %s",
+					agency.Id, agc_data.Name, agency.Name)
+			}
+
+			if agc_data.TimeZone != agency.Timezone {
+				t.Errorf("agency %s timezone mismatch", agency.Id)
+			}
+
+			if agc_data.AgencyUrl != agency.Url {
+				t.Errorf("agency %s URL mismatch", agency.Id)
 			}
 		}
 	})
@@ -121,14 +147,45 @@ func TestGetStopLocationsByIDs(t *testing.T) {
 	staticStore := NewStaticStore()
 	staticStore.Set(server.ID, staticData)
 
-	t.Run("Valid stop IDs", func(t *testing.T) {
+	t.Run("Valid stops", func(t *testing.T) {
 		stopIDs := []string{"11060", "1108"} // Make sure these exist in your test GTFS
+		stopsData := map[string]struct {
+			stopName string
+			lat      float64
+			long     float64
+		}{
+			"11060": {stopName: "Broadway & E Denny Way", lat: 47.618425, long: -122.320940},
+			"1108":  {stopName: "Westlake", lat: 47.611450, long: -122.337532},
+		}
+
 		stops, err := getStopLocationsByIDs(server.ID, stopIDs, staticStore)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if len(stops) == 0 {
 			t.Fatalf("expected some matched stops, got 0")
+		}
+
+		for _, stop := range stops {
+			expected, ok := stopsData[stop.Id]
+			if !ok {
+				t.Fatalf("unexpected stop ID returned: %s", stop.Id)
+			}
+
+			if stop.Name != expected.stopName {
+				t.Errorf("stop %s name mismatch: expected %s, got %s",
+					stop.Id, expected.stopName, stop.Name)
+			}
+
+			const epsilon = 1e-5
+			if diff := *stop.Latitude - expected.lat; diff > epsilon || diff < -epsilon {
+				t.Errorf("stop %s latitude mismatch: expected %f, got %f",
+					stop.Id, expected.lat, *stop.Latitude)
+			}
+			if diff := *stop.Longitude - expected.long; diff > epsilon || diff < -epsilon {
+				t.Errorf("stop %s longitude mismatch: expected %f, got %f",
+					stop.Id, expected.long, *stop.Longitude)
+			}
 		}
 	})
 
@@ -187,19 +244,21 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 			t.Fatalf("Expected %d vehicles, got %d", len(expectedRtData.Vehicles), len(realtimeData.Vehicles))
 		}
 
-		expectedMap := make(map[string]struct{})
+		expectedMap := make(map[string]obaGtfs.Vehicle)
 		for _, vehicle := range expectedRtData.Vehicles {
 			if vehicle.ID != nil {
-				expectedMap[vehicle.ID.ID] = struct{}{}
+				expectedMap[vehicle.ID.ID] = vehicle
 			}
 		}
 		countExpectedNilIDs := len(expectedRtData.Vehicles) - len(expectedMap)
 		countNilIDs := 0
 		for _, vehicle := range realtimeData.Vehicles {
 			if vehicle.ID != nil {
-				if _, exists := expectedMap[vehicle.ID.ID]; !exists {
+				expectedVehicle, exists := expectedMap[vehicle.ID.ID]
+				if !exists {
 					t.Errorf("Unexpected vehicle ID %s found in GTFS-RT data", vehicle.ID.ID)
 				}
+				assertVehicle(t, &expectedVehicle, &vehicle)
 			} else {
 				countNilIDs++
 			}
