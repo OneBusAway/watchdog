@@ -1,7 +1,7 @@
 package models
 
 import (
-	remoteGtfs "github.com/jamespfennell/gtfs"
+	obaGtfs "github.com/OneBusAway/go-gtfs"
 )
 
 // StaticData represents the static GTFS data structure.
@@ -13,16 +13,16 @@ import (
 // to include more fields from the GTFS Static bundle.
 // Don't forget to include them here
 type StaticData struct {
-	Stops    []remoteGtfs.Stop
-	Agencies []remoteGtfs.Agency
-	Services []remoteGtfs.Service
+	Stops    []obaGtfs.Stop
+	Agencies []obaGtfs.Agency
+	Services []obaGtfs.Service
 }
 
-func NewStaticData(GtfsStaticBundle *remoteGtfs.Static) *StaticData {
+func NewStaticData(GtfsStaticBundle *obaGtfs.Static) *StaticData {
 	return &StaticData{
-		Stops:    append([]remoteGtfs.Stop(nil), GtfsStaticBundle.Stops...),
-		Agencies: append([]remoteGtfs.Agency(nil), GtfsStaticBundle.Agencies...),
-		Services: append([]remoteGtfs.Service(nil), GtfsStaticBundle.Services...),
+		Stops:    append([]obaGtfs.Stop(nil), GtfsStaticBundle.Stops...),
+		Agencies: append([]obaGtfs.Agency(nil), GtfsStaticBundle.Agencies...),
+		Services: append([]obaGtfs.Service(nil), GtfsStaticBundle.Services...),
 	}
 }
 
@@ -34,11 +34,11 @@ func NewStaticData(GtfsStaticBundle *remoteGtfs.Static) *StaticData {
 // to include more fields from the GTFS Realtime bundle.
 // Don't forget to include them here
 type RealtimeData struct {
-	Vehicles []remoteGtfs.Vehicle
+	Vehicles []obaGtfs.Vehicle
 }
 
-func NewRealtimeData(GtfsRealtimeBundle *remoteGtfs.Realtime) *RealtimeData {
+func NewRealtimeData(GtfsRealtimeBundle *obaGtfs.Realtime) *RealtimeData {
 	return &RealtimeData{
-		Vehicles: append([]remoteGtfs.Vehicle(nil), GtfsRealtimeBundle.Vehicles...),
+		Vehicles: append([]obaGtfs.Vehicle(nil), GtfsRealtimeBundle.Vehicles...),
 	}
 }

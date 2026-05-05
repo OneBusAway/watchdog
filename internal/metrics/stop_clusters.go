@@ -1,7 +1,7 @@
 package metrics
 
 import (
-	remoteGtfs "github.com/jamespfennell/gtfs"
+	obaGtfs "github.com/OneBusAway/go-gtfs"
 	"watchdog.onebusaway.org/internal/geo"
 )
 
@@ -19,7 +19,7 @@ import (
 // - slugID: a unique identifier for the server or deployment instance
 // - agencyID: the GTFS agency identifier
 // - unmatchedStops: a map of stop IDs to GTFS stop objects not matched to gtfs static data
-func reportUnmatchedStopClusters(slugID, agencyID string, unmatchedStops map[string]remoteGtfs.Stop) {
+func reportUnmatchedStopClusters(slugID, agencyID string, unmatchedStops map[string]obaGtfs.Stop) {
 	clusterCount := make(map[string]int)
 	clusterType := make(map[string]string) // station or s2
 

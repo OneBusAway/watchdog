@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	remoteGtfs "github.com/jamespfennell/gtfs"
+	obaGtfs "github.com/OneBusAway/go-gtfs"
 	"github.com/prometheus/client_golang/prometheus"
 	"watchdog.onebusaway.org/internal/config"
 	"watchdog.onebusaway.org/internal/geo"
@@ -49,7 +49,7 @@ func newTestApplication(t *testing.T) *Application {
 	if err != nil {
 		t.Fatalf("Failed to read GTFS fixture: %v", err)
 	}
-	staticBundle, err := remoteGtfs.ParseStatic(fileBytes, remoteGtfs.ParseStaticOptions{})
+	staticBundle, err := obaGtfs.ParseStatic(fileBytes, obaGtfs.ParseStaticOptions{})
 	if err != nil {
 		t.Fatalf("Failed to parse GTFS data: %v", err)
 	}
@@ -75,7 +75,7 @@ func newTestApplication(t *testing.T) *Application {
 	if err != nil {
 		t.Fatalf("Failed to read GTFS-RT fixture: %v", err)
 	}
-	gtfsRT, err := remoteGtfs.ParseRealtime(data, &remoteGtfs.ParseRealtimeOptions{})
+	gtfsRT, err := obaGtfs.ParseRealtime(data, &obaGtfs.ParseRealtimeOptions{})
 	if err != nil {
 		t.Fatalf("Failed to parse GTFS-RT data: %v", err)
 	}

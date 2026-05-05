@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	remoteGtfs "github.com/jamespfennell/gtfs"
+	obaGtfs "github.com/OneBusAway/go-gtfs"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
@@ -30,7 +30,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	gtfsRT, err := remoteGtfs.ParseRealtime(data, &remoteGtfs.ParseRealtimeOptions{})
+	gtfsRT, err := obaGtfs.ParseRealtime(data, &obaGtfs.ParseRealtimeOptions{})
 	if err != nil {
 		fmt.Printf("Failed to parse GTFS-RT data: %v\n", err)
 		os.Exit(1)

@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
+	obaGtfs "github.com/OneBusAway/go-gtfs"
 	"github.com/getsentry/sentry-go"
-	remoteGtfs "github.com/jamespfennell/gtfs"
 	"watchdog.onebusaway.org/internal/config"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/models"
@@ -137,7 +137,7 @@ func refreshGTFSBundles(ctx context.Context, servers []models.ObaServer, logger 
 //   - gtfs static data
 //   - error: Describes what went wrong, or nil if the operation was successful.
 
-func downloadGTFSBundle(ctx context.Context, url string, serverID int, maxRetries int) (*remoteGtfs.Static, error) {
+func downloadGTFSBundle(ctx context.Context, url string, serverID int, maxRetries int) (*obaGtfs.Static, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -184,7 +184,7 @@ func downloadGTFSBundle(ctx context.Context, url string, serverID int, maxRetrie
 		return nil, err
 	}
 
-	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
+	staticBundle, err := obaGtfs.ParseStatic(data, obaGtfs.ParseStaticOptions{})
 	if err != nil {
 		err = fmt.Errorf("failed to parse GTFS static data from %s: %w", url, err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -217,7 +217,7 @@ func downloadGTFSBundle(ctx context.Context, url string, serverID int, maxRetrie
 // Returns:
 //   - error: If computing the bounding box fails, an error is returned. Otherwise, nil.
 
-func storeGTFSBundle(staticBundle *remoteGtfs.Static, serverID int, staticStore *StaticStore, boundingBoxStore *geo.BoundingBoxStore) error {
+func storeGTFSBundle(staticBundle *obaGtfs.Static, serverID int, staticStore *StaticStore, boundingBoxStore *geo.BoundingBoxStore) error {
 	// StaticData is a wrapper around the GTFS static bundle
 	// that includes only the parts we use in the application.
 	// So we do not keep the whole GTFS static bundle in memory,
@@ -238,7 +238,7 @@ func storeGTFSBundle(staticBundle *remoteGtfs.Static, serverID int, staticStore 
 // getStopLocationsByIDs retrieves stop locations by their IDs from the GTFS cache.
 // It returns a map of stop IDs to gtfs.Stop objects.
 
-func getStopLocationsByIDs(serverID int, stopIDs []string, staticStore *StaticStore) (map[string]remoteGtfs.Stop, error) {
+func getStopLocationsByIDs(serverID int, stopIDs []string, staticStore *StaticStore) (map[string]obaGtfs.Stop, error) {
 	staticData, ok := staticStore.Get(serverID)
 	if !ok || staticData == nil {
 		err := fmt.Errorf("no GTFS static data found for server ID %d", serverID)
@@ -253,7 +253,7 @@ func getStopLocationsByIDs(serverID int, stopIDs []string, staticStore *StaticSt
 		stopIDSet[id] = struct{}{}
 	}
 
-	result := make(map[string]remoteGtfs.Stop)
+	result := make(map[string]obaGtfs.Stop)
 	for _, stop := range staticData.Stops {
 		if _, exists := stopIDSet[stop.Id]; exists {
 			result[stop.Id] = stop
@@ -312,7 +312,7 @@ func fetchAndStoreGTFSRTFeed(server models.ObaServer, realtimeStore *RealtimeSto
 		return err
 	}
 
-	gtfsRT, err := remoteGtfs.ParseRealtime(data, &remoteGtfs.ParseRealtimeOptions{})
+	gtfsRT, err := obaGtfs.ParseRealtime(data, &obaGtfs.ParseRealtimeOptions{})
 	if err != nil {
 		report.ReportError(err)
 		return err

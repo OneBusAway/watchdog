@@ -6,8 +6,7 @@ import (
 	"os"
 	"testing"
 
-	remoteGtfs "github.com/jamespfennell/gtfs"
-
+	obaGtfs "github.com/OneBusAway/go-gtfs"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
 )
@@ -24,7 +23,7 @@ func TestCheckAgenciesWithCoverage(t *testing.T) {
 		testServer := createTestServer(ts.URL, "Test Server", 999, "test-key", "http://example.com", "test-api-value", "test-api-key", "1")
 
 		data := readFixture(t, "gtfs.zip")
-		staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
+		staticBundle, err := obaGtfs.ParseStatic(data, obaGtfs.ParseStaticOptions{})
 		if err != nil {
 			t.Fatal("failed to parse gtfs static data")
 		}

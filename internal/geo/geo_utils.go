@@ -8,8 +8,8 @@ import (
 	"math"
 	"sync"
 
+	obaGtfs "github.com/OneBusAway/go-gtfs"
 	"github.com/golang/geo/s2"
-	remoteGtfs "github.com/jamespfennell/gtfs"
 )
 
 // BoundingBox defines the geographic boundaries of a rectangular area.
@@ -29,7 +29,7 @@ func (b *BoundingBox) Contains(lat, lon float64) bool {
 // computeBoundingBox returns the bounding box enclosing all valid stops.
 //
 // It returns an error if the input slice is empty or contains no valid lat/lon pairs.
-func computeBoundingBox(stops []remoteGtfs.Stop) (BoundingBox, error) {
+func computeBoundingBox(stops []obaGtfs.Stop) (BoundingBox, error) {
 	if len(stops) == 0 {
 		return BoundingBox{}, fmt.Errorf("no stops to compute bounding box")
 	}
@@ -41,8 +41,8 @@ func computeBoundingBox(stops []remoteGtfs.Stop) (BoundingBox, error) {
 
 	for _, stop := range stops {
 		if stop.Latitude != nil && stop.Longitude != nil {
-			lat := float64(*stop.Latitude)
-			lon := float64(*stop.Longitude)
+			lat := *stop.Latitude
+			lon := *stop.Longitude
 			if lat < minLat {
 				minLat = lat
 			}
