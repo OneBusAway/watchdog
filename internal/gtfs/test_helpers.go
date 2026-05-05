@@ -60,7 +60,14 @@ func readFixture(t *testing.T, fixturePath string) []byte {
 
 func assertVehicle(t *testing.T, actual *gtfs.Vehicle, expected *gtfs.Vehicle) {
 	t.Helper()
+	if expected == nil {
+		t.Fatal("expected vehicle must not be nil")
+	}
+	if actual == nil {
+		t.Errorf("actual vehicle is nil")
+		return
 
+	}
 	if expected.ID != nil {
 		if actual.ID == nil {
 			t.Errorf("vehicle ID missing")
@@ -107,6 +114,8 @@ func assertVehicle(t *testing.T, actual *gtfs.Vehicle, expected *gtfs.Vehicle) {
 					t.Errorf("latitude mismatch: expected %f got %f",
 						*expected.Position.Latitude, *actual.Position.Latitude)
 				}
+			} else if expected.Position.Latitude != nil && actual.Position.Latitude == nil {
+				t.Errorf("latitude missing")
 			}
 
 			if expected.Position.Longitude != nil && actual.Position.Longitude != nil {
@@ -114,6 +123,8 @@ func assertVehicle(t *testing.T, actual *gtfs.Vehicle, expected *gtfs.Vehicle) {
 					t.Errorf("longitude mismatch: expected %f got %f",
 						*expected.Position.Longitude, *actual.Position.Longitude)
 				}
+			} else if expected.Position.Longitude != nil && actual.Position.Longitude == nil {
+				t.Errorf("longitude missing")
 			}
 
 			if expected.Position.Speed != nil && actual.Position.Speed != nil {
@@ -121,6 +132,8 @@ func assertVehicle(t *testing.T, actual *gtfs.Vehicle, expected *gtfs.Vehicle) {
 					t.Errorf("speed mismatch: expected %f got %f",
 						*expected.Position.Speed, *actual.Position.Speed)
 				}
+			} else if expected.Position.Speed != nil && actual.Position.Speed == nil {
+				t.Errorf("speed missing")
 			}
 		}
 	}

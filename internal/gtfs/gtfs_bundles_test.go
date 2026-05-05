@@ -171,6 +171,9 @@ func TestGetStopLocationsByIDs(t *testing.T) {
 			if !ok {
 				t.Fatalf("unexpected stop ID returned: %s", stop.Id)
 			}
+			if stop.Latitude == nil || stop.Longitude == nil {
+				t.Fatalf("stop %s missing coordinates", stop.Id)
+			}
 
 			if stop.Name != expected.stopName {
 				t.Errorf("stop %s name mismatch: expected %s, got %s",
