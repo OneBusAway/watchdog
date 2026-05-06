@@ -1,7 +1,7 @@
 package geo
 
 import (
-	obaGtfs "github.com/OneBusAway/go-gtfs"
+	remoteGtfs "github.com/OneBusAway/go-gtfs"
 )
 
 // For now geo package only exposes helper functions to be used by other packages.
@@ -19,7 +19,7 @@ import (
 
 // Wrappers for utility functions
 
-func ComputeBoundingBox(stops []obaGtfs.Stop) (BoundingBox, error) {
+func ComputeBoundingBox(stops []remoteGtfs.Stop) (BoundingBox, error) {
 	return computeBoundingBox(stops)
 }
 
@@ -31,6 +31,6 @@ func HaversineDistance(lat1, lon1, lat2, lon2 float64) float64 {
 	return haversineDistance(lat1, lon1, lat2, lon2)
 }
 
-func GetClusterID(stop obaGtfs.Stop) (clusterID string, clusterType string, ok bool) {
+func GetClusterID(stop remoteGtfs.Stop) (clusterID string, clusterType string, ok bool) {
 	return getClusterID(stop)
 }

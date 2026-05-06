@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	obaGtfs "github.com/OneBusAway/go-gtfs"
+	remoteGtfs "github.com/OneBusAway/go-gtfs"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/models"
 )
@@ -56,73 +56,6 @@ func TestDownloadGTFSBundle(t *testing.T) {
 		if staticBundle == nil {
 			t.Fatal("static data retrieved from the store is nil; expected non-nil value")
 		}
-
-		data := readFixture(t, "gtfs.zip")
-		expectedStaticData, err := obaGtfs.ParseStatic(data, obaGtfs.ParseStaticOptions{})
-		if err != nil {
-			t.Fatalf("failed to parse expected GTFS static data from fixture: %v", err)
-		}
-		if expectedStaticData == nil {
-			t.Fatal("parsed expected static data is nil; expected valid GTFS data")
-		}
-		if expectedStaticData.Agencies == nil {
-			t.Fatal("expected static data has nil Agencies slice; expected it to be parsed")
-		}
-
-		// For simplicity, we validate the content of agency.txt by comparing the agency IDs.
-		// We assume that if the agency IDs match, the GTFS static data was parsed and stored correctly.
-		// This level of verification is sufficient for this test.
-		//
-		// Note: We rely on agency.txt as it is a required GTFS file.
-		// Make sure the test data provided includes a non-empty agency.txt file.
-
-		if len(expectedStaticData.Agencies) != len(staticBundle.Agencies) {
-			t.Fatalf("expected %d agencies, got %d", len(expectedStaticData.Agencies), len(staticBundle.Agencies))
-		}
-		if len(expectedStaticData.Agencies) == 0 {
-			t.Fatal("expected Agencies slice is empty; can't verify content consistency")
-		}
-		expectedAgencyIDs := make(map[string]struct {
-			Name      string
-			TimeZone  string
-			AgencyUrl string
-		})
-		for _, agency := range expectedStaticData.Agencies {
-			expectedAgencyIDs[agency.Id] = struct {
-				Name      string
-				TimeZone  string
-				AgencyUrl string
-			}{
-				Name:      agency.Name,
-				TimeZone:  agency.Timezone,
-				AgencyUrl: agency.Url,
-			}
-		}
-		if staticBundle.Agencies == nil {
-			t.Fatal("stored static data has nil Agencies slice; expected it to be populated")
-		}
-		if len(staticBundle.Agencies) == 0 {
-			t.Fatal("stored Agencies slice is empty; static data likely not parsed correctly")
-		}
-		for _, agency := range staticBundle.Agencies {
-			agc_data, ok := expectedAgencyIDs[agency.Id]
-			if !ok {
-				t.Fatalf("unexpected agency ID %s", agency.Id)
-			}
-
-			if agc_data.Name != agency.Name {
-				t.Errorf("agency %s name mismatch: expected %s, got %s",
-					agency.Id, agc_data.Name, agency.Name)
-			}
-
-			if agc_data.TimeZone != agency.Timezone {
-				t.Errorf("agency %s timezone mismatch", agency.Id)
-			}
-
-			if agc_data.AgencyUrl != agency.Url {
-				t.Errorf("agency %s URL mismatch", agency.Id)
-			}
-		}
 	})
 
 	t.Run("Invalid URL", func(t *testing.T) {
@@ -135,11 +68,162 @@ func TestDownloadGTFSBundle(t *testing.T) {
 
 }
 
+func TestAgencyParsing(t *testing.T) {
+	data := readFixture(t, "gtfs.zip")
+	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
+	if err != nil {
+		t.Fatalf("failed to parse expected GTFS static data from fixture: %v", err)
+	}
+
+	expectedStaticAgencies := []remoteGtfs.Agency{
+		{
+			Id:       "40",
+			Name:     "Sound Transit",
+			Url:      "https://www.soundtransit.org",
+			Timezone: "America/Los_Angeles",
+			Language: "en",
+			Phone:    "1-888-889-6368",
+			FareUrl:  "https://www.soundtransit.org/ride-with-us/how-to-pay/fares",
+			Email:    "main@soundtransit.org",
+		},
+	}
+
+	if staticBundle.Agencies == nil {
+		t.Fatal("stored static data has nil Agencies slice; expected it to be populated")
+	}
+	if len(staticBundle.Agencies) == 0 {
+		t.Fatal("stored Agencies slice is empty; static data likely not parsed correctly")
+	}
+
+	if len(expectedStaticAgencies) != len(staticBundle.Agencies) {
+		t.Fatalf("expected %d agencies, got %d", len(expectedStaticAgencies), len(staticBundle.Agencies))
+	}
+
+	expectedAgencyIDs := make(map[string]struct {
+		Name      string
+		TimeZone  string
+		AgencyUrl string
+	})
+
+	for _, agency := range expectedStaticAgencies {
+		expectedAgencyIDs[agency.Id] = struct {
+			Name      string
+			TimeZone  string
+			AgencyUrl string
+		}{
+			Name:      agency.Name,
+			TimeZone:  agency.Timezone,
+			AgencyUrl: agency.Url,
+		}
+	}
+	for _, agency := range staticBundle.Agencies {
+		agc_data, ok := expectedAgencyIDs[agency.Id]
+		if !ok {
+			t.Fatalf("unexpected agency ID %s", agency.Id)
+		}
+
+		if agc_data.Name != agency.Name {
+			t.Errorf("agency %s name mismatch: expected %s, got %s",
+				agency.Id, agc_data.Name, agency.Name)
+		}
+
+		if agc_data.TimeZone != agency.Timezone {
+			t.Errorf("agency %s timezone mismatch", agency.Id)
+		}
+
+		if agc_data.AgencyUrl != agency.Url {
+			t.Errorf("agency %s URL mismatch", agency.Id)
+		}
+	}
+}
+
+func TestStopsParsing(t *testing.T) {
+	server := models.ObaServer{ID: 1, Name: "test"}
+
+	data := readFixture(t, "gtfs.zip")
+	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
+	if err != nil {
+		t.Fatal("failed to parse gtfs static data")
+	}
+	staticData := models.NewStaticData(staticBundle)
+	staticStore := NewStaticStore()
+	staticStore.Set(server.ID, staticData)
+	stopIDs := []string{"11060", "1108"} // Make sure these exist in your test GTFS
+	stopsData := map[string]struct {
+		stopName string
+		lat      float64
+		long     float64
+	}{
+		"11060": {stopName: "Broadway & E Denny Way", lat: 47.618425, long: -122.320940},
+		"1108":  {stopName: "Westlake", lat: 47.611450, long: -122.337532},
+	}
+
+	stops, err := getStopLocationsByIDs(server.ID, stopIDs, staticStore)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(stops) == 0 {
+		t.Fatalf("expected some matched stops, got 0")
+	}
+
+	for _, stop := range stops {
+		expected, ok := stopsData[stop.Id]
+		if !ok {
+			t.Fatalf("unexpected stop ID returned: %s", stop.Id)
+		}
+		if stop.Latitude == nil || stop.Longitude == nil {
+			t.Fatalf("stop %s missing coordinates", stop.Id)
+		}
+
+		if stop.Name != expected.stopName {
+			t.Errorf("stop %s name mismatch: expected %s, got %s",
+				stop.Id, expected.stopName, stop.Name)
+		}
+
+		const epsilon = 1e-5
+		if diff := *stop.Latitude - expected.lat; diff > epsilon || diff < -epsilon {
+			t.Errorf("stop %s latitude mismatch: expected %f, got %f",
+				stop.Id, expected.lat, *stop.Latitude)
+		}
+		if diff := *stop.Longitude - expected.long; diff > epsilon || diff < -epsilon {
+			t.Errorf("stop %s longitude mismatch: expected %f, got %f",
+				stop.Id, expected.long, *stop.Longitude)
+		}
+	}
+}
+
+func TestGetEarliestAndLatestServiceDates(t *testing.T) {
+	server := models.ObaServer{ID: 1, Name: "test"}
+	data := readFixture(t, "gtfs.zip")
+	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
+	if err != nil {
+		t.Fatal("failed to parse gtfs static data")
+	}
+	staticData := models.NewStaticData(staticBundle)
+	staticStore := NewStaticStore()
+	staticStore.Set(server.ID, staticData)
+	loc, _ := time.LoadLocation("America/Los_Angeles")
+	// make sure these already exist in the test data
+	expectedEarliestEndDate := time.Date(2024, 11, 22, 0, 0, 0, 0, loc)
+	expectedLatestEndDate := time.Date(2025, 03, 28, 0, 0, 0, 0, loc)
+	actualEarliest, actualLatest, err := getEarliestAndLatestServiceDates(staticData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !expectedEarliestEndDate.Equal(actualEarliest) {
+		t.Fatalf("earliest date mismatch: expected %s, got %s", expectedEarliestEndDate.Format("2006-01-02"), actualEarliest.Format("2006-01-02"))
+	}
+	if !expectedLatestEndDate.Equal(actualLatest) {
+		t.Fatalf("latest date mismatch: expected %s, got %s", expectedLatestEndDate.Format("2006-01-02"), actualLatest.Format("2006-01-02"))
+	}
+}
+
 func TestGetStopLocationsByIDs(t *testing.T) {
 	server := models.ObaServer{ID: 1, Name: "test"}
 
 	data := readFixture(t, "gtfs.zip")
-	staticBundle, err := obaGtfs.ParseStatic(data, obaGtfs.ParseStaticOptions{})
+	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
 	if err != nil {
 		t.Fatal("failed to parse gtfs static data")
 	}
@@ -147,48 +231,14 @@ func TestGetStopLocationsByIDs(t *testing.T) {
 	staticStore := NewStaticStore()
 	staticStore.Set(server.ID, staticData)
 
-	t.Run("Valid stops", func(t *testing.T) {
+	t.Run("Valid stops IDs", func(t *testing.T) {
 		stopIDs := []string{"11060", "1108"} // Make sure these exist in your test GTFS
-		stopsData := map[string]struct {
-			stopName string
-			lat      float64
-			long     float64
-		}{
-			"11060": {stopName: "Broadway & E Denny Way", lat: 47.618425, long: -122.320940},
-			"1108":  {stopName: "Westlake", lat: 47.611450, long: -122.337532},
-		}
-
 		stops, err := getStopLocationsByIDs(server.ID, stopIDs, staticStore)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if len(stops) == 0 {
 			t.Fatalf("expected some matched stops, got 0")
-		}
-
-		for _, stop := range stops {
-			expected, ok := stopsData[stop.Id]
-			if !ok {
-				t.Fatalf("unexpected stop ID returned: %s", stop.Id)
-			}
-			if stop.Latitude == nil || stop.Longitude == nil {
-				t.Fatalf("stop %s missing coordinates", stop.Id)
-			}
-
-			if stop.Name != expected.stopName {
-				t.Errorf("stop %s name mismatch: expected %s, got %s",
-					stop.Id, expected.stopName, stop.Name)
-			}
-
-			const epsilon = 1e-5
-			if diff := *stop.Latitude - expected.lat; diff > epsilon || diff < -epsilon {
-				t.Errorf("stop %s latitude mismatch: expected %f, got %f",
-					stop.Id, expected.lat, *stop.Latitude)
-			}
-			if diff := *stop.Longitude - expected.long; diff > epsilon || diff < -epsilon {
-				t.Errorf("stop %s longitude mismatch: expected %f, got %f",
-					stop.Id, expected.long, *stop.Longitude)
-			}
 		}
 	})
 
@@ -229,7 +279,7 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 		}
 
 		data := readFixture(t, "gtfs_rt_feed_vehicles.pb")
-		gtfsRT, err := obaGtfs.ParseRealtime(data, &obaGtfs.ParseRealtimeOptions{})
+		gtfsRT, err := remoteGtfs.ParseRealtime(data, &remoteGtfs.ParseRealtimeOptions{})
 		if err != nil {
 			t.Fatalf("Failed to parse GTFS-RT data: %v", err)
 		}
@@ -247,7 +297,7 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 			t.Fatalf("Expected %d vehicles, got %d", len(expectedRtData.Vehicles), len(realtimeData.Vehicles))
 		}
 
-		expectedMap := make(map[string]obaGtfs.Vehicle)
+		expectedMap := make(map[string]remoteGtfs.Vehicle)
 		for _, vehicle := range expectedRtData.Vehicles {
 			if vehicle.ID != nil {
 				expectedMap[vehicle.ID.ID] = vehicle

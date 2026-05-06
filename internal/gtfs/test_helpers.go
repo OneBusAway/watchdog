@@ -6,8 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
-	"github.com/OneBusAway/go-gtfs"
+	remoteGtfs "github.com/OneBusAway/go-gtfs"
 )
 
 func setupGtfsServer(t *testing.T, fixturePath string) *httptest.Server {
@@ -58,7 +59,26 @@ func readFixture(t *testing.T, fixturePath string) []byte {
 	return data
 }
 
-func assertVehicle(t *testing.T, actual *gtfs.Vehicle, expected *gtfs.Vehicle) {
+func assertPtr[T comparable](t *testing.T, expected *T, actual *T, field string, equal func(a, b T) bool) {
+	t.Helper()
+
+	if expected == nil {
+		if actual != nil {
+			t.Errorf("%s: unexpected value", field)
+		}
+		return
+	}
+
+	if actual == nil {
+		t.Errorf("%s: missing value", field)
+		return
+	}
+	if !equal(*expected, *actual) {
+		t.Errorf("%s mismatch: expected %v, got %v", field, *expected, *actual)
+	}
+}
+
+func assertVehicle(t *testing.T, actual *remoteGtfs.Vehicle, expected *remoteGtfs.Vehicle) {
 	t.Helper()
 	if expected == nil {
 		t.Fatal("expected vehicle must not be nil")
@@ -68,7 +88,12 @@ func assertVehicle(t *testing.T, actual *gtfs.Vehicle, expected *gtfs.Vehicle) {
 		return
 
 	}
-	if expected.ID != nil {
+
+	if expected.ID == nil {
+		if actual.ID != nil {
+			t.Errorf("mismatch between expected vehicle ID and actual vehicle ID")
+		}
+	} else {
 		if actual.ID == nil {
 			t.Errorf("vehicle ID missing")
 		} else if expected.ID.ID != actual.ID.ID {
@@ -77,64 +102,34 @@ func assertVehicle(t *testing.T, actual *gtfs.Vehicle, expected *gtfs.Vehicle) {
 		}
 	}
 
-	if expected.StopID != nil {
-		if actual.StopID == nil {
-			t.Errorf("vehicle StopID missing")
-		} else if *expected.StopID != *actual.StopID {
-			t.Errorf("vehicle StopID mismatch: expected %s, got %s",
-				*expected.StopID, *actual.StopID)
-		}
-	}
+	assertPtr(t, expected.StopID, actual.StopID, "vehicle StopID", func(a, b string) bool {
+		return a == b
+	})
+	assertPtr(t, expected.CurrentStopSequence, actual.CurrentStopSequence, "vehicle StopSequence", func(a, b uint32) bool {
+		return a == b
+	})
+	assertPtr(t, expected.Timestamp, actual.Timestamp, "vehicle Timestamp", func(a, b time.Time) bool {
+		return a.Equal(b)
+	})
 
-	if expected.CurrentStopSequence != nil {
-		if actual.CurrentStopSequence == nil {
-			t.Errorf("vehicle StopSequence missing")
-		} else if *expected.CurrentStopSequence != *actual.CurrentStopSequence {
-			t.Errorf("vehicle StopSequence mismatch: expected %d, got %d",
-				*expected.CurrentStopSequence, *actual.CurrentStopSequence)
+	if expected.Position == nil {
+		if actual.Position != nil {
+			t.Errorf("vehicle Position: unexpected value")
 		}
-	}
-
-	if expected.Timestamp != nil {
-		if actual.Timestamp == nil {
-			t.Errorf("vehicle Timestamp missing")
-		} else if !expected.Timestamp.Equal(*actual.Timestamp) {
-			t.Errorf("vehicle Timestamp mismatch")
-		}
-	}
-
-	if expected.Position != nil {
+	} else {
 		if actual.Position == nil {
-			t.Errorf("vehicle Position missing")
+			t.Errorf("vehicle Position: missing value")
 		} else {
 			const eps = 1e-5
 
-			if expected.Position.Latitude != nil && actual.Position.Latitude != nil {
-				if diff := *expected.Position.Latitude - *actual.Position.Latitude; diff > eps || diff < -eps {
-					t.Errorf("latitude mismatch: expected %f got %f",
-						*expected.Position.Latitude, *actual.Position.Latitude)
-				}
-			} else if expected.Position.Latitude != nil && actual.Position.Latitude == nil {
-				t.Errorf("latitude missing")
+			floatEq := func(a, b float32) bool {
+				diff := a - b
+				return diff <= eps && diff >= -eps
 			}
 
-			if expected.Position.Longitude != nil && actual.Position.Longitude != nil {
-				if diff := *expected.Position.Longitude - *actual.Position.Longitude; diff > eps || diff < -eps {
-					t.Errorf("longitude mismatch: expected %f got %f",
-						*expected.Position.Longitude, *actual.Position.Longitude)
-				}
-			} else if expected.Position.Longitude != nil && actual.Position.Longitude == nil {
-				t.Errorf("longitude missing")
-			}
-
-			if expected.Position.Speed != nil && actual.Position.Speed != nil {
-				if diff := *expected.Position.Speed - *actual.Position.Speed; diff > eps || diff < -eps {
-					t.Errorf("speed mismatch: expected %f got %f",
-						*expected.Position.Speed, *actual.Position.Speed)
-				}
-			} else if expected.Position.Speed != nil && actual.Position.Speed == nil {
-				t.Errorf("speed missing")
-			}
+			assertPtr(t, expected.Position.Latitude, actual.Position.Latitude, "vehicle latitude", floatEq)
+			assertPtr(t, expected.Position.Longitude, actual.Position.Longitude, "vehicle longitude", floatEq)
+			assertPtr(t, expected.Position.Speed, actual.Position.Speed, "vehicle speed", floatEq)
 		}
 	}
 

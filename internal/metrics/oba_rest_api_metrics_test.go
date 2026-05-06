@@ -1,7 +1,7 @@
 package metrics
 
 import (
-	obaGtfs "github.com/OneBusAway/go-gtfs"
+	remoteGtfs "github.com/OneBusAway/go-gtfs"
 	"gopkg.in/dnaeon/go-vcr.v4/pkg/recorder"
 	"net/http"
 	"path/filepath"
@@ -13,7 +13,7 @@ import (
 
 func TestFetchObaAPIMetrics_WithVCR(t *testing.T) {
 	data := readFixture(t, "gtfs.zip")
-	staticBundle, err := obaGtfs.ParseStatic(data, obaGtfs.ParseStaticOptions{})
+	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
 	staticData := models.NewStaticData(staticBundle)
 	if err != nil {
 		t.Fatal("failed to parse gtfs static data")

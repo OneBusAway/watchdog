@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	obaGtfs "github.com/OneBusAway/go-gtfs"
+	remoteGtfs "github.com/OneBusAway/go-gtfs"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
 )
@@ -13,7 +13,7 @@ func TestCheckBundleExpiration(t *testing.T) {
 	testServer := createTestServer("www.example.com", "Test Server", 999, "", "www.example.com", "test-api-value", "test-api-key", "1")
 
 	data := readFixture(t, "gtfs.zip")
-	staticBundle, err := obaGtfs.ParseStatic(data, obaGtfs.ParseStaticOptions{})
+	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
 	if err != nil {
 		t.Fatal("failed to parse gtfs static data")
 	}

@@ -8,7 +8,7 @@ import (
 	"math"
 	"sync"
 
-	obaGtfs "github.com/OneBusAway/go-gtfs"
+	remoteGtfs "github.com/OneBusAway/go-gtfs"
 	"github.com/golang/geo/s2"
 )
 
@@ -29,7 +29,7 @@ func (b *BoundingBox) Contains(lat, lon float64) bool {
 // computeBoundingBox returns the bounding box enclosing all valid stops.
 //
 // It returns an error if the input slice is empty or contains no valid lat/lon pairs.
-func computeBoundingBox(stops []obaGtfs.Stop) (BoundingBox, error) {
+func computeBoundingBox(stops []remoteGtfs.Stop) (BoundingBox, error) {
 	if len(stops) == 0 {
 		return BoundingBox{}, fmt.Errorf("no stops to compute bounding box")
 	}
