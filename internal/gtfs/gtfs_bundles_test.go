@@ -311,7 +311,7 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 				if !exists {
 					t.Errorf("Unexpected vehicle ID %s found in GTFS-RT data", vehicle.ID.ID)
 				}
-				assertVehicle(t, &expectedVehicle, &vehicle)
+				assertVehicle(t, &vehicle, &expectedVehicle)
 			} else {
 				countNilIDs++
 			}

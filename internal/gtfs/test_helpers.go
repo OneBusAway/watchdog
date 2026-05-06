@@ -86,7 +86,6 @@ func assertVehicle(t *testing.T, actual *remoteGtfs.Vehicle, expected *remoteGtf
 	if actual == nil {
 		t.Errorf("actual vehicle is nil")
 		return
-
 	}
 
 	if expected.ID == nil {
