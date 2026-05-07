@@ -74,7 +74,8 @@ func getClusterID(stop remoteGtfs.Stop) (clusterID string, clusterType string, o
 				return root.Id, "station", true
 			}
 			return "", "", false // malformed hierarchy
-		} else if stop.Latitude != nil && stop.Longitude != nil {
+		} else if stop.Latitude != nil && stop.Longitude != nil &&
+			isValidLatLon(*stop.Latitude, *stop.Longitude) {
 			return s2ClusterID(*stop.Latitude, *stop.Longitude, s2Level), "s2", true
 		}
 	case 1: // Station
@@ -88,7 +89,8 @@ func getClusterID(stop remoteGtfs.Stop) (clusterID string, clusterType string, o
 		if stop.Parent != nil && stop.Parent.Type == 0 {
 			grandparent := stop.Parent.Parent
 			if grandparent == nil {
-				if stop.Latitude != nil && stop.Longitude != nil {
+				if stop.Latitude != nil && stop.Longitude != nil &&
+					isValidLatLon(*stop.Latitude, *stop.Longitude) {
 					return s2ClusterID(*stop.Latitude, *stop.Longitude, s2Level), "s2", true
 				}
 				return "", "", false
