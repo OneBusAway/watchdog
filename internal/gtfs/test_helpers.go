@@ -64,17 +64,17 @@ func assertPtr[T comparable](t *testing.T, expected *T, actual *T, field string,
 
 	if expected == nil {
 		if actual != nil {
-			t.Errorf("%s: unexpected value", field)
+			t.Errorf("%s mismatch:\nexpected: nil\ngot %v", field, *actual)
 		}
 		return
 	}
 
 	if actual == nil {
-		t.Errorf("%s: missing value", field)
+		t.Errorf("%s mismatch:\nexpected: %v\ngot nil", field, *expected)
 		return
 	}
 	if !equal(*expected, *actual) {
-		t.Errorf("%s mismatch: expected %v, got %v", field, *expected, *actual)
+		t.Errorf("%s mismatch:\nexpected %v, got %v", field, *expected, *actual)
 	}
 }
 
@@ -84,20 +84,19 @@ func assertVehicle(t *testing.T, actual *remoteGtfs.Vehicle, expected *remoteGtf
 		t.Fatal("expected vehicle must not be nil")
 	}
 	if actual == nil {
-		t.Errorf("actual vehicle is nil")
+		t.Errorf("vehicle mismatch:\nexpected: %v\ngot nil", expected)
 		return
 	}
 
 	if expected.ID == nil {
 		if actual.ID != nil {
-			t.Errorf("mismatch between expected vehicle ID and actual vehicle ID")
+			t.Errorf("vehicle ID mismatch:\nexpected: nil\ngot %v", actual.ID)
 		}
 	} else {
 		if actual.ID == nil {
-			t.Errorf("vehicle ID missing")
+			t.Errorf("vehicle ID mismatch:\nexpected: %v\ngot nil", expected.ID)
 		} else if expected.ID.ID != actual.ID.ID {
-			t.Errorf("vehicle ID mismatch: expected %s, got %s",
-				expected.ID.ID, actual.ID.ID)
+			t.Errorf("vehicle ID mismatch:\nexpected: %s\ngot %s", expected.ID.ID, actual.ID.ID)
 		}
 	}
 
@@ -113,11 +112,11 @@ func assertVehicle(t *testing.T, actual *remoteGtfs.Vehicle, expected *remoteGtf
 
 	if expected.Position == nil {
 		if actual.Position != nil {
-			t.Errorf("vehicle Position: unexpected value")
+			t.Errorf("vehicle Position mismatch:\nexpected: nil\ngot %v", actual.Position)
 		}
 	} else {
 		if actual.Position == nil {
-			t.Errorf("vehicle Position: missing value")
+			t.Errorf("vehicle Position mismatch:\nexpected: %v\ngot nil", expected.Position)
 		} else {
 			const eps = 1e-5
 
@@ -133,7 +132,7 @@ func assertVehicle(t *testing.T, actual *remoteGtfs.Vehicle, expected *remoteGtf
 	}
 
 	if expected.IsEntityInMessage != actual.IsEntityInMessage {
-		t.Errorf("IsEntityInMessage mismatch: expected %v got %v",
+		t.Errorf("IsEntityInMessage mismatch:\nexpected: %v\ngot %v",
 			expected.IsEntityInMessage, actual.IsEntityInMessage)
 	}
 }

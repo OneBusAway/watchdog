@@ -56,6 +56,46 @@ func TestDownloadGTFSBundle(t *testing.T) {
 		if staticBundle == nil {
 			t.Fatal("static data retrieved from the store is nil; expected non-nil value")
 		}
+		data := readFixture(t, "gtfs.zip")
+		expectedStaticData, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
+		if err != nil {
+			t.Fatalf("failed to parse expected GTFS static data from fixture: %v", err)
+		}
+		if expectedStaticData == nil {
+			t.Fatal("parsed expected static data is nil; expected valid GTFS data")
+		}
+		if expectedStaticData.Agencies == nil {
+			t.Fatal("expected static data has nil Agencies slice; expected it to be parsed")
+		}
+
+		// For simplicity, we validate the content of agency.txt by comparing the agency IDs.
+		// We assume that if the agency IDs match, the GTFS static data was parsed and stored correctly.
+		// This level of verification is sufficient for this test.
+		//
+		// Note: We rely on agency.txt as it is a required GTFS file.
+		// Make sure the test data provided includes a non-empty agency.txt file.
+
+		if len(expectedStaticData.Agencies) != len(staticBundle.Agencies) {
+			t.Fatalf("expected %d agencies, got %d", len(expectedStaticData.Agencies), len(staticBundle.Agencies))
+		}
+		if len(expectedStaticData.Agencies) == 0 {
+			t.Fatal("expected Agencies slice is empty; can't verify content consistency")
+		}
+		expectedAgencyIDs := make(map[string]struct{})
+		for _, agency := range expectedStaticData.Agencies {
+			expectedAgencyIDs[agency.Id] = struct{}{}
+		}
+		if staticBundle.Agencies == nil {
+			t.Fatal("stored static data has nil Agencies slice; expected it to be populated")
+		}
+		if len(staticBundle.Agencies) == 0 {
+			t.Fatal("stored Agencies slice is empty; static data likely not parsed correctly")
+		}
+		for _, agency := range staticBundle.Agencies {
+			if _, ok := expectedAgencyIDs[agency.Id]; !ok {
+				t.Fatalf("unexpected agency ID %s found in stored static data", agency.Id)
+			}
+		}
 	})
 
 	t.Run("Invalid URL", func(t *testing.T) {
@@ -99,40 +139,34 @@ func TestAgencyParsing(t *testing.T) {
 		t.Fatalf("expected %d agencies, got %d", len(expectedStaticAgencies), len(staticBundle.Agencies))
 	}
 
-	expectedAgencyIDs := make(map[string]struct {
-		Name      string
-		TimeZone  string
-		AgencyUrl string
-	})
+	expectedAgencies := make(map[string]remoteGtfs.Agency)
 
 	for _, agency := range expectedStaticAgencies {
-		expectedAgencyIDs[agency.Id] = struct {
-			Name      string
-			TimeZone  string
-			AgencyUrl string
-		}{
-			Name:      agency.Name,
-			TimeZone:  agency.Timezone,
-			AgencyUrl: agency.Url,
+		expectedAgencies[agency.Id] = remoteGtfs.Agency{
+			Id:       agency.Id,
+			Name:     agency.Name,
+			Timezone: agency.Timezone,
+			Url:      agency.Url,
+			FareUrl:  agency.FareUrl,
+			Language: agency.Language,
+			Phone:    agency.Phone,
+			Email:    agency.Email,
 		}
 	}
+
 	for _, agency := range staticBundle.Agencies {
-		agc_data, ok := expectedAgencyIDs[agency.Id]
+		expectedAgency, ok := expectedAgencies[agency.Id]
 		if !ok {
 			t.Fatalf("unexpected agency ID %s", agency.Id)
 		}
 
-		if agc_data.Name != agency.Name {
-			t.Errorf("agency %s name mismatch: expected %s, got %s",
-				agency.Id, agc_data.Name, agency.Name)
-		}
-
-		if agc_data.TimeZone != agency.Timezone {
-			t.Errorf("agency %s timezone mismatch", agency.Id)
-		}
-
-		if agc_data.AgencyUrl != agency.Url {
-			t.Errorf("agency %s URL mismatch", agency.Id)
+		if expectedAgency != agency {
+			t.Errorf(
+				"agency mismatch for ID %s expected: %+v got %+v",
+				agency.Id,
+				expectedAgency,
+				agency,
+			)
 		}
 	}
 }
