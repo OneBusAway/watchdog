@@ -142,16 +142,7 @@ func TestAgencyParsing(t *testing.T) {
 	expectedAgencies := make(map[string]remoteGtfs.Agency)
 
 	for _, agency := range expectedStaticAgencies {
-		expectedAgencies[agency.Id] = remoteGtfs.Agency{
-			Id:       agency.Id,
-			Name:     agency.Name,
-			Timezone: agency.Timezone,
-			Url:      agency.Url,
-			FareUrl:  agency.FareUrl,
-			Language: agency.Language,
-			Phone:    agency.Phone,
-			Email:    agency.Email,
-		}
+		expectedAgencies[agency.Id] = agency
 	}
 
 	for _, agency := range staticBundle.Agencies {
