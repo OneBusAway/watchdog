@@ -183,8 +183,8 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		})
 	}
 	// Fetch and store GTFS-RT feed
-	// Note : function after FetchAndStoreGTFSRTFeed is depends on this function
-	// on failure of this function we return
+	// Note : All functions after FetchAndStoreGTFSRTFeed depend on this function
+	// on failure of this function we return and don't proceed
 	err = app.GtfsService.FetchAndStoreGTFSRTFeed(server)
 	if err != nil {
 		app.Logger.Error("Failed to fetch and store GTFS-RT feed", "error", err)

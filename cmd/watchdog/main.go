@@ -100,7 +100,7 @@ func main() {
 	// Initialize the application struct with all services
 	// This includes the configuration service, GTFS service, and metrics service.
 	// and the required dependencies.
-	// this New() function is critical in understanding how we structure the application talk a look at it.
+	// this New() function is critical in understanding how we structure the application take a look at it.
 	// and also take a look at service file in each package to see the dependencies and the exposed methods and function.
 	app := app.New(&cfg, logger, client, version)
 
