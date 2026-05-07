@@ -1,7 +1,7 @@
 package geo
 
 import (
-	remoteGtfs "github.com/jamespfennell/gtfs"
+	remoteGtfs "github.com/OneBusAway/go-gtfs"
 )
 
 // For now geo package only exposes helper functions to be used by other packages.

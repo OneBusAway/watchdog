@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	remoteGtfs "github.com/jamespfennell/gtfs"
+	remoteGtfs "github.com/OneBusAway/go-gtfs"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/models"
 )

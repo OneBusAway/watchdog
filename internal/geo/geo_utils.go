@@ -8,8 +8,8 @@ import (
 	"math"
 	"sync"
 
+	remoteGtfs "github.com/OneBusAway/go-gtfs"
 	"github.com/golang/geo/s2"
-	remoteGtfs "github.com/jamespfennell/gtfs"
 )
 
 // BoundingBox defines the geographic boundaries of a rectangular area.
@@ -41,8 +41,8 @@ func computeBoundingBox(stops []remoteGtfs.Stop) (BoundingBox, error) {
 
 	for _, stop := range stops {
 		if stop.Latitude != nil && stop.Longitude != nil {
-			lat := float64(*stop.Latitude)
-			lon := float64(*stop.Longitude)
+			lat := *stop.Latitude
+			lon := *stop.Longitude
 			if lat < minLat {
 				minLat = lat
 			}

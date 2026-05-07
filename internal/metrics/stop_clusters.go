@@ -1,7 +1,7 @@
 package metrics
 
 import (
-	remoteGtfs "github.com/jamespfennell/gtfs"
+	remoteGtfs "github.com/OneBusAway/go-gtfs"
 	"watchdog.onebusaway.org/internal/geo"
 )
 

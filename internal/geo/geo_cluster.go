@@ -3,8 +3,8 @@ package geo
 import (
 	"fmt"
 
+	remoteGtfs "github.com/OneBusAway/go-gtfs"
 	"github.com/golang/geo/s2"
-	remoteGtfs "github.com/jamespfennell/gtfs"
 )
 
 const s2Level = 13 // S2 cell level with 850–1225 m spatial resolution

@@ -1,7 +1,7 @@
 package models
 
 import (
-	remoteGtfs "github.com/jamespfennell/gtfs"
+	remoteGtfs "github.com/OneBusAway/go-gtfs"
 )
 
 // StaticData represents the static GTFS data structure.

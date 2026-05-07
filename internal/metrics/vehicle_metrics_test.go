@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	remoteGtfs "github.com/jamespfennell/gtfs"
+	remoteGtfs "github.com/OneBusAway/go-gtfs"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"

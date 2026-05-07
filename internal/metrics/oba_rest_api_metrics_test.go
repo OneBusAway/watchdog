@@ -1,13 +1,12 @@
 package metrics
 
 import (
+	remoteGtfs "github.com/OneBusAway/go-gtfs"
+	"gopkg.in/dnaeon/go-vcr.v4/pkg/recorder"
 	"net/http"
 	"path/filepath"
 	"testing"
 	"time"
-
-	remoteGtfs "github.com/jamespfennell/gtfs"
-	"gopkg.in/dnaeon/go-vcr.v4/pkg/recorder"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
 )

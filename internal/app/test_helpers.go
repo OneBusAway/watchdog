@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	remoteGtfs "github.com/jamespfennell/gtfs"
+	remoteGtfs "github.com/OneBusAway/go-gtfs"
 	"github.com/prometheus/client_golang/prometheus"
 	"watchdog.onebusaway.org/internal/config"
 	"watchdog.onebusaway.org/internal/geo"

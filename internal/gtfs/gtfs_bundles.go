@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
+	remoteGtfs "github.com/OneBusAway/go-gtfs"
 	"github.com/getsentry/sentry-go"
-	remoteGtfs "github.com/jamespfennell/gtfs"
 	"watchdog.onebusaway.org/internal/config"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/models"
