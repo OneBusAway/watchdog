@@ -163,7 +163,9 @@ func TestLoadConfigFromURLFiltersInvalidServers(t *testing.T) {
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(body))
+		if _, err := w.Write([]byte(body)); err != nil {
+			t.Errorf("failed to write response: %v", err)
+		}
 	}))
 	defer ts.Close()
 
