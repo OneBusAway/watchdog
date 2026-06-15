@@ -72,6 +72,17 @@ func main() {
 	// Using a pooled client allows for better performance and resource management.
 	client := app.NewPooledClient()
 
+	// Initialize Sentry for error reporting before anything else that might
+	// report an error. Configuration loading (below) validates servers and
+	// reports invalid ones to Sentry, so Sentry must be live first — otherwise
+	// those startup reports are captured by an uninitialized hub and lost.
+	//
+	// Note: you should have (SENTRY_DSN) environment variable set to your Sentry DSN.
+	// Link to official documentation: https://docs.sentry.io/concepts/key-terms/dsn-explainer/
+	report.SetupSentry()
+	defer report.FlushSentry()
+	report.ConfigureScope(cfg.Env, version)
+
 	// Load the configuration from the specified source
 	// If a config file is specified, load it from disk.
 	// If a config URL is specified, fetch it over HTTP(S).
@@ -103,18 +114,6 @@ func main() {
 	// this New() function is critical in understanding how we structure the application take a look at it.
 	// and also take a look at service file in each package to see the dependencies and the exposed methods and function.
 	app := app.New(&cfg, logger, client, version)
-
-	// Initialize Sentry for error reporting
-	// This will allow us to capture and report errors that occur during the application's execution.
-	// Sentry is a powerful error tracking tool that helps developers monitor and fix crashes in real-time.
-	// It provides detailed error reports, stack traces, and context about the errors.
-	//
-	// Note: you should have (SENTRY_DSN) environment variable set to your Sentry DSN.
-	// you can read in sentry documentation how to set it up.
-	// Link to official documentation: https://docs.sentry.io/concepts/key-terms/dsn-explainer/
-	report.SetupSentry()
-	defer report.FlushSentry()
-	report.ConfigureScope(cfg.Env, version)
 
 	// From here we set up all dependencies and we are ready to start business logic.
 
