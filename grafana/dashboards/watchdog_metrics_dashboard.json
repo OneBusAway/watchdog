@@ -38,9 +38,55 @@
     },
     {
       "datasource": {
-        "name": "Prometheus"
+        "type": "prometheus"
       },
       "description": "Metrics: oba_api_status\nQuestion answered: \"Is the API up?\"",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisPlacement": "auto",
+            "fillOpacity": 70,
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineWidth": 1,
+            "spanNulls": false
+          },
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "red",
+                  "index": 1,
+                  "text": "DOWN"
+                },
+                "1": {
+                  "color": "green",
+                  "index": 0,
+                  "text": "UP"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -48,17 +94,41 @@
         "y": 1
       },
       "id": 101,
+      "options": {
+        "alignValue": "center",
+        "annotations": {
+          "clustering": -1,
+          "multiLane": false
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "mergeValues": true,
+        "rowHeight": 0.85,
+        "showValue": "auto",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "13.0.2",
       "targets": [
         {
-          "expr": "oba_api_status{server_id=~\"$server_id\"}",
-          "refId": "A",
           "datasource": {
-            "name": "Prometheus"
-          }
+            "type": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "oba_api_status{server_id=~\"$server_id\"}",
+          "legendFormat": "Server {{server_id}}",
+          "range": true,
+          "refId": "A"
         }
       ],
       "title": "1.1 API Status",
-      "type": "timeseries"
+      "type": "state-timeline"
     },
     {
       "datasource": {
