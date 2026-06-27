@@ -28,7 +28,8 @@ func TestLoadConfigFromFile(t *testing.T) {
 		"trip_update_url": "https://trip.example.com",
 		"vehicle_position_url": "https://vehicle.example.com",
 		"gtfs_rt_api_key": "",
-		"gtfs_rt_api_value": ""
+		"gtfs_rt_api_value": "",
+		"agency_id": "agency-1"
 		}]`
 
 		dir := t.TempDir()
@@ -56,6 +57,7 @@ func TestLoadConfigFromFile(t *testing.T) {
 			VehiclePositionUrl: "https://vehicle.example.com",
 			GtfsRtApiKey:       "",
 			GtfsRtApiValue:     "",
+			AgencyID:           "agency-1",
 		}
 
 		if servers[0] != expected {
@@ -102,7 +104,8 @@ func TestLoadConfigFromURL(t *testing.T) {
 			 "trip_update_url": "https://trip.example.com",
 			 "vehicle_position_url": "https://vehicle.example.com",
 			 "gtfs_rt_api_key": "",
-			 "gtfs_rt_api_value": ""
+			 "gtfs_rt_api_value": "",
+			 "agency_id": "agency-1"
 			}]`))
 		}))
 		defer ts.Close()
@@ -124,6 +127,7 @@ func TestLoadConfigFromURL(t *testing.T) {
 			GtfsUrl:            "https://gtfs.example.com",
 			TripUpdateUrl:      "https://trip.example.com",
 			VehiclePositionUrl: "https://vehicle.example.com",
+			AgencyID:           "agency-1",
 		}
 
 		if servers[0] != expected {
@@ -310,9 +314,11 @@ func TestRefreshConfig(t *testing.T) {
 					{
 							"id": 999,
 							"name": "Refreshed Test Server",
-							"url": "https://refreshed.example.com",
-							"api_key": "refreshed-key",
-							"gtfs_url": "https://refreshed.example.com/gtfs.zip"
+							"oba_base_url": "https://refreshed.example.com",
+							"oba_api_key": "refreshed-key",
+							"gtfs_url": "https://refreshed.example.com/gtfs.zip",
+							"vehicle_position_url": "https://refreshed.example.com/vehicles",
+							"agency_id": "agency-999"
 					}
 			]`)
 	}))

@@ -114,7 +114,7 @@ func loadConfigFromFile(filePath string) ([]models.ObaServer, error) {
 		return nil, fmt.Errorf("failed to unmarshal JSON: %v", err)
 	}
 
-	return servers, nil
+	return filterValidServers(servers), nil
 }
 
 // loadConfigFromURL fetches a JSON configuration from a remote HTTP(S) endpoint,
@@ -180,5 +180,5 @@ func loadConfigFromURL(ctx context.Context, client *http.Client, url, authUser, 
 		return nil, fmt.Errorf("failed to unmarshal JSON: %v", err)
 	}
 
-	return servers, nil
+	return filterValidServers(servers), nil
 }
