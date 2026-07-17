@@ -541,7 +541,33 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: gtfs_rt_invalid_vehicle_coordinates, gtfs_rt_stopped_out_of_bounds_vehicles\nQuestion answered: \"Are vehicle coordinates geographically valid?\"",
+      "description": "Metrics: gtfs_rt_invalid_vehicle_coordinates, gtfs_rt_stopped_out_of_bounds_vehicles\nQuestion answered: \"Are vehicle coordinates geographically valid?\"\n\nVisualization: Bar Gauge\nRationale: Grouping by server using a bar gauge instantly surfaces which specific data pipeline is emitting the most malformed coordinates. Color thresholds (green=0, yellow>=1, red>=5) provide immediate visual alerting.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -549,9 +575,27 @@
         "y": 45
       },
       "id": 502,
+      "options": {
+        "displayMode": "gradient",
+        "maxVizHeight": 300,
+        "minVizHeight": 16,
+        "minVizWidth": 75,
+        "namePlacement": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "sizing": "auto",
+        "valueMode": "color"
+      },
+      "pluginVersion": "13.0.2",
       "targets": [
         {
           "expr": "gtfs_rt_invalid_vehicle_coordinates{server_id=~\"$server_id\"}",
+          "legendFormat": "Invalid Coords (Server {{server_id}})",
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
@@ -559,6 +603,7 @@
         },
         {
           "expr": "gtfs_rt_stopped_out_of_bounds_vehicles{server_id=~\"$server_id\"}",
+          "legendFormat": "Out-of-Bounds (Server {{server_id}})",
           "refId": "B",
           "datasource": {
             "name": "Prometheus"
@@ -566,7 +611,7 @@
         }
       ],
       "title": "5.2 Spatial Validation",
-      "type": "timeseries"
+      "type": "bargauge"
     },
     {
       "collapsed": false,
