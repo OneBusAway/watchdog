@@ -466,7 +466,33 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: oba_agencies_with_coverage_count, oba_scheduled_trips_count\nQuestion answered: \"What is the overall realtime coverage footprint?\"",
+      "description": "Metrics: oba_agencies_with_coverage_count, oba_scheduled_trips_count\nQuestion answered: \"What is the overall realtime coverage footprint?\"\n\nVisualization: Stat\nRationale: This panel conveys the two headline numbers for a transit deployment: total agencies with coverage and total scheduled trips. A stat panel with a large-font single-value callout provides instant situational awareness as an executive KPI.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "green",
+                "value": 5
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -474,24 +500,44 @@
         "y": 36
       },
       "id": 403,
+      "options": {
+        "colorMode": "background_solid",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "13.0.2",
       "targets": [
         {
           "expr": "oba_agencies_with_coverage_count{server=~\"$server_id\"}",
+          "legendFormat": "Agencies with Coverage",
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
-          }
+          },
+          "instant": true
         },
         {
-          "expr": "oba_scheduled_trips_count{server=~\"$server_id\", agency=~\"$agency_id\"}",
+          "expr": "sum(oba_scheduled_trips_count{server=~\"$server_id\", agency=~\"$agency_id\"})",
+          "legendFormat": "Scheduled Trips",
           "refId": "B",
           "datasource": {
             "name": "Prometheus"
-          }
+          },
+          "instant": true
         }
       ],
       "title": "4.3 Coverage Summary",
-      "type": "timeseries"
+      "type": "stat"
     },
     {
       "collapsed": false,
