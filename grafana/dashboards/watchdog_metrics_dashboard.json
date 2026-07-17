@@ -171,7 +171,35 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: gtfs_bundle_days_until_earliest_expiration, gtfs_bundle_days_until_latest_expiration\nQuestion answered: \"Are GTFS bundles approaching expiration?\"",
+      "description": "Metrics: gtfs_bundle_days_until_earliest_expiration, gtfs_bundle_days_until_latest_expiration\nQuestion answered: \"Are GTFS bundles approaching expiration?\"\n\nVisualization: Bar Gauge\nRationale: This metric is a countdown. Rendering it as a horizontal bar gauge allows operators to stack multiple feeds side-by-side. The bars act as a visual timer that shifts from green to warning red as the days until expiration drop below the critical threshold.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "max": 90,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 7
+              },
+              {
+                "color": "green",
+                "value": 30
+              }
+            ]
+          },
+          "unit": "d"
+        },
+        "overrides": []
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -179,9 +207,27 @@
         "y": 10
       },
       "id": 201,
+      "options": {
+        "displayMode": "gradient",
+        "maxVizHeight": 300,
+        "minVizHeight": 16,
+        "minVizWidth": 75,
+        "namePlacement": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "sizing": "auto",
+        "valueMode": "color"
+      },
+      "pluginVersion": "13.0.2",
       "targets": [
         {
           "expr": "gtfs_bundle_days_until_earliest_expiration{server_id=~\"$server_id\"}",
+          "legendFormat": "Earliest Expiration (Server {{server_id}})",
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
@@ -189,6 +235,7 @@
         },
         {
           "expr": "gtfs_bundle_days_until_latest_expiration{server_id=~\"$server_id\"}",
+          "legendFormat": "Latest Expiration (Server {{server_id}})",
           "refId": "B",
           "datasource": {
             "name": "Prometheus"
@@ -196,7 +243,7 @@
         }
       ],
       "title": "2.1 Feed Expiration",
-      "type": "timeseries"
+      "type": "bargauge"
     },
     {
       "datasource": {
