@@ -322,7 +322,41 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: vehicle_report_total\nQuestion answered: \"Are realtime updates continuously flowing?\"",
+      "description": "Metrics: vehicle_report_total\nQuestion answered: \"Are realtime updates continuously flowing?\"\n\nVisualization: Time Series (with rate)\nRationale: Because this metric (vehicle_report_total) is a continuously accumulating counter, visualizing the raw number is unhelpful. Applying a Prometheus rate() function and plotting it on a time-series chart is the only way to monitor the live flow rate and capture sudden velocity drops.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "gradientMode": "scheme",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -330,9 +364,24 @@
         "y": 27
       },
       "id": 303,
+      "options": {
+        "legend": {
+          "calcs": ["mean", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "13.0.2",
       "targets": [
         {
-          "expr": "vehicle_report_total{server_id=~\"$server_id\"}",
+          "expr": "rate(vehicle_report_total{server_id=~\"$server_id\"}[5m])",
+          "legendFormat": "Vehicle {{vehicle_id}} (Server {{server_id}})",
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
