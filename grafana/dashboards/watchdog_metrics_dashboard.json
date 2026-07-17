@@ -253,7 +253,42 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: realtime_vehicle_positions_count_gtfs_rt, vehicle_count_api, gtfs_rt_tracked_vehicles_count\nQuestion answered: \"Is realtime coverage dropping?\"",
+      "description": "Metrics: realtime_vehicle_positions_count_gtfs_rt, vehicle_count_api, gtfs_rt_tracked_vehicles_count\nQuestion answered: \"Is realtime coverage dropping?\"\n\nVisualization: Time Series\nRationale: Vehicle volume naturally ebbs and flows with the daily transit schedule. Overlaying the GTFS-RT feed count directly against the API output count on a time series line chart allows operators to immediately spot ingestion drops or system divergence from the historical daily baseline.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -261,9 +296,24 @@
         "y": 19
       },
       "id": 301,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "mean"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "13.0.2",
       "targets": [
         {
           "expr": "realtime_vehicle_positions_count_gtfs_rt{server_id=~\"$server_id\"}",
+          "legendFormat": "GTFS-RT Feed (Server {{server_id}})",
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
@@ -271,6 +321,7 @@
         },
         {
           "expr": "vehicle_count_api{server_id=~\"$server_id\", agency_id=~\"$agency_id\"}",
+          "legendFormat": "API Count ({{agency_id}})",
           "refId": "B",
           "datasource": {
             "name": "Prometheus"
@@ -278,6 +329,7 @@
         },
         {
           "expr": "gtfs_rt_tracked_vehicles_count{server_id=~\"$server_id\"}",
+          "legendFormat": "Tracked Vehicles (Server {{server_id}})",
           "refId": "C",
           "datasource": {
             "name": "Prometheus"
