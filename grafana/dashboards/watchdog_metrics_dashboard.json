@@ -383,7 +383,106 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: oba_realtime_records_total, oba_realtime_trips_matched_count, oba_realtime_trips_unmatched_count, oba_realtime_trip_match_ratio\nQuestion answered: \"How much realtime trip data is usable?\"",
+      "description": "Metrics: oba_realtime_records_total, oba_realtime_trips_matched_count, oba_realtime_trips_unmatched_count, oba_realtime_trip_match_ratio\nQuestion answered: \"How much realtime trip data is usable?\"\n\nVisualization: Time Series (Stacked Area)\nRationale: Stacking matched over unmatched trips as filled areas reveals total realtime volume while simultaneously indicating the match proportion. The unmatched area growing is an early warning of schedule drift. The match ratio is overlaid as a line on the right y-axis for precise reading.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 50,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Match Ratio"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.stacking",
+                "value": {
+                  "group": "B",
+                  "mode": "none"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "yellow",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Total Records"
+            },
+            "properties": [
+              {
+                "id": "custom.stacking",
+                "value": {
+                  "group": "B",
+                  "mode": "none"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [10, 10],
+                  "fill": "dash"
+                }
+              }
+            ]
+          }
+        ]
+      },
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -391,30 +490,48 @@
         "y": 36
       },
       "id": 401,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "13.0.2",
       "targets": [
         {
-          "expr": "oba_realtime_records_total{server=~\"$server_id\", agency=~\"$agency_id\"}",
+          "expr": "oba_realtime_trips_matched_count{server=~\"$server_id\", agency=~\"$agency_id\"}",
+          "legendFormat": "Matched",
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
           }
         },
         {
-          "expr": "oba_realtime_trips_matched_count{server=~\"$server_id\", agency=~\"$agency_id\"}",
+          "expr": "oba_realtime_trips_unmatched_count{server=~\"$server_id\", agency=~\"$agency_id\"}",
+          "legendFormat": "Unmatched",
           "refId": "B",
           "datasource": {
             "name": "Prometheus"
           }
         },
         {
-          "expr": "oba_realtime_trips_unmatched_count{server=~\"$server_id\", agency=~\"$agency_id\"}",
+          "expr": "oba_realtime_trip_match_ratio{server=~\"$server_id\", agency=~\"$agency_id\"}",
+          "legendFormat": "Match Ratio",
           "refId": "C",
           "datasource": {
             "name": "Prometheus"
           }
         },
         {
-          "expr": "oba_realtime_trip_match_ratio{server=~\"$server_id\", agency=~\"$agency_id\"}",
+          "expr": "oba_realtime_records_total{server=~\"$server_id\", agency=~\"$agency_id\"}",
+          "legendFormat": "Total Records",
           "refId": "D",
           "datasource": {
             "name": "Prometheus"
