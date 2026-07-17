@@ -585,7 +585,31 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: oba_unmatched_stop_cluster_count\nQuestion answered: \"Where are failures concentrated?\"",
+      "description": "Metrics: oba_unmatched_stop_location\nQuestion answered: \"Where are failures concentrated?\"\n\nVisualization: Geomap\nRationale: Stop cluster mismatches are geographical problems. Rendering them on a Geomap instantly reveals spatial patterns (e.g. an entire transit corridor failing to match due to bad GTFS data). NOTE: Changed metric from oba_unmatched_stop_cluster_count to oba_unmatched_stop_location to ensure lat/lon coordinates are available for map plotting.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -593,9 +617,49 @@
         "y": 54
       },
       "id": 601,
+      "options": {
+        "basemap": {
+          "config": {},
+          "name": "Layer 0",
+          "type": "default"
+        },
+        "controls": {
+          "mouseWheelZoom": true,
+          "showAttribution": true,
+          "showDebug": false,
+          "showScale": false,
+          "showZoom": true
+        },
+        "layers": [
+          {
+            "config": {
+              "showLegend": true
+            },
+            "location": {
+              "lookup": "lat, lon",
+              "mode": "auto"
+            },
+            "name": "Layer 1",
+            "type": "markers"
+          }
+        ],
+        "tooltip": {
+          "mode": "details"
+        },
+        "view": {
+          "id": "zero",
+          "lat": 0,
+          "lon": 0,
+          "zoom": 1
+        }
+      },
+      "pluginVersion": "13.0.2",
       "targets": [
         {
-          "expr": "oba_unmatched_stop_cluster_count",
+          "expr": "oba_unmatched_stop_location{server_id=~\"$server_id\"}",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "Unmatched Stop",
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
@@ -603,7 +667,7 @@
         }
       ],
       "title": "6.1 Unmatched Stop Clusters",
-      "type": "timeseries"
+      "type": "geomap"
     }
   ],
   "schemaVersion": 39,
