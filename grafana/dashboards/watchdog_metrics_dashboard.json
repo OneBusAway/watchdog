@@ -291,7 +291,35 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: vehicle_position_report_interval_seconds, oba_time_since_last_update_seconds\nQuestion answered: \"How stale is realtime data?\"",
+      "description": "Metrics: vehicle_position_report_interval_seconds, oba_time_since_last_update_seconds\nQuestion answered: \"How stale is realtime data?\"\n\nVisualization: Bar Gauge\nRationale: Freshness requires an immediate live status check. A vertical bar gauge per agency immediately catches the eye. As realtime updates lag, the bars fill up and hit red thresholds, quickly highlighting exactly which agency's data pipeline is hung.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "max": 300,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 30
+              },
+              {
+                "color": "red",
+                "value": 120
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -299,24 +327,35 @@
         "y": 19
       },
       "id": 302,
+      "options": {
+        "displayMode": "gradient",
+        "maxVizHeight": 300,
+        "minVizHeight": 16,
+        "minVizWidth": 50,
+        "namePlacement": "auto",
+        "orientation": "vertical",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "sizing": "auto",
+        "valueMode": "color"
+      },
+      "pluginVersion": "13.0.2",
       "targets": [
         {
-          "expr": "vehicle_position_report_interval_seconds{server_id=~\"$server_id\"}",
-          "refId": "A",
-          "datasource": {
-            "name": "Prometheus"
-          }
-        },
-        {
           "expr": "oba_time_since_last_update_seconds{server=~\"$server_id\", agency=~\"$agency_id\"}",
-          "refId": "B",
+          "legendFormat": "{{agency}} (Server {{server}})",
+          "refId": "A",
           "datasource": {
             "name": "Prometheus"
           }
         }
       ],
       "title": "3.2 Feed Freshness",
-      "type": "timeseries"
+      "type": "bargauge"
     },
     {
       "datasource": {
