@@ -7,8 +7,10 @@ WORKDIR /usr/src/app
 COPY go.mod go.sum ./
 RUN go mod download && go mod verify
 
+ARG VERSION=dev
+
 COPY . .
-RUN CGO_ENABLED=0 go build -v -o . ./...
+RUN CGO_ENABLED=0 go build -v -ldflags="-X main.version=${VERSION}" -o . ./...
 
 # Final stage
 FROM debian:bookworm-slim

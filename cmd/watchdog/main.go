@@ -16,10 +16,9 @@ import (
 	"watchdog.onebusaway.org/internal/report"
 )
 
-// Declare a string containing the application version number. Later in the book we'll
-// generate this automatically at build time, but for now we'll just store the version
-// number as a hard-coded global constant.
-const version = "1.0.0"
+// Application version injected at build time via ldflags.
+// Defaults to "dev" when built without ldflags (e.g., go run).
+var version = "dev"
 
 func main() {
 	// Initialize a structured logger for the application
