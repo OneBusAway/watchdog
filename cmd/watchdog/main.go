@@ -21,6 +21,24 @@ import (
 var version = "dev"
 
 func main() {
+	var cfg config.Config
+
+	flag.IntVar(&cfg.Port, "port", 4000, "API server port")
+	flag.StringVar(&cfg.Env, "env", "development", "Environment (development|staging|production)")
+	flag.IntVar(&cfg.FetchInterval, "fetch-interval", 30, "Interval (in seconds) at which the application fetches data from realtime APIs and updates Prometheus metrics")
+
+	var (
+		showVersion = flag.Bool("version", false, "display version and exit")
+		configFile  = flag.String("config-file", "", "Path to a local JSON configuration file")
+		configURL   = flag.String("config-url", "", "URL to a remote JSON configuration file")
+	)
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		os.Exit(0)
+	}
+
 	// Initialize a structured logger for the application
 	// This logger will be used throughout the application for logging messages.
 	// It can be configured to log to different outputs (e.g., console, file)
@@ -29,21 +47,6 @@ func main() {
 	// Load environment variables for configuration
 	configAuthUser := os.Getenv("CONFIG_AUTH_USER")
 	configAuthPass := os.Getenv("CONFIG_AUTH_PASS")
-
-	// Initialize the application configuration with default values
-	// These values can be overridden by command line flags or environment variables.
-	var cfg config.Config
-
-	flag.IntVar(&cfg.Port, "port", 4000, "API server port")
-	flag.StringVar(&cfg.Env, "env", "development", "Environment (development|staging|production)")
-	flag.IntVar(&cfg.FetchInterval, "fetch-interval", 30, "Interval (in seconds) at which the application fetches data from realtime APIs and updates Prometheus metrics")
-
-	var (
-		configFile = flag.String("config-file", "", "Path to a local JSON configuration file")
-		configURL  = flag.String("config-url", "", "URL to a remote JSON configuration file")
-	)
-	// Parse command line flags
-	flag.Parse()
 
 	// Validate that only one configuration source is specified
 	// Either a config file or a remote config URL can be specified, but not both.
