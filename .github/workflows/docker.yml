@@ -98,6 +98,7 @@ jobs:
           context: .  # Path to the directory containing the Dockerfile
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           push: true
+          build-args: VERSION=${{ env.IMAGE_TAG }}
           tags: |
             opentransitsoftwarefoundation/watchdog:latest
             opentransitsoftwarefoundation/watchdog:${{ env.IMAGE_TAG }}
