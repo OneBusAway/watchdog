@@ -428,7 +428,7 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: oba_stops_matched_count, oba_stops_unmatched_count, oba_stop_match_ratio\nQuestion answered: \"Are stop mappings degrading?\"\n\nVisualization: Bar Gauge\nRationale: A ranking bar gauge sorted by worst agencies first allows operators to immediately triage the most problematic feeds. The gradient color (green to red) makes it visually obvious which stops need attention.",
+      "description": "Metric: oba_stop_match_ratio\nQuestion answered: \"Which agencies have the worst stop mapping quality?\"\n\nVisualization: Bar Gauge\nRationale: A ranking bar gauge sorted by worst agencies first allows operators to immediately triage the most problematic feeds. The gradient color (green to red) makes it visually obvious which stops need attention.",
       "fieldConfig": {
         "defaults": {
           "color": {
