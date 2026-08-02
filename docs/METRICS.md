@@ -84,7 +84,7 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
 | Metric Name                          | Type  | Labels                                                   | Unit    | Description                                        |
 | ------------------------------------ | ----- | -------------------------------------------------------- | ------- | -------------------------------------------------- |
 | `oba_agencies_with_coverage_count`   | Gauge | `server`                                                 | count   | Number of agencies with coverage.                  |
-| `oba_realtime_records_total`         | Gauge | `server`, `agency`                                       | count   | Total realtime records received.                   |
+| `oba_realtime_records_count`         | Gauge | `server`, `agency`                                       | count   | Total realtime records received.                   |
 | `oba_realtime_trips_matched_count`   | Gauge | `server`, `agency`                                       | count   | Number of matched realtime trips.                  |
 | `oba_realtime_trips_unmatched_count` | Gauge | `server`, `agency`                                       | count   | Number of unmatched realtime trips.                |
 | `oba_scheduled_trips_count`          | Gauge | `server`, `agency`                                       | count   | Number of scheduled trips.                         |

@@ -383,7 +383,7 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: oba_realtime_records_total, oba_realtime_trips_matched_count, oba_realtime_trips_unmatched_count, oba_realtime_trip_match_ratio\nQuestion answered: \"How much realtime trip data is usable?\"",
+      "description": "Metrics: oba_realtime_records_count, oba_realtime_trips_matched_count, oba_realtime_trips_unmatched_count, oba_realtime_trip_match_ratio\nQuestion answered: \"How much realtime trip data is usable?\"",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -393,7 +393,7 @@
       "id": 401,
       "targets": [
         {
-          "expr": "oba_realtime_records_total{server=~\"$server_id\", agency=~\"$agency_id\"}",
+          "expr": "oba_realtime_records_count{server=~\"$server_id\", agency=~\"$agency_id\"}",
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
