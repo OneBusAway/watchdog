@@ -195,7 +195,7 @@
       "pluginVersion": "13.0.2",
       "targets": [
         {
-          "expr": "sum(rate(http_outgoing_request_duration_seconds_bucket{url=~\".*\"}[5m])) by (le)",
+          "expr": "sum(rate(http_outgoing_request_duration_seconds_bucket{server_id=~\"$server_id\"}[5m])) by (le)",
           "format": "heatmap",
           "legendFormat": "{{le}}",
           "refId": "A",
