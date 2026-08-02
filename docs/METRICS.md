@@ -84,7 +84,7 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
 | Metric Name                          | Type  | Labels                                                   | Unit    | Description                                        |
 | ------------------------------------ | ----- | -------------------------------------------------------- | ------- | -------------------------------------------------- |
 | `oba_agencies_with_coverage_count`   | Gauge | `server`                                                 | count   | Number of agencies with coverage.                  |
-| `oba_realtime_records_total`         | Gauge | `server`, `agency`                                       | count   | Total realtime records received.                   |
+| `oba_realtime_records_count`         | Gauge | `server`, `agency`                                       | count   | Total realtime records received.                   |
 | `oba_realtime_trips_matched_count`   | Gauge | `server`, `agency`                                       | count   | Number of matched realtime trips.                  |
 | `oba_realtime_trips_unmatched_count` | Gauge | `server`, `agency`                                       | count   | Number of unmatched realtime trips.                |
 | `oba_scheduled_trips_count`          | Gauge | `server`, `agency`                                       | count   | Number of scheduled trips.                         |
@@ -93,7 +93,7 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
 | `oba_realtime_trip_match_ratio`      | Gauge | `server`, `agency`                                       | ratio   | Ratio of matched realtime trips to total trips.    |
 | `oba_stop_match_ratio`               | Gauge | `server`, `agency`                                       | ratio   | Ratio of matched stops to total stops.             |
 | `oba_time_since_last_update_seconds` | Gauge | `server`, `agency`                                       | seconds | Time since last realtime update.                   |
-| `oba_unmatched_stop_location`        | Gauge | `server`, `agency`, `stop_id`, `stop_name`, `lat`, `lon` | N/A     | Location info of unmatched stops from static GTFS. |
+| `oba_unmatched_stop_info`            | Gauge | `server`, `agency`, `stop_id`, `stop_name`, `lat`, `lon` | N/A     | Presence marker (always 1) for unmatched stops from static GTFS, with location as labels. |
 | `oba_unmatched_stop_cluster_count`   | Gauge | `server`, `agency`, `cluster_id`, `cluster_type`         | count   | Number of unmatched stops grouped by cluster.      |
 
 **Interpretation Guide:**

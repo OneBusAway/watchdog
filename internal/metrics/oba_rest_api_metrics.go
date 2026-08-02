@@ -178,7 +178,7 @@ func fetchObaAPIMetrics(slugID string, serverID int, serverBaseUrl string, apiKe
 				if stop.Latitude == nil || stop.Longitude == nil {
 					continue
 				}
-				ObaUnmatchedStopLocation.WithLabelValues(
+				ObaUnmatchedStopInfo.WithLabelValues(
 					slugID,
 					agencyID,
 					stopID,

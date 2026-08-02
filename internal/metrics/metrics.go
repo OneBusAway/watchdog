@@ -123,7 +123,7 @@ var (
 
 	ObaRealtimeRecords = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "oba_realtime_records_total",
+			Name: "oba_realtime_records_count",
 			Help: "Total number of realtime records",
 		},
 		[]string{"server", "agency"},
@@ -187,10 +187,10 @@ var (
 		[]string{"server", "agency"},
 	)
 
-	ObaUnmatchedStopLocation = promauto.NewGaugeVec(
+	ObaUnmatchedStopInfo = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "oba_unmatched_stop_location",
-			Help: "Location info of unmatched stops from static GTFS",
+			Name: "oba_unmatched_stop_info",
+			Help: "Presence marker (always 1) for unmatched stops from static GTFS with their location as labels",
 		},
 		[]string{"server", "agency", "stop_id", "stop_name", "lat", "lon"},
 	)
