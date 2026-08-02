@@ -510,7 +510,31 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: gtfs_rt_vehicle_computed_speed, gtfs_rt_vehicle_speed_discrepancy_ratio\nQuestion answered: \"Are vehicles reporting unrealistic speeds?\"",
+      "description": "Metrics: gtfs_rt_vehicle_computed_speed, gtfs_rt_vehicle_speed_discrepancy_ratio\nQuestion answered: \"Are vehicles reporting unrealistic speeds?\"\n\nVisualization: Histogram\nRationale: A histogram buckets computed speeds into ranges, making it trivial to spot an anomalous right-tail (speeds > 100 km/h for a city bus). This is far more effective than a time series for isolating the fraction of vehicles reporting physically impossible speeds.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 80,
+            "gradientMode": "scheme",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "min": 0,
+          "unit": "velocitykmh"
+        },
+        "overrides": []
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -518,24 +542,35 @@
         "y": 45
       },
       "id": 501,
+      "options": {
+        "bucketCount": 20,
+        "combine": false,
+        "fillOpacity": 80,
+        "gradientMode": "scheme",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "13.0.2",
       "targets": [
         {
           "expr": "gtfs_rt_vehicle_computed_speed{server_id=~\"$server_id\", agency_id=~\"$agency_id\"}",
+          "legendFormat": "Speed ({{vehicle_id}})",
           "refId": "A",
-          "datasource": {
-            "name": "Prometheus"
-          }
-        },
-        {
-          "expr": "gtfs_rt_vehicle_speed_discrepancy_ratio{server_id=~\"$server_id\", agency_id=~\"$agency_id\"}",
-          "refId": "B",
           "datasource": {
             "name": "Prometheus"
           }
         }
       ],
       "title": "5.1 Speed Validation",
-      "type": "timeseries"
+      "type": "histogram"
     },
     {
       "datasource": {
