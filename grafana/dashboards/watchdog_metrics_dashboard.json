@@ -177,7 +177,7 @@
           "color": {
             "mode": "thresholds"
           },
-          "max": 90,
+          "max": 7776000,
           "min": 0,
           "thresholds": {
             "mode": "absolute",
@@ -188,15 +188,15 @@
               },
               {
                 "color": "yellow",
-                "value": 7
+                "value": 604800
               },
               {
                 "color": "green",
-                "value": 30
+                "value": 2592000
               }
             ]
           },
-          "unit": "d"
+          "unit": "dtdurations"
         },
         "overrides": []
       },
@@ -226,7 +226,7 @@
       "pluginVersion": "13.0.2",
       "targets": [
         {
-          "expr": "gtfs_bundle_days_until_earliest_expiration{server_id=~\"$server_id\"}",
+          "expr": "gtfs_bundle_days_until_earliest_expiration{server_id=~\"$server_id\"} * 86400",
           "legendFormat": "Earliest Expiration (Server {{server_id}})",
           "refId": "A",
           "datasource": {
@@ -234,7 +234,7 @@
           }
         },
         {
-          "expr": "gtfs_bundle_days_until_latest_expiration{server_id=~\"$server_id\"}",
+          "expr": "gtfs_bundle_days_until_latest_expiration{server_id=~\"$server_id\"} * 86400",
           "legendFormat": "Latest Expiration (Server {{server_id}})",
           "refId": "B",
           "datasource": {
