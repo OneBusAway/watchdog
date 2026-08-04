@@ -1,0 +1,15 @@
+groups:
+  - name: watchdog-meta
+    rules:
+      - alert: WatchdogDown
+        expr: (up{job="watchdog"} == 0) or absent(up{job="watchdog"})
+        for: 2m
+        keep_firing_for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Watchdog unreachable or metrics absent"
+          description: >-
+            Watchdog (job={{ or $labels.job "watchdog" }},
+            instance={{ or $labels.instance "unknown" }}) has been down
+            (up == 0) or its metric series has been absent for 2m+ (value={{ $value }}).

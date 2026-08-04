@@ -1,0 +1,24 @@
+groups:
+  - name: prediction-quality
+    rules:
+      - alert: LowTripMatchRatio
+        expr: oba_realtime_trip_match_ratio < 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low realtime trip match ratio for {{ $labels.server }}"
+          description: >-
+            Trip match ratio for server {{ $labels.server }} is {{ $value }},
+            below the 0.8 floor for 10m+.
+
+      - alert: LowStopMatchRatio
+        expr: oba_stop_match_ratio < 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low stop match ratio for {{ $labels.server }}"
+          description: >-
+            Stop match ratio for server {{ $labels.server }} is {{ $value }},
+            below the 0.8 floor for 10m+.
