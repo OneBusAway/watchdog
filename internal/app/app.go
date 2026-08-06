@@ -25,7 +25,7 @@ type Application struct {
 
 // New creates and wires all dependencies for the Application.
 // Accepts config, logger, client, and version as arguments.
-func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version string) *Application {
+func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version string, droppedStore *config.DroppedServersStore) *Application {
 
 	staticStore := gtfs.NewStaticStore()
 	realtimeStore := gtfs.NewRealtimeStore()
@@ -33,7 +33,7 @@ func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version s
 	vehicleLastSeen := metrics.NewVehicleLastSeen()
 	backoffStore := config.NewBackoffStore()
 
-	configService := config.NewConfigService(logger, client, cfg, backoffStore)
+	configService := config.NewConfigService(logger, client, cfg, backoffStore, droppedStore)
 	gtfsService := gtfs.NewGtfsService(staticStore, realtimeStore, boundingBoxStore, logger, client)
 	metricsService := metrics.NewMetricsService(staticStore, realtimeStore, boundingBoxStore, vehicleLastSeen, logger, client)
 
