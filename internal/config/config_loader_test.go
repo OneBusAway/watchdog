@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -299,9 +300,9 @@ func TestRefreshConfig(t *testing.T) {
 
 	testLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	var serverHitCount int
+	var serverHitCount atomic.Int32
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		serverHitCount++
+		serverHitCount.Add(1)
 
 		user, pass, hasAuth := r.BasicAuth()
 		if hasAuth && (user != "testuser" || pass != "testpass") {
@@ -333,7 +334,7 @@ func TestRefreshConfig(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 
-	if serverHitCount == 0 {
+	if serverHitCount.Load() == 0 {
 		t.Fatal("Mock server was never called")
 	}
 
