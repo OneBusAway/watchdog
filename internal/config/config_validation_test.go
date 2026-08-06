@@ -125,7 +125,7 @@ func TestLoadConfigFromFileFiltersInvalidServers(t *testing.T) {
 		t.Fatalf("write config.json: %v", err)
 	}
 
-	servers, err := loadConfigFromFile(fp)
+	servers, err := loadConfigFromFile(fp, NewDroppedServersStore())
 	if err != nil {
 		t.Fatalf("loadConfigFromFile failed: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestLoadConfigFromURLFiltersInvalidServers(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	servers, err := loadConfigFromURL(context.Background(), &http.Client{Timeout: 10 * time.Second}, ts.URL, "", "", 1)
+	servers, err := loadConfigFromURL(context.Background(), &http.Client{Timeout: 10 * time.Second}, ts.URL, "", "", NewDroppedServersStore(), 1)
 	if err != nil {
 		t.Fatalf("loadConfigFromURL failed: %v", err)
 	}
@@ -179,8 +179,9 @@ func TestLoadConfigFromURLFiltersInvalidServers(t *testing.T) {
 	}
 }
 
-func TestFilterValidServers(t *testing.T) {
+func TestReconcile(t *testing.T) {
 	t.Run("drops every invalid server and preserves the order of valid ones", func(t *testing.T) {
+		store := NewDroppedServersStore()
 		valid1 := validServer()
 		valid1.ID = 1
 		valid2 := validServer()
@@ -193,7 +194,7 @@ func TestFilterValidServers(t *testing.T) {
 		invalidB.AgencyID = ""
 
 		// Interleave valid and invalid: valid, invalid, valid, invalid.
-		got := filterValidServers([]models.ObaServer{valid1, invalidA, valid2, invalidB})
+		got := store.Reconcile([]models.ObaServer{valid1, invalidA, valid2, invalidB})
 
 		if len(got) != 2 {
 			t.Fatalf("expected 2 valid servers, got %d: %+v", len(got), got)
@@ -204,16 +205,18 @@ func TestFilterValidServers(t *testing.T) {
 	})
 
 	t.Run("all servers invalid yields an empty slice", func(t *testing.T) {
+		store := NewDroppedServersStore()
 		bad := validServer()
 		bad.GtfsUrl = ""
-		got := filterValidServers([]models.ObaServer{bad})
+		got := store.Reconcile([]models.ObaServer{bad})
 		if len(got) != 0 {
 			t.Fatalf("expected 0 valid servers, got %d", len(got))
 		}
 	})
 
 	t.Run("empty input yields an empty slice", func(t *testing.T) {
-		got := filterValidServers(nil)
+		store := NewDroppedServersStore()
+		got := store.Reconcile(nil)
 		if len(got) != 0 {
 			t.Fatalf("expected 0 servers, got %d", len(got))
 		}
