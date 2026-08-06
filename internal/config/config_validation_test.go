@@ -7,9 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/getsentry/sentry-go"
 	"watchdog.onebusaway.org/internal/models"
 )
 
@@ -221,4 +223,177 @@ func TestReconcile(t *testing.T) {
 			t.Fatalf("expected 0 servers, got %d", len(got))
 		}
 	})
+}
+
+// A server that stays invalid across refresh cycles must be reported to Sentry
+// exactly once, not once per cycle.
+func TestReconcileReportsInvalidServerOnce(t *testing.T) {
+	rec := captureSentry(t)
+	store := NewDroppedServersStore()
+
+	invalid := validServer()
+	invalid.ID = 7
+	invalid.GtfsUrl = ""
+
+	for i := 0; i < 3; i++ {
+		if got := store.Reconcile([]models.ObaServer{invalid}); len(got) != 0 {
+			t.Fatalf("iteration %d: expected invalid server dropped, got %d valid", i, len(got))
+		}
+	}
+
+	events := rec.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected exactly 1 Sentry report for a persistently invalid server, got %d", len(events))
+	}
+	if events[0].Level != sentry.LevelError {
+		t.Errorf("expected error level, got %s", events[0].Level)
+	}
+	if events[0].Tags["server_id"] != "7" || events[0].Tags["server_name"] != invalid.Name {
+		t.Errorf("unexpected tags: %v", events[0].Tags)
+	}
+}
+
+// When a previously dropped server becomes valid, exactly one info-level
+// recovery report is emitted and no further invalid reports follow.
+func TestReconcileReportsRecoveryOnce(t *testing.T) {
+	rec := captureSentry(t)
+	store := NewDroppedServersStore()
+
+	invalid := validServer()
+	invalid.ID = 7
+	invalid.GtfsUrl = ""
+
+	if got := store.Reconcile([]models.ObaServer{invalid}); len(got) != 0 {
+		t.Fatal("expected invalid server dropped")
+	}
+
+	recovered := invalid
+	recovered.GtfsUrl = "https://gtfs.example.com"
+	for i := 0; i < 2; i++ {
+		if got := store.Reconcile([]models.ObaServer{recovered}); len(got) != 1 {
+			t.Fatalf("iteration %d: expected recovered server kept, got %d valid", i, len(got))
+		}
+	}
+
+	events := rec.Events()
+	if len(events) != 2 {
+		t.Fatalf("expected 1 error + 1 recovery report, got %d", len(events))
+	}
+	if events[0].Level != sentry.LevelError {
+		t.Errorf("expected first event at error level, got %s", events[0].Level)
+	}
+	if events[1].Level != sentry.LevelInfo {
+		t.Errorf("expected recovery event at info level, got %s", events[1].Level)
+	}
+}
+
+// A reported server that disappears from the config is pruned; if it later
+// reappears invalid, it is a fresh state and gets reported again.
+func TestReconcileReportsPrunedServerAgain(t *testing.T) {
+	rec := captureSentry(t)
+	store := NewDroppedServersStore()
+
+	invalid := validServer()
+	invalid.ID = 7
+	invalid.GtfsUrl = ""
+
+	if got := store.Reconcile([]models.ObaServer{invalid}); len(got) != 0 {
+		t.Fatal("expected invalid server dropped")
+	}
+
+	if got := store.Reconcile(nil); len(got) != 0 {
+		t.Fatal("expected no servers")
+	}
+
+	if got := store.Reconcile([]models.ObaServer{invalid}); len(got) != 0 {
+		t.Fatal("expected invalid server dropped")
+	}
+
+	if events := rec.Events(); len(events) != 2 {
+		t.Fatalf("expected 2 Sentry reports, got %d", len(events))
+	}
+}
+
+// Sentry reports for dropped servers must carry only identifying tags, never
+// credentials such as API keys.
+func TestReconcileReportsNoCredentials(t *testing.T) {
+	rec := captureSentry(t)
+	store := NewDroppedServersStore()
+
+	invalid := validServer()
+	invalid.ID = 7
+	invalid.ObaApiKey = "super-secret-key"
+	invalid.GtfsRtApiKey = "gtfs-secret"
+	invalid.GtfsRtApiValue = "gtfs-value"
+	invalid.GtfsUrl = ""
+
+	store.Reconcile([]models.ObaServer{invalid})
+
+	events := rec.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 report, got %d", len(events))
+	}
+	event := events[0]
+
+	for _, secret := range []string{"super-secret-key", "gtfs-secret", "gtfs-value"} {
+		if strings.Contains(event.Message, secret) {
+			t.Errorf("report leaked credential %q in message", secret)
+		}
+		if len(event.Exception) > 0 && strings.Contains(event.Exception[0].Value, secret) {
+			t.Errorf("report leaked credential %q in exception value", secret)
+		}
+		for _, tag := range event.Tags {
+			if strings.Contains(tag, secret) {
+				t.Errorf("report leaked credential %q in tag", secret)
+			}
+		}
+	}
+
+	for _, want := range []string{"server_id", "server_name"} {
+		if _, ok := event.Tags[want]; !ok {
+			t.Errorf("expected tag %q to be present, got %v", want, event.Tags)
+		}
+	}
+}
+
+// recordingTransport captures Sentry events in memory instead of sending them.
+type recordingTransport struct {
+	mu     sync.Mutex
+	events []*sentry.Event
+}
+
+func (t *recordingTransport) Configure(_ sentry.ClientOptions) {}
+func (t *recordingTransport) Close()                           {}
+
+func (t *recordingTransport) SendEvent(event *sentry.Event) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.events = append(t.events, event)
+}
+
+func (t *recordingTransport) Flush(_ time.Duration) bool { return true }
+
+func (t *recordingTransport) Events() []*sentry.Event {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]*sentry.Event(nil), t.events...)
+}
+
+// captureSentry binds a recording transport to the current hub for the duration
+// of the test so Reconcile's Sentry reports can be asserted.
+func captureSentry(t *testing.T) *recordingTransport {
+	t.Helper()
+	rec := &recordingTransport{}
+	client, err := sentry.NewClient(sentry.ClientOptions{
+		Dsn:       "https://public@sentry.example.com/1",
+		Transport: rec,
+	})
+	if err != nil {
+		t.Fatalf("sentry.NewClient: %v", err)
+	}
+	hub := sentry.CurrentHub()
+	prev := hub.Client()
+	hub.BindClient(client)
+	t.Cleanup(func() { hub.BindClient(prev) })
+	return rec
 }
