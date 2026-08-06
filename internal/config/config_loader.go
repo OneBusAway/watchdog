@@ -114,7 +114,7 @@ func loadConfigFromFile(filePath string, droppedStore *DroppedServersStore) ([]m
 		return nil, fmt.Errorf("failed to unmarshal JSON: %v", err)
 	}
 
-	return droppedStore.Reconcile(servers), nil
+	return droppedStore.Reconcile(droppedStore.rejectDuplicateServerIDs(servers)), nil
 }
 
 // loadConfigFromURL fetches a JSON configuration from a remote HTTP(S) endpoint,
@@ -180,5 +180,5 @@ func loadConfigFromURL(ctx context.Context, client *http.Client, url, authUser, 
 		return nil, fmt.Errorf("failed to unmarshal JSON: %v", err)
 	}
 
-	return droppedStore.Reconcile(servers), nil
+	return droppedStore.Reconcile(droppedStore.rejectDuplicateServerIDs(servers)), nil
 }

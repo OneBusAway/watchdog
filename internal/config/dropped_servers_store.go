@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"strconv"
 	"sync"
 
@@ -16,12 +17,17 @@ import (
 type DroppedServersStore struct {
 	mu       sync.RWMutex
 	reported map[int]bool
+	// reportedDuplicates tracks duplicate server IDs whose extra occurrences
+	// were already reported, kept separate from reported so a duplicate report
+	// can never be mistaken for a "recovered" invalid server.
+	reportedDuplicates map[int]struct{}
 }
 
 // NewDroppedServersStore creates an empty DroppedServersStore.
 func NewDroppedServersStore() *DroppedServersStore {
 	return &DroppedServersStore{
-		reported: make(map[int]bool),
+		reported:           make(map[int]bool),
+		reportedDuplicates: make(map[int]struct{}),
 	}
 }
 
@@ -81,4 +87,53 @@ func (s *DroppedServersStore) Reconcile(servers []models.ObaServer) []models.Oba
 	}
 
 	return valid
+}
+
+// rejectDuplicateServerIDs drops all but the first server with a given ID,
+// reporting each dropped duplicate to Sentry at most once per ID (tracked in a
+// separate map from reported so a duplicate can never be misread as a
+// previously invalid server that recovered).
+//
+// It must run before Reconcile: Reconcile keys its report-once state by server
+// ID, so without this pre-pass a second invalid server sharing an ID with the
+// first would be silently swallowed instead of reported. Duplicates whose ID
+// disappears from the config are pruned, so a duplicate that reappears later
+// reports again.
+func (s *DroppedServersStore) rejectDuplicateServerIDs(servers []models.ObaServer) []models.ObaServer {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	seen := make(map[int]struct{}, len(servers))
+	present := make(map[int]struct{}, len(servers))
+	unique := make([]models.ObaServer, 0, len(servers))
+
+	for _, server := range servers {
+		present[server.ID] = struct{}{}
+		if _, ok := seen[server.ID]; ok {
+			if _, reported := s.reportedDuplicates[server.ID]; !reported {
+				s.reportedDuplicates[server.ID] = struct{}{}
+				report.ReportErrorWithSentryOptions(
+					fmt.Errorf("duplicate server id %d (%q) dropped: keeping the first server with this id", server.ID, server.Name),
+					report.SentryReportOptions{
+						Tags: map[string]string{
+							"server_id":   strconv.Itoa(server.ID),
+							"server_name": server.Name,
+						},
+						Level: sentry.LevelError,
+					},
+				)
+			}
+			continue
+		}
+		seen[server.ID] = struct{}{}
+		unique = append(unique, server)
+	}
+
+	for id := range s.reportedDuplicates {
+		if _, ok := present[id]; !ok {
+			delete(s.reportedDuplicates, id)
+		}
+	}
+
+	return unique
 }
