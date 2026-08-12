@@ -198,13 +198,23 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		return
 	}
 
-	err = app.MetricsService.CheckVehicleCountMatch(server)
+	err = app.MetricsService.CountVehiclePositions(server)
 	if err != nil {
-		app.Logger.Error("Failed to check vehicle count match metric", "error", err)
+		app.Logger.Error("Failed to count vehicle positions from GTFS-RT", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
-				"server_id":   fmt.Sprintf("%d", server.ID),
-				"server_name": server.Name,
+				"server_id": fmt.Sprintf("%d", server.ID),
+			},
+			Level: sentry.LevelError,
+		})
+	}
+
+	err = app.MetricsService.VehiclesForAgencyAPI(server)
+	if err != nil {
+		app.Logger.Error("Failed to count vehicles from VehiclesForAgency API", "error", err)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: map[string]string{
+				"server_id": fmt.Sprintf("%d", server.ID),
 			},
 			Level: sentry.LevelError,
 		})

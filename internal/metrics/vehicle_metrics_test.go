@@ -124,40 +124,6 @@ func TestVehiclesForAgencyAPI(t *testing.T) {
 	})
 }
 
-func TestCheckVehicleCountMatch(t *testing.T) {
-	t.Run("Success", func(t *testing.T) {
-
-		obaServer := setupObaServer(t, `{"code":200,"currentTime":1234567890000,"text":"OK","version":2,"data":{"list":[{"agencyId":"1"}]}}`, http.StatusOK)
-		defer obaServer.Close()
-
-		testServer := createTestServer(obaServer.URL, "Test Server", 999, "test-key", "GTFS-Rt Server URL 1", "test-api-value", "test-api-key", "1")
-
-		err := checkVehicleCountMatch(testServer, realtimeStore)
-		if err != nil {
-			t.Fatalf("CheckVehicleCountMatch failed: %v", err)
-		}
-
-		realtimeData := realtimeStore.Get()
-		if realtimeData == nil {
-			t.Fatalf("Failed to parse GTFS-RT fixture data: %v", err)
-		}
-
-		t.Log("Number of vehicles in GTFS-RT feed:", len(realtimeData.Vehicles))
-	})
-	t.Run("OBA API Error", func(t *testing.T) {
-		obaServer := setupObaServer(t, `{}`, http.StatusInternalServerError)
-		defer obaServer.Close()
-
-		testServer := createTestServer(obaServer.URL, "Test Server", 999, "test-key", "GTFS-Rt Server URL 1", "test-api-value", "test-api-key", "1")
-
-		err := checkVehicleCountMatch(testServer, realtimeStore)
-		if err == nil {
-			t.Fatal("Expected an error but got nil")
-		}
-		t.Log("Received expected error:", err)
-	})
-}
-
 func TestTrackInvalidVehiclesAndStoppedOutOfBounds(t *testing.T) {
 	boundingBoxStore := geo.NewBoundingBoxStore()
 	boundingBoxStore.Set(1, geo.BoundingBox{

@@ -56,11 +56,6 @@ var (
 		Help: "Number of vehicles in the API response",
 	}, []string{"agency_id", "server_id"})
 
-	VehicleCountMatch = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "vehicle_count_match",
-		Help: "Whether the number of vehicles in the API response matches the number of vehicles in the static GTFS-RT file (1 = match, 0 = no match)",
-	}, []string{"agency_id", "server_id"})
-
 	VehicleReportInterval = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "vehicle_position_report_interval_seconds",
 		Help: "Time in seconds since each vehicle last reported a GTFS-RT position",

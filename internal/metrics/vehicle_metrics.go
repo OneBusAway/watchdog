@@ -103,47 +103,6 @@ func vehiclesForAgencyAPI(server models.ObaServer) (int, error) {
 	return len(response.Data.List), nil
 }
 
-// checkVehicleCountMatch compares the number of vehicles in the GTFS-RT feed with
-// the number reported by the VehiclesForAgency API for the given server.
-//
-// It sets the VehicleCountMatch Prometheus metric to 1 if the counts match, or 0 otherwise.
-// Used to detect inconsistencies between real-time GTFS-RT data and the OBA API.
-//
-// Parameters:
-//   - server: the ObaServer for which the comparison is made.
-//   - realtimeStore: a pointer to the RealtimeStore holding GTFS-RT data.
-//
-// Returns:
-//   - error: if counting vehicles from either source fails.
-func checkVehicleCountMatch(server models.ObaServer, realtimeStore *gtfs.RealtimeStore) error {
-	gtfsRtVehicleCount, err := countVehiclePositions(server, realtimeStore)
-	if err != nil {
-		err := fmt.Errorf("failed to count vehicle positions from GTFS-RT: %v", err)
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
-		})
-		return err
-	}
-
-	apiVehicleCount, err := vehiclesForAgencyAPI(server)
-	if err != nil {
-		err := fmt.Errorf("failed to count vehicle positions from API: %v", err)
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
-		})
-		return err
-	}
-
-	match := 0
-	if gtfsRtVehicleCount == apiVehicleCount {
-		match = 1
-	}
-
-	VehicleCountMatch.WithLabelValues(server.AgencyID, strconv.Itoa(server.ID)).Set(float64(match))
-
-	return nil
-}
-
 // trackVehicleTelemetry collects and reports various telemetry metrics for vehicles in a GTFS-RT feed.
 //
 // This function performs the following tasks:

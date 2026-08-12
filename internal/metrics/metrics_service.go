@@ -30,8 +30,14 @@ func NewMetricsService(static *gtfs.StaticStore, realtime *gtfs.RealtimeStore, b
 	}
 }
 
-func (ms *MetricsService) CheckVehicleCountMatch(server models.ObaServer) error {
-	return checkVehicleCountMatch(server, ms.RealtimeStore)
+func (ms *MetricsService) CountVehiclePositions(server models.ObaServer) error {
+	_, err := countVehiclePositions(server, ms.RealtimeStore)
+	return err
+}
+
+func (ms *MetricsService) VehiclesForAgencyAPI(server models.ObaServer) error {
+	_, err := vehiclesForAgencyAPI(server)
+	return err
 }
 
 func (ms *MetricsService) CheckAgenciesWithCoverageMatch(server models.ObaServer) error {

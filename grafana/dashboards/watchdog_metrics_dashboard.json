@@ -343,30 +343,6 @@
       "type": "timeseries"
     },
     {
-      "datasource": {
-        "name": "Prometheus"
-      },
-      "description": "Metrics: vehicle_count_match\nQuestion answered: \"Does the API reflect GTFS-RT correctly?\"",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 27
-      },
-      "id": 304,
-      "targets": [
-        {
-          "expr": "vehicle_count_match{server_id=~\"$server_id\", agency_id=~\"$agency_id\"}",
-          "refId": "A",
-          "datasource": {
-            "name": "Prometheus"
-          }
-        }
-      ],
-      "title": "3.4 API \u2194 GTFS-RT Consistency",
-      "type": "timeseries"
-    },
-    {
       "collapsed": false,
       "gridPos": {
         "h": 1,
