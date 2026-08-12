@@ -62,8 +62,8 @@ func countVehiclePositions(server models.ObaServer, realtimeStore *gtfs.Realtime
 	return count, nil
 }
 
-// vehiclesForAgencyAPI calls the OneBusAway VehiclesForAgency API for the given server,
-// retrieves the list of vehicles, and reports the count to the VehicleCountAPI Prometheus metric.
+// countActiveVehiclesForAgency calls the OneBusAway VehiclesForAgency API for the given server,
+// retrieves the list of vehicles, and reports the count to the AgencyActiveVehiclesGauge Prometheus metric.
 //
 // This function fetches live vehicle data from the OBA API using the agency ID.
 //
@@ -73,7 +73,7 @@ func countVehiclePositions(server models.ObaServer, realtimeStore *gtfs.Realtime
 // Returns:
 //   - int: the number of vehicles returned by the API.
 //   - error: if the API call fails or returns an invalid response.
-func vehiclesForAgencyAPI(server models.ObaServer) (int, error) {
+func countActiveVehiclesForAgency(server models.ObaServer) (int, error) {
 
 	client := onebusaway.NewClient(
 		option.WithAPIKey(server.ObaApiKey),
@@ -98,7 +98,7 @@ func vehiclesForAgencyAPI(server models.ObaServer) (int, error) {
 		return 0, nil
 	}
 
-	VehicleCountAPI.WithLabelValues(server.AgencyID, strconv.Itoa(server.ID)).Set(float64(len(response.Data.List)))
+	AgencyActiveVehiclesGauge.WithLabelValues(server.AgencyID, strconv.Itoa(server.ID)).Set(float64(len(response.Data.List)))
 
 	return len(response.Data.List), nil
 }

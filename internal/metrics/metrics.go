@@ -51,9 +51,9 @@ var (
 		Help: "Number of realtime vehicle positions in the GTFS-RT feed",
 	}, []string{"gtfs_rt_url", "server_id"})
 
-	VehicleCountAPI = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "vehicle_count_api",
-		Help: "Number of vehicles in the API response",
+	AgencyActiveVehiclesGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "oba_agency_active_vehicles_count",
+		Help: "Number of active vehicles reported for the agency by the OBA vehicles-for-agency API",
 	}, []string{"agency_id", "server_id"})
 
 	VehicleReportInterval = promauto.NewGaugeVec(prometheus.GaugeOpts{

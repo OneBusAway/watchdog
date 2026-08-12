@@ -35,8 +35,8 @@ func (ms *MetricsService) CountVehiclePositions(server models.ObaServer) error {
 	return err
 }
 
-func (ms *MetricsService) VehiclesForAgencyAPI(server models.ObaServer) error {
-	_, err := vehiclesForAgencyAPI(server)
+func (ms *MetricsService) CountActiveVehiclesForAgency(server models.ObaServer) error {
+	_, err := countActiveVehiclesForAgency(server)
 	return err
 }
 

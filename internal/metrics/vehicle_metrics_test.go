@@ -60,7 +60,7 @@ func TestCountVehiclePositions(t *testing.T) {
 
 }
 
-func TestVehiclesForAgencyAPI(t *testing.T) {
+func TestCountActiveVehiclesForAgency(t *testing.T) {
 	t.Run("NilResponse", func(t *testing.T) {
 		ts := setupObaServer(t, `{"data": {"list": []}}`, http.StatusOK)
 		defer ts.Close()
@@ -73,7 +73,7 @@ func TestVehiclesForAgencyAPI(t *testing.T) {
 			AgencyID:   "test-agency",
 		}
 
-		count, err := vehiclesForAgencyAPI(server)
+		count, err := countActiveVehiclesForAgency(server)
 		if err != nil {
 			t.Fatalf("Expected no error, got %v", err)
 		}
@@ -95,7 +95,7 @@ func TestVehiclesForAgencyAPI(t *testing.T) {
 			AgencyID:   "test-agency",
 		}
 
-		count, err := vehiclesForAgencyAPI(server)
+		count, err := countActiveVehiclesForAgency(server)
 		if err != nil {
 			t.Fatalf("Expected no error, got %v", err)
 		}
@@ -117,7 +117,7 @@ func TestVehiclesForAgencyAPI(t *testing.T) {
 			AgencyID:   "test-agency",
 		}
 
-		_, err := vehiclesForAgencyAPI(server)
+		_, err := countActiveVehiclesForAgency(server)
 		if err == nil {
 			t.Fatal("Expected an error but got nil")
 		}

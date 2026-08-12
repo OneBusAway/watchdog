@@ -209,7 +209,7 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		})
 	}
 
-	err = app.MetricsService.VehiclesForAgencyAPI(server)
+	err = app.MetricsService.CountActiveVehiclesForAgency(server)
 	if err != nil {
 		app.Logger.Error("Failed to count vehicles from VehiclesForAgency API", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{

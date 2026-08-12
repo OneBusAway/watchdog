@@ -253,7 +253,7 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: realtime_vehicle_positions_count_gtfs_rt, vehicle_count_api, gtfs_rt_tracked_vehicles_count\nQuestion answered: \"Is realtime coverage dropping?\"",
+      "description": "Metrics: realtime_vehicle_positions_count_gtfs_rt, oba_agency_active_vehicles_count, gtfs_rt_tracked_vehicles_count\nQuestion answered: \"Is realtime coverage dropping?\"",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -270,7 +270,7 @@
           }
         },
         {
-          "expr": "vehicle_count_api{server_id=~\"$server_id\", agency_id=~\"$agency_id\"}",
+          "expr": "oba_agency_active_vehicles_count{server_id=~\"$server_id\", agency_id=~\"$agency_id\"}",
           "refId": "B",
           "datasource": {
             "name": "Prometheus"

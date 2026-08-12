@@ -60,7 +60,7 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
 | Metric Name                                | Type    | Labels                                 | Unit          | Description                                                   |
 | ------------------------------------------ | ------- | -------------------------------------- | ------------- | ------------------------------------------------------------- |
 | `realtime_vehicle_positions_count_gtfs_rt` | Gauge   | `gtfs_rt_url`, `server_id`             | count         | Number of realtime vehicle positions in the GTFS-RT feed.     |
-| `vehicle_count_api`                        | Gauge   | `agency_id`, `server_id`               | count         | Number of vehicles in the API response.                       |
+| `oba_agency_active_vehicles_count`         | Gauge   | `agency_id`, `server_id`               | count         | Number of active vehicles reported for the agency by the OBA vehicles-for-agency API. |
 | `vehicle_position_report_interval_seconds` | Gauge   | `vehicle_id`, `server_id`              | seconds       | Time since each vehicle last reported a GTFS-RT position.     |
 | `vehicle_report_total`                     | Counter | `vehicle_id`, `server_id`              | count         | Total number of GTFS-RT updates received per vehicle.         |
 | `gtfs_rt_vehicle_computed_speed`           | Gauge   | `vehicle_id`, `agency_id`, `server_id` | m/s           | Computed vehicle speed from GTFS-RT positions.                |
