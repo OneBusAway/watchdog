@@ -209,9 +209,9 @@ var (
 	UnmatchedStopClusterCount = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "oba_unmatched_stop_cluster_count",
-			Help: "Number of unmatched stops grouped by station or spatial cluster",
+			Help: "Number of unmatched stops grouped by station and S2 spatial cluster",
 		},
-		[]string{"server", "agency", "cluster_id", "cluster_type"},
+		[]string{"server", "agency", "station_id", "cluster_id", "cluster_lat", "cluster_lon"},
 	)
 )
 

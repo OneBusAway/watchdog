@@ -1,19 +1,26 @@
 package metrics
 
 import (
+	"fmt"
+
 	remoteGtfs "github.com/OneBusAway/go-gtfs"
 	"watchdog.onebusaway.org/internal/geo"
 )
 
-// reportUnmatchedStopClusters groups unmatched GTFS stops using hybrid clustering
-// (station-based or S2-based) and reports the cluster counts as Prometheus metrics.
+// reportUnmatchedStopClusters groups unmatched GTFS stops into spatial S2
+// clusters (always based on the stop's own coordinates at level 13) and reports
+// the cluster counts as Prometheus metrics.
 //
 // Clustering logic:
-// - If a stop belongs to a station hierarchy, it is grouped under the root station ID.
-// - Otherwise, the stop is assigned to a geographic S2 cluster based on its lat/lon.
+//   - Each valid stop is assigned to the S2 cell containing its own lat/lon.
+//   - Stops that are part of a station hierarchy (or are themselves stations) are
+//     additionally tagged with the root station ID; otherwise the station_id label
+//     is geo.NoStationID. Grouping is by the (station_id, cluster_id) pair so two
+//     stations sharing an S2 cell are not merged.
 //
 // Reported metric:
-// - UnmatchedStopClusterCount: labeled by slug ID, agency ID, cluster ID, and cluster type ("station" or "s2").
+//   - UnmatchedStopClusterCount: labeled by slug ID, agency ID, station ID, S2
+//     cluster ID, and the cluster's latitude/longitude.
 //
 // Parameters:
 // - serverID: the numeric ID of the server, used as the tracker key.
@@ -22,22 +29,31 @@ import (
 // - unmatchedStops: a map of stop IDs to GTFS stop objects not matched to gtfs static data
 // - tracker: used to record cluster observations so stale cluster series can be cleaned up later.
 func reportUnmatchedStopClusters(serverID int, slugID, agencyID string, unmatchedStops map[string]remoteGtfs.Stop, tracker *UnmatchedStopTracker) {
-	clusterCount := make(map[string]int)
-	clusterType := make(map[string]string) // station or s2
+	type clusterKey struct {
+		stationID string
+		clusterID string
+	}
+	clusterCount := make(map[clusterKey]int)
+	clusterLocation := make(map[clusterKey][2]string) // [lat, lon]
 
 	for _, stop := range unmatchedStops {
-		clusterID, ctype, ok := geo.GetClusterID(stop)
+		cluster, ok := geo.GetClusterID(stop)
 		if !ok {
 			continue
 		}
-		clusterCount[clusterID]++
-		clusterType[clusterID] = ctype
+		key := clusterKey{stationID: cluster.StationID, clusterID: cluster.ID}
+		clusterCount[key]++
+		clusterLocation[key] = [2]string{
+			fmt.Sprintf("%.6f", cluster.Latitude),
+			fmt.Sprintf("%.6f", cluster.Longitude),
+		}
 	}
 
 	// Report each cluster to Prometheus and record its observation so the
 	// cluster series can be pruned once the cluster stops appearing.
-	for id, count := range clusterCount {
-		tracker.RecordClusterSeen(serverID, slugID, agencyID, id, clusterType[id])
-		UnmatchedStopClusterCount.WithLabelValues(slugID, agencyID, id, clusterType[id]).Set(float64(count))
+	for key, count := range clusterCount {
+		lat, lon := clusterLocation[key][0], clusterLocation[key][1]
+		tracker.RecordClusterSeen(serverID, slugID, agencyID, key.stationID, key.clusterID, lat, lon)
+		UnmatchedStopClusterCount.WithLabelValues(slugID, agencyID, key.stationID, key.clusterID, lat, lon).Set(float64(count))
 	}
 }

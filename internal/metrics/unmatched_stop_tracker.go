@@ -19,12 +19,14 @@ type trackedStop struct {
 	LastSeen time.Time
 }
 
-// clusterKey identifies a reported unmatched-stop cluster by its ID and type.
-// Both are needed because the same cluster ID could in principle be reported
-// with different types ("station" vs "s2") across bundle refreshes.
+// clusterKey identifies a reported unmatched-stop cluster by its station, S2
+// cluster, and reported coordinates. All four are needed because the series is
+// labeled by the same values and DeleteLabelValues must match exactly.
 type clusterKey struct {
-	ID   string
-	Type string
+	StationID string
+	ClusterID string
+	Lat       string
+	Lon       string
 }
 
 // trackedCluster records the last observation time of an unmatched-stop
@@ -95,7 +97,7 @@ func (t *UnmatchedStopTracker) RecordLastSeen(serverID int, slug, agency, stopID
 
 // RecordClusterSeen updates (or creates) the tracked entry for an unmatched-stop
 // cluster that was just reported.
-func (t *UnmatchedStopTracker) RecordClusterSeen(serverID int, slug, agency, clusterID, clusterType string) {
+func (t *UnmatchedStopTracker) RecordClusterSeen(serverID int, slug, agency, stationID, clusterID, lat, lon string) {
 	t.Mu.Lock()
 	defer t.Mu.Unlock()
 
@@ -111,7 +113,7 @@ func (t *UnmatchedStopTracker) RecordClusterSeen(serverID int, slug, agency, clu
 		agencies[agency] = clusters
 	}
 
-	key := clusterKey{ID: clusterID, Type: clusterType}
+	key := clusterKey{StationID: stationID, ClusterID: clusterID, Lat: lat, Lon: lon}
 	entry, exists := clusters[key]
 	if !exists {
 		entry = trackedCluster{
@@ -200,7 +202,7 @@ func (t *UnmatchedStopTracker) clearClusters(now time.Time, threshold time.Durat
 					continue
 				}
 
-				UnmatchedStopClusterCount.DeleteLabelValues(entry.Slug, entry.Agency, key.ID, key.Type)
+				UnmatchedStopClusterCount.DeleteLabelValues(entry.Slug, entry.Agency, key.StationID, key.ClusterID, key.Lat, key.Lon)
 				delete(clusters, key)
 			}
 
