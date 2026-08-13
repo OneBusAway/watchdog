@@ -225,6 +225,7 @@ func storeGTFSBundle(staticBundle *remoteGtfs.Static, serverID int, staticStore 
 	staticData := models.NewStaticData(staticBundle)
 	staticBundle = nil // drop reference, GC can collect earlier
 	staticStore.Set(serverID, staticData)
+	staticStore.SetFetchTime(serverID, time.Now().UTC())
 	// compute bounding box for each downloaded GTFS bundle
 	bbox, err := geo.ComputeBoundingBox(staticData.Stops)
 	if err != nil {
