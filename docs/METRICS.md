@@ -109,6 +109,7 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
   # daily recording rule to bucket unmatched stops per calendar day
   sum by (server, agency, stop_id) (max_over_time(oba_unmatched_stop_info[1d]))
 ```
+- **`oba_unmatched_stop_cluster_count` retention:** Cluster series follow the same 24h TTL as `oba_unmatched_stop_info` — a cluster's last reported count is retained until the cluster has not appeared for 24 hours, then the series is pruned. Use range queries to reconstruct historical cluster membership.
 - **`oba_unmatched_stop_unresolved`:** `> 0` signals the OBA server is matching against a static bundle that differs from the one Watchdog downloaded (e.g., bundle refresh timing), so lookups silently dropped. Correlate with `gtfs_bundle_last_fetched_timestamp_seconds` to see how stale Watchdog's snapshot is.
 - **Example alert:**
 ```promql
