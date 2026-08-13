@@ -30,9 +30,9 @@ func TestUnmatchedStopTrackerRecordLastSeen(t *testing.T) {
 
 func TestUnmatchedStopTrackerRecordClusterSeen(t *testing.T) {
 	tracker := NewUnmatchedStopTracker()
-	tracker.RecordClusterSeen(1, "slug-a", "agency-x", "station-1", "station")
-	tracker.RecordClusterSeen(1, "slug-a", "agency-x", "station-1", "station")
-	tracker.RecordClusterSeen(1, "slug-a", "agency-x", "s2-abc", "s2")
+	tracker.RecordClusterSeen(1, "slug-a", "agency-x", "station-1", "s2_111", "38.900000", "-77.040000")
+	tracker.RecordClusterSeen(1, "slug-a", "agency-x", "station-1", "s2_111", "38.900000", "-77.040000")
+	tracker.RecordClusterSeen(1, "slug-a", "agency-x", "no_station", "s2_222", "38.910000", "-77.050000")
 
 	tracker.Mu.RLock()
 	defer tracker.Mu.RUnlock()
@@ -43,7 +43,7 @@ func TestUnmatchedStopTrackerRecordClusterSeen(t *testing.T) {
 	if len(clusters) != 2 {
 		t.Fatalf("expected 2 clusters, got %d", len(clusters))
 	}
-	if entry, ok := clusters[clusterKey{ID: "s2-abc", Type: "s2"}]; !ok || entry.Agency != "agency-x" {
+	if entry, ok := clusters[clusterKey{StationID: "no_station", ClusterID: "s2_222", Lat: "38.910000", Lon: "-77.050000"}]; !ok || entry.Agency != "agency-x" {
 		t.Fatalf("unexpected cluster entry: %+v", entry)
 	}
 }
@@ -51,14 +51,14 @@ func TestUnmatchedStopTrackerRecordClusterSeen(t *testing.T) {
 func TestUnmatchedStopTrackerClearStaleStopsAndClusters(t *testing.T) {
 	tracker := NewUnmatchedStopTracker()
 	ObaUnmatchedStopInfo.WithLabelValues("slug-a", "agency-x", "stop-1", "Stop One", "1.100000", "2.200000").Set(1)
-	UnmatchedStopClusterCount.WithLabelValues("slug-a", "agency-x", "station-1", "station").Set(3)
+	UnmatchedStopClusterCount.WithLabelValues("slug-a", "agency-x", "station-1", "s2_111", "38.900000", "-77.040000").Set(3)
 
 	tracker.RecordLastSeen(1, "slug-a", "agency-x", "stop-1", "Stop One", "1.100000", "2.200000")
-	tracker.RecordClusterSeen(1, "slug-a", "agency-x", "station-1", "station")
+	tracker.RecordClusterSeen(1, "slug-a", "agency-x", "station-1", "s2_111", "38.900000", "-77.040000")
 
 	tracker.Mu.Lock()
 	tracker.Entries[1]["agency-x"]["stop-1"] = withLastSeen(tracker.Entries[1]["agency-x"]["stop-1"], time.Now().Add(-2*24*time.Hour))
-	tracker.Clusters[1]["agency-x"][clusterKey{ID: "station-1", Type: "station"}] = withClusterLastSeen(tracker.Clusters[1]["agency-x"][clusterKey{ID: "station-1", Type: "station"}], time.Now().Add(-2*24*time.Hour))
+	tracker.Clusters[1]["agency-x"][clusterKey{StationID: "station-1", ClusterID: "s2_111", Lat: "38.900000", Lon: "-77.040000"}] = withClusterLastSeen(tracker.Clusters[1]["agency-x"][clusterKey{StationID: "station-1", ClusterID: "s2_111", Lat: "38.900000", Lon: "-77.040000"}], time.Now().Add(-2*24*time.Hour))
 	tracker.Mu.Unlock()
 
 	tracker.clear(24 * time.Hour)
@@ -85,7 +85,7 @@ func TestUnmatchedStopTrackerClearStaleStopsAndClusters(t *testing.T) {
 func TestUnmatchedStopTrackerClearKeepsFresh(t *testing.T) {
 	tracker := NewUnmatchedStopTracker()
 	tracker.RecordLastSeen(1, "slug-a", "agency-x", "stop-1", "Stop One", "1.100000", "2.200000")
-	tracker.RecordClusterSeen(1, "slug-a", "agency-x", "station-1", "station")
+	tracker.RecordClusterSeen(1, "slug-a", "agency-x", "station-1", "s2_111", "38.900000", "-77.040000")
 
 	tracker.Mu.Lock()
 	tracker.Entries[1]["agency-x"]["stop-1"] = withLastSeen(tracker.Entries[1]["agency-x"]["stop-1"], time.Now().Add(-2*24*time.Hour))
@@ -100,33 +100,33 @@ func TestUnmatchedStopTrackerClearKeepsFresh(t *testing.T) {
 	if _, ok := stops["stop-1"]; ok {
 		t.Fatal("expected stale stop-1 to be cleared")
 	}
-	if _, ok := clusters[clusterKey{ID: "station-1", Type: "station"}]; !ok {
+	if _, ok := clusters[clusterKey{StationID: "station-1", ClusterID: "s2_111", Lat: "38.900000", Lon: "-77.040000"}]; !ok {
 		t.Fatal("expected fresh cluster to be retained")
 	}
 }
 
 func TestUnmatchedStopTrackerClearReclusteringGhost(t *testing.T) {
 	tracker := NewUnmatchedStopTracker()
-	UnmatchedStopClusterCount.WithLabelValues("slug-a", "agency-x", "old-cluster", "s2").Set(4)
+	UnmatchedStopClusterCount.WithLabelValues("slug-a", "agency-x", "station-1", "s2_old_111", "38.900000", "-77.040000").Set(4)
 
-	// First tick: cluster reported as old-cluster/s2.
-	tracker.RecordClusterSeen(1, "slug-a", "agency-x", "old-cluster", "s2")
+	// First tick: cluster reported as station-1/s2_old_111.
+	tracker.RecordClusterSeen(1, "slug-a", "agency-x", "station-1", "s2_old_111", "38.900000", "-77.040000")
 	tracker.Mu.Lock()
-	tracker.Clusters[1]["agency-x"][clusterKey{ID: "old-cluster", Type: "s2"}] = withClusterLastSeen(tracker.Clusters[1]["agency-x"][clusterKey{ID: "old-cluster", Type: "s2"}], time.Now().Add(-2*24*time.Hour))
+	tracker.Clusters[1]["agency-x"][clusterKey{StationID: "station-1", ClusterID: "s2_old_111", Lat: "38.900000", Lon: "-77.040000"}] = withClusterLastSeen(tracker.Clusters[1]["agency-x"][clusterKey{StationID: "station-1", ClusterID: "s2_old_111", Lat: "38.900000", Lon: "-77.040000"}], time.Now().Add(-2*24*time.Hour))
 	tracker.Mu.Unlock()
 
 	// Second tick: the stops re-clustered; only new-cluster is reported.
-	tracker.RecordClusterSeen(1, "slug-a", "agency-x", "new-cluster", "station")
+	tracker.RecordClusterSeen(1, "slug-a", "agency-x", "station-2", "s2_new_222", "38.910000", "-77.050000")
 
 	tracker.clear(24 * time.Hour)
 
 	tracker.Mu.RLock()
 	clusters := tracker.Clusters[1]["agency-x"]
 	tracker.Mu.RUnlock()
-	if _, ok := clusters[clusterKey{ID: "old-cluster", Type: "s2"}]; ok {
+	if _, ok := clusters[clusterKey{StationID: "station-1", ClusterID: "s2_old_111", Lat: "38.900000", Lon: "-77.040000"}]; ok {
 		t.Fatal("expected re-clustered old-cluster entry to be cleared")
 	}
-	if _, ok := clusters[clusterKey{ID: "new-cluster", Type: "station"}]; !ok {
+	if _, ok := clusters[clusterKey{StationID: "station-2", ClusterID: "s2_new_222", Lat: "38.910000", Lon: "-77.050000"}]; !ok {
 		t.Fatal("expected new-cluster entry to be retained")
 	}
 
@@ -137,12 +137,12 @@ func TestUnmatchedStopTrackerClearReclusteringGhost(t *testing.T) {
 
 func TestUnmatchedStopTrackerClearClusterWithoutStops(t *testing.T) {
 	tracker := NewUnmatchedStopTracker()
-	UnmatchedStopClusterCount.WithLabelValues("slug-a", "agency-x", "station-1", "station").Set(2)
+	UnmatchedStopClusterCount.WithLabelValues("slug-a", "agency-x", "station-1", "s2_111", "38.900000", "-77.040000").Set(2)
 
 	// Cluster is reported but none of its stops get individual stop entries.
-	tracker.RecordClusterSeen(1, "slug-a", "agency-x", "station-1", "station")
+	tracker.RecordClusterSeen(1, "slug-a", "agency-x", "station-1", "s2_111", "38.900000", "-77.040000")
 	tracker.Mu.Lock()
-	tracker.Clusters[1]["agency-x"][clusterKey{ID: "station-1", Type: "station"}] = withClusterLastSeen(tracker.Clusters[1]["agency-x"][clusterKey{ID: "station-1", Type: "station"}], time.Now().Add(-2*24*time.Hour))
+	tracker.Clusters[1]["agency-x"][clusterKey{StationID: "station-1", ClusterID: "s2_111", Lat: "38.900000", Lon: "-77.040000"}] = withClusterLastSeen(tracker.Clusters[1]["agency-x"][clusterKey{StationID: "station-1", ClusterID: "s2_111", Lat: "38.900000", Lon: "-77.040000"}], time.Now().Add(-2*24*time.Hour))
 	tracker.Mu.Unlock()
 
 	tracker.clear(24 * time.Hour)
