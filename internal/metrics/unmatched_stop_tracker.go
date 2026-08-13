@@ -10,41 +10,58 @@ import (
 // was reported as unmatched by the OBA metrics API. It is used so the gauge
 // series created for the stop can be deleted (via DeleteLabelValues) after the
 // stop has not been seen for a configured threshold.
-//
-// The cluster fields are populated when the stop participates in a reported
-// unmatched-stop cluster, so the matching cluster series can also be cleaned up.
 type trackedStop struct {
-	Slug        string
-	Agency      string
-	StopName    string
-	Lat         string
-	Lon         string
-	ClusterID   string
-	ClusterType string
-	HasCluster  bool
-	LastSeen    time.Time
+	Slug     string
+	Agency   string
+	StopName string
+	Lat      string
+	Lon      string
+	LastSeen time.Time
+}
+
+// clusterKey identifies a reported unmatched-stop cluster by its ID and type.
+// Both are needed because the same cluster ID could in principle be reported
+// with different types ("station" vs "s2") across bundle refreshes.
+type clusterKey struct {
+	ID   string
+	Type string
+}
+
+// trackedCluster records the last observation time of an unmatched-stop
+// cluster, so the cluster gauge series can be deleted after the cluster has
+// not been seen for a configured threshold.
+type trackedCluster struct {
+	Slug     string
+	Agency   string
+	Key      clusterKey
+	LastSeen time.Time
 }
 
 // UnmatchedStopTracker stores the most recent observation of each unmatched
-// stop per server, agency, and stop ID.
+// stop and unmatched-stop cluster per server and agency. Stop series and
+// cluster series are tracked independently: a cluster series is deleted once
+// the cluster itself has not been seen for the TTL, regardless of which stops
+// are (or were) its members.
 //
 // The outer map key is the server ID (int), the next map key is the agency ID,
-// and the innermost map key is the stop ID.
+// and the innermost map key is the stop ID (Entries) or the cluster key
+// (Clusters).
 type UnmatchedStopTracker struct {
-	Mu      sync.RWMutex
-	Entries map[int]map[string]map[string]trackedStop
+	Mu       sync.RWMutex
+	Entries  map[int]map[string]map[string]trackedStop
+	Clusters map[int]map[string]map[clusterKey]trackedCluster
 }
 
 func NewUnmatchedStopTracker() *UnmatchedStopTracker {
 	return &UnmatchedStopTracker{
-		Entries: make(map[int]map[string]map[string]trackedStop),
+		Entries:  make(map[int]map[string]map[string]trackedStop),
+		Clusters: make(map[int]map[string]map[clusterKey]trackedCluster),
 	}
 }
 
 // RecordLastSeen updates (or creates) the tracked entry for a stop that was just
-// reported as unmatched. When hasCluster is true, the cluster labels are stored
-// so the cluster series can be cleaned up together with the stop series.
-func (t *UnmatchedStopTracker) RecordLastSeen(serverID int, slug, agency, stopID, stopName, lat, lon string, clusterID, clusterType string, hasCluster bool) {
+// reported as unmatched.
+func (t *UnmatchedStopTracker) RecordLastSeen(serverID int, slug, agency, stopID, stopName, lat, lon string) {
 	t.Mu.Lock()
 	defer t.Mu.Unlock()
 
@@ -72,21 +89,46 @@ func (t *UnmatchedStopTracker) RecordLastSeen(serverID int, slug, agency, stopID
 	}
 
 	entry.LastSeen = time.Now().UTC()
-	if hasCluster {
-		entry.ClusterID = clusterID
-		entry.ClusterType = clusterType
-	} else {
-		entry.ClusterID = ""
-		entry.ClusterType = ""
-	}
-	entry.HasCluster = hasCluster
 
 	stops[stopID] = entry
 }
 
+// RecordClusterSeen updates (or creates) the tracked entry for an unmatched-stop
+// cluster that was just reported.
+func (t *UnmatchedStopTracker) RecordClusterSeen(serverID int, slug, agency, clusterID, clusterType string) {
+	t.Mu.Lock()
+	defer t.Mu.Unlock()
+
+	agencies, ok := t.Clusters[serverID]
+	if !ok {
+		agencies = make(map[string]map[clusterKey]trackedCluster)
+		t.Clusters[serverID] = agencies
+	}
+
+	clusters, ok := agencies[agency]
+	if !ok {
+		clusters = make(map[clusterKey]trackedCluster)
+		agencies[agency] = clusters
+	}
+
+	key := clusterKey{ID: clusterID, Type: clusterType}
+	entry, exists := clusters[key]
+	if !exists {
+		entry = trackedCluster{
+			Slug:   slug,
+			Agency: agency,
+			Key:    key,
+		}
+	}
+
+	entry.LastSeen = time.Now().UTC()
+
+	clusters[key] = entry
+}
+
 // ClearRoutine runs a background process that periodically removes tracked
-// unmatched stops whose LastSeen timestamps exceed the given threshold,
-// deleting the corresponding Prometheus gauge series.
+// unmatched stops and clusters whose LastSeen timestamps exceed the given
+// threshold, deleting the corresponding Prometheus gauge series.
 //
 // ctx: Context for canceling the routine.
 // timeInterval: Interval at which cleanup checks are performed.
@@ -105,19 +147,24 @@ func (t *UnmatchedStopTracker) ClearRoutine(ctx context.Context, timeInterval, t
 	}
 }
 
-// clear removes stale entries from the tracker and deletes the gauge series
-// that were emitted for them.
+// clear removes stale stop and cluster entries from the tracker and deletes
+// the gauge series that were emitted for them.
 //
 // threshold: Duration after which an entry is considered stale.
 func (t *UnmatchedStopTracker) clear(threshold time.Duration) {
 	t.Mu.Lock()
 	defer t.Mu.Unlock()
 
+	now := time.Now().UTC()
+
+	t.clearStops(now, threshold)
+	t.clearClusters(now, threshold)
+}
+
+func (t *UnmatchedStopTracker) clearStops(now time.Time, threshold time.Duration) {
 	if len(t.Entries) == 0 {
 		return
 	}
-
-	now := time.Now().UTC()
 
 	for serverID, agencies := range t.Entries {
 		for agencyID, stops := range agencies {
@@ -126,9 +173,6 @@ func (t *UnmatchedStopTracker) clear(threshold time.Duration) {
 					continue
 				}
 
-				if entry.HasCluster {
-					UnmatchedStopClusterCount.DeleteLabelValues(entry.Slug, entry.Agency, entry.ClusterID, entry.ClusterType)
-				}
 				ObaUnmatchedStopInfo.DeleteLabelValues(entry.Slug, entry.Agency, stopID, entry.StopName, entry.Lat, entry.Lon)
 				delete(stops, stopID)
 			}
@@ -140,6 +184,33 @@ func (t *UnmatchedStopTracker) clear(threshold time.Duration) {
 
 		if len(agencies) == 0 {
 			delete(t.Entries, serverID)
+		}
+	}
+}
+
+func (t *UnmatchedStopTracker) clearClusters(now time.Time, threshold time.Duration) {
+	if len(t.Clusters) == 0 {
+		return
+	}
+
+	for serverID, agencies := range t.Clusters {
+		for agencyID, clusters := range agencies {
+			for key, entry := range clusters {
+				if now.Sub(entry.LastSeen) <= threshold {
+					continue
+				}
+
+				UnmatchedStopClusterCount.DeleteLabelValues(entry.Slug, entry.Agency, key.ID, key.Type)
+				delete(clusters, key)
+			}
+
+			if len(clusters) == 0 {
+				delete(agencies, agencyID)
+			}
+		}
+
+		if len(agencies) == 0 {
+			delete(t.Clusters, serverID)
 		}
 	}
 }

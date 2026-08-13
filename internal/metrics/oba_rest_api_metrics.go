@@ -200,7 +200,7 @@ func fetchObaAPIMetrics(slugID string, serverID int, serverBaseUrl string, apiKe
 				lonStr,
 			).Set(1)
 			resolved++
-			unmatchedStopTracker.RecordLastSeen(serverID, slugID, agencyID, stopID, stop.Name, latStr, lonStr, "", "", false)
+			unmatchedStopTracker.RecordLastSeen(serverID, slugID, agencyID, stopID, stop.Name, latStr, lonStr)
 		}
 
 		unresolved := len(unmatchedStopIDs) - resolved

@@ -1,8 +1,6 @@
 package metrics
 
 import (
-	"fmt"
-
 	remoteGtfs "github.com/OneBusAway/go-gtfs"
 	"watchdog.onebusaway.org/internal/geo"
 )
@@ -22,7 +20,7 @@ import (
 // - slugID: a unique identifier for the server or deployment instance
 // - agencyID: the GTFS agency identifier
 // - unmatchedStops: a map of stop IDs to GTFS stop objects not matched to gtfs static data
-// - tracker: used to record cluster membership so stale cluster series can be cleaned up later.
+// - tracker: used to record cluster observations so stale cluster series can be cleaned up later.
 func reportUnmatchedStopClusters(serverID int, slugID, agencyID string, unmatchedStops map[string]remoteGtfs.Stop, tracker *UnmatchedStopTracker) {
 	clusterCount := make(map[string]int)
 	clusterType := make(map[string]string) // station or s2
@@ -34,15 +32,12 @@ func reportUnmatchedStopClusters(serverID int, slugID, agencyID string, unmatche
 		}
 		clusterCount[clusterID]++
 		clusterType[clusterID] = ctype
-		if stop.Latitude == nil || stop.Longitude == nil {
-			continue
-		}
-		tracker.RecordLastSeen(serverID, slugID, agencyID, stop.Id, stop.Name,
-			fmt.Sprintf("%.6f", *stop.Latitude), fmt.Sprintf("%.6f", *stop.Longitude), clusterID, ctype, true)
 	}
 
-	// Report each cluster to Prometheus
+	// Report each cluster to Prometheus and record its observation so the
+	// cluster series can be pruned once the cluster stops appearing.
 	for id, count := range clusterCount {
+		tracker.RecordClusterSeen(serverID, slugID, agencyID, id, clusterType[id])
 		UnmatchedStopClusterCount.WithLabelValues(slugID, agencyID, id, clusterType[id]).Set(float64(count))
 	}
 }
