@@ -95,10 +95,13 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
 | `oba_time_since_last_update_seconds` | Gauge | `server`, `agency`                                       | seconds | Time since last realtime update.                   |
 | `oba_unmatched_stop_info`            | Gauge | `server`, `agency`, `stop_id`, `stop_name`, `lat`, `lon` | N/A     | Presence marker (always 1) for unmatched stops from static GTFS, with location as labels. |
 | `oba_unmatched_stop_unresolved`      | Gauge | `server`, `agency`                                       | count   | Number of stop IDs OBA reported as unmatched that Watchdog could not resolve against its local GTFS bundle. |
-| `oba_unmatched_stop_cluster_count`   | Gauge | `server`, `agency`, `cluster_id`, `cluster_type`         | count   | Number of unmatched stops grouped by cluster.      |
+| `oba_unmatched_stop_cluster_count`   | Gauge | `server`, `agency`, `station_id`, `cluster_id`, `cluster_lat`, `cluster_lon` | count   | Number of unmatched stops grouped by station and S2 spatial cluster.      |
 
 **Interpretation Guide:**
-- **Unmatched stop clusters:** Identify systemic coverage gaps.
+- **Unmatched stop clusters:** Identify systemic coverage gaps. Each series is one `(station_id, cluster_id)` pair:
+    - `cluster_id` is the S2 cell (level 13, ~850–1225 m spatial resolution) derived from the unmatched stops' **own** coordinates — never fetched per station, so no N+1 API calls.
+    - `cluster_lat` / `cluster_lon` are the center of that S2 cell, so clusters can be plotted on a map or joined by coordinates without decoding the ID.
+    - `station_id` is the root parent station ID when the stops belong to a station hierarchy, or `no_station` when they do not. A large station can span several S2 cells, yielding one series per `(station_id, cluster_id)` pair; group by `cluster_id` for spatial aggregation and by `station_id` for per-station totals.
 - **Time since update:** If unusually high, real-time feed is stale.
 - **`oba_unmatched_stop_info` retention:** Each series is emitted at every scrape and pruned 24 hours after the stop last appeared unmatched. A `1` means the stop was unmatched at some point in the last 24 hours; history is preserved by Prometheus itself — use range queries to separate days:
 ```promql

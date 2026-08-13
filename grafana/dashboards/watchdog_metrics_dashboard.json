@@ -562,6 +562,14 @@
         "name": "Prometheus"
       },
       "description": "Metrics: oba_unmatched_stop_cluster_count\nQuestion answered: \"Where are failures concentrated?\"",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": []
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -569,17 +577,22 @@
         "y": 54
       },
       "id": 601,
+      "options": {
+        "showHeader": true
+      },
       "targets": [
         {
-          "expr": "oba_unmatched_stop_cluster_count",
-          "refId": "A",
           "datasource": {
             "name": "Prometheus"
-          }
+          },
+          "expr": "sum by (station_id, cluster_id, cluster_lat, cluster_lon) (oba_unmatched_stop_cluster_count)",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
         }
       ],
-      "title": "6.1 Unmatched Stop Clusters",
-      "type": "timeseries"
+      "title": "6.1 Unmatched Stop Clusters (by station and S2 cell)",
+      "type": "table"
     }
   ],
   "schemaVersion": 39,
