@@ -28,6 +28,7 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
 | -------------------------------------------- | ----- | ----------- | ---- | ----------------------------------------------- |
 | `gtfs_bundle_days_until_earliest_expiration` | Gauge | `server_id` | days | Days until the earliest GTFS bundle expiration. |
 | `gtfs_bundle_days_until_latest_expiration`   | Gauge | `server_id` | days | Days until the latest GTFS bundle expiration.   |
+| `gtfs_bundle_last_fetched_timestamp_seconds` | Gauge | `server`    | unix_timestamp | When Watchdog last downloaded the server's GTFS static bundle. |
 
 **Interpretation Guide:**
 
@@ -93,11 +94,26 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
 | `oba_stop_match_ratio`               | Gauge | `server`, `agency`                                       | ratio   | Ratio of matched stops to total stops.             |
 | `oba_time_since_last_update_seconds` | Gauge | `server`, `agency`                                       | seconds | Time since last realtime update.                   |
 | `oba_unmatched_stop_info`            | Gauge | `server`, `agency`, `stop_id`, `stop_name`, `lat`, `lon` | N/A     | Presence marker (always 1) for unmatched stops from static GTFS, with location as labels. |
+| `oba_unmatched_stop_unresolved`      | Gauge | `server`, `agency`                                       | count   | Number of stop IDs OBA reported as unmatched that Watchdog could not resolve against its local GTFS bundle. |
 | `oba_unmatched_stop_cluster_count`   | Gauge | `server`, `agency`, `cluster_id`, `cluster_type`         | count   | Number of unmatched stops grouped by cluster.      |
 
 **Interpretation Guide:**
 - **Unmatched stop clusters:** Identify systemic coverage gaps.
 - **Time since update:** If unusually high, real-time feed is stale.
+- **`oba_unmatched_stop_info` retention:** Each series is emitted at every scrape and pruned 24 hours after the stop last appeared unmatched. A `1` means the stop was unmatched at some point in the last 24 hours; history is preserved by Prometheus itself — use range queries to separate days:
+```promql
+  # unmatched at some point during the last day
+  max_over_time(oba_unmatched_stop_info{server="unitrans"}[1d])
+  # flapping signal (value changes during the day)
+  changes(oba_unmatched_stop_info{server="unitrans"}[1d])
+  # daily recording rule to bucket unmatched stops per calendar day
+  sum by (server, agency, stop_id) (max_over_time(oba_unmatched_stop_info[1d]))
+```
+- **`oba_unmatched_stop_unresolved`:** `> 0` signals the OBA server is matching against a static bundle that differs from the one Watchdog downloaded (e.g., bundle refresh timing), so lookups silently dropped. Correlate with `gtfs_bundle_last_fetched_timestamp_seconds` to see how stale Watchdog's snapshot is.
+- **Example alert:**
+```promql
+  sum by (server) (oba_unmatched_stop_unresolved) > 0
+```
 ---
 ## 6. Outgoing HTTP Requests
 
