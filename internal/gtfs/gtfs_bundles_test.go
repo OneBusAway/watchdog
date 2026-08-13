@@ -217,6 +217,30 @@ func TestStopsParsing(t *testing.T) {
 	}
 }
 
+func TestStoreGTFSBundleRecordsFetchTime(t *testing.T) {
+	server := models.ObaServer{ID: 1, Name: "test"}
+	data := readFixture(t, "gtfs.zip")
+	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
+	if err != nil {
+		t.Fatal("failed to parse gtfs static data")
+	}
+	staticStore := NewStaticStore()
+	boundingBoxStore := geo.NewBoundingBoxStore()
+
+	err = storeGTFSBundle(staticBundle, server.ID, staticStore, boundingBoxStore)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	fetchTime, ok := staticStore.GetFetchTime(server.ID)
+	if !ok {
+		t.Fatal("expected a fetch time to be recorded after storing the bundle")
+	}
+	if time.Since(fetchTime) > time.Minute {
+		t.Fatalf("fetch time should be recent, got %s", fetchTime)
+	}
+}
+
 func TestGetEarliestAndLatestServiceDates(t *testing.T) {
 	server := models.ObaServer{ID: 1, Name: "test"}
 	data := readFixture(t, "gtfs.zip")
