@@ -5,9 +5,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	remoteGtfs "github.com/OneBusAway/go-gtfs"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
@@ -58,6 +61,41 @@ func TestCountVehiclePositions(t *testing.T) {
 		}
 	})
 
+	t.Run("gtfs_rt_url label is sanitized", func(t *testing.T) {
+		server := models.ObaServer{
+			ID:                 77,
+			VehiclePositionUrl: "https://rt.example.com/vehiclePositions.pb?api_key=SUPERSECRET&token=TOPSECRET",
+		}
+		if _, err := countVehiclePositions(server, realtimeStore); err != nil {
+			t.Fatalf("Expected no error, got %v", err)
+		}
+
+		c := make(chan prometheus.Metric, 1)
+		RealtimeVehiclePositions.With(prometheus.Labels{
+			"gtfs_rt_url": "https://rt.example.com",
+			"server_id":   "77",
+		}).Collect(c)
+		m := <-c
+
+		pb := &dto.Metric{}
+		if err := m.Write(pb); err != nil {
+			t.Fatalf("Failed to write metric: %v", err)
+		}
+
+		labels := make(map[string]string)
+		for _, lp := range pb.Label {
+			labels[lp.GetName()] = lp.GetValue()
+		}
+
+		for name, value := range labels {
+			if strings.Contains(value, "SUPERSECRET") || strings.Contains(value, "TOPSECRET") || strings.Contains(value, "api_key") {
+				t.Fatalf("credential leaked in label %s=%q", name, value)
+			}
+			if name == "gtfs_rt_url" && value != "https://rt.example.com" {
+				t.Fatalf("expected sanitized gtfs_rt_url, got %q", value)
+			}
+		}
+	})
 }
 
 func TestCountActiveVehiclesForAgency(t *testing.T) {

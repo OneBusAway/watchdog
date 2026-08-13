@@ -55,7 +55,7 @@ func countVehiclePositions(server models.ObaServer, realtimeStore *gtfs.Realtime
 	count := len(realtimeData.Vehicles)
 
 	RealtimeVehiclePositions.WithLabelValues(
-		server.VehiclePositionUrl,
+		utils.SanitizeServerURL(server.VehiclePositionUrl),
 		strconv.Itoa(server.ID),
 	).Set(float64(count))
 

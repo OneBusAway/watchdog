@@ -6,9 +6,14 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
 )
@@ -88,5 +93,60 @@ func TestFetchObaAPIMetrics_WithVCR(t *testing.T) {
 				t.Errorf("unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+func TestFetchObaAPIMetrics_SanitizesServerURLLabel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.RawQuery == "key=SUPERSECRETOBAKEY" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			// Writing to ResponseWriter in tests, error can be safely ignored.
+			// #nosec G104
+			w.Write([]byte(`{"code":200,"text":"OK","version":2,"currentTime":123,"data":{"entry":{"agenciesWithCoverageCount":0,"agencyIDs":[]}}}`))
+			return
+		}
+		http.Error(w, "missing key", http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	// Base URL carrying userinfo credentials, to ensure they get stripped too.
+	serverBaseURL := strings.Replace(server.URL, "://", "://user:pass@", 1)
+	apiKey := "SUPERSECRETOBAKEY"
+	staticStore := gtfs.NewStaticStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	tracker := NewUnmatchedStopTracker()
+
+	if err := fetchObaAPIMetrics("42", 42, serverBaseURL, apiKey, &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	c := make(chan prometheus.Metric, 8)
+	ObaApiStatus.Collect(c)
+	close(c)
+
+	gotURL := ""
+	for m := range c {
+		pb := &dto.Metric{}
+		if err := m.Write(pb); err != nil {
+			t.Fatalf("failed to write metric: %v", err)
+		}
+		labels := make(map[string]string)
+		for _, lp := range pb.Label {
+			labels[lp.GetName()] = lp.GetValue()
+		}
+		if labels["server_id"] == "42" {
+			gotURL = labels["server_url"]
+		}
+	}
+
+	// The caller-provided base URL carried userinfo, and the query string carries the
+	// API key; the label must reduce to the clean scheme://host of the httptest server.
+	wantURL := server.URL
+	if gotURL != wantURL {
+		t.Fatalf("expected server_url label %q, got %q", wantURL, gotURL)
+	}
+	if strings.Contains(gotURL, apiKey) || strings.Contains(gotURL, "key=") || strings.Contains(gotURL, "user:pass") {
+		t.Fatalf("credential leaked in server_url label %q", gotURL)
 	}
 }
