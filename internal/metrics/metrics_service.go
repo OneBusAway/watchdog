@@ -11,22 +11,24 @@ import (
 )
 
 type MetricsService struct {
-	StaticStore      *gtfs.StaticStore
-	RealtimeStore    *gtfs.RealtimeStore
-	BoundingBoxStore *geo.BoundingBoxStore
-	VehicleLastSeen  *VehicleLastSeen
-	Logger           *slog.Logger
-	Client           *http.Client
+	StaticStore          *gtfs.StaticStore
+	RealtimeStore        *gtfs.RealtimeStore
+	BoundingBoxStore     *geo.BoundingBoxStore
+	VehicleLastSeen      *VehicleLastSeen
+	UnmatchedStopTracker *UnmatchedStopTracker
+	Logger               *slog.Logger
+	Client               *http.Client
 }
 
-func NewMetricsService(static *gtfs.StaticStore, realtime *gtfs.RealtimeStore, bbox *geo.BoundingBoxStore, vehicleLastSeen *VehicleLastSeen, logger *slog.Logger, client *http.Client) *MetricsService {
+func NewMetricsService(static *gtfs.StaticStore, realtime *gtfs.RealtimeStore, bbox *geo.BoundingBoxStore, vehicleLastSeen *VehicleLastSeen, unmatchedStopTracker *UnmatchedStopTracker, logger *slog.Logger, client *http.Client) *MetricsService {
 	return &MetricsService{
-		StaticStore:      static,
-		RealtimeStore:    realtime,
-		BoundingBoxStore: bbox,
-		VehicleLastSeen:  vehicleLastSeen,
-		Logger:           logger,
-		Client:           client,
+		StaticStore:          static,
+		RealtimeStore:        realtime,
+		BoundingBoxStore:     bbox,
+		VehicleLastSeen:      vehicleLastSeen,
+		UnmatchedStopTracker: unmatchedStopTracker,
+		Logger:               logger,
+		Client:               client,
 	}
 }
 
@@ -57,7 +59,7 @@ func (ms *MetricsService) ServerPing(server models.ObaServer) bool {
 }
 
 func (ms *MetricsService) FetchObaAPIMetrics(slugID string, serverID int, serverBaseUrl string, apiKey string) error {
-	return fetchObaAPIMetrics(slugID, serverID, serverBaseUrl, apiKey, ms.Client, ms.StaticStore)
+	return fetchObaAPIMetrics(slugID, serverID, serverBaseUrl, apiKey, ms.Client, ms.StaticStore, ms.Logger, ms.UnmatchedStopTracker)
 }
 
 func (ms *MetricsService) TrackVehicleTelemetry(server models.ObaServer) error {

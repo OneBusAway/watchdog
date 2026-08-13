@@ -133,6 +133,9 @@ func main() {
 	// Cron job to delete the data of vehicles that has not sent updates for 1 hour
 	go app.MetricsService.VehicleLastSeen.ClearRoutine(ctx, 15*time.Minute, time.Hour)
 
+	// Cron job to prune unmatched-stop gauge series that have not been seen for 24 hours
+	go app.MetricsService.UnmatchedStopTracker.ClearRoutine(ctx, 15*time.Minute, 24*time.Hour)
+
 	// If a remote URL is specified, refresh the configuration every minute
 	if *configURL != "" {
 		go app.ConfigService.RefreshConfig(ctx, *configURL, configAuthUser, configAuthPass, time.Minute, 20)

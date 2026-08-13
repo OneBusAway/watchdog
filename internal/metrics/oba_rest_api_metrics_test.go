@@ -3,6 +3,8 @@ package metrics
 import (
 	remoteGtfs "github.com/OneBusAway/go-gtfs"
 	"gopkg.in/dnaeon/go-vcr.v4/pkg/recorder"
+	"io"
+	"log/slog"
 	"net/http"
 	"path/filepath"
 	"testing"
@@ -70,7 +72,9 @@ func TestFetchObaAPIMetrics_WithVCR(t *testing.T) {
 				}
 			}
 			staticStore.Set(tt.serverID, staticData)
-			err := fetchObaAPIMetrics(tt.slugID, tt.serverID, tt.serverURL, tt.apiKey, client, staticStore)
+			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+			tracker := NewUnmatchedStopTracker()
+			err := fetchObaAPIMetrics(tt.slugID, tt.serverID, tt.serverURL, tt.apiKey, client, staticStore, logger, tracker)
 
 			if tt.wantErr {
 				if err == nil {

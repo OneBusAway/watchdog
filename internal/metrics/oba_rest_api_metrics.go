@@ -3,6 +3,7 @@ package metrics
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -56,7 +57,7 @@ type OBAMetrics struct {
 // Returns:
 //   - error: any error encountered during request, decoding, or Prometheus reporting.
 
-func fetchObaAPIMetrics(slugID string, serverID int, serverBaseUrl string, apiKey string, client *http.Client, staticStore *gtfs.StaticStore) error {
+func fetchObaAPIMetrics(slugID string, serverID int, serverBaseUrl string, apiKey string, client *http.Client, staticStore *gtfs.StaticStore, logger *slog.Logger, unmatchedStopTracker *UnmatchedStopTracker) error {
 	if client == nil {
 		client = &http.Client{
 			Timeout: 10 * time.Second,
@@ -65,7 +66,7 @@ func fetchObaAPIMetrics(slugID string, serverID int, serverBaseUrl string, apiKe
 
 	url := fmt.Sprintf("%s/api/where/metrics.json?key=%s", serverBaseUrl, apiKey)
 
-	fmt.Printf("Fetching metrics from %s\n", url)
+	logger.Info("Fetching metrics from OBA server", "server", slugID, "url", url)
 
 	resp, err := client.Get(url)
 	if err != nil {
@@ -113,6 +114,10 @@ func fetchObaAPIMetrics(slugID string, serverID int, serverBaseUrl string, apiKe
 	}
 
 	ObaApiStatus.WithLabelValues(slugID, url).Set(1)
+
+	if fetchTime, ok := staticStore.GetFetchTime(serverID); ok {
+		GtfsBundleLastFetchedTimestamp.WithLabelValues(slugID).Set(float64(fetchTime.Unix()))
+	}
 
 	entry := metrics.Data.Entry
 
@@ -164,31 +169,47 @@ func fetchObaAPIMetrics(slugID string, serverID int, serverBaseUrl string, apiKe
 		}
 
 		unmatchedStopIDs := entry.StopIDsUnmatched[agencyID]
-		if len(unmatchedStopIDs) > 0 {
-			stopInfoMap, err := gtfs.GetStopLocationsByIDs(serverID, unmatchedStopIDs, staticStore)
-			if err != nil {
-				report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-					Tags:         utils.MakeMap("slug_id", slugID),
-					ExtraContext: map[string]interface{}{"reason": "failed to match stop IDs to GTFS"},
-				})
+		if len(unmatchedStopIDs) == 0 {
+			ObaUnmatchedStopUnresolved.WithLabelValues(slugID, agencyID).Set(0)
+			continue
+		}
+
+		stopInfoMap, err := gtfs.GetStopLocationsByIDs(serverID, unmatchedStopIDs, staticStore)
+		if err != nil {
+			ObaUnmatchedStopUnresolved.WithLabelValues(slugID, agencyID).Set(float64(len(unmatchedStopIDs)))
+			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+				Tags:         utils.MakeMap("slug_id", slugID),
+				ExtraContext: map[string]interface{}{"reason": "failed to match stop IDs to GTFS"},
+			})
+			continue
+		}
+
+		resolved := 0
+		for stopID, stop := range stopInfoMap {
+			if stop.Latitude == nil || stop.Longitude == nil {
 				continue
 			}
-
-			for stopID, stop := range stopInfoMap {
-				if stop.Latitude == nil || stop.Longitude == nil {
-					continue
-				}
-				ObaUnmatchedStopInfo.WithLabelValues(
-					slugID,
-					agencyID,
-					stopID,
-					stop.Name,
-					fmt.Sprintf("%.6f", *stop.Latitude),
-					fmt.Sprintf("%.6f", *stop.Longitude),
-				).Set(1)
-			}
-			reportUnmatchedStopClusters(slugID, agencyID, stopInfoMap)
+			latStr := fmt.Sprintf("%.6f", *stop.Latitude)
+			lonStr := fmt.Sprintf("%.6f", *stop.Longitude)
+			ObaUnmatchedStopInfo.WithLabelValues(
+				slugID,
+				agencyID,
+				stopID,
+				stop.Name,
+				latStr,
+				lonStr,
+			).Set(1)
+			resolved++
+			unmatchedStopTracker.RecordLastSeen(serverID, slugID, agencyID, stopID, stop.Name, latStr, lonStr, "", "", false)
 		}
+
+		unresolved := len(unmatchedStopIDs) - resolved
+		ObaUnmatchedStopUnresolved.WithLabelValues(slugID, agencyID).Set(float64(unresolved))
+		if unresolved > 0 {
+			logger.Warn("OBA unmatched stop IDs could not be resolved against the local GTFS bundle",
+				"server", slugID, "agency", agencyID, "requested", len(unmatchedStopIDs), "resolved", resolved)
+		}
+		reportUnmatchedStopClusters(serverID, slugID, agencyID, stopInfoMap, unmatchedStopTracker)
 	}
 	return nil
 }

@@ -190,6 +190,22 @@ var (
 		[]string{"server", "agency", "stop_id", "stop_name", "lat", "lon"},
 	)
 
+	ObaUnmatchedStopUnresolved = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "oba_unmatched_stop_unresolved",
+			Help: "Number of stop IDs reported as unmatched by the OBA metrics API that could not be resolved against the local GTFS static bundle",
+		},
+		[]string{"server", "agency"},
+	)
+
+	GtfsBundleLastFetchedTimestamp = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "gtfs_bundle_last_fetched_timestamp_seconds",
+			Help: "Unix timestamp of when the GTFS static bundle was last downloaded for a server",
+		},
+		[]string{"server"},
+	)
+
 	UnmatchedStopClusterCount = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "oba_unmatched_stop_cluster_count",
