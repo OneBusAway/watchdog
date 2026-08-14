@@ -1,30 +1,31 @@
 package models
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestNewObaServer(t *testing.T) {
 	name := "Test Server"
-	id := 1
+	agencyID := "test-agency-id"
 	baseURL := "https://test.onebusaway.org"
 	apiKey := "test-key"
-	gtfsURL := "https://test.gtfs.url"
-	tripUpdateURL := "https://test.tripupdate.url"
-	vehiclePositionURL := "https://test.vehicleposition.url"
-	GtfsRtApiKey := "test-gtfs-rt-api-key"
-	GtfsRtApiValue := "test-gtfs-rt-api-value"
-	agencyID := "test-agency-id"
+	gtfsURLs := []string{"https://test.gtfs.url"}
+	gtfsRTFeeds := []GtfsRTFeed{{
+		TripUpdateURL:      "https://test.tripupdate.url",
+		VehiclePositionURL: "https://test.vehicleposition.url",
+		GtfsRTAPIKey:       "test-gtfs-rt-api-key",
+		GtfsRTAPIValue:     "test-gtfs-rt-api-value",
+		AgencyIDs:          []string{agencyID},
+	}}
 
 	server := NewObaServer(
 		name,
-		id,
+		agencyID,
 		baseURL,
 		apiKey,
-		gtfsURL,
-		tripUpdateURL,
-		vehiclePositionURL,
-		GtfsRtApiKey,
-		GtfsRtApiValue,
-		agencyID,
+		gtfsURLs,
+		gtfsRTFeeds,
 	)
 
 	tests := []struct {
@@ -33,11 +34,9 @@ func TestNewObaServer(t *testing.T) {
 		expected string
 	}{
 		{"Name", server.Name, name},
+		{"AgencyID", server.AgencyID, agencyID},
 		{"BaseURL", server.ObaBaseURL, baseURL},
 		{"ApiKey", server.ObaApiKey, apiKey},
-		{"GtfsUrl", server.GtfsUrl, gtfsURL},
-		{"TripUpdateUrl", server.TripUpdateUrl, tripUpdateURL},
-		{"VehiclePositionUrl", server.VehiclePositionUrl, vehiclePositionURL},
 	}
 
 	for _, tt := range tests {
@@ -48,7 +47,10 @@ func TestNewObaServer(t *testing.T) {
 		})
 	}
 
-	if server.ID != id {
-		t.Errorf("NewObaServer() ID = %v, want %v", server.ID, id)
+	if len(server.GtfsURLs) != 1 || server.GtfsURLs[0] != gtfsURLs[0] {
+		t.Errorf("NewObaServer() GtfsURLs = %v, want %v", server.GtfsURLs, gtfsURLs)
+	}
+	if !reflect.DeepEqual(server.GtfsRTFeeds, gtfsRTFeeds) {
+		t.Errorf("NewObaServer() GtfsRTFeeds = %v, want %v", server.GtfsRTFeeds, gtfsRTFeeds)
 	}
 }
