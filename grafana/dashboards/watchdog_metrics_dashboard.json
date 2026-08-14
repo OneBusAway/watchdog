@@ -346,7 +346,56 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: vehicle_count_match\nQuestion answered: \"Does the API reflect GTFS-RT correctly?\"",
+      "description": "Metrics: vehicle_count_match\nQuestion answered: \"Does the API reflect GTFS-RT correctly?\"\n\nVisualization: State Timeline\nRationale: Consistency is binary: the counts either match or they do not. A state timeline panel turns each evaluation period into a vivid block of green (match) or red (mismatch), making it trivial to trace exactly when an inconsistency started and ended.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 70,
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineWidth": 1,
+            "spanNulls": false
+          },
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "red",
+                  "index": 1,
+                  "text": "MISMATCH"
+                },
+                "1": {
+                  "color": "green",
+                  "index": 0,
+                  "text": "MATCH"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -354,17 +403,35 @@
         "y": 27
       },
       "id": 304,
+      "options": {
+        "alignValue": "center",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "mergeValues": true,
+        "rowHeight": 0.85,
+        "showValue": "auto",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "13.0.2",
       "targets": [
         {
           "expr": "vehicle_count_match{server_id=~\"$server_id\", agency_id=~\"$agency_id\"}",
+          "legendFormat": "{{agency_id}} (Server {{server_id}})",
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
           }
         }
       ],
-      "title": "3.4 API \u2194 GTFS-RT Consistency",
-      "type": "timeseries"
+      "title": "3.4 API ↔ GTFS-RT Consistency",
+      "type": "state-timeline"
     },
     {
       "collapsed": false,
