@@ -102,13 +102,13 @@ func (app *Application) StartMetricsCollection(ctx context.Context) {
 //   - Dependencies are injected (via app fields) to support testability and separation of concerns.
 func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 	// Check if server has an active backoff period
-	nextRetryAt, exists := app.ConfigService.BackoffStore.NextRetryAt(server.ID)
+	nextRetryAt, exists := app.ConfigService.BackoffStore.NextRetryAt(server.AgencyID)
 	if exists && time.Now().UTC().Before(nextRetryAt) {
 		// Still in backoff → skip metrics collection
-		app.Logger.Info("Skipping metrics collection for server due to backoff", "server_id", server.ID, "next_retry_at", nextRetryAt)
+		app.Logger.Info("Skipping metrics collection for agency due to backoff", "agency_id", server.AgencyID, "next_retry_at", nextRetryAt)
 		report.ReportErrorWithSentryOptions(fmt.Errorf("skipping metrics collection for server %s due to backoff", server.ObaBaseURL), report.SentryReportOptions{
 			Tags: map[string]string{
-				"server_id":   fmt.Sprintf("%d", server.ID),
+				"agency_id":   server.AgencyID,
 				"server_name": server.Name,
 			},
 			ExtraContext: map[string]interface{}{
@@ -122,10 +122,10 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 	ok := app.MetricsService.ServerPing(server)
 	if !ok {
 		// On ping failure → increase backoff for this server
-		app.Logger.Error("Server ping failed", "server_id", server.ID, "server_name", server.Name)
+		app.Logger.Error("Server ping failed", "agency_id", server.AgencyID, "server_name", server.Name)
 		report.ReportErrorWithSentryOptions(fmt.Errorf("server ping failed for %s", server.ObaBaseURL), report.SentryReportOptions{
 			Tags: map[string]string{
-				"server_id":   fmt.Sprintf("%d", server.ID),
+				"agency_id":   server.AgencyID,
 				"server_name": server.Name,
 			},
 			ExtraContext: map[string]interface{}{
@@ -133,21 +133,21 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 			},
 			Level: sentry.LevelError,
 		})
-		app.ConfigService.BackoffStore.UpdateBackoff(server.ID)
+		app.ConfigService.BackoffStore.UpdateBackoff(server.AgencyID)
 		app.Logger.Info("Skipping further metrics collection for server due to ping failure")
 		return
 	}
 
 	// On successful ping → reset backoff for this server
-	app.Logger.Info("Server ping successful", "server_id", server.ID, "server_name", server.Name)
-	app.ConfigService.BackoffStore.ResetBackoff(server.ID)
+	app.Logger.Info("Server ping successful", "agency_id", server.AgencyID, "server_name", server.Name)
+	app.ConfigService.BackoffStore.ResetBackoff(server.AgencyID)
 
 	_, _, err := app.MetricsService.CheckBundleExpiration(time.Now().UTC(), server)
 	if err != nil {
 		app.Logger.Error("Failed to check GTFS bundle expiration", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
-				"server_id":   fmt.Sprintf("%d", server.ID),
+				"agency_id":   server.AgencyID,
 				"server_name": server.Name,
 			},
 			Level: sentry.LevelError,
@@ -160,20 +160,20 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		app.Logger.Error("Failed to check agencies with coverage match metric", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
-				"server_id":   fmt.Sprintf("%d", server.ID),
+				"agency_id":   server.AgencyID,
 				"server_name": server.Name,
 			},
 			Level: sentry.LevelError,
 		})
 	}
 
-	err = app.MetricsService.FetchObaAPIMetrics(server.AgencyID, server.ID, server.ObaBaseURL, server.ObaApiKey)
+	err = app.MetricsService.FetchObaAPIMetrics(server.AgencyID, server.ObaBaseURL, server.ObaApiKey)
 
 	if err != nil {
 		app.Logger.Error("Failed to fetch OBA API metrics", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
-				"server_id":   fmt.Sprintf("%d", server.ID),
+				"agency_id":   server.AgencyID,
 				"server_name": server.Name,
 			},
 			ExtraContext: map[string]interface{}{
@@ -190,7 +190,7 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		app.Logger.Error("Failed to fetch and store GTFS-RT feed", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
-				"server_id":   fmt.Sprintf("%d", server.ID),
+				"agency_id":   server.AgencyID,
 				"server_name": server.Name,
 			},
 			Level: sentry.LevelError,
@@ -203,7 +203,7 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		app.Logger.Error("Failed to count vehicle positions from GTFS-RT", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
-				"server_id": fmt.Sprintf("%d", server.ID),
+				"agency_id": server.AgencyID,
 			},
 			Level: sentry.LevelError,
 		})
@@ -214,7 +214,7 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		app.Logger.Error("Failed to count vehicles from VehiclesForAgency API", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
-				"server_id": fmt.Sprintf("%d", server.ID),
+				"agency_id": server.AgencyID,
 			},
 			Level: sentry.LevelError,
 		})
@@ -225,7 +225,7 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		app.Logger.Error("Failed to track vehicle reporting frequency", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
-				"server_id": fmt.Sprintf("%d", server.ID),
+				"agency_id": server.AgencyID,
 			},
 			Level: sentry.LevelError,
 		})
@@ -236,7 +236,7 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		app.Logger.Error("Failed to count invalid vehicle coordinates", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
-				"server_id": fmt.Sprintf("%d", server.ID),
+				"agency_id": server.AgencyID,
 			},
 			Level: sentry.LevelError,
 		})

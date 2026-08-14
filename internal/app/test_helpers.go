@@ -21,15 +21,11 @@ func newTestApplication(t *testing.T) *Application {
 
 	obaServer := models.NewObaServer(
 		"Test Server",
-		1,
+		"test-agency",
 		"https://test.example.com",
 		"test-key",
-		"",
-		"",
-		"",
-		"",
-		"",
-		"",
+		[]string{"https://gtfs.example.com"},
+		[]models.GtfsRTFeed{{VehiclePositionURL: "https://vehicle.example.com"}},
 	)
 
 	cfg := config.NewConfig(
@@ -59,7 +55,7 @@ func newTestApplication(t *testing.T) *Application {
 
 	staticData := models.NewStaticData(staticBundle)
 	staticStore := gtfs.NewStaticStore()
-	staticStore.Set(obaServer.ID, staticData)
+	staticStore.Set(obaServer.AgencyID, staticData)
 
 	stops := staticData.Stops
 	boundingBox, err := geo.ComputeBoundingBox(stops)
@@ -68,7 +64,7 @@ func newTestApplication(t *testing.T) *Application {
 		t.Fatalf("Failed to compute bounding box: %v", err)
 	}
 	boundingBoxStore := geo.NewBoundingBoxStore()
-	boundingBoxStore.Set(obaServer.ID, boundingBox)
+	boundingBoxStore.Set(obaServer.AgencyID, boundingBox)
 
 	const realtimeDataPath = "../../testdata/gtfs_rt_feed_vehicles.pb"
 	data, err := os.ReadFile(realtimeDataPath)
@@ -84,7 +80,7 @@ func newTestApplication(t *testing.T) *Application {
 	}
 	realtimeData := models.NewRealtimeData(gtfsRT)
 	realtimeStore := gtfs.NewRealtimeStore()
-	realtimeStore.Set(realtimeData)
+	realtimeStore.Set(obaServer.AgencyID, realtimeData)
 
 	vehicleLastSeen := metrics.NewVehicleLastSeen()
 	unmatchedStopTracker := metrics.NewUnmatchedStopTracker()
