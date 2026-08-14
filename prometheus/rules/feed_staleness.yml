@@ -1,0 +1,13 @@
+groups:
+  - name: feed-staleness
+    rules:
+      - alert: FeedStale
+        expr: oba_time_since_last_update_seconds > 900
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "GTFS-RT feed stale for {{ $labels.server }}"
+          description: >-
+            The realtime feed for server {{ $labels.server }} has had no update for {{ $value }} seconds,
+            exceeding the 900s staleness threshold for 5m+.
