@@ -22,11 +22,11 @@ func TestOBAConnection(t *testing.T) {
 
 	for _, server := range integrationServers {
 		srv := server
-		t.Run(fmt.Sprintf("ServerID_%d", srv.ID), func(t *testing.T) {
+		t.Run(fmt.Sprintf("Agency_%s", srv.AgencyID), func(t *testing.T) {
 			t.Parallel()
 
 			if srv.ObaApiKey == "" || srv.ObaBaseURL == "" {
-				t.Skipf("Skipping server ID %d: missing API key or BaseURL", srv.ID)
+				t.Skipf("Skipping agency %s: missing API key or BaseURL", srv.AgencyID)
 			}
 
 			client := onebusaway.NewClient(
@@ -39,15 +39,15 @@ func TestOBAConnection(t *testing.T) {
 
 			resp, err := client.CurrentTime.Get(ctx)
 			if err != nil {
-				t.Errorf("Server ID %d (%s): Failed to connect to OBA API: %v", srv.ID, srv.ObaBaseURL, err)
+				t.Errorf("Agency %s (%s): Failed to connect to OBA API: %v", srv.AgencyID, srv.ObaBaseURL, err)
 				return
 			}
 
 			if resp.Data.Entry.ReadableTime == "" {
-				t.Errorf("Server ID %d (%s): Expected non-empty ReadableTime from OBA API", srv.ID, srv.ObaBaseURL)
+				t.Errorf("Agency %s (%s): Expected non-empty ReadableTime from OBA API", srv.AgencyID, srv.ObaBaseURL)
 			} else {
-				t.Logf("Server ID %d (%s): Successfully retrieved current time: %s",
-					srv.ID, srv.ObaBaseURL, resp.Data.Entry.ReadableTime)
+				t.Logf("Agency %s (%s): Successfully retrieved current time: %s",
+					srv.AgencyID, srv.ObaBaseURL, resp.Data.Entry.ReadableTime)
 			}
 		})
 	}

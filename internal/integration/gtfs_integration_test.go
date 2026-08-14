@@ -30,19 +30,21 @@ func TestDownloadGTFSBundles(t *testing.T) {
 	ctx := context.Background()
 	for _, server := range integrationServers {
 		srv := server
-		t.Run(fmt.Sprintf("ServerID_%d", srv.ID), func(t *testing.T) {
+		t.Run(fmt.Sprintf("Agency_%s", srv.AgencyID), func(t *testing.T) {
 			t.Parallel()
-			staticBundle, err := gtfsService.DownloadGTFSBundle(ctx, srv.GtfsUrl, srv.ID, 20)
-			if err != nil {
-				t.Errorf("failed to download GTFS bundle for server %d : %v", srv.ID, err)
-				return
+			for _, gtfsURL := range srv.GtfsURLs {
+				staticBundle, err := gtfsService.DownloadGTFSBundle(ctx, gtfsURL, srv.AgencyID, 20)
+				if err != nil {
+					t.Errorf("failed to download GTFS bundle for agency %s : %v", srv.AgencyID, err)
+					return
+				}
+				err = gtfsService.StoreGTFSBundle(staticBundle, srv.AgencyID)
+				if err != nil {
+					t.Errorf("failed to store GTFS bundle for agency %s : %v", srv.AgencyID, err)
+					return
+				}
 			}
-			err = gtfsService.StoreGTFSBundle(staticBundle, server.ID)
-			if err != nil {
-				t.Errorf("failed to store GTFS bundle for server %d : %v", srv.ID, err)
-				return
-			}
-			t.Logf("GTFS bundle downloaded successfully for server %d", srv.ID)
+			t.Logf("GTFS bundle downloaded successfully for agency %s", srv.AgencyID)
 		})
 	}
 }
