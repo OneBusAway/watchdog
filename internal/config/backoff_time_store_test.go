@@ -138,18 +138,18 @@ func TestCalculateNextRetryAt(t *testing.T) {
 
 func TestBackoffStore(t *testing.T) {
 	store := NewBackoffStore()
-	serverID := 42
+	agencyID := "agency-42"
 
 	t.Run("NextRetryAt returns false when no entry", func(t *testing.T) {
-		_, ok := store.NextRetryAt(serverID)
+		_, ok := store.NextRetryAt(agencyID)
 		if ok {
 			t.Errorf("expected no backoff entry, got ok=true")
 		}
 	})
 
 	t.Run("UpdateBackoff creates new entry", func(t *testing.T) {
-		store.UpdateBackoff(serverID)
-		got, ok := store.NextRetryAt(serverID)
+		store.UpdateBackoff(agencyID)
+		got, ok := store.NextRetryAt(agencyID)
 		if !ok {
 			t.Fatalf("expected entry to exist after UpdateBackoff")
 		}
@@ -161,9 +161,9 @@ func TestBackoffStore(t *testing.T) {
 	})
 
 	t.Run("UpdateBackoff increases delay", func(t *testing.T) {
-		before, _ := store.NextRetryAt(serverID)
-		store.UpdateBackoff(serverID)
-		after, _ := store.NextRetryAt(serverID)
+		before, _ := store.NextRetryAt(agencyID)
+		store.UpdateBackoff(agencyID)
+		after, _ := store.NextRetryAt(agencyID)
 
 		if !after.After(before) {
 			t.Errorf("expected NextRetryAt to move forward after backoff increase, got before=%v after=%v", before, after)
@@ -171,8 +171,8 @@ func TestBackoffStore(t *testing.T) {
 	})
 
 	t.Run("ResetBackoff deletes entry", func(t *testing.T) {
-		store.ResetBackoff(serverID)
-		_, ok := store.NextRetryAt(serverID)
+		store.ResetBackoff(agencyID)
+		_, ok := store.NextRetryAt(agencyID)
 		if ok {
 			t.Errorf("expected no entry after ResetBackoff")
 		}

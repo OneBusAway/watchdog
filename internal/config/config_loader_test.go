@@ -11,7 +11,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,14 +23,11 @@ import (
 func TestLoadConfigFromFile(t *testing.T) {
 	t.Run("ValidConfig", func(t *testing.T) {
 		content := `[{
-		"name": "Test Server", "id": 1,
+		"name": "Test Server",
 		"oba_base_url": "https://test.example.com",
 		"oba_api_key": "test-key",
-		"gtfs_url": "https://gtfs.example.com",
-		"trip_update_url": "https://trip.example.com",
-		"vehicle_position_url": "https://vehicle.example.com",
-		"gtfs_rt_api_key": "",
-		"gtfs_rt_api_value": "",
+		"gtfs_urls": ["https://gtfs.example.com"],
+		"gtfs_rt_feeds": [{"trip_update_url": "https://trip.example.com", "vehicle_position_url": "https://vehicle.example.com"}],
 		"agency_id": "agency-1"
 		}]`
 
@@ -48,19 +47,18 @@ func TestLoadConfigFromFile(t *testing.T) {
 		}
 
 		expected := models.ObaServer{
-			Name:               "Test Server",
-			ID:                 1,
-			ObaBaseURL:         "https://test.example.com",
-			ObaApiKey:          "test-key",
-			GtfsUrl:            "https://gtfs.example.com",
-			TripUpdateUrl:      "https://trip.example.com",
-			VehiclePositionUrl: "https://vehicle.example.com",
-			GtfsRtApiKey:       "",
-			GtfsRtApiValue:     "",
-			AgencyID:           "agency-1",
+			Name:       "Test Server",
+			ObaBaseURL: "https://test.example.com",
+			ObaApiKey:  "test-key",
+			AgencyID:   "agency-1",
+			GtfsURLs:   []string{"https://gtfs.example.com"},
+			GtfsRTFeeds: []models.GtfsRTFeed{{
+				TripUpdateURL:      "https://trip.example.com",
+				VehiclePositionURL: "https://vehicle.example.com",
+			}},
 		}
 
-		if servers[0] != expected {
+		if !reflect.DeepEqual(servers[0], expected) {
 			t.Errorf("expected %+v, got %+v", expected, servers[0])
 		}
 	})
@@ -97,14 +95,10 @@ func TestLoadConfigFromURL(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`[{"name": "Test Server",
-			 "id": 1,
 			 "oba_base_url": "https://test.example.com",
 			 "oba_api_key": "test-key",
-			 "gtfs_url": "https://gtfs.example.com",
-			 "trip_update_url": "https://trip.example.com",
-			 "vehicle_position_url": "https://vehicle.example.com",
-			 "gtfs_rt_api_key": "",
-			 "gtfs_rt_api_value": "",
+			 "gtfs_urls": ["https://gtfs.example.com"],
+			 "gtfs_rt_feeds": [{"trip_update_url": "https://trip.example.com", "vehicle_position_url": "https://vehicle.example.com"}],
 			 "agency_id": "agency-1"
 			}]`))
 		}))
@@ -120,17 +114,18 @@ func TestLoadConfigFromURL(t *testing.T) {
 		}
 
 		expected := models.ObaServer{
-			Name:               "Test Server",
-			ID:                 1,
-			ObaBaseURL:         "https://test.example.com",
-			ObaApiKey:          "test-key",
-			GtfsUrl:            "https://gtfs.example.com",
-			TripUpdateUrl:      "https://trip.example.com",
-			VehiclePositionUrl: "https://vehicle.example.com",
-			AgencyID:           "agency-1",
+			Name:       "Test Server",
+			ObaBaseURL: "https://test.example.com",
+			ObaApiKey:  "test-key",
+			AgencyID:   "agency-1",
+			GtfsURLs:   []string{"https://gtfs.example.com"},
+			GtfsRTFeeds: []models.GtfsRTFeed{{
+				TripUpdateURL:      "https://trip.example.com",
+				VehiclePositionURL: "https://vehicle.example.com",
+			}},
 		}
 
-		if servers[0] != expected {
+		if !reflect.DeepEqual(servers[0], expected) {
 			t.Errorf("Expected server %+v, got %+v", expected, servers[0])
 		}
 	})
@@ -276,15 +271,11 @@ func TestValidateConfigFlags(t *testing.T) {
 func TestRefreshConfig(t *testing.T) {
 	obaServer := models.NewObaServer(
 		"Test Server",
-		1,
+		"test-agency",
 		"https://test.example.com",
 		"test-key",
-		"",
-		"",
-		"",
-		"",
-		"",
-		"",
+		[]string{"https://test.example.com/gtfs.zip"},
+		[]models.GtfsRTFeed{{VehiclePositionURL: "https://test.example.com/vehicles"}},
 	)
 
 	cfg := NewConfig(
@@ -299,9 +290,9 @@ func TestRefreshConfig(t *testing.T) {
 
 	testLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	var serverHitCount int
+	var serverHitCount atomic.Int32
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		serverHitCount++
+		serverHitCount.Add(1)
 
 		user, pass, hasAuth := r.BasicAuth()
 		if hasAuth && (user != "testuser" || pass != "testpass") {
@@ -312,12 +303,11 @@ func TestRefreshConfig(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintln(w, `[
 					{
-							"id": 999,
 							"name": "Refreshed Test Server",
 							"oba_base_url": "https://refreshed.example.com",
 							"oba_api_key": "refreshed-key",
-							"gtfs_url": "https://refreshed.example.com/gtfs.zip",
-							"vehicle_position_url": "https://refreshed.example.com/vehicles",
+							"gtfs_urls": ["https://refreshed.example.com/gtfs.zip"],
+							"gtfs_rt_feeds": [{"vehicle_position_url": "https://refreshed.example.com/vehicles"}],
 							"agency_id": "agency-999"
 					}
 			]`)
@@ -333,7 +323,7 @@ func TestRefreshConfig(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 
-	if serverHitCount == 0 {
+	if serverHitCount.Load() == 0 {
 		t.Fatal("Mock server was never called")
 	}
 
@@ -345,7 +335,7 @@ func TestRefreshConfig(t *testing.T) {
 
 	var found bool
 	for _, s := range updatedServers {
-		if s.ID == 999 && s.Name == "Refreshed Test Server" {
+		if s.AgencyID == "agency-999" && s.Name == "Refreshed Test Server" {
 			found = true
 			break
 		}

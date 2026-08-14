@@ -34,22 +34,22 @@ type backoffData struct {
 // It is safe for concurrent use across goroutines.
 type BackoffStore struct {
 	mu       sync.RWMutex
-	backoffs map[int]backoffData
+	backoffs map[string]backoffData
 }
 
 // NewBackoffStore creates and returns a new BackoffStore instance.
 func NewBackoffStore() *BackoffStore {
 	return &BackoffStore{
-		backoffs: make(map[int]backoffData),
+		backoffs: make(map[string]backoffData),
 	}
 }
 
 // NextRetryAt retrieves the next retry time for the given server ID.
 // It returns the timestamp in UTC and a boolean indicating whether the server has an active backoff.
-func (s *BackoffStore) NextRetryAt(serverID int) (time.Time, bool) {
+func (s *BackoffStore) NextRetryAt(agencyID string) (time.Time, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if backoff, exists := s.backoffs[serverID]; exists {
+	if backoff, exists := s.backoffs[agencyID]; exists {
 		return backoff.NextRetryAt.UTC(), true
 	}
 	return time.Time{}, false
@@ -57,16 +57,16 @@ func (s *BackoffStore) NextRetryAt(serverID int) (time.Time, bool) {
 
 // UpdateBackoff updates the backoff delay and next retry time for the given server ID.
 // If no backoff exists for the server, it initializes one with BASE_BACKOFF.
-func (s *BackoffStore) UpdateBackoff(serverID int) {
+func (s *BackoffStore) UpdateBackoff(agencyID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if backoff, exists := s.backoffs[serverID]; exists {
+	if backoff, exists := s.backoffs[agencyID]; exists {
 		backoff.BackoffDelay = calculateNewBackoffDelay(backoff.BackoffDelay)
 		backoff.NextRetryAt = calculateNextRetryAt(backoff.BackoffDelay)
-		s.backoffs[serverID] = backoff
+		s.backoffs[agencyID] = backoff
 	} else {
-		s.backoffs[serverID] = backoffData{
+		s.backoffs[agencyID] = backoffData{
 			BackoffDelay: BASE_BACKOFF,
 			NextRetryAt:  calculateNextRetryAt(BASE_BACKOFF),
 		}
@@ -74,11 +74,11 @@ func (s *BackoffStore) UpdateBackoff(serverID int) {
 }
 
 // ResetBackoff removes any existing backoff data for the given server ID.
-func (s *BackoffStore) ResetBackoff(serverID int) {
+func (s *BackoffStore) ResetBackoff(agencyID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	delete(s.backoffs, serverID)
+	delete(s.backoffs, agencyID)
 }
 
 // DoWithBackoff executes an HTTP request with exponential backoff on failure.

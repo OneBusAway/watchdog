@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/getsentry/sentry-go"
@@ -23,10 +22,6 @@ import (
 func ValidateServer(server models.ObaServer) error {
 	var missing []string
 
-	if server.ID == 0 {
-		missing = append(missing, "id")
-	}
-
 	requiredStrings := []struct {
 		name  string
 		value string
@@ -34,9 +29,26 @@ func ValidateServer(server models.ObaServer) error {
 		{"name", server.Name},
 		{"oba_base_url", server.ObaBaseURL},
 		{"oba_api_key", server.ObaApiKey},
-		{"gtfs_url", server.GtfsUrl},
-		{"vehicle_position_url", server.VehiclePositionUrl},
 		{"agency_id", server.AgencyID},
+	}
+	if len(server.GtfsURLs) == 0 {
+		missing = append(missing, "gtfs_urls")
+	}
+	for i, gtfsURL := range server.GtfsURLs {
+		if strings.TrimSpace(gtfsURL) == "" {
+			missing = append(missing, fmt.Sprintf("gtfs_urls[%d]", i))
+		}
+	}
+	if len(server.GtfsRTFeeds) == 0 {
+		missing = append(missing, "gtfs_rt_feeds")
+	}
+	for i, feed := range server.GtfsRTFeeds {
+		if strings.TrimSpace(feed.VehiclePositionURL) == "" {
+			missing = append(missing, fmt.Sprintf("gtfs_rt_feeds[%d].vehicle_position_url", i))
+		}
+		if (strings.TrimSpace(feed.GtfsRTAPIKey) == "") != (strings.TrimSpace(feed.GtfsRTAPIValue) == "") {
+			missing = append(missing, fmt.Sprintf("gtfs_rt_feeds[%d].gtfs_rt_api_key/value", i))
+		}
 	}
 	for _, field := range requiredStrings {
 		if strings.TrimSpace(field.value) == "" {
@@ -45,8 +57,7 @@ func ValidateServer(server models.ObaServer) error {
 	}
 
 	if len(missing) > 0 {
-		return fmt.Errorf("server %q (id %d) is missing required fields: %s",
-			server.Name, server.ID, strings.Join(missing, ", "))
+		return fmt.Errorf("agency %q is missing required fields: %s", server.AgencyID, strings.Join(missing, ", "))
 	}
 	return nil
 }
@@ -56,17 +67,23 @@ func ValidateServer(server models.ObaServer) error {
 // entry (e.g. null feed URLs) cannot block monitoring of the rest of the fleet.
 func filterValidServers(servers []models.ObaServer) []models.ObaServer {
 	valid := make([]models.ObaServer, 0, len(servers))
+	seenAgencies := make(map[string]struct{})
 	for _, server := range servers {
 		if err := ValidateServer(server); err != nil {
 			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 				Tags: map[string]string{
-					"server_id":   strconv.Itoa(server.ID),
+					"agency_id":   server.AgencyID,
 					"server_name": server.Name,
 				},
 				Level: sentry.LevelError,
 			})
 			continue
 		}
+		if _, exists := seenAgencies[server.AgencyID]; exists {
+			report.ReportError(fmt.Errorf("duplicate agency_id %q", server.AgencyID))
+			continue
+		}
+		seenAgencies[server.AgencyID] = struct{}{}
 		valid = append(valid, server)
 	}
 	return valid
