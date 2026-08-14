@@ -25,14 +25,14 @@ type LastSeen struct {
 
 type VehicleLastSeen struct {
 	Mu    sync.RWMutex
-	Store map[int]map[string]LastSeen
+	Store map[string]map[string]LastSeen
 }
 
 // NewVehicleLastSeen creates and returns a new VehicleLastSeen instance
 // with an initialized storage map. This is the constructor for VehicleLastSeen.
 func NewVehicleLastSeen() *VehicleLastSeen {
 	return &VehicleLastSeen{
-		Store: make(map[int]map[string]LastSeen),
+		Store: make(map[string]map[string]LastSeen),
 	}
 }
 
@@ -41,7 +41,7 @@ func NewVehicleLastSeen() *VehicleLastSeen {
 //
 // serverID: ID of the server.
 // vehicleID: Unique identifier of the vehicle.
-func (vehicleLastSeen *VehicleLastSeen) Get(serverID int, vehicleID string) (LastSeen, bool) {
+func (vehicleLastSeen *VehicleLastSeen) Get(agencyID, vehicleID string) (LastSeen, bool) {
 	vehicleLastSeen.Mu.RLock()
 	defer vehicleLastSeen.Mu.RUnlock()
 
@@ -49,7 +49,7 @@ func (vehicleLastSeen *VehicleLastSeen) Get(serverID int, vehicleID string) (Las
 		return LastSeen{}, false
 	}
 
-	if vehicles, ok := vehicleLastSeen.Store[serverID]; ok {
+	if vehicles, ok := vehicleLastSeen.Store[agencyID]; ok {
 		lastSeen, ok := vehicles[vehicleID]
 		return lastSeen, ok
 	}
@@ -61,24 +61,24 @@ func (vehicleLastSeen *VehicleLastSeen) Get(serverID int, vehicleID string) (Las
 // serverID: ID of the server.
 // vehicleID: Unique identifier of the vehicle.
 // lastSeen: LastSeen object containing the latest observation time and related data.
-func (vehicleLastSeen *VehicleLastSeen) Set(serverID int, vehicleID string, lastSeen LastSeen) {
+func (vehicleLastSeen *VehicleLastSeen) Set(agencyID, vehicleID string, lastSeen LastSeen) {
 	vehicleLastSeen.Mu.Lock()
 	defer vehicleLastSeen.Mu.Unlock()
 
-	if _, ok := vehicleLastSeen.Store[serverID]; !ok {
-		vehicleLastSeen.Store[serverID] = make(map[string]LastSeen)
+	if _, ok := vehicleLastSeen.Store[agencyID]; !ok {
+		vehicleLastSeen.Store[agencyID] = make(map[string]LastSeen)
 	}
-	vehicleLastSeen.Store[serverID][vehicleID] = lastSeen
+	vehicleLastSeen.Store[agencyID][vehicleID] = lastSeen
 }
 
 // Count returns the number of tracked vehicles for a given server.
 //
 // serverID: ID of the server to count vehicles for.
-func (v *VehicleLastSeen) Count(serverID int) int {
+func (v *VehicleLastSeen) Count(agencyID string) int {
 	v.Mu.RLock()
 	defer v.Mu.RUnlock()
 
-	return len(v.Store[serverID])
+	return len(v.Store[agencyID])
 }
 
 // ClearRoutine runs a background process that periodically removes vehicles

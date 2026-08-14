@@ -11,8 +11,7 @@ import (
 // series created for the stop can be deleted (via DeleteLabelValues) after the
 // stop has not been seen for a configured threshold.
 type trackedStop struct {
-	Slug     string
-	Agency   string
+	AgencyID string
 	StopName string
 	Lat      string
 	Lon      string
@@ -33,57 +32,48 @@ type clusterKey struct {
 // cluster, so the cluster gauge series can be deleted after the cluster has
 // not been seen for a configured threshold.
 type trackedCluster struct {
-	Slug     string
-	Agency   string
+	AgencyID string
 	Key      clusterKey
 	LastSeen time.Time
 }
 
 // UnmatchedStopTracker stores the most recent observation of each unmatched
-// stop and unmatched-stop cluster per server and agency. Stop series and
-// cluster series are tracked independently: a cluster series is deleted once
-// the cluster itself has not been seen for the TTL, regardless of which stops
-// are (or were) its members.
+// stop and unmatched-stop cluster per agency. Stop series and cluster series
+// are tracked independently: a cluster series is deleted once the cluster
+// itself has not been seen for the TTL, regardless of which stops are (or were)
+// its members.
 //
-// The outer map key is the server ID (int), the next map key is the agency ID,
-// and the innermost map key is the stop ID (Entries) or the cluster key
-// (Clusters).
+// The outer map key is the agency ID and the innermost map key is the stop ID
+// (Entries) or the cluster key (Clusters).
 type UnmatchedStopTracker struct {
 	Mu       sync.RWMutex
-	Entries  map[int]map[string]map[string]trackedStop
-	Clusters map[int]map[string]map[clusterKey]trackedCluster
+	Entries  map[string]map[string]trackedStop
+	Clusters map[string]map[clusterKey]trackedCluster
 }
 
 func NewUnmatchedStopTracker() *UnmatchedStopTracker {
 	return &UnmatchedStopTracker{
-		Entries:  make(map[int]map[string]map[string]trackedStop),
-		Clusters: make(map[int]map[string]map[clusterKey]trackedCluster),
+		Entries:  make(map[string]map[string]trackedStop),
+		Clusters: make(map[string]map[clusterKey]trackedCluster),
 	}
 }
 
 // RecordLastSeen updates (or creates) the tracked entry for a stop that was just
 // reported as unmatched.
-func (t *UnmatchedStopTracker) RecordLastSeen(serverID int, slug, agency, stopID, stopName, lat, lon string) {
+func (t *UnmatchedStopTracker) RecordLastSeen(agencyID, stopID, stopName, lat, lon string) {
 	t.Mu.Lock()
 	defer t.Mu.Unlock()
 
-	agencies, ok := t.Entries[serverID]
-	if !ok {
-		agencies = make(map[string]map[string]trackedStop)
-		t.Entries[serverID] = agencies
-	}
-
-	stops, ok := agencies[agency]
+	stops, ok := t.Entries[agencyID]
 	if !ok {
 		stops = make(map[string]trackedStop)
-		agencies[agency] = stops
+		t.Entries[agencyID] = stops
 	}
 
 	entry, exists := stops[stopID]
 	if !exists {
 		entry = trackedStop{
-			Slug:     slug,
-			Agency:   agency,
+			AgencyID: agencyID,
 			StopName: stopName,
 			Lat:      lat,
 			Lon:      lon,
@@ -97,35 +87,28 @@ func (t *UnmatchedStopTracker) RecordLastSeen(serverID int, slug, agency, stopID
 
 // RecordClusterSeen updates (or creates) the tracked entry for an unmatched-stop
 // cluster that was just reported.
-func (t *UnmatchedStopTracker) RecordClusterSeen(serverID int, slug, agency, stationID, clusterID, lat, lon string) {
+func (t *UnmatchedStopTracker) RecordClusterSeen(agencyID, stationID, clusterID, lat, lon string) {
 	t.Mu.Lock()
 	defer t.Mu.Unlock()
 
-	agencies, ok := t.Clusters[serverID]
-	if !ok {
-		agencies = make(map[string]map[clusterKey]trackedCluster)
-		t.Clusters[serverID] = agencies
-	}
-
-	clusters, ok := agencies[agency]
+	clusters, ok := t.Clusters[agencyID]
 	if !ok {
 		clusters = make(map[clusterKey]trackedCluster)
-		agencies[agency] = clusters
+		t.Clusters[agencyID] = clusters
 	}
 
-	key := clusterKey{StationID: stationID, ClusterID: clusterID, Lat: lat, Lon: lon}
-	entry, exists := clusters[key]
+	cluster := clusterKey{StationID: stationID, ClusterID: clusterID, Lat: lat, Lon: lon}
+	entry, exists := clusters[cluster]
 	if !exists {
 		entry = trackedCluster{
-			Slug:   slug,
-			Agency: agency,
-			Key:    key,
+			AgencyID: agencyID,
+			Key:      cluster,
 		}
 	}
 
 	entry.LastSeen = time.Now().UTC()
 
-	clusters[key] = entry
+	clusters[cluster] = entry
 }
 
 // ClearRoutine runs a background process that periodically removes tracked
@@ -168,24 +151,18 @@ func (t *UnmatchedStopTracker) clearStops(now time.Time, threshold time.Duration
 		return
 	}
 
-	for serverID, agencies := range t.Entries {
-		for agencyID, stops := range agencies {
-			for stopID, entry := range stops {
-				if now.Sub(entry.LastSeen) <= threshold {
-					continue
-				}
-
-				ObaUnmatchedStopInfo.DeleteLabelValues(entry.Slug, entry.Agency, stopID, entry.StopName, entry.Lat, entry.Lon)
-				delete(stops, stopID)
+	for agencyID, stops := range t.Entries {
+		for stopID, entry := range stops {
+			if now.Sub(entry.LastSeen) <= threshold {
+				continue
 			}
 
-			if len(stops) == 0 {
-				delete(agencies, agencyID)
-			}
+			ObaUnmatchedStopInfo.DeleteLabelValues(entry.AgencyID, stopID, entry.StopName, entry.Lat, entry.Lon)
+			delete(stops, stopID)
 		}
 
-		if len(agencies) == 0 {
-			delete(t.Entries, serverID)
+		if len(stops) == 0 {
+			delete(t.Entries, agencyID)
 		}
 	}
 }
@@ -195,24 +172,18 @@ func (t *UnmatchedStopTracker) clearClusters(now time.Time, threshold time.Durat
 		return
 	}
 
-	for serverID, agencies := range t.Clusters {
-		for agencyID, clusters := range agencies {
-			for key, entry := range clusters {
-				if now.Sub(entry.LastSeen) <= threshold {
-					continue
-				}
-
-				UnmatchedStopClusterCount.DeleteLabelValues(entry.Slug, entry.Agency, key.StationID, key.ClusterID, key.Lat, key.Lon)
-				delete(clusters, key)
+	for agencyID, clusters := range t.Clusters {
+		for key, entry := range clusters {
+			if now.Sub(entry.LastSeen) <= threshold {
+				continue
 			}
 
-			if len(clusters) == 0 {
-				delete(agencies, agencyID)
-			}
+			UnmatchedStopClusterCount.DeleteLabelValues(entry.AgencyID, key.StationID, key.ClusterID, key.Lat, key.Lon)
+			delete(clusters, key)
 		}
 
-		if len(agencies) == 0 {
-			delete(t.Clusters, serverID)
+		if len(clusters) == 0 {
+			delete(t.Clusters, agencyID)
 		}
 	}
 }

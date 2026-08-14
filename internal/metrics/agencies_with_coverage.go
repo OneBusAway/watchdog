@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strconv"
 
 	onebusaway "github.com/OneBusAway/go-sdk"
 	"github.com/OneBusAway/go-sdk/option"
@@ -21,28 +20,28 @@ import (
 // Returns the agency count if the bundle is present and valid.
 // Returns an error if the bundle is missing, nil, or contains no agencies.
 func checkAgenciesWithCoverage(staticStore *gtfs.StaticStore, server models.ObaServer) (int, error) {
-	staticData, ok := staticStore.Get(server.ID)
+	staticData, ok := staticStore.Get(server.AgencyID)
 	if !ok {
-		err := fmt.Errorf("there is no bundle for server %v", server.ID)
+		err := fmt.Errorf("there is no bundle for agency %s", server.AgencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags:  utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+			Tags:  utils.MakeMap("agency_id", server.AgencyID),
 			Level: sentry.LevelWarning,
 		})
 		return 0, err
 	}
 	if staticData == nil {
-		err := fmt.Errorf("static data is nil for server %v", server.ID)
+		err := fmt.Errorf("static data is nil for agency %s", server.AgencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags:  utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+			Tags:  utils.MakeMap("agency_id", server.AgencyID),
 			Level: sentry.LevelWarning,
 		})
 		return 0, err
 	}
 	if len(staticData.Agencies) == 0 {
-		err := fmt.Errorf("no agencies found in GTFS bundle for server %v", server.ID)
+		err := fmt.Errorf("no agencies found in GTFS bundle for agency %s", server.AgencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
-				"server_id": strconv.Itoa(server.ID),
+				"agency_id": server.AgencyID,
 			},
 			Level: sentry.LevelWarning,
 		})
@@ -50,7 +49,7 @@ func checkAgenciesWithCoverage(staticStore *gtfs.StaticStore, server models.ObaS
 	}
 
 	AgenciesInStaticGtfs.WithLabelValues(
-		strconv.Itoa(server.ID),
+		server.AgencyID,
 	).Set(float64(len(staticData.Agencies)))
 
 	return len(staticData.Agencies), nil
@@ -77,7 +76,7 @@ func getAgenciesWithCoverage(server models.ObaServer) (int, error) {
 	if err != nil {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
-				"server_id":    strconv.Itoa(server.ID),
+				"agency_id":    server.AgencyID,
 				"oba_base_url": server.ObaBaseURL,
 			},
 		})
@@ -89,7 +88,7 @@ func getAgenciesWithCoverage(server models.ObaServer) (int, error) {
 	}
 
 	AgenciesInCoverageEndpoint.WithLabelValues(
-		strconv.Itoa(server.ID),
+		server.AgencyID,
 	).Set(float64(len(response.Data.List)))
 
 	return len(response.Data.List), nil
@@ -113,11 +112,11 @@ func checkAgenciesWithCoverageMatch(staticStore *gtfs.StaticStore, logger *slog.
 	}
 
 	matchValue := 0
-	if coverageAgenciesCount == staticGtfsAgenciesCount {
+	if coverageAgenciesCount > 0 && staticGtfsAgenciesCount > 0 && coverageAgenciesCount == staticGtfsAgenciesCount {
 		matchValue = 1
 	}
 
-	AgenciesMatch.WithLabelValues(strconv.Itoa(server.ID)).Set(float64(matchValue))
+	AgenciesMatch.WithLabelValues(server.AgencyID).Set(float64(matchValue))
 
 	return nil
 }

@@ -3,7 +3,6 @@ package metrics
 import (
 	"context"
 	"fmt"
-	"strconv"
 
 	onebusaway "github.com/OneBusAway/go-sdk"
 	"github.com/OneBusAway/go-sdk/option"
@@ -36,14 +35,14 @@ func serverPing(server models.ObaServer) bool {
 	if err != nil {
 		err := fmt.Errorf("failed to ping OBA server %s: %v", server.ObaBaseURL, err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+			Tags: utils.MakeMap("agency_id", server.AgencyID),
 			ExtraContext: map[string]interface{}{
 				"oba_base_url": server.ObaBaseURL,
 			},
 		})
 		// Update status metric
 		ObaApiStatus.WithLabelValues(
-			strconv.Itoa(server.ID),
+			server.AgencyID,
 			utils.SanitizeServerURL(server.ObaBaseURL),
 		).Set(0)
 		return false
@@ -52,13 +51,13 @@ func serverPing(server models.ObaServer) bool {
 	// Check response validity
 	if response.Data.Entry.ReadableTime != "" {
 		ObaApiStatus.WithLabelValues(
-			strconv.Itoa(server.ID),
+			server.AgencyID,
 			utils.SanitizeServerURL(server.ObaBaseURL),
 		).Set(1)
 		return true
 	}
 	ObaApiStatus.WithLabelValues(
-		strconv.Itoa(server.ID),
+		server.AgencyID,
 		utils.SanitizeServerURL(server.ObaBaseURL),
 	).Set(0)
 	return false

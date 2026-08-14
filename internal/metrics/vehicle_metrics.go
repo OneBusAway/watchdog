@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"strconv"
 	"time"
 
 	onebusaway "github.com/OneBusAway/go-sdk"
@@ -32,32 +31,23 @@ import (
 
 func countVehiclePositions(server models.ObaServer, realtimeStore *gtfs.RealtimeStore) (int, error) {
 	if realtimeStore == nil {
-		err := fmt.Errorf("realtimeStore is nil for server %d", server.ID)
+		err := fmt.Errorf("realtimeStore is nil for agency %s", server.AgencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
-			ExtraContext: map[string]interface{}{
-				"vehicle_position_url": server.VehiclePositionUrl,
-			},
+			Tags: utils.MakeMap("agency_id", server.AgencyID),
 		})
 		return 0, err
 	}
-	realtimeData := realtimeStore.Get()
+	realtimeData := realtimeStore.Get(server.AgencyID)
 	if realtimeData == nil {
-		err := fmt.Errorf("no GTFS-RT data available for server %d", server.ID)
+		err := fmt.Errorf("no GTFS-RT data available for agency %s", server.AgencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
-			ExtraContext: map[string]interface{}{
-				"vehicle_position_url": server.VehiclePositionUrl,
-			},
+			Tags: utils.MakeMap("agency_id", server.AgencyID),
 		})
 		return 0, err
 	}
 	count := len(realtimeData.Vehicles)
 
-	RealtimeVehiclePositions.WithLabelValues(
-		utils.SanitizeServerURL(server.VehiclePositionUrl),
-		strconv.Itoa(server.ID),
-	).Set(float64(count))
+	RealtimeVehiclePositions.WithLabelValues(server.AgencyID).Set(float64(count))
 
 	return count, nil
 }
@@ -87,7 +77,6 @@ func countActiveVehiclesForAgency(server models.ObaServer) (int, error) {
 	if err != nil {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
-				"server_id": strconv.Itoa(server.ID),
 				"agency_id": server.AgencyID,
 			},
 		})
@@ -98,7 +87,7 @@ func countActiveVehiclesForAgency(server models.ObaServer) (int, error) {
 		return 0, nil
 	}
 
-	AgencyActiveVehiclesGauge.WithLabelValues(server.AgencyID, strconv.Itoa(server.ID)).Set(float64(len(response.Data.List)))
+	AgencyActiveVehiclesGauge.WithLabelValues(server.AgencyID).Set(float64(len(response.Data.List)))
 
 	return len(response.Data.List), nil
 }
@@ -126,24 +115,20 @@ func countActiveVehiclesForAgency(server models.ObaServer) (int, error) {
 // Returns:
 //   - An error if the feed cannot be fetched or parsed, otherwise nil.
 func trackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLastSeen, realtimeStore *gtfs.RealtimeStore) error {
-	serverID := server.ID
 	agencyID := server.AgencyID
 	now := time.Now().UTC()
 
-	realtimeData := realtimeStore.Get()
+	realtimeData := realtimeStore.Get(agencyID)
 	if realtimeData == nil {
-		err := fmt.Errorf("no GTFS-RT data available for server %d", serverID)
+		err := fmt.Errorf("no GTFS-RT data available for agency %s", agencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
-			ExtraContext: map[string]interface{}{
-				"vehicle_position_url": server.VehiclePositionUrl,
-			},
+			Tags: utils.MakeMap("agency_id", agencyID),
 		})
 		return err
 	}
 
 	if len(realtimeData.Vehicles) == 0 {
-		TrackedVehiclesGauge.WithLabelValues(strconv.Itoa(serverID)).Set(0)
+		TrackedVehiclesGauge.WithLabelValues(agencyID).Set(0)
 		return nil
 	}
 
@@ -165,39 +150,39 @@ func trackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLast
 		}
 
 		interval := now.Sub(seenAt).Seconds()
-		VehicleReportCount.WithLabelValues(vehicleID, strconv.Itoa(serverID)).Inc()
-		VehicleReportInterval.WithLabelValues(vehicleID, strconv.Itoa(serverID)).Set(interval)
+		VehicleReportCount.WithLabelValues(vehicleID, agencyID).Inc()
+		VehicleReportInterval.WithLabelValues(vehicleID, agencyID).Set(interval)
 
 		// Compute speed
-		prev, ok := vehicleLastSeen.Get(serverID, vehicleID)
+		prev, ok := vehicleLastSeen.Get(agencyID, vehicleID)
 		if ok {
 			timeDelta := seenAt.Sub(prev.Time).Seconds()
 			if timeDelta > 0 {
 				distance := geo.HaversineDistance(prev.Lat, prev.Lon, lat, lon)
 				computedSpeed := distance / timeDelta
 
-				VehicleSpeedGauge.WithLabelValues(vehicleID, agencyID, strconv.Itoa(serverID)).Set(computedSpeed)
+				VehicleSpeedGauge.WithLabelValues(vehicleID, agencyID).Set(computedSpeed)
 
 				// Compare reported speed with computed speed
 				if vehicle.Position.Speed != nil {
 					reportedSpeed := float64(*vehicle.Position.Speed)
 					if reportedSpeed > 0 {
 						diffRatio := math.Abs(computedSpeed-reportedSpeed) / reportedSpeed
-						VehicleSpeedDiscrepancyRatioGauge.WithLabelValues(vehicleID, agencyID, strconv.Itoa(serverID)).Set(diffRatio)
+						VehicleSpeedDiscrepancyRatioGauge.WithLabelValues(vehicleID, agencyID).Set(diffRatio)
 					}
 				}
 			}
 		}
 
 		// Save last seen data
-		vehicleLastSeen.Set(serverID, vehicleID, LastSeen{
+		vehicleLastSeen.Set(agencyID, vehicleID, LastSeen{
 			Time: seenAt,
 			Lat:  lat,
 			Lon:  lon,
 		})
 	}
 
-	TrackedVehiclesGauge.WithLabelValues(strconv.Itoa(serverID)).Set(float64(vehicleLastSeen.Count(serverID)))
+	TrackedVehiclesGauge.WithLabelValues(agencyID).Set(float64(vehicleLastSeen.Count(agencyID)))
 
 	return nil
 }
@@ -232,21 +217,18 @@ const VehicleStatusStoppedAtStop = 1
 // - InvalidVehicleCoordinatesGauge: for invalid or missing coordinates
 // - StoppedOutOfBoundsVehiclesGauge: for vehicles stopped outside the bounding box
 func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, boundingBoxStore *geo.BoundingBoxStore, realtimeStore *gtfs.RealtimeStore) error {
-	realtimeData := realtimeStore.Get()
+	realtimeData := realtimeStore.Get(server.AgencyID)
 	if realtimeData == nil {
-		err := fmt.Errorf("no GTFS-RT data available for server %d", server.ID)
+		err := fmt.Errorf("no GTFS-RT data available for agency %s", server.AgencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
-			ExtraContext: map[string]interface{}{
-				"vehicle_position_url": server.VehiclePositionUrl,
-			},
+			Tags: utils.MakeMap("agency_id", server.AgencyID),
 		})
 		return err
 	}
 
-	boundingBox, ok := boundingBoxStore.Get(server.ID)
+	boundingBox, ok := boundingBoxStore.Get(server.AgencyID)
 	if !ok {
-		return fmt.Errorf("no bounding box found for server ID %d", server.ID)
+		return fmt.Errorf("no bounding box found for agency ID %s", server.AgencyID)
 	}
 
 	invalidCount := 0
@@ -274,9 +256,8 @@ func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, bounding
 		}
 	}
 
-	serverID := strconv.Itoa(server.ID)
-	InvalidVehicleCoordinatesGauge.WithLabelValues(serverID).Set(float64(invalidCount))
-	StoppedOutOfBoundsVehiclesGauge.WithLabelValues(serverID).Set(float64(outOfBoundsCount))
+	InvalidVehicleCoordinatesGauge.WithLabelValues(server.AgencyID).Set(float64(invalidCount))
+	StoppedOutOfBoundsVehiclesGauge.WithLabelValues(server.AgencyID).Set(float64(outOfBoundsCount))
 
 	return nil
 }

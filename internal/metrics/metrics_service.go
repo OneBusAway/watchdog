@@ -58,8 +58,8 @@ func (ms *MetricsService) ServerPing(server models.ObaServer) bool {
 	return serverPing(server)
 }
 
-func (ms *MetricsService) FetchObaAPIMetrics(slugID string, serverID int, serverBaseUrl string, apiKey string) error {
-	return fetchObaAPIMetrics(slugID, serverID, serverBaseUrl, apiKey, ms.Client, ms.StaticStore, ms.Logger, ms.UnmatchedStopTracker)
+func (ms *MetricsService) FetchObaAPIMetrics(agencyID, serverBaseURL, apiKey string) error {
+	return fetchObaAPIMetrics(agencyID, serverBaseURL, apiKey, ms.Client, ms.StaticStore, ms.Logger, ms.UnmatchedStopTracker)
 }
 
 func (ms *MetricsService) TrackVehicleTelemetry(server models.ObaServer) error {

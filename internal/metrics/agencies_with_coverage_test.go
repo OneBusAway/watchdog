@@ -20,7 +20,12 @@ func TestCheckAgenciesWithCoverage(t *testing.T) {
 		ts := setupObaServer(t, `{"code":200,"currentTime":1234567890000,"text":"OK","version":2,"data":{"list":[{"agencyId":"1"}]}}`, http.StatusOK)
 		defer ts.Close()
 
-		testServer := createTestServer(ts.URL, "Test Server", 999, "test-key", "http://example.com", "test-api-value", "test-api-key", "1")
+		testServer := models.ObaServer{
+			Name:       "Test Server",
+			AgencyID:   "1",
+			ObaBaseURL: ts.URL,
+			ObaApiKey:  "test-key",
+		}
 
 		data := readFixture(t, "gtfs.zip")
 		staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
@@ -29,14 +34,14 @@ func TestCheckAgenciesWithCoverage(t *testing.T) {
 		}
 		staticData := models.NewStaticData(staticBundle)
 		staticStore := gtfs.NewStaticStore()
-		staticStore.Set(testServer.ID, staticData)
+		staticStore.Set(testServer.AgencyID, staticData)
 
 		err = checkAgenciesWithCoverageMatch(staticStore, logger, testServer)
 		if err != nil {
 			t.Fatalf("CheckAgenciesWithCoverageMatch failed: %v", err)
 		}
 
-		agencyMatchMetric, err := getMetricValue(AgenciesMatch, map[string]string{"server_id": "999"})
+		agencyMatchMetric, err := getMetricValue(AgenciesMatch, map[string]string{"agency_id": testServer.AgencyID})
 		if err != nil {
 			t.Errorf("Failed to get AgenciesMatch metric value: %v", err)
 		}
@@ -55,7 +60,6 @@ func TestGetAgenciesWithCoverage(t *testing.T) {
 
 		server := models.ObaServer{
 			Name:       "Test Server",
-			ID:         999,
 			ObaBaseURL: ts.URL,
 			ObaApiKey:  "test-key",
 		}
@@ -76,7 +80,6 @@ func TestGetAgenciesWithCoverage(t *testing.T) {
 
 		server := models.ObaServer{
 			Name:       "Test Server",
-			ID:         999,
 			ObaBaseURL: ts.URL,
 			ObaApiKey:  "test-key",
 		}
@@ -97,7 +100,6 @@ func TestGetAgenciesWithCoverage(t *testing.T) {
 
 		server := models.ObaServer{
 			Name:       "Test Server",
-			ID:         999,
 			ObaBaseURL: ts.URL,
 			ObaApiKey:  "test-key",
 		}

@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	remoteGtfs "github.com/OneBusAway/go-gtfs"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
+	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
 )
 
@@ -32,18 +34,33 @@ func readFixture(t *testing.T, fixturePath string) []byte {
 	return data
 }
 
+// testRealtimeStore creates an in-memory realtime store seeded with the
+// vehicles fixture, scoped to the given agency ID.
+func testRealtimeStore(t *testing.T, agencyID string) *gtfs.RealtimeStore {
+	t.Helper()
+	data := readFixture(t, "gtfs_rt_feed_vehicles.pb")
+	parsed, err := remoteGtfs.ParseRealtime(data, &remoteGtfs.ParseRealtimeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := gtfs.NewRealtimeStore()
+	store.Set(agencyID, models.NewRealtimeData(parsed))
+	return store
+}
+
 // createTestServer creates and returns a mock ObaServer instance with the given parameters.
 // Useful for unit testing functions that depend on server configuration.
-func createTestServer(url, name string, id int, apiKey string, vehiclePositionUrl string, gtfsRtApiKey string, gtfsRtApiValue string, agencyID string) models.ObaServer {
+func createTestServer(url, name string, apiKey, vehiclePositionURL, gtfsRTAPIKey, gtfsRTAPIValue, agencyID string) models.ObaServer {
 	return models.ObaServer{
-		Name:               name,
-		ID:                 id,
-		ObaBaseURL:         url,
-		VehiclePositionUrl: vehiclePositionUrl,
-		ObaApiKey:          apiKey,
-		GtfsRtApiKey:       gtfsRtApiKey,
-		GtfsRtApiValue:     gtfsRtApiValue,
-		AgencyID:           agencyID,
+		Name:       name,
+		ObaBaseURL: url,
+		ObaApiKey:  apiKey,
+		AgencyID:   agencyID,
+		GtfsRTFeeds: []models.GtfsRTFeed{{
+			VehiclePositionURL: vehiclePositionURL,
+			GtfsRTAPIKey:       gtfsRTAPIKey,
+			GtfsRTAPIValue:     gtfsRTAPIValue,
+		}},
 	}
 }
 

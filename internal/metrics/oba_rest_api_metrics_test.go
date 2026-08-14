@@ -30,7 +30,6 @@ func TestFetchObaAPIMetrics_WithVCR(t *testing.T) {
 	tests := []struct {
 		name      string
 		slugID    string
-		serverID  int
 		serverURL string
 		apiKey    string
 		useVCR    bool
@@ -41,7 +40,6 @@ func TestFetchObaAPIMetrics_WithVCR(t *testing.T) {
 		{
 			name:      "successful request",
 			slugID:    "unitrans",
-			serverID:  1,
 			serverURL: "https://oba-api.onrender.com",
 			apiKey:    "org.onebusaway.iphone",
 			useVCR:    true,
@@ -51,7 +49,6 @@ func TestFetchObaAPIMetrics_WithVCR(t *testing.T) {
 		{
 			name:      "not found error",
 			slugID:    "invalid-region",
-			serverID:  2,
 			serverURL: "https://api.pugetsound.onebusaway.org",
 			apiKey:    "org.onebusaway.iphone",
 			useVCR:    false,
@@ -76,10 +73,10 @@ func TestFetchObaAPIMetrics_WithVCR(t *testing.T) {
 					Timeout:   10 * time.Second,
 				}
 			}
-			staticStore.Set(tt.serverID, staticData)
+			staticStore.Set(tt.slugID, staticData)
 			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 			tracker := NewUnmatchedStopTracker()
-			err := fetchObaAPIMetrics(tt.slugID, tt.serverID, tt.serverURL, tt.apiKey, client, staticStore, logger, tracker)
+			err := fetchObaAPIMetrics(tt.slugID, tt.serverURL, tt.apiKey, client, staticStore, logger, tracker)
 
 			if tt.wantErr {
 				if err == nil {
@@ -117,7 +114,7 @@ func TestFetchObaAPIMetrics_SanitizesServerURLLabel(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	tracker := NewUnmatchedStopTracker()
 
-	if err := fetchObaAPIMetrics("42", 42, serverBaseURL, apiKey, &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
+	if err := fetchObaAPIMetrics("42", serverBaseURL, apiKey, &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -135,7 +132,7 @@ func TestFetchObaAPIMetrics_SanitizesServerURLLabel(t *testing.T) {
 		for _, lp := range pb.Label {
 			labels[lp.GetName()] = lp.GetValue()
 		}
-		if labels["server_id"] == "42" {
+		if labels["agency_id"] == "42" {
 			gotURL = labels["server_url"]
 		}
 	}
