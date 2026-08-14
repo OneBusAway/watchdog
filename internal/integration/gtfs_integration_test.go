@@ -26,18 +26,18 @@ func TestDownloadGTFSBundles(t *testing.T) {
 	boundingBoxStore := geo.NewBoundingBoxStore()
 	logger := slog.Default()
 	client := &http.Client{}
-	gtfsService := gtfs.NewGtfsService(staticStore,realtimeStore,boundingBoxStore,logger,client)
+	gtfsService := gtfs.NewGtfsService(staticStore, realtimeStore, boundingBoxStore, logger, client)
 	ctx := context.Background()
 	for _, server := range integrationServers {
 		srv := server
 		t.Run(fmt.Sprintf("ServerID_%d", srv.ID), func(t *testing.T) {
 			t.Parallel()
-			staticBundle,err := gtfsService.DownloadGTFSBundle(ctx,srv.GtfsUrl, srv.ID,20)
+			staticBundle, err := gtfsService.DownloadGTFSBundle(ctx, srv.GtfsUrl, srv.ID, 20)
 			if err != nil {
 				t.Errorf("failed to download GTFS bundle for server %d : %v", srv.ID, err)
 				return
 			}
-			err = gtfsService.StoreGTFSBundle(staticBundle,server.ID)
+			err = gtfsService.StoreGTFSBundle(staticBundle, server.ID)
 			if err != nil {
 				t.Errorf("failed to store GTFS bundle for server %d : %v", srv.ID, err)
 				return

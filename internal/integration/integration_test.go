@@ -48,7 +48,7 @@ func TestMain(m *testing.M) {
 	}
 
 	if filepath.Base(integrationConfigPath) != "integration_config.json" {
-		fmt.Fprintln(os.Stderr,"invalid integration config file name: (only integration_config.json is allowed)", integrationConfigPath)
+		fmt.Fprintln(os.Stderr, "invalid integration config file name: (only integration_config.json is allowed)", integrationConfigPath)
 		os.Exit(1)
 	}
 

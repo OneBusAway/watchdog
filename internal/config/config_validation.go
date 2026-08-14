@@ -2,12 +2,9 @@ package config
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
-	"github.com/getsentry/sentry-go"
 	"watchdog.onebusaway.org/internal/models"
-	"watchdog.onebusaway.org/internal/report"
 )
 
 // ValidateServer checks that an ObaServer has all the fields Watchdog requires
@@ -51,23 +48,8 @@ func ValidateServer(server models.ObaServer) error {
 	return nil
 }
 
-// filterValidServers returns only the servers that pass ValidateServer. Each
-// invalid server is reported to Sentry and dropped so that one misconfigured
-// entry (e.g. null feed URLs) cannot block monitoring of the rest of the fleet.
-func filterValidServers(servers []models.ObaServer) []models.ObaServer {
-	valid := make([]models.ObaServer, 0, len(servers))
-	for _, server := range servers {
-		if err := ValidateServer(server); err != nil {
-			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-				Tags: map[string]string{
-					"server_id":   strconv.Itoa(server.ID),
-					"server_name": server.Name,
-				},
-				Level: sentry.LevelError,
-			})
-			continue
-		}
-		valid = append(valid, server)
-	}
-	return valid
+// newErrRecovered builds the message for a server that was previously dropped
+// as invalid and now passes validation.
+func newErrRecovered(server models.ObaServer) error {
+	return fmt.Errorf("server %q (id %d) recovered: previously missing required fields", server.Name, server.ID)
 }
