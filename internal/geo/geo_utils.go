@@ -75,37 +75,37 @@ func computeBoundingBox(stops []remoteGtfs.Stop) (BoundingBox, error) {
 // bounding boxes indexed by server ID.
 type BoundingBoxStore struct {
 	mu    sync.RWMutex
-	store map[int]BoundingBox
+	store map[string]BoundingBox
 }
 
 // NewBoundingBoxStore returns a new instance of BoundingBoxStore.
 func NewBoundingBoxStore() *BoundingBoxStore {
 	return &BoundingBoxStore{
-		store: make(map[int]BoundingBox),
+		store: make(map[string]BoundingBox),
 	}
 }
 
 // Set stores the bounding box associated with the given server ID.
-func (s *BoundingBoxStore) Set(serverID int, bbox BoundingBox) {
+func (s *BoundingBoxStore) Set(agencyID string, bbox BoundingBox) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.store[serverID] = bbox
+	s.store[agencyID] = bbox
 }
 
 // Get retrieves the bounding box associated with the given server ID.
 //
 // The second return value indicates whether a bounding box was found.
-func (s *BoundingBoxStore) Get(serverID int) (BoundingBox, bool) {
+func (s *BoundingBoxStore) Get(agencyID string) (BoundingBox, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	bbox, ok := s.store[serverID]
+	bbox, ok := s.store[agencyID]
 	return bbox, ok
 }
 
 // IsInBoundingBox checks whether the given lat/lon is within the
 // bounding box associated with the specified server ID.
-func (s *BoundingBoxStore) IsInBoundingBox(serverID int, lat, lon float64) bool {
-	bbox, ok := s.Get(serverID)
+func (s *BoundingBoxStore) IsInBoundingBox(agencyID string, lat, lon float64) bool {
+	bbox, ok := s.Get(agencyID)
 	if !ok {
 		return false
 	}
