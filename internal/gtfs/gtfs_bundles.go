@@ -6,8 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
-	"strconv"
 	"sync"
 	"time"
 
@@ -51,31 +49,29 @@ func downloadGTFSBundles(ctx context.Context, servers []models.ObaServer, logger
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-
-			staticBundle, err := downloadGTFSBundle(ctx, s.GtfsUrl, s.ID, maxRetries)
-			if err != nil {
+			bundles := make([]*remoteGtfs.Static, 0, len(s.GtfsURLs))
+			for _, gtfsURL := range s.GtfsURLs {
+				staticBundle, err := downloadGTFSBundle(ctx, gtfsURL, s.AgencyID, maxRetries)
+				if err == nil {
+					bundles = append(bundles, staticBundle)
+					continue
+				}
 				report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-					Tags: utils.MakeMap("server_id", fmt.Sprintf("%d", server.ID)),
+					Tags: utils.MakeMap("agency_id", s.AgencyID),
 					ExtraContext: map[string]interface{}{
-						"gtfs_url": s.GtfsUrl,
+						"gtfs_url": gtfsURL,
 					},
 					Level: sentry.LevelError,
 				})
-				logger.Error("Failed to download GTFS bundle", "server_id", s.ID, "error", err)
+				logger.Error("Failed to download GTFS bundle", "agency_id", s.AgencyID, "error", err)
 				return
 			}
-			logger.Info("Successfully downloaded GTFS bundle", "server_id", s.ID)
-
-			err = storeGTFSBundle(staticBundle, s.ID, staticStore, boundingBoxStore)
-			if err != nil {
+			if err := storeGTFSBundles(bundles, s.AgencyID, staticStore, boundingBoxStore); err != nil {
 				report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-					Tags: utils.MakeMap("server_id", fmt.Sprintf("%d", s.ID)),
-					ExtraContext: map[string]interface{}{
-						"gtfs_url": s.GtfsUrl,
-					},
+					Tags:  utils.MakeMap("agency_id", s.AgencyID),
 					Level: sentry.LevelError,
 				})
-				logger.Error("Failed to store GTFS bundle", "server_id", s.ID, "error", err)
+				logger.Error("Failed to store GTFS bundles", "agency_id", s.AgencyID, "error", err)
 			}
 		}()
 	}
@@ -137,15 +133,16 @@ func refreshGTFSBundles(ctx context.Context, servers []models.ObaServer, logger 
 //   - gtfs static data
 //   - error: Describes what went wrong, or nil if the operation was successful.
 
-func downloadGTFSBundle(ctx context.Context, url string, serverID int, maxRetries int) (*remoteGtfs.Static, error) {
+func downloadGTFSBundle(ctx context.Context, url, agencyID string, maxRetries int) (*remoteGtfs.Static, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
+	sanitizedURL := utils.SanitizeServerURL(url)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		err = fmt.Errorf("failed to create request for %s: %w", url, err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(serverID)),
+			Tags: utils.MakeMap("agency_id", agencyID),
 			ExtraContext: map[string]interface{}{
-				"url": url,
+				"url": sanitizedURL,
 			},
 		})
 		return nil, err
@@ -156,9 +153,9 @@ func downloadGTFSBundle(ctx context.Context, url string, serverID int, maxRetrie
 	if err != nil {
 		err = fmt.Errorf("failed to make GET request to %s: %w", url, err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(serverID)),
+			Tags: utils.MakeMap("agency_id", agencyID),
 			ExtraContext: map[string]interface{}{
-				"url": url,
+				"url": sanitizedURL,
 			},
 		})
 		return nil, err
@@ -168,9 +165,9 @@ func downloadGTFSBundle(ctx context.Context, url string, serverID int, maxRetrie
 	if resp.StatusCode != http.StatusOK {
 		err = fmt.Errorf("unexpected response status %d when downloading GTFS bundle from %s", resp.StatusCode, url)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(serverID)),
+			Tags: utils.MakeMap("agency_id", agencyID),
 			ExtraContext: map[string]interface{}{
-				"url":    url,
+				"url":    sanitizedURL,
 				"status": resp.Status,
 			},
 		})
@@ -188,9 +185,9 @@ func downloadGTFSBundle(ctx context.Context, url string, serverID int, maxRetrie
 	if err != nil {
 		err = fmt.Errorf("failed to parse GTFS static data from %s: %w", url, err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(serverID)),
+			Tags: utils.MakeMap("agency_id", agencyID),
 			ExtraContext: map[string]interface{}{
-				"url": url,
+				"url": sanitizedURL,
 			},
 		})
 		return nil, err
@@ -199,52 +196,71 @@ func downloadGTFSBundle(ctx context.Context, url string, serverID int, maxRetrie
 
 }
 
-// storeGTFSBundle stores a parsed GTFS static bundle in memory and computes its bounding box.
+// storeGTFSBundles merges parsed GTFS static bundles and stores the combined
+// result in memory, computing a bounding box over all stops.
 //
 // The function performs the following:
-//   1. Wraps the GTFS static bundle into a StaticData object, keeping only the relevant parts
-//      needed by the application to avoid storing the full bundle in memory.
-//   2. Stores the StaticData in the StaticStore, keyed by serverID.
-//   3. Computes the bounding box from the stops in the GTFS data.
-//   4. Stores the bounding box in the BoundingBoxStore, also keyed by serverID.
+//   1. Wraps each GTFS static bundle into a StaticData object, keeping only the
+//      relevant parts needed by the application to avoid storing the full
+//      bundle in memory.
+//   2. Merges stops and agencies across bundles, deduplicating by stop/agency ID,
+//      and appends all service entries.
+//   3. Computes the bounding box from all merged stops.
+//   4. Stores the merged StaticData, fetch time, and bounding box in the stores,
+//      keyed by agency ID.
 //
 // Parameters:
-//   - staticBundle: The parsed GTFS static bundle containing routes, stops, and other transit data.
-//   - serverID: The identifier used to store and retrieve data for a specific server.
-//   - staticStore: The in-memory store holding GTFS static data indexed by server ID.
+//   - staticBundles: The parsed GTFS static bundles to merge.
+//   - agencyID: The identifier used to store and retrieve data for a specific agency.
+//   - staticStore: The in-memory store holding GTFS static data indexed by agency ID.
 //   - boundingBoxStore: The in-memory store holding computed bounding boxes for GTFS data.
 //
 // Returns:
 //   - error: If computing the bounding box fails, an error is returned. Otherwise, nil.
 
-func storeGTFSBundle(staticBundle *remoteGtfs.Static, serverID int, staticStore *StaticStore, boundingBoxStore *geo.BoundingBoxStore) error {
-	// StaticData is a wrapper around the GTFS static bundle
-	// that includes only the parts we use in the application.
-	// So we do not keep the whole GTFS static bundle in memory,
-	// but only the parts we need.
-	staticData := models.NewStaticData(staticBundle)
-	staticBundle = nil // drop reference, GC can collect earlier
-	staticStore.Set(serverID, staticData)
-	staticStore.SetFetchTime(serverID, time.Now().UTC())
-	// compute bounding box for each downloaded GTFS bundle
+func storeGTFSBundles(staticBundles []*remoteGtfs.Static, agencyID string, staticStore *StaticStore, boundingBoxStore *geo.BoundingBoxStore) error {
+	staticData := &models.StaticData{}
+	stops := make(map[string]struct{})
+	agencies := make(map[string]struct{})
+	for _, staticBundle := range staticBundles {
+		data := models.NewStaticData(staticBundle)
+		for _, stop := range data.Stops {
+			if _, exists := stops[stop.Id]; !exists {
+				staticData.Stops = append(staticData.Stops, stop)
+				stops[stop.Id] = struct{}{}
+			}
+		}
+		for _, agency := range data.Agencies {
+			if _, exists := agencies[agency.Id]; !exists {
+				staticData.Agencies = append(staticData.Agencies, agency)
+				agencies[agency.Id] = struct{}{}
+			}
+		}
+		staticData.Services = append(staticData.Services, data.Services...)
+	}
 	bbox, err := geo.ComputeBoundingBox(staticData.Stops)
 	if err != nil {
-		return fmt.Errorf("could not compute bounding box for server_id %d: %v", serverID, err)
+		return fmt.Errorf("could not compute bounding box for agency_id %s: %w", agencyID, err)
 	}
-	// one bounding box per server
-	boundingBoxStore.Set(serverID, bbox)
+	staticStore.Set(agencyID, staticData)
+	staticStore.SetFetchTime(agencyID, time.Now().UTC())
+	boundingBoxStore.Set(agencyID, bbox)
 	return nil
+}
+
+func storeGTFSBundle(staticBundle *remoteGtfs.Static, agencyID string, staticStore *StaticStore, boundingBoxStore *geo.BoundingBoxStore) error {
+	return storeGTFSBundles([]*remoteGtfs.Static{staticBundle}, agencyID, staticStore, boundingBoxStore)
 }
 
 // getStopLocationsByIDs retrieves stop locations by their IDs from the GTFS cache.
 // It returns a map of stop IDs to gtfs.Stop objects.
 
-func getStopLocationsByIDs(serverID int, stopIDs []string, staticStore *StaticStore) (map[string]remoteGtfs.Stop, error) {
-	staticData, ok := staticStore.Get(serverID)
+func getStopLocationsByIDs(agencyID string, stopIDs []string, staticStore *StaticStore) (map[string]remoteGtfs.Stop, error) {
+	staticData, ok := staticStore.Get(agencyID)
 	if !ok || staticData == nil {
-		err := fmt.Errorf("no GTFS static data found for server ID %d", serverID)
+		err := fmt.Errorf("no GTFS static data found for agency ID %s", agencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(serverID)),
+			Tags: utils.MakeMap("agency_id", agencyID),
 		})
 		return nil, err
 	}
@@ -272,55 +288,84 @@ func getStopLocationsByIDs(serverID int, stopIDs []string, staticStore *StaticSt
 // making it safe for concurrent access across goroutines.
 
 func fetchAndStoreGTFSRTFeed(server models.ObaServer, realtimeStore *RealtimeStore, client *http.Client) error {
-	parsedURL, err := url.Parse(server.VehiclePositionUrl)
-	if err != nil {
-		err = fmt.Errorf("failed to parse GTFS-RT URL: %v", err)
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
-			ExtraContext: map[string]interface{}{
-				"vehicle_position_url": server.VehiclePositionUrl,
-			},
-		})
-		return err
+	merged := &models.RealtimeData{}
+	vehicleIDs := make(map[string]struct{})
+	for _, feed := range server.GtfsRTFeeds {
+		sanitizedURL := utils.SanitizeServerURL(feed.VehiclePositionURL)
+		req, err := http.NewRequest(http.MethodGet, feed.VehiclePositionURL, nil)
+		if err != nil {
+			err = fmt.Errorf("create GTFS-RT request: %w", err)
+			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+				Tags: utils.MakeMap("agency_id", server.AgencyID),
+				ExtraContext: map[string]interface{}{
+					"vehicle_position_url": sanitizedURL,
+				},
+			})
+			return err
+		}
+		if feed.GtfsRTAPIKey != "" {
+			req.Header.Set(feed.GtfsRTAPIKey, feed.GtfsRTAPIValue)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			err = fmt.Errorf("fetch GTFS-RT feed %s: %w", feed.VehiclePositionURL, err)
+			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+				Tags: utils.MakeMap("agency_id", server.AgencyID),
+				ExtraContext: map[string]interface{}{
+					"vehicle_position_url": sanitizedURL,
+				},
+			})
+			return err
+		}
+		data, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			err = fmt.Errorf("read GTFS-RT feed %s: %w", feed.VehiclePositionURL, readErr)
+			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+				Tags: utils.MakeMap("agency_id", server.AgencyID),
+				ExtraContext: map[string]interface{}{
+					"vehicle_position_url": sanitizedURL,
+				},
+			})
+			return err
+		}
+		if resp.StatusCode != http.StatusOK {
+			err = fmt.Errorf("GTFS-RT feed %s returned %s", feed.VehiclePositionURL, resp.Status)
+			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+				Tags: utils.MakeMap("agency_id", server.AgencyID),
+				ExtraContext: map[string]interface{}{
+					"vehicle_position_url": sanitizedURL,
+					"status":               resp.Status,
+				},
+			})
+			return err
+		}
+		parsed, err := remoteGtfs.ParseRealtime(data, &remoteGtfs.ParseRealtimeOptions{})
+		if err != nil {
+			err = fmt.Errorf("parse GTFS-RT feed %s: %w", feed.VehiclePositionURL, err)
+			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+				Tags: utils.MakeMap("agency_id", server.AgencyID),
+				ExtraContext: map[string]interface{}{
+					"vehicle_position_url": sanitizedURL,
+				},
+			})
+			return err
+		}
+		for _, vehicle := range parsed.Vehicles {
+			id := ""
+			if vehicle.ID != nil {
+				id = vehicle.ID.ID
+			}
+			if id != "" {
+				if _, exists := vehicleIDs[id]; exists {
+					continue
+				}
+				vehicleIDs[id] = struct{}{}
+			}
+			merged.Vehicles = append(merged.Vehicles, vehicle)
+		}
 	}
-
-	req, err := http.NewRequest("GET", parsedURL.String(), nil)
-	if err != nil {
-		report.ReportError(err)
-		return err
-	}
-
-	if server.GtfsRtApiKey != "" && server.GtfsRtApiValue != "" {
-		req.Header.Set(server.GtfsRtApiKey, server.GtfsRtApiValue)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		err = fmt.Errorf("failed to fetch GTFS-RT feed: %v", err)
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_id", strconv.Itoa(server.ID)),
-			ExtraContext: map[string]interface{}{
-				"vehicle_position_url": server.VehiclePositionUrl,
-			},
-		})
-		return err
-	}
-	defer resp.Body.Close()
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		report.ReportError(err)
-		return err
-	}
-
-	gtfsRT, err := remoteGtfs.ParseRealtime(data, &remoteGtfs.ParseRealtimeOptions{})
-	if err != nil {
-		report.ReportError(err)
-		return err
-	}
-	realtimeData := models.NewRealtimeData(gtfsRT)
-	gtfsRT = nil // drop reference, GC can collect earlier
-	realtimeStore.Set(realtimeData)
+	realtimeStore.Set(server.AgencyID, merged)
 	return nil
 }
 

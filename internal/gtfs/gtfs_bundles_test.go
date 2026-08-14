@@ -17,7 +17,7 @@ import (
 
 func TestDownloadGTFSBundles(t *testing.T) {
 	servers := []models.ObaServer{
-		{ID: 1, GtfsUrl: "https://example.com/gtfs.zip"},
+		{AgencyID: "agency-1", GtfsURLs: []string{"https://example.com/gtfs.zip"}},
 	}
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -32,7 +32,7 @@ func TestRefreshGTFSBundles(t *testing.T) {
 	var logBuffer bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-	servers := []models.ObaServer{{ID: 1, Name: "Test Server", GtfsUrl: "http://example.com/gtfs.zip"}}
+	servers := []models.ObaServer{{AgencyID: "agency-1", Name: "Test Server", GtfsURLs: []string{"http://example.com/gtfs.zip"}}}
 	boundingBoxStore := geo.NewBoundingBoxStore()
 	staticStore := NewStaticStore()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -46,10 +46,10 @@ func TestRefreshGTFSBundles(t *testing.T) {
 
 func TestDownloadGTFSBundle(t *testing.T) {
 	mockServer := setupGtfsServer(t, "gtfs.zip")
-	serverID := 1
+	agencyID := "agency-1"
 	ctx := context.Background()
 	t.Run("Success Response", func(t *testing.T) {
-		staticBundle, err := downloadGTFSBundle(ctx, mockServer.URL, serverID, 1)
+		staticBundle, err := downloadGTFSBundle(ctx, mockServer.URL, agencyID, 1)
 		if err != nil {
 			t.Fatalf("DownloadGTFSBundle failed: %v", err)
 		}
@@ -100,7 +100,7 @@ func TestDownloadGTFSBundle(t *testing.T) {
 
 	t.Run("Invalid URL", func(t *testing.T) {
 		invalidURL := "http://invalid-url"
-		_, err := downloadGTFSBundle(ctx, invalidURL, 2, 1)
+		_, err := downloadGTFSBundle(ctx, invalidURL, "agency-2", 1)
 		if err == nil {
 			t.Errorf("Expected error for invalid URL, got none")
 		}
@@ -163,7 +163,7 @@ func TestAgencyParsing(t *testing.T) {
 }
 
 func TestStopsParsing(t *testing.T) {
-	server := models.ObaServer{ID: 1, Name: "test"}
+	server := models.ObaServer{AgencyID: "agency-1", Name: "test"}
 
 	data := readFixture(t, "gtfs.zip")
 	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
@@ -172,7 +172,7 @@ func TestStopsParsing(t *testing.T) {
 	}
 	staticData := models.NewStaticData(staticBundle)
 	staticStore := NewStaticStore()
-	staticStore.Set(server.ID, staticData)
+	staticStore.Set(server.AgencyID, staticData)
 	stopIDs := []string{"11060", "1108"} // Make sure these exist in your test GTFS
 	stopsData := map[string]struct {
 		stopName string
@@ -183,7 +183,7 @@ func TestStopsParsing(t *testing.T) {
 		"1108":  {stopName: "Westlake", lat: 47.611450, long: -122.337532},
 	}
 
-	stops, err := getStopLocationsByIDs(server.ID, stopIDs, staticStore)
+	stops, err := getStopLocationsByIDs(server.AgencyID, stopIDs, staticStore)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestStopsParsing(t *testing.T) {
 }
 
 func TestStoreGTFSBundleRecordsFetchTime(t *testing.T) {
-	server := models.ObaServer{ID: 1, Name: "test"}
+	server := models.ObaServer{AgencyID: "agency-1", Name: "test"}
 	data := readFixture(t, "gtfs.zip")
 	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
 	if err != nil {
@@ -227,12 +227,12 @@ func TestStoreGTFSBundleRecordsFetchTime(t *testing.T) {
 	staticStore := NewStaticStore()
 	boundingBoxStore := geo.NewBoundingBoxStore()
 
-	err = storeGTFSBundle(staticBundle, server.ID, staticStore, boundingBoxStore)
+	err = storeGTFSBundle(staticBundle, server.AgencyID, staticStore, boundingBoxStore)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	fetchTime, ok := staticStore.GetFetchTime(server.ID)
+	fetchTime, ok := staticStore.GetFetchTime(server.AgencyID)
 	if !ok {
 		t.Fatal("expected a fetch time to be recorded after storing the bundle")
 	}
@@ -242,7 +242,7 @@ func TestStoreGTFSBundleRecordsFetchTime(t *testing.T) {
 }
 
 func TestGetEarliestAndLatestServiceDates(t *testing.T) {
-	server := models.ObaServer{ID: 1, Name: "test"}
+	server := models.ObaServer{AgencyID: "agency-1", Name: "test"}
 	data := readFixture(t, "gtfs.zip")
 	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
 	if err != nil {
@@ -250,7 +250,7 @@ func TestGetEarliestAndLatestServiceDates(t *testing.T) {
 	}
 	staticData := models.NewStaticData(staticBundle)
 	staticStore := NewStaticStore()
-	staticStore.Set(server.ID, staticData)
+	staticStore.Set(server.AgencyID, staticData)
 	loc, _ := time.LoadLocation("America/Los_Angeles")
 	// make sure these already exist in the test data
 	expectedEarliestEndDate := time.Date(2024, 11, 22, 0, 0, 0, 0, loc)
@@ -269,7 +269,7 @@ func TestGetEarliestAndLatestServiceDates(t *testing.T) {
 }
 
 func TestGetStopLocationsByIDs(t *testing.T) {
-	server := models.ObaServer{ID: 1, Name: "test"}
+	server := models.ObaServer{AgencyID: "agency-1", Name: "test"}
 
 	data := readFixture(t, "gtfs.zip")
 	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
@@ -278,11 +278,11 @@ func TestGetStopLocationsByIDs(t *testing.T) {
 	}
 	staticData := models.NewStaticData(staticBundle)
 	staticStore := NewStaticStore()
-	staticStore.Set(server.ID, staticData)
+	staticStore.Set(server.AgencyID, staticData)
 
 	t.Run("Valid stops IDs", func(t *testing.T) {
 		stopIDs := []string{"11060", "1108"} // Make sure these exist in your test GTFS
-		stops, err := getStopLocationsByIDs(server.ID, stopIDs, staticStore)
+		stops, err := getStopLocationsByIDs(server.AgencyID, stopIDs, staticStore)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -293,7 +293,7 @@ func TestGetStopLocationsByIDs(t *testing.T) {
 
 	t.Run("Invalid stop IDs", func(t *testing.T) {
 		stopIDs := []string{"nonexistent1", "nonexistent2"}
-		stops, err := getStopLocationsByIDs(server.ID, stopIDs, staticStore)
+		stops, err := getStopLocationsByIDs(server.AgencyID, stopIDs, staticStore)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -309,10 +309,11 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 		defer mockServer.Close()
 
 		server := models.ObaServer{
-			ID:                 1,
-			VehiclePositionUrl: mockServer.URL,
-			GtfsRtApiKey:       "X-Test-Header",
-			GtfsRtApiValue:     "test-value",
+			AgencyID: "agency-1",
+			GtfsRTFeeds: []models.GtfsRTFeed{
+				{VehiclePositionURL: mockServer.URL, GtfsRTAPIKey: "X-Test-Header", GtfsRTAPIValue: "test-value"},
+				{VehiclePositionURL: mockServer.URL},
+			},
 		}
 
 		client := &http.Client{
@@ -323,7 +324,7 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Expected no error, got: %v", err)
 		}
-		if realtimeStore.Get() == nil {
+		if realtimeStore.Get(server.AgencyID) == nil {
 			t.Fatalf("Expected realtimeStore to contain parsed GTFS-RT data, but it is nil")
 		}
 
@@ -333,7 +334,7 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 			t.Fatalf("Failed to parse GTFS-RT data: %v", err)
 		}
 		expectedRtData := models.NewRealtimeData(gtfsRT)
-		realtimeData := realtimeStore.Get()
+		realtimeData := realtimeStore.Get(server.AgencyID)
 		if realtimeData == nil {
 			t.Fatal("realtimeData is nil; expected non-nil GTFS-RT data")
 		}
@@ -372,8 +373,8 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 
 	t.Run("Failure Case - Invalid URL", func(t *testing.T) {
 		server := models.ObaServer{
-			ID:                 2,
-			VehiclePositionUrl: "://invalid-url",
+			AgencyID:    "agency-2",
+			GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: "://invalid-url"}},
 		}
 		client := &http.Client{
 			Timeout: 5 * time.Second,
@@ -391,8 +392,8 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 		mockServer.Close()
 
 		server := models.ObaServer{
-			ID:                 3,
-			VehiclePositionUrl: mockServer.URL,
+			AgencyID:    "agency-3",
+			GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: mockServer.URL}},
 		}
 		client := &http.Client{
 			Timeout: 5 * time.Second,
@@ -403,4 +404,28 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 			t.Error("Expected error when accessing closed server, got nil")
 		}
 	})
+}
+
+func TestFetchAndStoreGTFSRTFeedKeepsAgenciesIsolated(t *testing.T) {
+	mockServer := setupGtfsServer(t, "gtfs_rt_feed_vehicles.pb")
+	defer mockServer.Close()
+
+	store := NewRealtimeStore()
+	client := &http.Client{Timeout: 5 * time.Second}
+	first := models.ObaServer{AgencyID: "agency-1", GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: mockServer.URL}}}
+	second := models.ObaServer{AgencyID: "agency-2", GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: mockServer.URL}}}
+
+	if err := fetchAndStoreGTFSRTFeed(first, store, client); err != nil {
+		t.Fatalf("fetch first agency feed: %v", err)
+	}
+	firstData := store.Get(first.AgencyID)
+	if err := fetchAndStoreGTFSRTFeed(second, store, client); err != nil {
+		t.Fatalf("fetch second agency feed: %v", err)
+	}
+	if firstData == nil || store.Get(second.AgencyID) == nil {
+		t.Fatal("expected realtime data for both agencies")
+	}
+	if store.Get(first.AgencyID) != firstData {
+		t.Fatal("second agency fetch replaced the first agency's realtime data")
+	}
 }

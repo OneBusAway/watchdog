@@ -39,12 +39,12 @@ func (gs *GtfsService) DownloadGTFSBundles(ctx context.Context, servers []models
 // but this public method can be used to download a single GTFS bundle.
 // It parses the GTFS data and stores it in the StaticStore using the serverID as the key.
 // It returns an error if the download or parsing fails.
-func (gs *GtfsService) DownloadGTFSBundle(ctx context.Context, url string, serverID int, maxRetires int) (*remoteGtfs.Static, error) {
-	return downloadGTFSBundle(ctx, url, serverID, maxRetires)
+func (gs *GtfsService) DownloadGTFSBundle(ctx context.Context, url, agencyID string, maxRetires int) (*remoteGtfs.Static, error) {
+	return downloadGTFSBundle(ctx, url, agencyID, maxRetires)
 }
 
-func (gs *GtfsService) StoreGTFSBundle(staticBundle *remoteGtfs.Static, serverID int) error {
-	return storeGTFSBundle(staticBundle, serverID, gs.StaticStore, gs.BoundingBoxStore)
+func (gs *GtfsService) StoreGTFSBundle(staticBundle *remoteGtfs.Static, agencyID string) error {
+	return storeGTFSBundle(staticBundle, agencyID, gs.StaticStore, gs.BoundingBoxStore)
 }
 
 func (gs *GtfsService) RefreshGTFSBundles(ctx context.Context, servers []models.ObaServer, interval time.Duration, maxRetries int) {
@@ -64,6 +64,6 @@ func GetEarliestAndLatestServiceDates(staticData *models.StaticData) (earliest, 
 	return earliestTime, latestTime, nil
 }
 
-func GetStopLocationsByIDs(serverID int, stopIDs []string, staticStore *StaticStore) (map[string]remoteGtfs.Stop, error) {
-	return getStopLocationsByIDs(serverID, stopIDs, staticStore)
+func GetStopLocationsByIDs(agencyID string, stopIDs []string, staticStore *StaticStore) (map[string]remoteGtfs.Stop, error) {
+	return getStopLocationsByIDs(agencyID, stopIDs, staticStore)
 }
