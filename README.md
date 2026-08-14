@@ -27,15 +27,17 @@ Watchdog requires a configuration file (`config.json`) before running. Even plac
 [
   {
     "name": "Test Server 1",
-    "id": 1,
+    "agency_id": "agency-1",
     "oba_base_url": "https://test1.example.com",
     "oba_api_key": "test-key-1",
-    "gtfs_url": "https://gtfs1.example.com",
-    "trip_update_url": "https://trip1.example.com",
-    "vehicle_position_url": "https://vehicle1.example.com",
-    "gtfs_rt_api_key": "api-key-1",
-    "gtfs_rt_api_value": "api-value-1",
-    "agency_id": "agency-1"
+    "gtfs_urls": ["https://gtfs1.example.com"],
+    "gtfs_rt_feeds": [{
+      "trip_update_url": "https://trip1.example.com",
+      "vehicle_position_url": "https://vehicle1.example.com",
+      "gtfs_rt_api_key": "api-key-1",
+      "gtfs_rt_api_value": "api-value-1",
+      "agency_ids": ["agency-1"]
+    }]
   }
 ]
 ```
