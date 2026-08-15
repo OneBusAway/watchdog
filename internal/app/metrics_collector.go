@@ -59,7 +59,8 @@ func (app *Application) StartMetricsCollection(ctx context.Context) {
 //  1. Pings the server to track basic availability.
 //  2. Checks GTFS static bundle expiration.
 //  3. Verifies agency coverage match (GTFS static vs real-time).
-//  4. Collects metrics from the OBA API endpoints.
+//  4. Collects metrics from the OBA API endpoints, including the live
+//     active vehicle count from the VehiclesForAgency API.
 //  5. Fetches and stores GTFS-RT (realtime) vehicle positions feed.
 //  6. Validates consistency between expected and actual vehicle counts.
 //  7. Tracks frequency of vehicle telemetry reporting over time.
@@ -182,6 +183,18 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 			Level: sentry.LevelError,
 		})
 	}
+
+	err = app.MetricsService.CountActiveVehiclesForAgency(server)
+	if err != nil {
+		app.Logger.Error("Failed to count vehicles from VehiclesForAgency API", "error", err)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: map[string]string{
+				"agency_id": server.AgencyID,
+			},
+			Level: sentry.LevelError,
+		})
+	}
+
 	// Fetch and store GTFS-RT feed
 	// Note : All functions after FetchAndStoreGTFSRTFeed depend on this function
 	// on failure of this function we return and don't proceed
@@ -201,17 +214,6 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 	err = app.MetricsService.CountVehiclePositions(server)
 	if err != nil {
 		app.Logger.Error("Failed to count vehicle positions from GTFS-RT", "error", err)
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{
-				"agency_id": server.AgencyID,
-			},
-			Level: sentry.LevelError,
-		})
-	}
-
-	err = app.MetricsService.CountActiveVehiclesForAgency(server)
-	if err != nil {
-		app.Logger.Error("Failed to count vehicles from VehiclesForAgency API", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"agency_id": server.AgencyID,
