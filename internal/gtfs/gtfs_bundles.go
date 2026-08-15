@@ -236,6 +236,13 @@ func storeGTFSBundles(staticBundles []*remoteGtfs.Static, agencyID string, stati
 				agencies[agency.Id] = struct{}{}
 			}
 		}
+		// Services are appended without deduplication, unlike stops and agencies above.
+		// Stops and agencies are keyed and addressed individually by ID later, so
+		// duplicates would cause collisions and must be collapsed (first occurrence wins).
+		// Service entries, by contrast, are only ever collapsed into aggregate ranges
+		// (e.g. earliest/latest service dates for bundle-expiration checks), so
+		// duplicates are a no-op — and deduplicating by service ID could actually drop a
+		// legitimately different date range from another feed of the same agency.
 		staticData.Services = append(staticData.Services, data.Services...)
 	}
 	bbox, err := geo.ComputeBoundingBox(staticData.Stops)
