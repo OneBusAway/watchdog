@@ -62,7 +62,7 @@ func (app *Application) StartMetricsCollection(ctx context.Context) {
 //  4. Collects metrics from the OBA API endpoints, including the live
 //     active vehicle count from the VehiclesForAgency API.
 //  5. Fetches and stores GTFS-RT (realtime) vehicle positions feed.
-//  6. Validates consistency between expected and actual vehicle counts.
+//  6. Counts vehicle positions from the GTFS-RT feed.
 //  7. Tracks frequency of vehicle telemetry reporting over time.
 //  8. Flags invalid vehicles and vehicles stopped outside bounds.
 //

@@ -104,7 +104,7 @@ func countActiveVehiclesForAgency(server models.ObaServer) (int, error) {
 //     - Compares the computed speed with the reported speed (if available) and reports the relative discrepancy
 //     (`gtfs_rt_vehicle_speed_discrepancy_ratio`).
 //
-// All metrics are labeled by `vehicle_id`, `server_id`, and `agency_id` to support detailed monitoring and alerting.
+// All metrics are labeled by `vehicle_id` and `agency_id` to support detailed monitoring and alerting.
 //
 // The function maintains a local in-memory store (`vehicleLastSeen`) to cache the last known location and timestamp
 // for each vehicle per server.
