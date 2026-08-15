@@ -121,8 +121,8 @@
             "type": "prometheus"
           },
           "editorMode": "code",
-          "expr": "oba_api_status{server_id=~\"$server_id\"}",
-          "legendFormat": "Server {{server_id}}",
+          "expr": "oba_api_status{agency_id=~\"$agency_id\"}",
+          "legendFormat": "{{agency_id}} · {{server_url}}",
           "range": true,
           "refId": "A"
         }
@@ -181,14 +181,14 @@
       "id": 201,
       "targets": [
         {
-          "expr": "gtfs_bundle_days_until_earliest_expiration{server_id=~\"$server_id\"}",
+          "expr": "gtfs_bundle_days_until_earliest_expiration{agency_id=~\"$agency_id\"}",
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
           }
         },
         {
-          "expr": "gtfs_bundle_days_until_latest_expiration{server_id=~\"$server_id\"}",
+          "expr": "gtfs_bundle_days_until_latest_expiration{agency_id=~\"$agency_id\"}",
           "refId": "B",
           "datasource": {
             "name": "Prometheus"
@@ -212,21 +212,21 @@
       "id": 202,
       "targets": [
         {
-          "expr": "oba_agencies_in_static_gtfs{server_id=~\"$server_id\"}",
+          "expr": "oba_agencies_in_static_gtfs{agency_id=~\"$agency_id\"}",
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
           }
         },
         {
-          "expr": "oba_agencies_in_coverage_endpoint{server_id=~\"$server_id\"}",
+          "expr": "oba_agencies_in_coverage_endpoint{agency_id=~\"$agency_id\"}",
           "refId": "B",
           "datasource": {
             "name": "Prometheus"
           }
         },
         {
-          "expr": "oba_agencies_match{server_id=~\"$server_id\"}",
+          "expr": "oba_agencies_match{agency_id=~\"$agency_id\"}",
           "refId": "C",
           "datasource": {
             "name": "Prometheus"
@@ -263,21 +263,21 @@
       "id": 301,
       "targets": [
         {
-          "expr": "realtime_vehicle_positions_count_gtfs_rt{server_id=~\"$server_id\"}",
+          "expr": "realtime_vehicle_positions_count_gtfs_rt{agency_id=~\"$agency_id\"}",
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
           }
         },
         {
-          "expr": "oba_agency_active_vehicles_count{server_id=~\"$server_id\", agency_id=~\"$agency_id\"}",
+          "expr": "oba_agency_active_vehicles_count{agency_id=~\"$agency_id\"}",
           "refId": "B",
           "datasource": {
             "name": "Prometheus"
           }
         },
         {
-          "expr": "gtfs_rt_tracked_vehicles_count{server_id=~\"$server_id\"}",
+          "expr": "gtfs_rt_tracked_vehicles_count{agency_id=~\"$agency_id\"}",
           "refId": "C",
           "datasource": {
             "name": "Prometheus"
@@ -301,14 +301,14 @@
       "id": 302,
       "targets": [
         {
-          "expr": "vehicle_position_report_interval_seconds{server_id=~\"$server_id\"}",
+          "expr": "vehicle_position_report_interval_seconds{agency_id=~\"$agency_id\"}",
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
           }
         },
         {
-          "expr": "oba_time_since_last_update_seconds{server=~\"$server_id\", agency=~\"$agency_id\"}",
+          "expr": "oba_time_since_last_update_seconds{agency_id=~\"$agency_id\"}",
           "refId": "B",
           "datasource": {
             "name": "Prometheus"
@@ -332,7 +332,7 @@
       "id": 303,
       "targets": [
         {
-          "expr": "vehicle_report_total{server_id=~\"$server_id\"}",
+          "expr": "vehicle_report_total{agency_id=~\"$agency_id\"}",
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
@@ -369,28 +369,28 @@
       "id": 401,
       "targets": [
         {
-          "expr": "oba_realtime_records_count{server=~\"$server_id\", agency=~\"$agency_id\"}",
+          "expr": "oba_realtime_records_count{agency_id=~\"$agency_id\"}",
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
           }
         },
         {
-          "expr": "oba_realtime_trips_matched_count{server=~\"$server_id\", agency=~\"$agency_id\"}",
+          "expr": "oba_realtime_trips_matched_count{agency_id=~\"$agency_id\"}",
           "refId": "B",
           "datasource": {
             "name": "Prometheus"
           }
         },
         {
-          "expr": "oba_realtime_trips_unmatched_count{server=~\"$server_id\", agency=~\"$agency_id\"}",
+          "expr": "oba_realtime_trips_unmatched_count{agency_id=~\"$agency_id\"}",
           "refId": "C",
           "datasource": {
             "name": "Prometheus"
           }
         },
         {
-          "expr": "oba_realtime_trip_match_ratio{server=~\"$server_id\", agency=~\"$agency_id\"}",
+          "expr": "oba_realtime_trip_match_ratio{agency_id=~\"$agency_id\"}",
           "refId": "D",
           "datasource": {
             "name": "Prometheus"
@@ -414,21 +414,21 @@
       "id": 402,
       "targets": [
         {
-          "expr": "oba_stops_matched_count{server=~\"$server_id\", agency=~\"$agency_id\"}",
+          "expr": "oba_stops_matched_count{agency_id=~\"$agency_id\"}",
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
           }
         },
         {
-          "expr": "oba_stops_unmatched_count{server=~\"$server_id\", agency=~\"$agency_id\"}",
+          "expr": "oba_stops_unmatched_count{agency_id=~\"$agency_id\"}",
           "refId": "B",
           "datasource": {
             "name": "Prometheus"
           }
         },
         {
-          "expr": "oba_stop_match_ratio{server=~\"$server_id\", agency=~\"$agency_id\"}",
+          "expr": "oba_stop_match_ratio{agency_id=~\"$agency_id\"}",
           "refId": "C",
           "datasource": {
             "name": "Prometheus"
@@ -452,14 +452,14 @@
       "id": 403,
       "targets": [
         {
-          "expr": "oba_agencies_with_coverage_count{server=~\"$server_id\"}",
+          "expr": "oba_agencies_with_coverage_count{agency_id=~\"$agency_id\"}",
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
           }
         },
         {
-          "expr": "oba_scheduled_trips_count{server=~\"$server_id\", agency=~\"$agency_id\"}",
+          "expr": "oba_scheduled_trips_count{agency_id=~\"$agency_id\"}",
           "refId": "B",
           "datasource": {
             "name": "Prometheus"
@@ -496,14 +496,14 @@
       "id": 501,
       "targets": [
         {
-          "expr": "gtfs_rt_vehicle_computed_speed{server_id=~\"$server_id\", agency_id=~\"$agency_id\"}",
+          "expr": "gtfs_rt_vehicle_computed_speed{agency_id=~\"$agency_id\"}",
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
           }
         },
         {
-          "expr": "gtfs_rt_vehicle_speed_discrepancy_ratio{server_id=~\"$server_id\", agency_id=~\"$agency_id\"}",
+          "expr": "gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id=~\"$agency_id\"}",
           "refId": "B",
           "datasource": {
             "name": "Prometheus"
@@ -527,14 +527,14 @@
       "id": 502,
       "targets": [
         {
-          "expr": "gtfs_rt_invalid_vehicle_coordinates{server_id=~\"$server_id\"}",
+          "expr": "gtfs_rt_invalid_vehicle_coordinates{agency_id=~\"$agency_id\"}",
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
           }
         },
         {
-          "expr": "gtfs_rt_stopped_out_of_bounds_vehicles{server_id=~\"$server_id\"}",
+          "expr": "gtfs_rt_stopped_out_of_bounds_vehicles{agency_id=~\"$agency_id\"}",
           "refId": "B",
           "datasource": {
             "name": "Prometheus"
@@ -602,36 +602,6 @@
   ],
   "templating": {
     "list": [
-      {
-        "current": {
-          "selected": true,
-          "text": [
-            "All"
-          ],
-          "value": [
-            "$__all"
-          ]
-        },
-        "datasource": {
-          "name": "Prometheus"
-        },
-        "definition": "label_values(server_id)",
-        "hide": 0,
-        "includeAll": true,
-        "multi": true,
-        "name": "server_id",
-        "options": [],
-        "query": {
-          "query": "label_values(server_id)",
-          "refId": "StandardVariableQuery"
-        },
-        "refresh": 1,
-        "regex": "",
-        "skipUrlSync": false,
-        "sort": 0,
-        "type": "query",
-        "label": "Server"
-      },
       {
         "current": {
           "selected": true,
