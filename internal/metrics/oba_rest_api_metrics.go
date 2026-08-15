@@ -65,18 +65,19 @@ func fetchObaAPIMetrics(agencyID, serverBaseUrl, apiKey string, client *http.Cli
 	}
 
 	url := fmt.Sprintf("%s/api/where/metrics.json?key=%s", serverBaseUrl, apiKey)
+	sanitizedURL := utils.SanitizeServerURL(url)
 
-	logger.Info("Fetching metrics from OBA server", "agency_id", agencyID, "url", url)
+	logger.Info("Fetching metrics from OBA server", "agency_id", agencyID, "url", sanitizedURL)
 
 	resp, err := client.Get(url)
 	if err != nil {
-		err = fmt.Errorf("failed to fetch metrics from %s: %v", url, err)
+		err = fmt.Errorf("failed to fetch metrics from %s: %v", sanitizedURL, err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"agency_id": agencyID,
 			},
 			ExtraContext: map[string]interface{}{
-				"url": url,
+				"url": sanitizedURL,
 			},
 		})
 		return err
@@ -88,12 +89,12 @@ func fetchObaAPIMetrics(agencyID, serverBaseUrl, apiKey string, client *http.Cli
 		if resp.StatusCode == http.StatusNotFound {
 			wrappedErr = fmt.Errorf("server %s does not support metrics API", serverBaseUrl)
 		} else {
-			wrappedErr = fmt.Errorf("unexpected status code from %s: %d", url, resp.StatusCode)
+			wrappedErr = fmt.Errorf("unexpected status code from %s: %d", sanitizedURL, resp.StatusCode)
 		}
 		report.ReportErrorWithSentryOptions(wrappedErr, report.SentryReportOptions{
 			Tags: utils.MakeMap("agency_id", agencyID),
 			ExtraContext: map[string]interface{}{
-				"url":         url,
+				"url":         sanitizedURL,
 				"status_code": resp.StatusCode,
 			},
 		})
@@ -103,11 +104,11 @@ func fetchObaAPIMetrics(agencyID, serverBaseUrl, apiKey string, client *http.Cli
 
 	var metrics OBAMetrics
 	if err := json.NewDecoder(resp.Body).Decode(&metrics); err != nil {
-		err = fmt.Errorf("failed to decode metrics from %s: %v", url, err)
+		err = fmt.Errorf("failed to decode metrics from %s: %v", sanitizedURL, err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: utils.MakeMap("agency_id", agencyID),
 			ExtraContext: map[string]interface{}{
-				"url": url,
+				"url": sanitizedURL,
 			},
 		})
 		return err

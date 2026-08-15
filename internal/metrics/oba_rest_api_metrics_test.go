@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"bytes"
 	remoteGtfs "github.com/OneBusAway/go-gtfs"
 	"gopkg.in/dnaeon/go-vcr.v4/pkg/recorder"
 	"io"
@@ -145,5 +146,54 @@ func TestFetchObaAPIMetrics_SanitizesServerURLLabel(t *testing.T) {
 	}
 	if strings.Contains(gotURL, apiKey) || strings.Contains(gotURL, "key=") || strings.Contains(gotURL, "user:pass") {
 		t.Fatalf("credential leaked in server_url label %q", gotURL)
+	}
+}
+
+func TestFetchObaAPIMetrics_DoesNotLeakAPIKeyInLogs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		// #nosec G104
+		w.Write([]byte(`{"code":200,"text":"OK","version":2,"currentTime":123,"data":{"entry":{"agenciesWithCoverageCount":0,"agencyIDs":[]}}}`))
+	}))
+	defer server.Close()
+
+	apiKey := "SUPERSECRETOBAKEY"
+	serverBaseURL := strings.Replace(server.URL, "://", "://user:pass@", 1)
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+	staticStore := gtfs.NewStaticStore()
+	tracker := NewUnmatchedStopTracker()
+
+	if err := fetchObaAPIMetrics("42", serverBaseURL, apiKey, &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	logged := logBuf.String()
+	if strings.Contains(logged, apiKey) || strings.Contains(logged, "key=") || strings.Contains(logged, "user:pass") {
+		t.Fatalf("credential leaked in structured logs:\n%s", logged)
+	}
+}
+
+func TestFetchObaAPIMetrics_ErrorDoesNotLeakAPIKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	apiKey := "SUPERSECRETOBAKEY"
+	serverBaseURL := strings.Replace(server.URL, "://", "://user:pass@", 1)
+
+	staticStore := gtfs.NewStaticStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	tracker := NewUnmatchedStopTracker()
+
+	err := fetchObaAPIMetrics("42", serverBaseURL, apiKey, &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker)
+	if err == nil {
+		t.Fatal("expected error but got none")
+	}
+	if strings.Contains(err.Error(), apiKey) || strings.Contains(err.Error(), "key=") || strings.Contains(err.Error(), "user:pass") {
+		t.Fatalf("credential leaked in error message: %v", err)
 	}
 }
