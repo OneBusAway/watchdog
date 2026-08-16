@@ -105,8 +105,8 @@ func loadConfigFromFile(filePath string) ([]models.ObaServer, error) {
 		return nil, fmt.Errorf("failed to read config file: %v", err)
 	}
 
-	var servers []models.ObaServer
-	if err := json.Unmarshal(data, &servers); err != nil {
+	var rawEntries []json.RawMessage
+	if err := json.Unmarshal(data, &rawEntries); err != nil {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags:  utils.MakeMap("file_path", filePath),
 			Level: sentry.LevelError,
@@ -114,7 +114,7 @@ func loadConfigFromFile(filePath string) ([]models.ObaServer, error) {
 		return nil, fmt.Errorf("failed to unmarshal JSON: %v", err)
 	}
 
-	return filterValidServers(servers), nil
+	return decodeServers(rawEntries), nil
 }
 
 // loadConfigFromURL fetches a JSON configuration from a remote HTTP(S) endpoint,
@@ -171,8 +171,8 @@ func loadConfigFromURL(ctx context.Context, client *http.Client, url, authUser, 
 		return nil, fmt.Errorf("failed to read remote config: %v", err)
 	}
 
-	var servers []models.ObaServer
-	if err := json.Unmarshal(data, &servers); err != nil {
+	var rawEntries []json.RawMessage
+	if err := json.Unmarshal(data, &rawEntries); err != nil {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags:  utils.MakeMap("config_url", url),
 			Level: sentry.LevelError,
@@ -180,5 +180,5 @@ func loadConfigFromURL(ctx context.Context, client *http.Client, url, authUser, 
 		return nil, fmt.Errorf("failed to unmarshal JSON: %v", err)
 	}
 
-	return filterValidServers(servers), nil
+	return decodeServers(rawEntries), nil
 }

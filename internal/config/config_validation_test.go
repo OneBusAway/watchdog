@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -177,21 +178,45 @@ func TestLoadConfigFromURLFiltersInvalidServers(t *testing.T) {
 	}
 }
 
-func TestFilterValidServers(t *testing.T) {
+func TestDecodeServers(t *testing.T) {
 	t.Run("drops every invalid server and preserves the order of valid ones", func(t *testing.T) {
-		valid1 := validServer()
-		valid1.AgencyID = "agency-1"
-		valid2 := validServer()
-		valid2.AgencyID = "agency-2"
-		invalidA := validServer()
-		invalidA.AgencyID = "agency-10"
-		invalidA.GtfsURLs = nil
-		invalidB := validServer()
-		invalidB.AgencyID = "agency-11"
-		invalidB.AgencyID = ""
+		rawEntries := []json.RawMessage{
+			json.RawMessage(`{
+				"name": "Valid Server",
+				"oba_base_url": "https://valid.example.com",
+				"oba_api_key": "valid-key",
+				"gtfs_urls": ["https://gtfs.example.com"],
+				"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle.example.com"}],
+				"agency_id": "agency-1"
+			}`),
+			json.RawMessage(`{
+				"name": "Invalid Server",
+				"oba_base_url": "https://invalid.example.com",
+				"oba_api_key": "invalid-key",
+				"gtfs_urls": null,
+				"gtfs_rt_feeds": null,
+				"agency_id": "agency-10"
+			}`),
+			json.RawMessage(`{
+				"name": "Valid Server 2",
+				"oba_base_url": "https://valid2.example.com",
+				"oba_api_key": "valid-key-2",
+				"gtfs_urls": ["https://gtfs2.example.com"],
+				"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle2.example.com"}],
+				"agency_id": "agency-2"
+			}`),
+			json.RawMessage(`{
+				"name": "No Agency",
+				"oba_base_url": "https://noagency.example.com",
+				"oba_api_key": "key",
+				"gtfs_urls": ["https://gtfs.example.com"],
+				"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle.example.com"}],
+				"agency_id": ""
+			}`),
+		}
 
 		// Interleave valid and invalid: valid, invalid, valid, invalid.
-		got := filterValidServers([]models.ObaServer{valid1, invalidA, valid2, invalidB})
+		got := decodeServers(rawEntries)
 
 		if len(got) != 2 {
 			t.Fatalf("expected 2 valid servers, got %d: %+v", len(got), got)
@@ -201,17 +226,54 @@ func TestFilterValidServers(t *testing.T) {
 		}
 	})
 
+	t.Run("drops duplicate agency ids", func(t *testing.T) {
+		rawEntries := []json.RawMessage{
+			json.RawMessage(`{
+				"name": "First",
+				"oba_base_url": "https://first.example.com",
+				"oba_api_key": "key",
+				"gtfs_urls": ["https://gtfs.example.com"],
+				"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle.example.com"}],
+				"agency_id": "agency-1"
+			}`),
+			json.RawMessage(`{
+				"name": "Second",
+				"oba_base_url": "https://second.example.com",
+				"oba_api_key": "key",
+				"gtfs_urls": ["https://gtfs.example.com"],
+				"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle.example.com"}],
+				"agency_id": "agency-1"
+			}`),
+		}
+
+		got := decodeServers(rawEntries)
+		if len(got) != 1 {
+			t.Fatalf("expected 1 server after dedup, got %d", len(got))
+		}
+		if got[0].Name != "First" {
+			t.Fatalf("expected the first entry to be kept, got %q", got[0].Name)
+		}
+	})
+
 	t.Run("all servers invalid yields an empty slice", func(t *testing.T) {
-		bad := validServer()
-		bad.GtfsURLs = nil
-		got := filterValidServers([]models.ObaServer{bad})
+		rawEntries := []json.RawMessage{
+			json.RawMessage(`{
+				"name": "Bad",
+				"oba_base_url": "https://bad.example.com",
+				"oba_api_key": "key",
+				"gtfs_urls": null,
+				"gtfs_rt_feeds": null,
+				"agency_id": "agency-bad"
+			}`),
+		}
+		got := decodeServers(rawEntries)
 		if len(got) != 0 {
 			t.Fatalf("expected 0 valid servers, got %d", len(got))
 		}
 	})
 
 	t.Run("empty input yields an empty slice", func(t *testing.T) {
-		got := filterValidServers(nil)
+		got := decodeServers(nil)
 		if len(got) != 0 {
 			t.Fatalf("expected 0 servers, got %d", len(got))
 		}

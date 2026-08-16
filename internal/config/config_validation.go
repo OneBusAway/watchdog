@@ -4,9 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/getsentry/sentry-go"
 	"watchdog.onebusaway.org/internal/models"
-	"watchdog.onebusaway.org/internal/report"
 )
 
 // ValidateServer checks that an ObaServer has all the fields Watchdog requires
@@ -15,8 +13,9 @@ import (
 // then produces cryptic `unsupported protocol scheme ""` errors on every fetch
 // cycle. Validating up front turns that into a single actionable error.
 //
-// The GTFS-RT auth header pair (gtfs_rt_api_key / gtfs_rt_api_value) and
-// trip_update_url are intentionally optional and not validated here.
+// The GTFS-RT auth header fields (gtfs_rt_api_key / gtfs_rt_api_value) are
+// optional, but when either is set the other must be set as well. trip_update_url
+// is optional and not validated here.
 //
 // It returns an error naming every missing field, or nil if the server is valid.
 func ValidateServer(server models.ObaServer) error {
@@ -60,31 +59,4 @@ func ValidateServer(server models.ObaServer) error {
 		return fmt.Errorf("agency %q is missing required fields: %s", server.AgencyID, strings.Join(missing, ", "))
 	}
 	return nil
-}
-
-// filterValidServers returns only the servers that pass ValidateServer. Each
-// invalid server is reported to Sentry and dropped so that one misconfigured
-// entry (e.g. null feed URLs) cannot block monitoring of the rest of the fleet.
-func filterValidServers(servers []models.ObaServer) []models.ObaServer {
-	valid := make([]models.ObaServer, 0, len(servers))
-	seenAgencies := make(map[string]struct{})
-	for _, server := range servers {
-		if err := ValidateServer(server); err != nil {
-			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-				Tags: map[string]string{
-					"agency_id":   server.AgencyID,
-					"server_name": server.Name,
-				},
-				Level: sentry.LevelError,
-			})
-			continue
-		}
-		if _, exists := seenAgencies[server.AgencyID]; exists {
-			report.ReportError(fmt.Errorf("duplicate agency_id %q", server.AgencyID))
-			continue
-		}
-		seenAgencies[server.AgencyID] = struct{}{}
-		valid = append(valid, server)
-	}
-	return valid
 }
