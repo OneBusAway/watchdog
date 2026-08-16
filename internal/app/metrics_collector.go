@@ -58,13 +58,12 @@ func (app *Application) StartMetricsCollection(ctx context.Context) {
 // It sequentially runs a series of probes and validations against the given server:
 //  1. Pings the server to track basic availability.
 //  2. Checks GTFS static bundle expiration.
-//  3. Verifies agency coverage match (GTFS static vs real-time).
-//  4. Collects metrics from the OBA API endpoints, including the live
+//  3. Collects metrics from the OBA API endpoints, including the live
 //     active vehicle count from the VehiclesForAgency API.
-//  5. Fetches and stores GTFS-RT (realtime) vehicle positions feed.
-//  6. Counts vehicle positions from the GTFS-RT feed.
-//  7. Tracks frequency of vehicle telemetry reporting over time.
-//  8. Flags invalid vehicles and vehicles stopped outside bounds.
+//  4. Fetches and stores GTFS-RT (realtime) vehicle positions feed.
+//  5. Counts vehicle positions from the GTFS-RT feed.
+//  6. Tracks frequency of vehicle telemetry reporting over time.
+//  7. Flags invalid vehicles and vehicles stopped outside bounds.
 //
 // Errors in each step are logged and reported to Sentry with contextual tags (e.g., server name, ID),
 // but the process continues unless the GTFS-RT feed fails — in which case the function returns early,
@@ -146,19 +145,6 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 	_, _, err := app.MetricsService.CheckBundleExpiration(time.Now().UTC(), server)
 	if err != nil {
 		app.Logger.Error("Failed to check GTFS bundle expiration", "error", err)
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{
-				"agency_id":   server.AgencyID,
-				"server_name": server.Name,
-			},
-			Level: sentry.LevelError,
-		})
-	}
-
-	err = app.MetricsService.CheckAgenciesWithCoverageMatch(server)
-
-	if err != nil {
-		app.Logger.Error("Failed to check agencies with coverage match metric", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"agency_id":   server.AgencyID,

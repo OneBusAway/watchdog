@@ -1,0 +1,44 @@
+package metrics
+
+import (
+	"watchdog.onebusaway.org/internal/models"
+)
+
+// lastTrackedAgencies remembers the last agency set emitted to the
+// tracked-agency metrics so subsequent calls with an unchanged set are no-ops.
+var (
+	lastTrackedAgencies     map[string]struct{}
+	trackedAgenciesReported bool
+)
+
+// reportTrackedAgencies updates the tracked-agency metrics to reflect the
+// agencies Watchdog is currently observing. Agencies are the servers that
+// passed config validation, so the count can be larger or smaller than the
+// number of agencies present in any individual GTFS bundle.
+//
+// It reports the total count to the AgenciesTrackedCount Prometheus metric,
+// and emits one AgenciesTrackedInfo series per agency labeled with its ID,
+// name, and base URL.
+//
+// This is called once at startup and again only when the configured server set
+// changes (e.g., a remote config refresh adds or removes an agency), never on
+// the periodic metric collection tick. Re-reporting an unchanged set is a no-op.
+func reportTrackedAgencies(servers []models.ObaServer) {
+	ids := trackedAgencyIDs(servers)
+	if trackedAgenciesReported && sameAgencySet(ids, lastTrackedAgencies) {
+		return
+	}
+	lastTrackedAgencies = ids
+	trackedAgenciesReported = true
+
+	AgenciesTrackedInfo.Reset()
+
+	AgenciesTrackedCount.Set(float64(len(servers)))
+	for _, server := range servers {
+		AgenciesTrackedInfo.WithLabelValues(
+			server.AgencyID,
+			server.Name,
+			server.ObaBaseURL,
+		).Set(1)
+	}
+}

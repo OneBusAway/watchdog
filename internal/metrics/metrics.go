@@ -29,20 +29,15 @@ var (
 )
 
 var (
-	AgenciesInStaticGtfs = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "oba_agencies_in_static_gtfs",
-		Help: "Number of agencies in the static GTFS file",
-	}, []string{"agency_id"})
+	AgenciesTrackedCount = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "oba_tracked_agencies_count",
+		Help: "Number of agencies currently tracked by Watchdog (validated config entries)",
+	})
 
-	AgenciesInCoverageEndpoint = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "oba_agencies_in_coverage_endpoint",
-		Help: "Number of agencies in the agencies-with-coverage endpoint",
-	}, []string{"agency_id"})
-
-	AgenciesMatch = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "oba_agencies_match",
-		Help: "Whether the number of agencies in the static GTFS file matches the agencies-with-coverage endpoint (1 = match, 0 = no match)",
-	}, []string{"agency_id"})
+	AgenciesTrackedInfo = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "oba_tracked_agencies_info",
+		Help: "One series per agency currently tracked by Watchdog (always 1)",
+	}, []string{"agency_id", "server_name", "server_url"})
 )
 
 var (

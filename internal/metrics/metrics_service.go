@@ -42,12 +42,8 @@ func (ms *MetricsService) CountActiveVehiclesForAgency(server models.ObaServer) 
 	return err
 }
 
-func (ms *MetricsService) CheckAgenciesWithCoverageMatch(server models.ObaServer) error {
-	if err := checkAgenciesWithCoverageMatch(ms.StaticStore, ms.Logger, server); err != nil {
-		return err
-	}
-	return nil
-
+func (ms *MetricsService) ReportTrackedAgencies(servers []models.ObaServer) {
+	reportTrackedAgencies(servers)
 }
 
 func (ms *MetricsService) CheckBundleExpiration(currentTime time.Time, server models.ObaServer) (int, int, error) {
