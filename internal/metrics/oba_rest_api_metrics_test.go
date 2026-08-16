@@ -101,7 +101,7 @@ func TestFetchObaAPIMetrics_SanitizesServerURLLabel(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			// Writing to ResponseWriter in tests, error can be safely ignored.
 			// #nosec G104
-			w.Write([]byte(`{"code":200,"text":"OK","version":2,"currentTime":123,"data":{"entry":{"agenciesWithCoverageCount":0,"agencyIDs":[]}}}`))
+			w.Write([]byte(`{"code":200,"text":"OK","version":2,"currentTime":123,"data":{"entry":{"agenciesWithCoverageCount":0,"agencyIDs":["42"]}}}`))
 			return
 		}
 		http.Error(w, "missing key", http.StatusUnauthorized)
@@ -149,12 +149,87 @@ func TestFetchObaAPIMetrics_SanitizesServerURLLabel(t *testing.T) {
 	}
 }
 
+func TestFetchObaAPIMetrics_LabelsWithConfiguredAgencyID(t *testing.T) {
+	// Each server's per-agency statistics are keyed by the agency ID Watchdog is
+	// configured to monitor, and the server lists those IDs in its agencyIDs
+	// metadata. The resulting series are labeled with the configured agency ID and
+	// the two servers cannot overwrite each other's metrics.
+	serverA := setupObaServer(t, `{"code":200,"text":"OK","version":2,"currentTime":123,"data":{"entry":{"agenciesWithCoverageCount":1,"agencyIDs":["unitrans-a"],"realtimeRecordsTotal":{"unitrans-a":3}}}}`, http.StatusOK)
+	defer serverA.Close()
+	serverB := setupObaServer(t, `{"code":200,"text":"OK","version":2,"currentTime":123,"data":{"entry":{"agenciesWithCoverageCount":1,"agencyIDs":["unitrans-b"],"realtimeRecordsTotal":{"unitrans-b":5}}}}`, http.StatusOK)
+	defer serverB.Close()
+
+	staticStore := gtfs.NewStaticStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	tracker := NewUnmatchedStopTracker()
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	if err := fetchObaAPIMetrics("unitrans-a", serverA.URL, "key", client, staticStore, logger, tracker); err != nil {
+		t.Fatalf("server A: unexpected error: %v", err)
+	}
+	if err := fetchObaAPIMetrics("unitrans-b", serverB.URL, "key", client, staticStore, logger, tracker); err != nil {
+		t.Fatalf("server B: unexpected error: %v", err)
+	}
+
+	recordsA, err := getMetricValue(ObaRealtimeRecords, map[string]string{"agency_id": "unitrans-a"})
+	if err != nil {
+		t.Fatalf("failed to read records for unitrans-a: %v", err)
+	}
+	if recordsA != 3 {
+		t.Fatalf("expected oba_realtime_records_count{agency_id=\"unitrans-a\"} to be 3, got %v", recordsA)
+	}
+
+	recordsB, err := getMetricValue(ObaRealtimeRecords, map[string]string{"agency_id": "unitrans-b"})
+	if err != nil {
+		t.Fatalf("failed to read records for unitrans-b: %v", err)
+	}
+	if recordsB != 5 {
+		t.Fatalf("expected oba_realtime_records_count{agency_id=\"unitrans-b\"} to be 5, got %v", recordsB)
+	}
+}
+
+func TestFetchObaAPIMetrics_AgencyNotListedInResponse(t *testing.T) {
+	// The server reports per-agency stats keyed by the requested agency, but that
+	// agency is absent from the agencyIDs metadata. fetchObaAPIMetrics must report
+	// the mismatch and set none of the per-agency metrics for it.
+	server := setupObaServer(t, `{"code":200,"text":"OK","version":2,"currentTime":123,"data":{"entry":{"agenciesWithCoverageCount":1,"agencyIDs":["other"],"realtimeRecordsTotal":{"requested":5},"realtimeTripCountsMatched":{"requested":3},"realtimeTripCountsUnmatched":{"requested":1},"scheduledTripsCount":{"requested":4},"stopIDsMatchedCount":{"requested":2},"stopIDsUnmatchedCount":{"requested":1},"timeSinceLastRealtimeUpdate":{"requested":10},"stopIDsUnmatched":{"requested":["stop-1"]}}}}`, http.StatusOK)
+	defer server.Close()
+
+	staticStore := gtfs.NewStaticStore()
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+	tracker := NewUnmatchedStopTracker()
+
+	if err := fetchObaAPIMetrics("requested", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(logBuf.String(), "Configured agency not found in OBA metrics response") {
+		t.Fatalf("expected error log about missing agency, got:\n%s", logBuf.String())
+	}
+
+	c := make(chan prometheus.Metric, 8)
+	ObaRealtimeRecords.Collect(c)
+	close(c)
+	for m := range c {
+		pb := &dto.Metric{}
+		if err := m.Write(pb); err != nil {
+			t.Fatalf("failed to write metric: %v", err)
+		}
+		for _, lp := range pb.Label {
+			if lp.GetName() == "agency_id" && lp.GetValue() == "requested" {
+				t.Fatalf("expected no oba_realtime_records series for agency %q, got one", "requested")
+			}
+		}
+	}
+}
+
 func TestFetchObaAPIMetrics_DoesNotLeakAPIKeyInLogs(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		// #nosec G104
-		w.Write([]byte(`{"code":200,"text":"OK","version":2,"currentTime":123,"data":{"entry":{"agenciesWithCoverageCount":0,"agencyIDs":[]}}}`))
+		w.Write([]byte(`{"code":200,"text":"OK","version":2,"currentTime":123,"data":{"entry":{"agenciesWithCoverageCount":0,"agencyIDs":["42"]}}}`))
 	}))
 	defer server.Close()
 

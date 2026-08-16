@@ -123,92 +123,117 @@ func fetchObaAPIMetrics(agencyID, serverBaseUrl, apiKey string, client *http.Cli
 
 	ObaAgenciesWithCoverage.WithLabelValues(agencyID).Set(float64(entry.AgenciesWithCoverageCount))
 
-	// The OBA metrics API reports per-agency statistics, so iterate over every
-	// agency the server covers and label each series with that agency's ID.
+	// The per-agency metrics below are only valid when the configured agencyID is
+	// actually one of the agencies the OBA server reports in entry.AgencyIDs. If it
+	// isn't, the server has no data for this agency, so report the mismatch and skip
+	// every per-agency metric (RealtimeRecordsTotal onward) for this cycle.
+	agencyFound := false
 	for _, reportedAgencyID := range entry.AgencyIDs {
-		if count, ok := entry.RealtimeRecordsTotal[reportedAgencyID]; ok {
-			ObaRealtimeRecords.WithLabelValues(reportedAgencyID).Set(float64(count))
+		if reportedAgencyID == agencyID {
+			agencyFound = true
+			break
 		}
-
-		if count, ok := entry.RealtimeTripCountsMatched[reportedAgencyID]; ok {
-			ObaRealtimeTripsMatched.WithLabelValues(reportedAgencyID).Set(float64(count))
-		}
-
-		if count, ok := entry.RealtimeTripCountsUnmatched[reportedAgencyID]; ok {
-			ObaRealtimeTripsUnmatched.WithLabelValues(reportedAgencyID).Set(float64(count))
-		}
-
-		matched := entry.RealtimeTripCountsMatched[reportedAgencyID]
-		unmatched := entry.RealtimeTripCountsUnmatched[reportedAgencyID]
-		total := matched + unmatched
-		if total > 0 {
-			TripMatchRatio.WithLabelValues(reportedAgencyID).Set(float64(matched) / float64(total))
-		}
-
-		if count, ok := entry.ScheduledTripsCount[reportedAgencyID]; ok {
-			ObaScheduledTrips.WithLabelValues(reportedAgencyID).Set(float64(count))
-		}
-
-		if count, ok := entry.StopIDsMatchedCount[reportedAgencyID]; ok {
-			ObaStopsMatched.WithLabelValues(reportedAgencyID).Set(float64(count))
-		}
-
-		if count, ok := entry.StopIDsUnmatchedCount[reportedAgencyID]; ok {
-			ObaStopsUnmatched.WithLabelValues(reportedAgencyID).Set(float64(count))
-		}
-
-		stopMatched := entry.StopIDsMatchedCount[reportedAgencyID]
-		stopUnmatched := entry.StopIDsUnmatchedCount[reportedAgencyID]
-		stopTotal := stopMatched + stopUnmatched
-		if stopTotal > 0 {
-			StopMatchRatio.WithLabelValues(reportedAgencyID).Set(float64(stopMatched) / float64(stopTotal))
-		}
-
-		if seconds, ok := entry.TimeSinceLastRealtimeUpdate[reportedAgencyID]; ok {
-			ObaTimeSinceUpdate.WithLabelValues(reportedAgencyID).Set(float64(seconds))
-		}
-
-		unmatchedStopIDs := entry.StopIDsUnmatched[reportedAgencyID]
-		if len(unmatchedStopIDs) == 0 {
-			ObaUnmatchedStopUnresolved.WithLabelValues(reportedAgencyID).Set(0)
-			continue
-		}
-
-		stopInfoMap, err := gtfs.GetStopLocationsByIDs(agencyID, unmatchedStopIDs, staticStore)
-		if err != nil {
-			ObaUnmatchedStopUnresolved.WithLabelValues(reportedAgencyID).Set(float64(len(unmatchedStopIDs)))
-			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-				Tags:         utils.MakeMap("agency_id", agencyID),
-				ExtraContext: map[string]interface{}{"reason": "failed to match stop IDs to GTFS"},
-			})
-			continue
-		}
-
-		resolved := 0
-		for stopID, stop := range stopInfoMap {
-			if stop.Latitude == nil || stop.Longitude == nil {
-				continue
-			}
-			latStr := fmt.Sprintf("%.6f", *stop.Latitude)
-			lonStr := fmt.Sprintf("%.6f", *stop.Longitude)
-			ObaUnmatchedStopInfo.WithLabelValues(
-				reportedAgencyID,
-				stopID,
-				stop.Name,
-				latStr,
-				lonStr,
-			).Set(1)
-			resolved++
-			unmatchedStopTracker.RecordLastSeen(reportedAgencyID, stopID, stop.Name, latStr, lonStr)
-		}
-
-		unresolved := len(unmatchedStopIDs) - resolved
-		ObaUnmatchedStopUnresolved.WithLabelValues(reportedAgencyID).Set(float64(unresolved))
-		if unresolved > 0 {
-			logger.Warn("OBA unmatched stop IDs could not be resolved against the local GTFS bundle",
-				"agency_id", reportedAgencyID, "requested", len(unmatchedStopIDs), "resolved", resolved)
-		}
-		reportUnmatchedStopClusters(reportedAgencyID, stopInfoMap, unmatchedStopTracker)
 	}
+	if !agencyFound {
+		err := fmt.Errorf("configured agency %s not found in OBA metrics response for %s", agencyID, sanitizedURL)
+		logger.Error("Configured agency not found in OBA metrics response",
+			"agency_id", agencyID, "url", sanitizedURL, "reported_agency_ids", entry.AgencyIDs)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: utils.MakeMap("agency_id", agencyID),
+			ExtraContext: map[string]interface{}{
+				"url":                 sanitizedURL,
+				"reported_agency_ids": entry.AgencyIDs,
+			},
+		})
+		return nil
+	}
+
+	// The per-agency maps are keyed by the agency IDs the server reports in
+	// entry.AgencyIDs. Index them with the configured agencyID so every series is
+	// labeled with it, and only report values when the server carries data for
+	// that agency.
+	if count, ok := entry.RealtimeRecordsTotal[agencyID]; ok {
+		ObaRealtimeRecords.WithLabelValues(agencyID).Set(float64(count))
+	}
+
+	if count, ok := entry.RealtimeTripCountsMatched[agencyID]; ok {
+		ObaRealtimeTripsMatched.WithLabelValues(agencyID).Set(float64(count))
+	}
+
+	if count, ok := entry.RealtimeTripCountsUnmatched[agencyID]; ok {
+		ObaRealtimeTripsUnmatched.WithLabelValues(agencyID).Set(float64(count))
+	}
+
+	matched := entry.RealtimeTripCountsMatched[agencyID]
+	unmatched := entry.RealtimeTripCountsUnmatched[agencyID]
+	total := matched + unmatched
+	if total > 0 {
+		TripMatchRatio.WithLabelValues(agencyID).Set(float64(matched) / float64(total))
+	}
+
+	if count, ok := entry.ScheduledTripsCount[agencyID]; ok {
+		ObaScheduledTrips.WithLabelValues(agencyID).Set(float64(count))
+	}
+
+	if count, ok := entry.StopIDsMatchedCount[agencyID]; ok {
+		ObaStopsMatched.WithLabelValues(agencyID).Set(float64(count))
+	}
+
+	if count, ok := entry.StopIDsUnmatchedCount[agencyID]; ok {
+		ObaStopsUnmatched.WithLabelValues(agencyID).Set(float64(count))
+	}
+
+	stopMatched := entry.StopIDsMatchedCount[agencyID]
+	stopUnmatched := entry.StopIDsUnmatchedCount[agencyID]
+	stopTotal := stopMatched + stopUnmatched
+	if stopTotal > 0 {
+		StopMatchRatio.WithLabelValues(agencyID).Set(float64(stopMatched) / float64(stopTotal))
+	}
+
+	if seconds, ok := entry.TimeSinceLastRealtimeUpdate[agencyID]; ok {
+		ObaTimeSinceUpdate.WithLabelValues(agencyID).Set(float64(seconds))
+	}
+
+	unmatchedStopIDs := entry.StopIDsUnmatched[agencyID]
+	if len(unmatchedStopIDs) == 0 {
+		ObaUnmatchedStopUnresolved.WithLabelValues(agencyID).Set(0)
+		return nil
+	}
+
+	stopInfoMap, err := gtfs.GetStopLocationsByIDs(agencyID, unmatchedStopIDs, staticStore)
+	if err != nil {
+		ObaUnmatchedStopUnresolved.WithLabelValues(agencyID).Set(float64(len(unmatchedStopIDs)))
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags:         utils.MakeMap("agency_id", agencyID),
+			ExtraContext: map[string]interface{}{"reason": "failed to match stop IDs to GTFS"},
+		})
+		return nil
+	}
+
+	resolved := 0
+	for stopID, stop := range stopInfoMap {
+		if stop.Latitude == nil || stop.Longitude == nil {
+			continue
+		}
+		latStr := fmt.Sprintf("%.6f", *stop.Latitude)
+		lonStr := fmt.Sprintf("%.6f", *stop.Longitude)
+		ObaUnmatchedStopInfo.WithLabelValues(
+			agencyID,
+			stopID,
+			stop.Name,
+			latStr,
+			lonStr,
+		).Set(1)
+		resolved++
+		unmatchedStopTracker.RecordLastSeen(agencyID, stopID, stop.Name, latStr, lonStr)
+	}
+
+	unresolved := len(unmatchedStopIDs) - resolved
+	ObaUnmatchedStopUnresolved.WithLabelValues(agencyID).Set(float64(unresolved))
+	if unresolved > 0 {
+		logger.Warn("OBA unmatched stop IDs could not be resolved against the local GTFS bundle",
+			"agency_id", agencyID, "requested", len(unmatchedStopIDs), "resolved", resolved)
+	}
+	reportUnmatchedStopClusters(agencyID, stopInfoMap, unmatchedStopTracker)
 	return nil
 }
