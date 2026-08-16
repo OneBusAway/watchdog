@@ -117,6 +117,11 @@ func main() {
 	// and also take a look at service file in each package to see the dependencies and the exposed methods and function.
 	app := app.New(&cfg, logger, client, version)
 
+	// Report the agencies Watchdog is tracking (those that passed config
+	// validation). This runs once at startup; it is re-triggered only when the
+	// remote config adds or removes an agency, never on the collection tick.
+	app.MetricsService.ReportTrackedAgencies(servers)
+
 	// From here we set up all dependencies and we are ready to start business logic.
 
 	// On startup, download GTFS static bundles for all configured servers
@@ -138,7 +143,9 @@ func main() {
 
 	// If a remote URL is specified, refresh the configuration every minute
 	if *configURL != "" {
-		go app.ConfigService.RefreshConfig(ctx, *configURL, configAuthUser, configAuthPass, time.Minute, 20)
+		go app.ConfigService.RefreshConfig(ctx, *configURL, configAuthUser, configAuthPass, time.Minute, 20, func(updated []models.ObaServer) {
+			app.MetricsService.ReportTrackedAgencies(updated)
+		})
 	}
 
 	// Start the HTTP server to serve the API and metrics endpoints

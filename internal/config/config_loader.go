@@ -55,8 +55,9 @@ func ValidateConfigFlags(configFile, configURL *string) error {
 //   - logger: Logger for structured log output.
 //   - interval: Time duration between consecutive refresh attempts.
 //   - maxRetries: Maximum number of exponential backoff retries per fetch attempt.
-
-func refreshConfig(ctx context.Context, client *http.Client, configURL, configAuthUser, configAuthPass string, cfg *Config, logger *slog.Logger, interval time.Duration, maxRetries int) {
+//   - onUpdated: Callback invoked with the newly validated servers after a
+//     successful config refresh. May be nil.
+func refreshConfig(ctx context.Context, client *http.Client, configURL, configAuthUser, configAuthPass string, cfg *Config, logger *slog.Logger, interval time.Duration, maxRetries int, onUpdated func([]models.ObaServer)) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -73,6 +74,9 @@ func refreshConfig(ctx context.Context, client *http.Client, configURL, configAu
 			} else {
 				cfg.UpdateConfig(newServers)
 				logger.Info("Successfully refreshed server configuration")
+				if onUpdated != nil {
+					onUpdated(newServers)
+				}
 			}
 			time.Sleep(interval)
 		}

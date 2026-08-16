@@ -31,8 +31,8 @@ func NewConfigService(logger *slog.Logger, client *http.Client, config *Config, 
 	}
 }
 
-func (cs *ConfigService) RefreshConfig(ctx context.Context, url, authUser, authPass string, interval time.Duration, maxRetries int) {
-	refreshConfig(ctx, cs.Client, url, authUser, authPass, cs.Config, cs.Logger, interval, maxRetries)
+func (cs *ConfigService) RefreshConfig(ctx context.Context, url, authUser, authPass string, interval time.Duration, maxRetries int, onUpdated func([]models.ObaServer)) {
+	refreshConfig(ctx, cs.Client, url, authUser, authPass, cs.Config, cs.Logger, interval, maxRetries, onUpdated)
 }
 
 // exported helper functions

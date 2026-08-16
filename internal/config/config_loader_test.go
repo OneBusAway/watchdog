@@ -319,12 +319,20 @@ func TestRefreshConfig(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go refreshConfig(ctx, client, mockServer.URL, "testuser", "testpass", cfg, testLogger, 100*time.Millisecond, 1)
+
+	var callbackServers []models.ObaServer
+	go refreshConfig(ctx, client, mockServer.URL, "testuser", "testpass", cfg, testLogger, 100*time.Millisecond, 1, func(servers []models.ObaServer) {
+		callbackServers = servers
+	})
 
 	time.Sleep(200 * time.Millisecond)
 
 	if serverHitCount.Load() == 0 {
 		t.Fatal("Mock server was never called")
+	}
+
+	if len(callbackServers) == 0 {
+		t.Fatal("onUpdated callback was never invoked with refreshed servers")
 	}
 
 	updatedServers := cfg.GetServers()
