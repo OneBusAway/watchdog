@@ -108,14 +108,6 @@ var (
 
 // OBA REST API 2.6.0 >= Metrics
 var (
-	ObaAgenciesWithCoverage = promauto.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "oba_agencies_with_coverage_count",
-			Help: "Number of agencies with coverage",
-		},
-		[]string{"agency_id"},
-	)
-
 	ObaRealtimeRecords = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "oba_realtime_records_count",

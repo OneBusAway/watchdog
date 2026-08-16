@@ -40,7 +40,6 @@ type OBAMetrics struct {
 // It performs an HTTP GET request to the server's `/metrics.json` endpoint using the provided
 // API key, decodes the response into structured fields, and populates Prometheus metrics such as:
 //
-//   - Number of agencies with coverage
 //   - Real-time and scheduled trip counts (matched/unmatched)
 //   - Stop ID match/unmatch counts and ratios
 //   - Trip and stop match ratios
@@ -120,8 +119,6 @@ func fetchObaAPIMetrics(agencyID, serverBaseUrl, apiKey string, client *http.Cli
 	}
 
 	entry := metrics.Data.Entry
-
-	ObaAgenciesWithCoverage.WithLabelValues(agencyID).Set(float64(entry.AgenciesWithCoverageCount))
 
 	// The per-agency metrics below are only valid when the configured agencyID is
 	// actually one of the agencies the OBA server reports in entry.AgencyIDs. If it
