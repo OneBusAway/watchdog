@@ -202,7 +202,13 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: oba_agencies_in_static_gtfs, oba_agencies_in_coverage_endpoint, oba_agencies_match\nQuestion answered: \"Does the coverage endpoint match the static GTFS dataset?\"",
+      "description": "Metrics: oba_tracked_agencies_count, oba_tracked_agencies_info\nQuestion answered: \"How many agencies is Watchdog currently tracking?\"",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -210,31 +216,34 @@
         "y": 10
       },
       "id": 202,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "auto"
+      },
       "targets": [
         {
-          "expr": "oba_agencies_in_static_gtfs{agency_id=~\"$agency_id\"}",
+          "expr": "oba_tracked_agencies_count",
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
           }
         },
         {
-          "expr": "oba_agencies_in_coverage_endpoint{agency_id=~\"$agency_id\"}",
+          "expr": "oba_tracked_agencies_info{agency_id=~\"$agency_id\"}",
           "refId": "B",
-          "datasource": {
-            "name": "Prometheus"
-          }
-        },
-        {
-          "expr": "oba_agencies_match{agency_id=~\"$agency_id\"}",
-          "refId": "C",
           "datasource": {
             "name": "Prometheus"
           }
         }
       ],
-      "title": "2.2 Agency Consistency",
-      "type": "timeseries"
+      "title": "2.2 Tracked Agencies",
+      "type": "stat"
     },
     {
       "collapsed": false,

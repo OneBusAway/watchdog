@@ -41,19 +41,24 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
     gtfs_bundle_days_until_earliest_expiration < 3
 ```
 ---
-## 3. Agency Data Consistency
+## 3. Tracked Agencies
 
-| Metric Name                         | Type  | Labels      | Unit          | Description                                                                 |
-| ----------------------------------- | ----- | ----------- | ------------- | --------------------------------------------------------------------------- |
-| `oba_agencies_in_static_gtfs`       | Gauge | `agency_id` | count         | Number of agencies in the static GTFS file.                                 |
-| `oba_agencies_in_coverage_endpoint` | Gauge | `agency_id` | count         | Number of agencies in the agencies-with-coverage endpoint.                  |
-| `oba_agencies_match`                | Gauge | `agency_id` | boolean (0/1) | Whether the agency count matches between static GTFS and coverage endpoint. |
+| Metric Name                    | Type  | Labels                              | Unit    | Description                                                              |
+| ------------------------------ | ----- | ----------------------------------- | ------- | ------------------------------------------------------------------------ |
+| `oba_tracked_agencies_count`   | Gauge | (none)                              | count   | Number of agencies currently tracked by Watchdog (validated config entries). |
+| `oba_tracked_agencies_info`    | Gauge | `agency_id`, `server_name`, `server_url` | presence | One series per tracked agency (always 1), listing the agencies themselves. |
 
 **Interpretation Guide:**
-- **Normal:** `oba_agencies_match` = `1`.
-- **Investigate if:** `oba_agencies_match` = `0` or large difference between counts.
-- **Possible causes:** Partial GTFS updates, API coverage issues, missing agencies.
-- **Spec reference:** GTFS [agency.txt](https://gtfs.org/documentation/schedule/reference/#agencytxt) requires at least one agency but does not define count-matching rules.
+- **Normal:** `oba_tracked_agencies_count` equals the number of servers in the config that passed validation.
+- **Investigate if:** The count doesn't match the number of servers you expect in the config.
+- **Possible causes:** A config entry failed validation (missing required fields, duplicate `agency_id`) and was dropped; or a refresh source (see `--config-url`) removed an agency.
+- **Notes:**
+  - These metrics are emitted once at startup and re-emitted only when the tracked set changes (a remote config refresh adds or removes an agency) — never on the periodic collection tick.
+  - Stale series are pruned when an agency is removed, so `sum(oba_tracked_agencies_info) == oba_tracked_agencies_count`.
+- **Example alert:**
+```promql
+  oba_tracked_agencies_count < 1
+```
 
 ---
 ## 4. Vehicle & GTFS-RT Data Quality
