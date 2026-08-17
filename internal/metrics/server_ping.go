@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	onebusaway "github.com/OneBusAway/go-sdk"
-	"github.com/OneBusAway/go-sdk/option"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
 	"watchdog.onebusaway.org/internal/utils"
@@ -23,16 +22,14 @@ const currentTimeEndpoint = "/api/where/current-time.json"
 // Errors (such as failed requests or invalid responses) are reported to Sentry with server context.
 //
 // Parameters:
+//   - client: the shared OneBusAway SDK client for the server, injected by the
+//     caller so the client's connection pool and instrumentation are reused
+//     across collection ticks.
 //   - server: a models.ObaServer object containing the base URL, API key, and server ID.
 //
 // Returns:
 //   - None (side effects include reporting to Prometheus and Sentry).
-func serverPing(server models.ObaServer) bool {
-	client := onebusaway.NewClient(
-		option.WithAPIKey(server.ObaApiKey),
-		option.WithBaseURL(server.ObaBaseURL),
-	)
-
+func serverPing(client *onebusaway.Client, server models.ObaServer) bool {
 	ctx := context.Background()
 	response, err := client.CurrentTime.Get(ctx)
 

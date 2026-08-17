@@ -85,10 +85,11 @@ func newTestApplication(t *testing.T) *Application {
 	vehicleLastSeen := metrics.NewVehicleLastSeen()
 	unmatchedStopTracker := metrics.NewUnmatchedStopTracker()
 	backoffStore := config.NewBackoffStore()
+	obaSDKClientCache := NewObaSDKClientCache(client)
 	return &Application{
 		ConfigService:  config.NewConfigService(logger, client, cfg, backoffStore),
 		GtfsService:    gtfs.NewGtfsService(staticStore, realtimeStore, boundingBoxStore, logger, client),
-		MetricsService: metrics.NewMetricsService(staticStore, realtimeStore, boundingBoxStore, vehicleLastSeen, unmatchedStopTracker, logger, client),
+		MetricsService: metrics.NewMetricsService(staticStore, realtimeStore, boundingBoxStore, vehicleLastSeen, unmatchedStopTracker, logger, client, obaSDKClientCache.For),
 		Version:        "1.0.0",
 		Logger:         logger,
 	}

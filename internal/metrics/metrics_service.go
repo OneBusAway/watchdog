@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	onebusaway "github.com/OneBusAway/go-sdk"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
@@ -18,9 +19,10 @@ type MetricsService struct {
 	UnmatchedStopTracker *UnmatchedStopTracker
 	Logger               *slog.Logger
 	Client               *http.Client
+	NewObaClient         func(models.ObaServer) *onebusaway.Client
 }
 
-func NewMetricsService(static *gtfs.StaticStore, realtime *gtfs.RealtimeStore, bbox *geo.BoundingBoxStore, vehicleLastSeen *VehicleLastSeen, unmatchedStopTracker *UnmatchedStopTracker, logger *slog.Logger, client *http.Client) *MetricsService {
+func NewMetricsService(static *gtfs.StaticStore, realtime *gtfs.RealtimeStore, bbox *geo.BoundingBoxStore, vehicleLastSeen *VehicleLastSeen, unmatchedStopTracker *UnmatchedStopTracker, logger *slog.Logger, client *http.Client, newObaClient func(models.ObaServer) *onebusaway.Client) *MetricsService {
 	return &MetricsService{
 		StaticStore:          static,
 		RealtimeStore:        realtime,
@@ -29,6 +31,7 @@ func NewMetricsService(static *gtfs.StaticStore, realtime *gtfs.RealtimeStore, b
 		UnmatchedStopTracker: unmatchedStopTracker,
 		Logger:               logger,
 		Client:               client,
+		NewObaClient:         newObaClient,
 	}
 }
 
@@ -38,7 +41,7 @@ func (ms *MetricsService) CountVehiclePositions(server models.ObaServer) error {
 }
 
 func (ms *MetricsService) CountActiveVehiclesForAgency(server models.ObaServer) error {
-	_, err := countActiveVehiclesForAgency(server)
+	_, err := countActiveVehiclesForAgency(ms.NewObaClient(server), server)
 	return err
 }
 
@@ -51,7 +54,7 @@ func (ms *MetricsService) CheckBundleExpiration(currentTime time.Time, server mo
 }
 
 func (ms *MetricsService) ServerPing(server models.ObaServer) bool {
-	return serverPing(server)
+	return serverPing(ms.NewObaClient(server), server)
 }
 
 func (ms *MetricsService) FetchObaAPIMetrics(agencyID, agencyName, serverBaseURL, apiKey string) error {

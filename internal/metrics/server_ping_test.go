@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	onebusaway "github.com/OneBusAway/go-sdk"
+	"github.com/OneBusAway/go-sdk/option"
 	"watchdog.onebusaway.org/internal/models"
 )
 
@@ -15,7 +17,11 @@ func TestCheckServer(t *testing.T) {
 
 		testServer := models.ObaServer{AgencyName: "Test Server", AgencyID: "1", ObaBaseURL: ts.URL, ObaApiKey: "test-key"}
 
-		serverPing(testServer)
+		client := onebusaway.NewClient(
+			option.WithAPIKey(testServer.ObaApiKey),
+			option.WithBaseURL(testServer.ObaBaseURL),
+		)
+		serverPing(client, testServer)
 		time.Sleep(100 * time.Millisecond)
 
 		metricValue, err := getMetricValue(ObaApiStatus, map[string]string{
@@ -38,7 +44,11 @@ func TestCheckServer(t *testing.T) {
 
 		testServer := models.ObaServer{AgencyName: "Test Server No Time", AgencyID: "2", ObaBaseURL: ts.URL, ObaApiKey: "test-key"}
 
-		serverPing(testServer)
+		client := onebusaway.NewClient(
+			option.WithAPIKey(testServer.ObaApiKey),
+			option.WithBaseURL(testServer.ObaBaseURL),
+		)
+		serverPing(client, testServer)
 		time.Sleep(100 * time.Millisecond)
 
 		metricValue, err := getMetricValue(ObaApiStatus, map[string]string{
@@ -58,7 +68,11 @@ func TestCheckServer(t *testing.T) {
 	t.Run("HTTP request failure", func(t *testing.T) {
 		testServer := models.ObaServer{AgencyName: "Test Server Invalid", AgencyID: "3", ObaBaseURL: "http://invalid.url", ObaApiKey: "test-key"}
 
-		serverPing(testServer)
+		client := onebusaway.NewClient(
+			option.WithAPIKey(testServer.ObaApiKey),
+			option.WithBaseURL(testServer.ObaBaseURL),
+		)
+		serverPing(client, testServer)
 		time.Sleep(100 * time.Millisecond)
 
 		metricValue, err := getMetricValue(ObaApiStatus, map[string]string{

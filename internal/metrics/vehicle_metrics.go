@@ -7,7 +7,6 @@ import (
 	"time"
 
 	onebusaway "github.com/OneBusAway/go-sdk"
-	"github.com/OneBusAway/go-sdk/option"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
@@ -58,18 +57,15 @@ func countVehiclePositions(server models.ObaServer, realtimeStore *gtfs.Realtime
 // This function fetches live vehicle data from the OBA API using the agency ID.
 //
 // Parameters:
+//   - client: the shared OneBusAway SDK client for the server, injected by the
+//     caller so the client's connection pool and instrumentation are reused
+//     across collection ticks.
 //   - server: the ObaServer containing API credentials and agency information.
 //
 // Returns:
 //   - int: the number of vehicles returned by the API.
 //   - error: if the API call fails or returns an invalid response.
-func countActiveVehiclesForAgency(server models.ObaServer) (int, error) {
-
-	client := onebusaway.NewClient(
-		option.WithAPIKey(server.ObaApiKey),
-		option.WithBaseURL(server.ObaBaseURL),
-	)
-
+func countActiveVehiclesForAgency(client *onebusaway.Client, server models.ObaServer) (int, error) {
 	ctx := context.Background()
 
 	response, err := client.VehiclesForAgency.List(ctx, server.AgencyID, onebusaway.VehiclesForAgencyListParams{})

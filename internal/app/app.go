@@ -34,9 +34,10 @@ func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version s
 	unmatchedStopTracker := metrics.NewUnmatchedStopTracker()
 	backoffStore := config.NewBackoffStore()
 
+	obaSDKClientCache := NewObaSDKClientCache(client)
 	configService := config.NewConfigService(logger, client, cfg, backoffStore)
 	gtfsService := gtfs.NewGtfsService(staticStore, realtimeStore, boundingBoxStore, logger, client)
-	metricsService := metrics.NewMetricsService(staticStore, realtimeStore, boundingBoxStore, vehicleLastSeen, unmatchedStopTracker, logger, client)
+	metricsService := metrics.NewMetricsService(staticStore, realtimeStore, boundingBoxStore, vehicleLastSeen, unmatchedStopTracker, logger, client, obaSDKClientCache.For)
 
 	return &Application{
 		ConfigService:  configService,

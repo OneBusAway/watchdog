@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"testing"
 
+	onebusaway "github.com/OneBusAway/go-sdk"
+	"github.com/OneBusAway/go-sdk/option"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/models"
 )
@@ -22,7 +24,12 @@ func TestCountVehiclePositionsUsesAgencyStore(t *testing.T) {
 func TestCountActiveVehiclesForAgency(t *testing.T) {
 	ts := setupObaServer(t, `{"data":{"list":[{"vehicleId":"1"},{"vehicleId":"2"}]}}`, http.StatusOK)
 	defer ts.Close()
-	count, err := countActiveVehiclesForAgency(models.ObaServer{AgencyID: "agency-a", ObaBaseURL: ts.URL, ObaApiKey: "key"})
+	server := models.ObaServer{AgencyID: "agency-a", ObaBaseURL: ts.URL, ObaApiKey: "key"}
+	client := onebusaway.NewClient(
+		option.WithAPIKey(server.ObaApiKey),
+		option.WithBaseURL(server.ObaBaseURL),
+	)
+	count, err := countActiveVehiclesForAgency(client, server)
 	if err != nil || count != 2 {
 		t.Fatalf("count=%d err=%v", count, err)
 	}
