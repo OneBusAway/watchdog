@@ -451,7 +451,7 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: oba_agencies_with_coverage_count, oba_scheduled_trips_count\nQuestion answered: \"What is the overall realtime coverage footprint?\"",
+      "description": "Metrics: oba_scheduled_trips_count\nQuestion answered: \"What is the overall realtime coverage footprint?\"",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -461,15 +461,8 @@
       "id": 403,
       "targets": [
         {
-          "expr": "oba_agencies_with_coverage_count{agency_id=~\"$agency_id\"}",
-          "refId": "A",
-          "datasource": {
-            "name": "Prometheus"
-          }
-        },
-        {
           "expr": "oba_scheduled_trips_count{agency_id=~\"$agency_id\"}",
-          "refId": "B",
+          "refId": "A",
           "datasource": {
             "name": "Prometheus"
           }
