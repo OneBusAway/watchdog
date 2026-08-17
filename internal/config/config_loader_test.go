@@ -26,7 +26,7 @@ func TestLoadConfigFromFile(t *testing.T) {
 		"agency_name": "Test Server",
 		"oba_base_url": "https://test.example.com",
 		"oba_api_key": "test-key",
-		"gtfs_urls": ["https://gtfs.example.com"],
+		"gtfs-static-feeds": ["https://gtfs.example.com"],
 		"gtfs_rt_feeds": [{"trip_update_url": "https://trip.example.com", "vehicle_position_url": "https://vehicle.example.com"}],
 		"agency_id": "agency-1"
 		}]`
@@ -47,11 +47,11 @@ func TestLoadConfigFromFile(t *testing.T) {
 		}
 
 		expected := models.ObaServer{
-			AgencyName: "Test Server",
-			ObaBaseURL: "https://test.example.com",
-			ObaApiKey:  "test-key",
-			AgencyID:   "agency-1",
-			GtfsURLs:   []string{"https://gtfs.example.com"},
+			AgencyName:      "Test Server",
+			ObaBaseURL:      "https://test.example.com",
+			ObaApiKey:       "test-key",
+			AgencyID:        "agency-1",
+			GtfsStaticFeeds: []string{"https://gtfs.example.com"},
 			GtfsRTFeeds: []models.GtfsRTFeed{{
 				TripUpdateURL:      "https://trip.example.com",
 				VehiclePositionURL: "https://vehicle.example.com",
@@ -97,7 +97,7 @@ func TestLoadConfigFromURL(t *testing.T) {
 			w.Write([]byte(`[{"agency_name": "Test Server",
 			 "oba_base_url": "https://test.example.com",
 			 "oba_api_key": "test-key",
-			 "gtfs_urls": ["https://gtfs.example.com"],
+			 "gtfs-static-feeds": ["https://gtfs.example.com"],
 			 "gtfs_rt_feeds": [{"trip_update_url": "https://trip.example.com", "vehicle_position_url": "https://vehicle.example.com"}],
 			 "agency_id": "agency-1"
 			}]`))
@@ -114,11 +114,11 @@ func TestLoadConfigFromURL(t *testing.T) {
 		}
 
 		expected := models.ObaServer{
-			AgencyName: "Test Server",
-			ObaBaseURL: "https://test.example.com",
-			ObaApiKey:  "test-key",
-			AgencyID:   "agency-1",
-			GtfsURLs:   []string{"https://gtfs.example.com"},
+			AgencyName:      "Test Server",
+			ObaBaseURL:      "https://test.example.com",
+			ObaApiKey:       "test-key",
+			AgencyID:        "agency-1",
+			GtfsStaticFeeds: []string{"https://gtfs.example.com"},
 			GtfsRTFeeds: []models.GtfsRTFeed{{
 				TripUpdateURL:      "https://trip.example.com",
 				VehiclePositionURL: "https://vehicle.example.com",
@@ -306,7 +306,7 @@ func TestRefreshConfig(t *testing.T) {
 							"agency_name": "Refreshed Test Server",
 							"oba_base_url": "https://refreshed.example.com",
 							"oba_api_key": "refreshed-key",
-							"gtfs_urls": ["https://refreshed.example.com/gtfs.zip"],
+							"gtfs-static-feeds": ["https://refreshed.example.com/gtfs.zip"],
 							"gtfs_rt_feeds": [{"vehicle_position_url": "https://refreshed.example.com/vehicles"}],
 							"agency_id": "agency-999"
 					}

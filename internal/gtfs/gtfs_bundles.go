@@ -49,8 +49,8 @@ func downloadGTFSBundles(ctx context.Context, servers []models.ObaServer, logger
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			bundles := make([]*remoteGtfs.Static, 0, len(s.GtfsURLs))
-			for _, gtfsURL := range s.GtfsURLs {
+			bundles := make([]*remoteGtfs.Static, 0, len(s.GtfsStaticFeeds))
+			for _, gtfsURL := range s.GtfsStaticFeeds {
 				staticBundle, err := downloadGTFSBundle(ctx, gtfsURL, s.AgencyID, maxRetries)
 				if err == nil {
 					bundles = append(bundles, staticBundle)

@@ -30,12 +30,12 @@ func ValidateServer(server models.ObaServer) error {
 		{"oba_api_key", server.ObaApiKey},
 		{"agency_id", server.AgencyID},
 	}
-	if len(server.GtfsURLs) == 0 {
-		missing = append(missing, "gtfs_urls")
+	if len(server.GtfsStaticFeeds) == 0 {
+		missing = append(missing, "gtfs-static-feeds")
 	}
-	for i, gtfsURL := range server.GtfsURLs {
-		if strings.TrimSpace(gtfsURL) == "" {
-			missing = append(missing, fmt.Sprintf("gtfs_urls[%d]", i))
+	for i, gtfsStaticFeed := range server.GtfsStaticFeeds {
+		if strings.TrimSpace(gtfsStaticFeed) == "" {
+			missing = append(missing, fmt.Sprintf("gtfs-static-feeds[%d]", i))
 		}
 	}
 	if len(server.GtfsRTFeeds) == 0 {

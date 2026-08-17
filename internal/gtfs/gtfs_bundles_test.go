@@ -17,7 +17,7 @@ import (
 
 func TestDownloadGTFSBundles(t *testing.T) {
 	servers := []models.ObaServer{
-		{AgencyID: "agency-1", GtfsURLs: []string{"https://example.com/gtfs.zip"}},
+		{AgencyID: "agency-1", GtfsStaticFeeds: []string{"https://example.com/gtfs.zip"}},
 	}
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -32,7 +32,7 @@ func TestRefreshGTFSBundles(t *testing.T) {
 	var logBuffer bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-	servers := []models.ObaServer{{AgencyID: "agency-1", AgencyName: "Test Server", GtfsURLs: []string{"http://example.com/gtfs.zip"}}}
+	servers := []models.ObaServer{{AgencyID: "agency-1", AgencyName: "Test Server", GtfsStaticFeeds: []string{"http://example.com/gtfs.zip"}}}
 	boundingBoxStore := geo.NewBoundingBoxStore()
 	staticStore := NewStaticStore()
 	ctx, cancel := context.WithCancel(context.Background())

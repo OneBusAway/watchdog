@@ -23,12 +23,12 @@ func TestNewConfig(t *testing.T) {
 			env:  "development",
 			servers: []models.ObaServer{
 				{
-					AgencyName:  "Test Server",
-					ObaBaseURL:  "https://test.onebusaway.org",
-					ObaApiKey:   "test-key",
-					AgencyID:    "agency-1",
-					GtfsURLs:    []string{"https://test.gtfs.url"},
-					GtfsRTFeeds: []models.GtfsRTFeed{{TripUpdateURL: "https://test.update.url", VehiclePositionURL: "https://test.vehicle.url"}},
+					AgencyName:      "Test Server",
+					ObaBaseURL:      "https://test.onebusaway.org",
+					ObaApiKey:       "test-key",
+					AgencyID:        "agency-1",
+					GtfsStaticFeeds: []string{"https://test.gtfs.url"},
+					GtfsRTFeeds:     []models.GtfsRTFeed{{TripUpdateURL: "https://test.update.url", VehiclePositionURL: "https://test.vehicle.url"}},
 				},
 			},
 			expectedPort: 4000,

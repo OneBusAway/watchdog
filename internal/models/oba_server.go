@@ -3,12 +3,12 @@ package models
 // ObaServer represents a OneBusAway server configuration
 // TODO: Some server have multiple Agencies, so we should have a list of Agencies
 type ObaServer struct {
-	AgencyName  string       `json:"agency_name"`
-	AgencyID    string       `json:"agency_id"`
-	ObaBaseURL  string       `json:"oba_base_url"`
-	ObaApiKey   string       `json:"oba_api_key"`
-	GtfsURLs    []string     `json:"gtfs_urls"`
-	GtfsRTFeeds []GtfsRTFeed `json:"gtfs_rt_feeds"`
+	AgencyName      string       `json:"agency_name"`
+	AgencyID        string       `json:"agency_id"`
+	ObaBaseURL      string       `json:"oba_base_url"`
+	ObaApiKey       string       `json:"oba_api_key"`
+	GtfsStaticFeeds []string     `json:"gtfs-static-feeds"`
+	GtfsRTFeeds     []GtfsRTFeed `json:"gtfs_rt_feeds"`
 }
 
 // GtfsRTFeed is one GTFS-Realtime source. Trip updates are retained for future
@@ -22,6 +22,6 @@ type GtfsRTFeed struct {
 }
 
 // NewObaServer creates a new ObaServer instance with the provided configuration.
-func NewObaServer(agencyName, agencyID, baseURL, apiKey string, gtfsURLs []string, gtfsRTFeeds []GtfsRTFeed) *ObaServer {
-	return &ObaServer{AgencyName: agencyName, AgencyID: agencyID, ObaBaseURL: baseURL, ObaApiKey: apiKey, GtfsURLs: gtfsURLs, GtfsRTFeeds: gtfsRTFeeds}
+func NewObaServer(agencyName, agencyID, baseURL, apiKey string, gtfsStaticFeeds []string, gtfsRTFeeds []GtfsRTFeed) *ObaServer {
+	return &ObaServer{AgencyName: agencyName, AgencyID: agencyID, ObaBaseURL: baseURL, ObaApiKey: apiKey, GtfsStaticFeeds: gtfsStaticFeeds, GtfsRTFeeds: gtfsRTFeeds}
 }

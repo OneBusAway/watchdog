@@ -32,7 +32,7 @@ func TestDownloadGTFSBundles(t *testing.T) {
 		srv := server
 		t.Run(fmt.Sprintf("Agency_%s", srv.AgencyID), func(t *testing.T) {
 			t.Parallel()
-			for _, gtfsURL := range srv.GtfsURLs {
+			for _, gtfsURL := range srv.GtfsStaticFeeds {
 				staticBundle, err := gtfsService.DownloadGTFSBundle(ctx, gtfsURL, srv.AgencyID, 20)
 				if err != nil {
 					t.Errorf("failed to download GTFS bundle for agency %s : %v", srv.AgencyID, err)

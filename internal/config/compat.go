@@ -59,11 +59,11 @@ func validateLegacy(server legacyObaServer) error {
 // legacyToCurrent converts a validated legacy v1 server to the current schema.
 func legacyToCurrent(l legacyObaServer) models.ObaServer {
 	return models.ObaServer{
-		AgencyName: l.Name,
-		AgencyID:   l.AgencyID,
-		ObaBaseURL: l.ObaBaseURL,
-		ObaApiKey:  l.ObaApiKey,
-		GtfsURLs:   []string{l.GtfsUrl},
+		AgencyName:      l.Name,
+		AgencyID:        l.AgencyID,
+		ObaBaseURL:      l.ObaBaseURL,
+		ObaApiKey:       l.ObaApiKey,
+		GtfsStaticFeeds: []string{l.GtfsUrl},
 		GtfsRTFeeds: []models.GtfsRTFeed{{
 			TripUpdateURL:      l.TripUpdateUrl,
 			VehiclePositionURL: l.VehiclePositionUrl,
@@ -85,7 +85,7 @@ func decodeServerEntry(raw json.RawMessage) (models.ObaServer, error) {
 	}
 
 	hasV1 := fields["gtfs_url"] != nil || fields["trip_update_url"] != nil || fields["vehicle_position_url"] != nil
-	hasV2 := fields["gtfs_urls"] != nil || fields["gtfs_rt_feeds"] != nil
+	hasV2 := fields["gtfs-static-feeds"] != nil || fields["gtfs_rt_feeds"] != nil
 	if hasV1 && hasV2 {
 		return models.ObaServer{}, fmt.Errorf("server entry mixes legacy (v1) and current (v2) fields; use either the flat schema or the array schema, not both")
 	}

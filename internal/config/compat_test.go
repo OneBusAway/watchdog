@@ -36,11 +36,11 @@ func TestDecodeServerEntry(t *testing.T) {
 		}
 
 		expected := models.ObaServer{
-			AgencyName: "Test Server 1",
-			AgencyID:   "agency-1",
-			ObaBaseURL: "https://test1.example.com",
-			ObaApiKey:  "test-key-1",
-			GtfsURLs:   []string{"https://gtfs1.example.com"},
+			AgencyName:      "Test Server 1",
+			AgencyID:        "agency-1",
+			ObaBaseURL:      "https://test1.example.com",
+			ObaApiKey:       "test-key-1",
+			GtfsStaticFeeds: []string{"https://gtfs1.example.com"},
 			GtfsRTFeeds: []models.GtfsRTFeed{{
 				TripUpdateURL:      "https://trip1.example.com",
 				VehiclePositionURL: "https://vehicle1.example.com",
@@ -92,7 +92,7 @@ func TestDecodeServerEntry(t *testing.T) {
 			"agency_name": "Test Server",
 			"oba_base_url": "https://test.example.com",
 			"oba_api_key": "test-key",
-			"gtfs_urls": ["https://gtfs.example.com"],
+			"gtfs-static-feeds": ["https://gtfs.example.com"],
 			"gtfs_rt_feeds": [{"trip_update_url": "https://trip.example.com", "vehicle_position_url": "https://vehicle.example.com"}],
 			"agency_id": "agency-1"
 		}`)
@@ -103,11 +103,11 @@ func TestDecodeServerEntry(t *testing.T) {
 		}
 
 		expected := models.ObaServer{
-			AgencyName: "Test Server",
-			AgencyID:   "agency-1",
-			ObaBaseURL: "https://test.example.com",
-			ObaApiKey:  "test-key",
-			GtfsURLs:   []string{"https://gtfs.example.com"},
+			AgencyName:      "Test Server",
+			AgencyID:        "agency-1",
+			ObaBaseURL:      "https://test.example.com",
+			ObaApiKey:       "test-key",
+			GtfsStaticFeeds: []string{"https://gtfs.example.com"},
 			GtfsRTFeeds: []models.GtfsRTFeed{{
 				TripUpdateURL:      "https://trip.example.com",
 				VehiclePositionURL: "https://vehicle.example.com",
@@ -124,7 +124,7 @@ func TestDecodeServerEntry(t *testing.T) {
 			"oba_base_url": "https://test.example.com",
 			"oba_api_key": "test-key",
 			"gtfs_url": "https://gtfs.example.com",
-			"gtfs_urls": ["https://gtfs.example.com"],
+			"gtfs-static-feeds": ["https://gtfs.example.com"],
 			"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle.example.com"}],
 			"agency_id": "agency-1"
 		}`)
@@ -143,7 +143,7 @@ func TestDecodeServerEntry(t *testing.T) {
 			"agency_name": "Partial Auth",
 			"oba_base_url": "https://test.example.com",
 			"oba_api_key": "test-key",
-			"gtfs_urls": ["https://gtfs.example.com"],
+			"gtfs-static-feeds": ["https://gtfs.example.com"],
 			"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle.example.com", "gtfs_rt_api_key": "only-key"}],
 			"agency_id": "agency-1"
 		}`)
@@ -188,8 +188,8 @@ func TestLoadConfigFromFileLegacy(t *testing.T) {
 	if servers[0].AgencyID != "agency-legacy" {
 		t.Fatalf("expected agency-legacy, got %q", servers[0].AgencyID)
 	}
-	if !reflect.DeepEqual(servers[0].GtfsURLs, []string{"https://gtfs.example.com"}) {
-		t.Errorf("expected gtfs_urls from legacy gtfs_url, got %+v", servers[0].GtfsURLs)
+	if !reflect.DeepEqual(servers[0].GtfsStaticFeeds, []string{"https://gtfs.example.com"}) {
+		t.Errorf("expected gtfs-static-feeds from legacy gtfs_url, got %+v", servers[0].GtfsStaticFeeds)
 	}
 	if len(servers[0].GtfsRTFeeds) != 1 || servers[0].GtfsRTFeeds[0].VehiclePositionURL != "https://vehicle.example.com" {
 		t.Errorf("expected converted feed, got %+v", servers[0].GtfsRTFeeds)
@@ -213,7 +213,7 @@ func TestLoadConfigFromFileMixedEntries(t *testing.T) {
 			"agency_name": "Current Server",
 			"oba_base_url": "https://current.example.com",
 			"oba_api_key": "current-key",
-			"gtfs_urls": ["https://gtfs.example.com"],
+			"gtfs-static-feeds": ["https://gtfs.example.com"],
 			"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle.example.com"}],
 			"agency_id": "agency-current"
 		},
@@ -221,7 +221,7 @@ func TestLoadConfigFromFileMixedEntries(t *testing.T) {
 			"agency_name": "Broken Server",
 			"oba_base_url": "https://broken.example.com",
 			"oba_api_key": "broken-key",
-			"gtfs_urls": null,
+			"gtfs-static-feeds": null,
 			"gtfs_rt_feeds": null,
 			"agency_id": "agency-broken"
 		}
@@ -275,7 +275,7 @@ func TestLoadConfigFromURLLegacy(t *testing.T) {
 	if len(servers) != 1 || servers[0].AgencyID != "agency-remote" {
 		t.Fatalf("expected the legacy server to be converted, got %+v", servers)
 	}
-	if !reflect.DeepEqual(servers[0].GtfsURLs, []string{"https://gtfs.example.com"}) {
-		t.Errorf("expected gtfs_urls from legacy gtfs_url, got %+v", servers[0].GtfsURLs)
+	if !reflect.DeepEqual(servers[0].GtfsStaticFeeds, []string{"https://gtfs.example.com"}) {
+		t.Errorf("expected gtfs-static-feeds from legacy gtfs_url, got %+v", servers[0].GtfsStaticFeeds)
 	}
 }

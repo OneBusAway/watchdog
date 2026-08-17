@@ -17,11 +17,11 @@ import (
 // validServer returns a fully-populated server that should pass validation.
 func validServer() models.ObaServer {
 	return models.ObaServer{
-		AgencyName: "Test Server",
-		ObaBaseURL: "https://test.example.com",
-		ObaApiKey:  "test-key",
-		AgencyID:   "agency-1",
-		GtfsURLs:   []string{"https://gtfs.example.com"},
+		AgencyName:      "Test Server",
+		ObaBaseURL:      "https://test.example.com",
+		ObaApiKey:       "test-key",
+		AgencyID:        "agency-1",
+		GtfsStaticFeeds: []string{"https://gtfs.example.com"},
 		GtfsRTFeeds: []models.GtfsRTFeed{{
 			TripUpdateURL:      "https://trip.example.com",
 			VehiclePositionURL: "https://vehicle.example.com",
@@ -51,7 +51,7 @@ func TestValidateServer(t *testing.T) {
 		mutate    func(*models.ObaServer)
 		wantField string
 	}{
-		{"missing gtfs_urls", func(s *models.ObaServer) { s.GtfsURLs = nil }, "gtfs_urls"},
+		{"missing gtfs-static-feeds", func(s *models.ObaServer) { s.GtfsStaticFeeds = nil }, "gtfs-static-feeds"},
 		{"missing gtfs_rt_feeds", func(s *models.ObaServer) { s.GtfsRTFeeds = nil }, "gtfs_rt_feeds"},
 		{"missing vehicle position URL", func(s *models.ObaServer) { s.GtfsRTFeeds[0].VehiclePositionURL = "" }, "gtfs_rt_feeds[0].vehicle_position_url"},
 		{"missing oba_base_url", func(s *models.ObaServer) { s.ObaBaseURL = "" }, "oba_base_url"},
@@ -59,7 +59,7 @@ func TestValidateServer(t *testing.T) {
 		{"missing agency_id", func(s *models.ObaServer) { s.AgencyID = "" }, "agency_id"},
 		{"missing agency_name", func(s *models.ObaServer) { s.AgencyName = "" }, "agency_name"},
 		{"whitespace-only agency_id", func(s *models.ObaServer) { s.AgencyID = "   " }, "agency_id"},
-		{"whitespace-only gtfs URL", func(s *models.ObaServer) { s.GtfsURLs[0] = "  \t " }, "gtfs_urls[0]"},
+		{"whitespace-only gtfs URL", func(s *models.ObaServer) { s.GtfsStaticFeeds[0] = "  \t " }, "gtfs-static-feeds[0]"},
 	}
 
 	for _, tc := range requiredFieldCases {
@@ -87,7 +87,7 @@ func TestValidateServer(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
-		for _, field := range []string{"gtfs_urls", "gtfs_rt_feeds", "agency_id"} {
+		for _, field := range []string{"gtfs-static-feeds", "gtfs_rt_feeds", "agency_id"} {
 			if !strings.Contains(err.Error(), field) {
 				t.Fatalf("expected error to mention %q, got: %v", field, err)
 			}
@@ -104,7 +104,7 @@ func TestLoadConfigFromFileFiltersInvalidServers(t *testing.T) {
 			"agency_name": "Valid Server",
 			"oba_base_url": "https://valid.example.com",
 			"oba_api_key": "valid-key",
-			"gtfs_urls": ["https://gtfs.example.com"],
+			"gtfs-static-feeds": ["https://gtfs.example.com"],
 			"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle.example.com"}],
 			"agency_id": "agency-1"
 		},
@@ -112,7 +112,7 @@ func TestLoadConfigFromFileFiltersInvalidServers(t *testing.T) {
 			"agency_name": "Broken Server",
 			"oba_base_url": "https://broken.example.com",
 			"oba_api_key": "broken-key",
-			"gtfs_urls": null,
+			"gtfs-static-feeds": null,
 			"gtfs_rt_feeds": null,
 			"agency_id": null
 		}
@@ -146,7 +146,7 @@ func TestLoadConfigFromURLFiltersInvalidServers(t *testing.T) {
 			"agency_name": "Valid Server",
 			"oba_base_url": "https://valid.example.com",
 			"oba_api_key": "valid-key",
-			"gtfs_urls": ["https://gtfs.example.com"],
+			"gtfs-static-feeds": ["https://gtfs.example.com"],
 			"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle.example.com"}],
 			"agency_id": "agency-1"
 		},
@@ -154,7 +154,7 @@ func TestLoadConfigFromURLFiltersInvalidServers(t *testing.T) {
 			"agency_name": "Broken Server",
 			"oba_base_url": "https://broken.example.com",
 			"oba_api_key": "broken-key",
-			"gtfs_urls": null,
+			"gtfs-static-feeds": null,
 			"gtfs_rt_feeds": null,
 			"agency_id": null
 		}
@@ -185,7 +185,7 @@ func TestDecodeServers(t *testing.T) {
 				"agency_name": "Valid Server",
 				"oba_base_url": "https://valid.example.com",
 				"oba_api_key": "valid-key",
-				"gtfs_urls": ["https://gtfs.example.com"],
+				"gtfs-static-feeds": ["https://gtfs.example.com"],
 				"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle.example.com"}],
 				"agency_id": "agency-1"
 			}`),
@@ -193,7 +193,7 @@ func TestDecodeServers(t *testing.T) {
 				"agency_name": "Invalid Server",
 				"oba_base_url": "https://invalid.example.com",
 				"oba_api_key": "invalid-key",
-				"gtfs_urls": null,
+				"gtfs-static-feeds": null,
 				"gtfs_rt_feeds": null,
 				"agency_id": "agency-10"
 			}`),
@@ -201,7 +201,7 @@ func TestDecodeServers(t *testing.T) {
 				"agency_name": "Valid Server 2",
 				"oba_base_url": "https://valid2.example.com",
 				"oba_api_key": "valid-key-2",
-				"gtfs_urls": ["https://gtfs2.example.com"],
+				"gtfs-static-feeds": ["https://gtfs2.example.com"],
 				"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle2.example.com"}],
 				"agency_id": "agency-2"
 			}`),
@@ -209,7 +209,7 @@ func TestDecodeServers(t *testing.T) {
 				"agency_name": "No Agency",
 				"oba_base_url": "https://noagency.example.com",
 				"oba_api_key": "key",
-				"gtfs_urls": ["https://gtfs.example.com"],
+				"gtfs-static-feeds": ["https://gtfs.example.com"],
 				"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle.example.com"}],
 				"agency_id": ""
 			}`),
@@ -232,7 +232,7 @@ func TestDecodeServers(t *testing.T) {
 				"agency_name": "First",
 				"oba_base_url": "https://first.example.com",
 				"oba_api_key": "key",
-				"gtfs_urls": ["https://gtfs.example.com"],
+				"gtfs-static-feeds": ["https://gtfs.example.com"],
 				"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle.example.com"}],
 				"agency_id": "agency-1"
 			}`),
@@ -240,7 +240,7 @@ func TestDecodeServers(t *testing.T) {
 				"agency_name": "Second",
 				"oba_base_url": "https://second.example.com",
 				"oba_api_key": "key",
-				"gtfs_urls": ["https://gtfs.example.com"],
+				"gtfs-static-feeds": ["https://gtfs.example.com"],
 				"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle.example.com"}],
 				"agency_id": "agency-1"
 			}`),
@@ -261,7 +261,7 @@ func TestDecodeServers(t *testing.T) {
 				"agency_name": "Bad",
 				"oba_base_url": "https://bad.example.com",
 				"oba_api_key": "key",
-				"gtfs_urls": null,
+				"gtfs-static-feeds": null,
 				"gtfs_rt_feeds": null,
 				"agency_id": "agency-bad"
 			}`),
