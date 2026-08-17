@@ -11,37 +11,37 @@ func TestSanitizeServerURL(t *testing.T) {
 		{
 			name:     "strips query string",
 			input:    "https://api.example.com/api/where/metrics.json?key=SECRET",
-			expected: "https://api.example.com",
+			expected: "https://api.example.com/api/where/metrics.json",
 		},
 		{
 			name:     "strips userinfo",
 			input:    "https://user:pass@rt.example.com/vehiclePositions.pb?token=SECRET",
-			expected: "https://rt.example.com",
+			expected: "https://rt.example.com/vehiclePositions.pb",
 		},
 		{
-			name:     "strips path",
+			name:     "keeps path",
 			input:    "https://rt.example.com/feed/positions.pb",
-			expected: "https://rt.example.com",
+			expected: "https://rt.example.com/feed/positions.pb",
 		},
 		{
 			name:     "preserves port",
 			input:    "https://rt.example.com:8080/path?key=x",
-			expected: "https://rt.example.com:8080",
+			expected: "https://rt.example.com:8080/path",
 		},
 		{
 			name:     "preserves http scheme",
 			input:    "http://example.com/foo",
-			expected: "http://example.com",
+			expected: "http://example.com/foo",
 		},
 		{
 			name:     "adds scheme when missing",
 			input:    "example.com:8080/path",
-			expected: "https://example.com:8080",
+			expected: "https://example.com:8080/path",
 		},
 		{
 			name:     "protocol-relative",
 			input:    "//example.com/path",
-			expected: "https://example.com",
+			expected: "https://example.com/path",
 		},
 		{
 			name:     "empty input",

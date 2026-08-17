@@ -12,7 +12,7 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
 
 | Metric Name      | Type  | Labels                    | Unit          | Description                                                        |
 | ---------------- | ----- | ------------------------- | ------------- | ------------------------------------------------------------------ |
-| `oba_api_status` | Gauge | `agency_id`, `agency_name`, `server_url` | boolean (0/1) | Status of the OneBusAway API Server (0 = not working, 1 = working) |
+| `oba_api_status` | Gauge | `agency_id`, `agency_name`, `server_url` | boolean (0/1) | Status of the OneBusAway API Server (0 = not working, 1 = working). One series per probed endpoint: `server_url` carries the full sanitized endpoint path, so `/api/where/current-time.json` and `/api/where/metrics.json` are reported separately. |
 
 **Interpretation Guide:**  
 - **Normal:** Always `1` (working).  

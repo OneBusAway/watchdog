@@ -114,7 +114,7 @@ func fetchObaAPIMetrics(agencyID, agencyName, serverBaseUrl, apiKey string, clie
 		})
 		return err
 	}
-	ObaApiStatus.WithLabelValues(agencyID, agencyName, utils.SanitizeServerURL(serverBaseUrl)).Set(1)
+	ObaApiStatus.WithLabelValues(agencyID, agencyName, utils.SanitizeServerURL(url)).Set(1)
 
 	if fetchTime, ok := staticStore.GetFetchTime(agencyID); ok {
 		GtfsBundleLastFetchedTimestamp.WithLabelValues(agencyID, agencyName).Set(float64(fetchTime.Unix()))

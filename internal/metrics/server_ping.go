@@ -11,6 +11,10 @@ import (
 	"watchdog.onebusaway.org/internal/utils"
 )
 
+// currentTimeEndpoint is the OBA API endpoint pinged by serverPing to verify
+// server availability.
+const currentTimeEndpoint = "/api/where/current-time.json"
+
 // serverPing pings the `/current-time` endpoint of the given OneBusAway server
 // to verify the API is reachable and returning valid data.
 //
@@ -44,7 +48,7 @@ func serverPing(server models.ObaServer) bool {
 		ObaApiStatus.WithLabelValues(
 			server.AgencyID,
 			server.AgencyName,
-			utils.SanitizeServerURL(server.ObaBaseURL),
+			utils.SanitizeServerURL(server.ObaBaseURL+currentTimeEndpoint),
 		).Set(0)
 		return false
 	}
@@ -54,14 +58,14 @@ func serverPing(server models.ObaServer) bool {
 		ObaApiStatus.WithLabelValues(
 			server.AgencyID,
 			server.AgencyName,
-			utils.SanitizeServerURL(server.ObaBaseURL),
+			utils.SanitizeServerURL(server.ObaBaseURL+currentTimeEndpoint),
 		).Set(1)
 		return true
 	}
 	ObaApiStatus.WithLabelValues(
 		server.AgencyID,
 		server.AgencyName,
-		utils.SanitizeServerURL(server.ObaBaseURL),
+		utils.SanitizeServerURL(server.ObaBaseURL+currentTimeEndpoint),
 	).Set(0)
 	return false
 }

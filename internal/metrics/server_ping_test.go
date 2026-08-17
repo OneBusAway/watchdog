@@ -21,7 +21,7 @@ func TestCheckServer(t *testing.T) {
 		metricValue, err := getMetricValue(ObaApiStatus, map[string]string{
 			"agency_id":   testServer.AgencyID,
 			"agency_name": testServer.AgencyName,
-			"server_url":  testServer.ObaBaseURL,
+			"server_url":  testServer.ObaBaseURL + currentTimeEndpoint,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -44,7 +44,7 @@ func TestCheckServer(t *testing.T) {
 		metricValue, err := getMetricValue(ObaApiStatus, map[string]string{
 			"agency_id":   testServer.AgencyID,
 			"agency_name": testServer.AgencyName,
-			"server_url":  testServer.ObaBaseURL,
+			"server_url":  testServer.ObaBaseURL + currentTimeEndpoint,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -64,7 +64,7 @@ func TestCheckServer(t *testing.T) {
 		metricValue, err := getMetricValue(ObaApiStatus, map[string]string{
 			"agency_id":   testServer.AgencyID,
 			"agency_name": testServer.AgencyName,
-			"server_url":  testServer.ObaBaseURL,
+			"server_url":  testServer.ObaBaseURL + currentTimeEndpoint,
 		})
 		if err != nil {
 			t.Fatal(err)

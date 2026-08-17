@@ -166,8 +166,9 @@ func TestFetchObaAPIMetrics_SanitizesServerURLLabel(t *testing.T) {
 	}
 
 	// The caller-provided base URL carried userinfo, and the query string carries the
-	// API key; the label must reduce to the clean scheme://host of the httptest server.
-	wantURL := server.URL
+	// API key; the label must reduce to the clean scheme://host and endpoint path
+	// of the httptest server.
+	wantURL := server.URL + "/api/where/metrics.json"
 	if gotURL != wantURL {
 		t.Fatalf("expected server_url label %q, got %q", wantURL, gotURL)
 	}

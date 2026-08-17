@@ -10,11 +10,12 @@ func MakeMap(key, value string) map[string]string {
 	return map[string]string{key: value}
 }
 
-// SanitizeServerURL reduces a URL to its scheme and host only, stripping any
-// query string, path, and userinfo. This is used for Prometheus label values so
-// that credentials embedded in URLs (e.g. ?api_key=SECRET or user:pass@host)
-// are never exposed through metrics. It returns an empty string if the input
-// cannot be parsed.
+// SanitizeServerURL reduces a URL to its scheme, host, and path, stripping any
+// query string and userinfo. This is used for Prometheus label values so that
+// credentials embedded in URLs (e.g. ?api_key=SECRET or user:pass@host) are
+// never exposed through metrics, while still distinguishing different API
+// endpoints by their path. It returns an empty string if the input cannot be
+// parsed.
 func SanitizeServerURL(rawURL string) string {
 	raw := strings.TrimSpace(rawURL)
 	if raw == "" {
@@ -43,5 +44,5 @@ func SanitizeServerURL(rawURL string) string {
 		return ""
 	}
 
-	return parsed.Scheme + "://" + parsed.Host
+	return parsed.Scheme + "://" + parsed.Host + parsed.Path
 }
