@@ -26,7 +26,7 @@ Watchdog requires a configuration file (`config.json`) before running. Even plac
 ```json
 [
   {
-    "name": "Test Server 1",
+    "agency_name": "Test Server 1",
     "agency_id": "agency-1",
     "oba_base_url": "https://test1.example.com",
     "oba_api_key": "test-key-1",

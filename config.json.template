@@ -1,6 +1,6 @@
 [
   {
-    "name": "Test Server 1",
+    "agency_name": "Test Server 1",
     "agency_id": "agency-1",
     "oba_base_url": "https://test1.example.com",
     "oba_api_key": "test-key-1",
@@ -14,7 +14,7 @@
     }]
   },
   {
-    "name": "Test Server 2",
+    "agency_name": "Test Server 2",
     "agency_id": "agency-2",
     "oba_base_url": "https://test2.example.com",
     "oba_api_key": "test-key-2",
