@@ -122,7 +122,7 @@
           },
           "editorMode": "code",
           "expr": "oba_api_status{agency_id=~\"$agency_id\"}",
-          "legendFormat": "{{agency_id}} · {{server_url}}",
+          "legendFormat": "{{agency_name}} ({{agency_id}}) · {{server_url}}",
           "range": true,
           "refId": "A"
         }
@@ -594,7 +594,7 @@
           "datasource": {
             "name": "Prometheus"
           },
-          "expr": "sum by (station_id, cluster_id, cluster_lat, cluster_lon) (oba_unmatched_stop_cluster_count)",
+          "expr": "sum by (agency_name, station_id, cluster_id, cluster_lat, cluster_lon) (oba_unmatched_stop_cluster_count)",
           "format": "table",
           "instant": true,
           "refId": "A"
@@ -640,6 +640,36 @@
         "sort": 0,
         "type": "query",
         "label": "Agency"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "datasource": {
+          "name": "Prometheus"
+        },
+        "definition": "label_values(agency_name)",
+        "hide": 0,
+        "includeAll": true,
+        "multi": true,
+        "name": "agency_name",
+        "options": [],
+        "query": {
+          "query": "label_values(agency_name)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query",
+        "label": "Agency Name"
       }
     ]
   },
