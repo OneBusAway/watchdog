@@ -36,7 +36,7 @@ func TestDecodeServerEntry(t *testing.T) {
 		}
 
 		expected := models.ObaServer{
-			Name:       "Test Server 1",
+			AgencyName: "Test Server 1",
 			AgencyID:   "agency-1",
 			ObaBaseURL: "https://test1.example.com",
 			ObaApiKey:  "test-key-1",
@@ -89,7 +89,7 @@ func TestDecodeServerEntry(t *testing.T) {
 
 	t.Run("current v2 entry decodes unchanged", func(t *testing.T) {
 		raw := json.RawMessage(`{
-			"name": "Test Server",
+			"agency_name": "Test Server",
 			"oba_base_url": "https://test.example.com",
 			"oba_api_key": "test-key",
 			"gtfs_urls": ["https://gtfs.example.com"],
@@ -103,7 +103,7 @@ func TestDecodeServerEntry(t *testing.T) {
 		}
 
 		expected := models.ObaServer{
-			Name:       "Test Server",
+			AgencyName: "Test Server",
 			AgencyID:   "agency-1",
 			ObaBaseURL: "https://test.example.com",
 			ObaApiKey:  "test-key",
@@ -140,7 +140,7 @@ func TestDecodeServerEntry(t *testing.T) {
 
 	t.Run("current v2 entry with partial auth pair is rejected", func(t *testing.T) {
 		raw := json.RawMessage(`{
-			"name": "Partial Auth",
+			"agency_name": "Partial Auth",
 			"oba_base_url": "https://test.example.com",
 			"oba_api_key": "test-key",
 			"gtfs_urls": ["https://gtfs.example.com"],
@@ -210,7 +210,7 @@ func TestLoadConfigFromFileMixedEntries(t *testing.T) {
 			"agency_id": "agency-legacy"
 		},
 		{
-			"name": "Current Server",
+			"agency_name": "Current Server",
 			"oba_base_url": "https://current.example.com",
 			"oba_api_key": "current-key",
 			"gtfs_urls": ["https://gtfs.example.com"],
@@ -218,7 +218,7 @@ func TestLoadConfigFromFileMixedEntries(t *testing.T) {
 			"agency_id": "agency-current"
 		},
 		{
-			"name": "Broken Server",
+			"agency_name": "Broken Server",
 			"oba_base_url": "https://broken.example.com",
 			"oba_api_key": "broken-key",
 			"gtfs_urls": null,

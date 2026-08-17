@@ -43,6 +43,7 @@ func serverPing(server models.ObaServer) bool {
 		// Update status metric
 		ObaApiStatus.WithLabelValues(
 			server.AgencyID,
+			server.AgencyName,
 			utils.SanitizeServerURL(server.ObaBaseURL),
 		).Set(0)
 		return false
@@ -52,12 +53,14 @@ func serverPing(server models.ObaServer) bool {
 	if response.Data.Entry.ReadableTime != "" {
 		ObaApiStatus.WithLabelValues(
 			server.AgencyID,
+			server.AgencyName,
 			utils.SanitizeServerURL(server.ObaBaseURL),
 		).Set(1)
 		return true
 	}
 	ObaApiStatus.WithLabelValues(
 		server.AgencyID,
+		server.AgencyName,
 		utils.SanitizeServerURL(server.ObaBaseURL),
 	).Set(0)
 	return false

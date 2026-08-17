@@ -6,7 +6,7 @@ import (
 )
 
 func TestNewObaServer(t *testing.T) {
-	name := "Test Server"
+	agencyName := "Test Server"
 	agencyID := "test-agency-id"
 	baseURL := "https://test.onebusaway.org"
 	apiKey := "test-key"
@@ -20,7 +20,7 @@ func TestNewObaServer(t *testing.T) {
 	}}
 
 	server := NewObaServer(
-		name,
+		agencyName,
 		agencyID,
 		baseURL,
 		apiKey,
@@ -33,7 +33,7 @@ func TestNewObaServer(t *testing.T) {
 		got      string
 		expected string
 	}{
-		{"Name", server.Name, name},
+		{"AgencyName", server.AgencyName, agencyName},
 		{"AgencyID", server.AgencyID, agencyID},
 		{"BaseURL", server.ObaBaseURL, baseURL},
 		{"ApiKey", server.ObaApiKey, apiKey},

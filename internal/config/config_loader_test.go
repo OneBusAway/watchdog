@@ -23,7 +23,7 @@ import (
 func TestLoadConfigFromFile(t *testing.T) {
 	t.Run("ValidConfig", func(t *testing.T) {
 		content := `[{
-		"name": "Test Server",
+		"agency_name": "Test Server",
 		"oba_base_url": "https://test.example.com",
 		"oba_api_key": "test-key",
 		"gtfs_urls": ["https://gtfs.example.com"],
@@ -47,7 +47,7 @@ func TestLoadConfigFromFile(t *testing.T) {
 		}
 
 		expected := models.ObaServer{
-			Name:       "Test Server",
+			AgencyName: "Test Server",
 			ObaBaseURL: "https://test.example.com",
 			ObaApiKey:  "test-key",
 			AgencyID:   "agency-1",
@@ -94,7 +94,7 @@ func TestLoadConfigFromURL(t *testing.T) {
 	t.Run("ValidResponse", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`[{"name": "Test Server",
+			w.Write([]byte(`[{"agency_name": "Test Server",
 			 "oba_base_url": "https://test.example.com",
 			 "oba_api_key": "test-key",
 			 "gtfs_urls": ["https://gtfs.example.com"],
@@ -114,7 +114,7 @@ func TestLoadConfigFromURL(t *testing.T) {
 		}
 
 		expected := models.ObaServer{
-			Name:       "Test Server",
+			AgencyName: "Test Server",
 			ObaBaseURL: "https://test.example.com",
 			ObaApiKey:  "test-key",
 			AgencyID:   "agency-1",
@@ -303,7 +303,7 @@ func TestRefreshConfig(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintln(w, `[
 					{
-							"name": "Refreshed Test Server",
+							"agency_name": "Refreshed Test Server",
 							"oba_base_url": "https://refreshed.example.com",
 							"oba_api_key": "refreshed-key",
 							"gtfs_urls": ["https://refreshed.example.com/gtfs.zip"],
@@ -343,7 +343,7 @@ func TestRefreshConfig(t *testing.T) {
 
 	var found bool
 	for _, s := range updatedServers {
-		if s.AgencyID == "agency-999" && s.Name == "Refreshed Test Server" {
+		if s.AgencyID == "agency-999" && s.AgencyName == "Refreshed Test Server" {
 			found = true
 			break
 		}

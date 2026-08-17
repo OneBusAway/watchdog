@@ -19,48 +19,54 @@ import (
 	"watchdog.onebusaway.org/internal/models"
 )
 
-func TestFetchObaAPIMetrics_WithVCR(t *testing.T) {
+func TestFetchObaAPIMetrics(t *testing.T) {
 	data := readFixture(t, "gtfs.zip")
 	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
-	staticData := models.NewStaticData(staticBundle)
 	if err != nil {
 		t.Fatal("failed to parse gtfs static data")
 	}
-	staticStore := gtfs.NewStaticStore()
+	staticData := models.NewStaticData(staticBundle)
+
+	const successBody = `{"code":200,"currentTime":1746323809556,"data":{"entry":{"agenciesWithCoverageCount":1,"agencyIDs":["unitrans"],"realtimeRecordsTotal":{"unitrans":3},"realtimeTripCountsMatched":{"unitrans":3},"realtimeTripCountsUnmatched":{"unitrans":0},"realtimeTripIDsUnmatched":{"unitrans":[]},"scheduledTripsCount":{"unitrans":5},"stopIDsMatchedCount":{"unitrans":5},"stopIDsUnmatched":{"unitrans":[]},"stopIDsUnmatchedCount":{"unitrans":0},"timeSinceLastRealtimeUpdate":{"unitrans":24}},"references":{"agencies":[],"routes":[],"situations":[],"stopTimes":[],"stops":[],"trips":[]}},"text":"OK","version":2}`
 
 	tests := []struct {
-		name      string
-		slugID    string
-		serverURL string
-		apiKey    string
-		useVCR    bool
-		cassette  string
-		wantErr   bool
-		errString string
+		name       string
+		agencyID   string
+		agencyName string
+		serverURL  string
+		apiKey     string
+		useVCR     bool
+		cassette   string
+		response   string
+		statusCode int
+		wantErr    bool
+		errString  string
 	}{
 		{
-			name:      "successful request",
-			slugID:    "unitrans",
-			serverURL: "https://oba-api.onrender.com",
-			apiKey:    "org.onebusaway.iphone",
-			useVCR:    true,
-			cassette:  "oba_metrics_api_successful_request",
-			wantErr:   false,
+			name:       "successful request",
+			agencyID:   "unitrans",
+			agencyName: "Unitrans",
+			serverURL:  "https://oba-api.onrender.com",
+			apiKey:     "org.onebusaway.iphone",
+			useVCR:     true,
+			cassette:   "oba_metrics_api_successful_request",
+			wantErr:    false,
 		},
 		{
-			name:      "not found error",
-			slugID:    "invalid-region",
-			serverURL: "https://api.pugetsound.onebusaway.org",
-			apiKey:    "org.onebusaway.iphone",
-			useVCR:    false,
-			wantErr:   true,
-			errString: "does not support metrics API",
+			name:       "not found error",
+			agencyID:   "invalid-region",
+			agencyName: "Puget Sound",
+			apiKey:     "org.onebusaway.iphone",
+			statusCode: http.StatusNotFound,
+			wantErr:    true,
+			errString:  "does not support metrics API",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var client *http.Client
+			var baseURL string
 
 			if tt.useVCR {
 				rec, err := recorder.New(filepath.Join("testdata", "vcr", tt.cassette))
@@ -73,22 +79,43 @@ func TestFetchObaAPIMetrics_WithVCR(t *testing.T) {
 					Transport: rec,
 					Timeout:   10 * time.Second,
 				}
+				baseURL = tt.serverURL
+			} else {
+				server := setupObaServer(t, tt.response, tt.statusCode)
+				defer server.Close()
+				client = &http.Client{Timeout: 10 * time.Second}
+				baseURL = server.URL
 			}
-			staticStore.Set(tt.slugID, staticData)
+
+			staticStore := gtfs.NewStaticStore()
+			staticStore.Set(tt.agencyID, staticData)
 			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 			tracker := NewUnmatchedStopTracker()
-			err := fetchObaAPIMetrics(tt.slugID, tt.serverURL, tt.apiKey, client, staticStore, logger, tracker)
+
+			err := fetchObaAPIMetrics(tt.agencyID, tt.agencyName, baseURL, tt.apiKey, client, staticStore, logger, tracker)
 
 			if tt.wantErr {
 				if err == nil {
 					t.Error("expected error but got none")
 					return
 				}
+				if !strings.Contains(err.Error(), tt.errString) {
+					t.Errorf("expected error to contain %q, got %q", tt.errString, err.Error())
+				}
 				return
 			}
 
 			if err != nil {
 				t.Errorf("unexpected error: %v", err)
+				return
+			}
+
+			records, err := getMetricValue(ObaRealtimeRecords, map[string]string{"agency_id": tt.agencyID, "agency_name": tt.agencyName})
+			if err != nil {
+				t.Fatalf("failed to read records for %s: %v", tt.agencyID, err)
+			}
+			if records != 3 {
+				t.Fatalf("expected oba_realtime_records_count to be 3, got %v", records)
 			}
 		})
 	}
@@ -115,7 +142,7 @@ func TestFetchObaAPIMetrics_SanitizesServerURLLabel(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	tracker := NewUnmatchedStopTracker()
 
-	if err := fetchObaAPIMetrics("42", serverBaseURL, apiKey, &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
+	if err := fetchObaAPIMetrics("42", "Sanitize Server", serverBaseURL, apiKey, &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -164,14 +191,14 @@ func TestFetchObaAPIMetrics_LabelsWithConfiguredAgencyID(t *testing.T) {
 	tracker := NewUnmatchedStopTracker()
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	if err := fetchObaAPIMetrics("unitrans-a", serverA.URL, "key", client, staticStore, logger, tracker); err != nil {
+	if err := fetchObaAPIMetrics("unitrans-a", "Unitrans A", serverA.URL, "key", client, staticStore, logger, tracker); err != nil {
 		t.Fatalf("server A: unexpected error: %v", err)
 	}
-	if err := fetchObaAPIMetrics("unitrans-b", serverB.URL, "key", client, staticStore, logger, tracker); err != nil {
+	if err := fetchObaAPIMetrics("unitrans-b", "Unitrans B", serverB.URL, "key", client, staticStore, logger, tracker); err != nil {
 		t.Fatalf("server B: unexpected error: %v", err)
 	}
 
-	recordsA, err := getMetricValue(ObaRealtimeRecords, map[string]string{"agency_id": "unitrans-a"})
+	recordsA, err := getMetricValue(ObaRealtimeRecords, map[string]string{"agency_id": "unitrans-a", "agency_name": "Unitrans A"})
 	if err != nil {
 		t.Fatalf("failed to read records for unitrans-a: %v", err)
 	}
@@ -179,7 +206,7 @@ func TestFetchObaAPIMetrics_LabelsWithConfiguredAgencyID(t *testing.T) {
 		t.Fatalf("expected oba_realtime_records_count{agency_id=\"unitrans-a\"} to be 3, got %v", recordsA)
 	}
 
-	recordsB, err := getMetricValue(ObaRealtimeRecords, map[string]string{"agency_id": "unitrans-b"})
+	recordsB, err := getMetricValue(ObaRealtimeRecords, map[string]string{"agency_id": "unitrans-b", "agency_name": "Unitrans B"})
 	if err != nil {
 		t.Fatalf("failed to read records for unitrans-b: %v", err)
 	}
@@ -200,7 +227,7 @@ func TestFetchObaAPIMetrics_AgencyNotListedInResponse(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
 	tracker := NewUnmatchedStopTracker()
 
-	if err := fetchObaAPIMetrics("requested", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
+	if err := fetchObaAPIMetrics("requested", "Requested Server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -241,7 +268,7 @@ func TestFetchObaAPIMetrics_DoesNotLeakAPIKeyInLogs(t *testing.T) {
 	staticStore := gtfs.NewStaticStore()
 	tracker := NewUnmatchedStopTracker()
 
-	if err := fetchObaAPIMetrics("42", serverBaseURL, apiKey, &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
+	if err := fetchObaAPIMetrics("42", "No Leak Server", serverBaseURL, apiKey, &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -264,7 +291,7 @@ func TestFetchObaAPIMetrics_ErrorDoesNotLeakAPIKey(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	tracker := NewUnmatchedStopTracker()
 
-	err := fetchObaAPIMetrics("42", serverBaseURL, apiKey, &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker)
+	err := fetchObaAPIMetrics("42", "Error Server", serverBaseURL, apiKey, &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker)
 	if err == nil {
 		t.Fatal("expected error but got none")
 	}

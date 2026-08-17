@@ -25,7 +25,7 @@ func ValidateServer(server models.ObaServer) error {
 		name  string
 		value string
 	}{
-		{"name", server.Name},
+		{"agency_name", server.AgencyName},
 		{"oba_base_url", server.ObaBaseURL},
 		{"oba_api_key", server.ObaApiKey},
 		{"agency_id", server.AgencyID},

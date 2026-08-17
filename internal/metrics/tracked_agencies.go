@@ -37,7 +37,7 @@ func reportTrackedAgencies(servers []models.ObaServer) {
 	for _, server := range servers {
 		AgenciesTrackedInfo.WithLabelValues(
 			server.AgencyID,
-			server.Name,
+			server.AgencyName,
 			server.ObaBaseURL,
 		).Set(1)
 	}

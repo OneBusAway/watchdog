@@ -32,7 +32,7 @@ func TestRefreshGTFSBundles(t *testing.T) {
 	var logBuffer bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-	servers := []models.ObaServer{{AgencyID: "agency-1", Name: "Test Server", GtfsURLs: []string{"http://example.com/gtfs.zip"}}}
+	servers := []models.ObaServer{{AgencyID: "agency-1", AgencyName: "Test Server", GtfsURLs: []string{"http://example.com/gtfs.zip"}}}
 	boundingBoxStore := geo.NewBoundingBoxStore()
 	staticStore := NewStaticStore()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -163,7 +163,7 @@ func TestAgencyParsing(t *testing.T) {
 }
 
 func TestStopsParsing(t *testing.T) {
-	server := models.ObaServer{AgencyID: "agency-1", Name: "test"}
+	server := models.ObaServer{AgencyID: "agency-1", AgencyName: "test"}
 
 	data := readFixture(t, "gtfs.zip")
 	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
@@ -218,7 +218,7 @@ func TestStopsParsing(t *testing.T) {
 }
 
 func TestStoreGTFSBundleRecordsFetchTime(t *testing.T) {
-	server := models.ObaServer{AgencyID: "agency-1", Name: "test"}
+	server := models.ObaServer{AgencyID: "agency-1", AgencyName: "test"}
 	data := readFixture(t, "gtfs.zip")
 	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
 	if err != nil {
@@ -242,7 +242,7 @@ func TestStoreGTFSBundleRecordsFetchTime(t *testing.T) {
 }
 
 func TestGetEarliestAndLatestServiceDates(t *testing.T) {
-	server := models.ObaServer{AgencyID: "agency-1", Name: "test"}
+	server := models.ObaServer{AgencyID: "agency-1", AgencyName: "test"}
 	data := readFixture(t, "gtfs.zip")
 	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
 	if err != nil {
@@ -269,7 +269,7 @@ func TestGetEarliestAndLatestServiceDates(t *testing.T) {
 }
 
 func TestGetStopLocationsByIDs(t *testing.T) {
-	server := models.ObaServer{AgencyID: "agency-1", Name: "test"}
+	server := models.ObaServer{AgencyID: "agency-1", AgencyName: "test"}
 
 	data := readFixture(t, "gtfs.zip")
 	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})

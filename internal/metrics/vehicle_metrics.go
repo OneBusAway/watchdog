@@ -47,7 +47,7 @@ func countVehiclePositions(server models.ObaServer, realtimeStore *gtfs.Realtime
 	}
 	count := len(realtimeData.Vehicles)
 
-	RealtimeVehiclePositions.WithLabelValues(server.AgencyID).Set(float64(count))
+	RealtimeVehiclePositions.WithLabelValues(server.AgencyID, server.AgencyName).Set(float64(count))
 
 	return count, nil
 }
@@ -87,7 +87,7 @@ func countActiveVehiclesForAgency(server models.ObaServer) (int, error) {
 		return 0, nil
 	}
 
-	AgencyActiveVehiclesGauge.WithLabelValues(server.AgencyID).Set(float64(len(response.Data.List)))
+	AgencyActiveVehiclesGauge.WithLabelValues(server.AgencyID, server.AgencyName).Set(float64(len(response.Data.List)))
 
 	return len(response.Data.List), nil
 }
@@ -128,7 +128,7 @@ func trackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLast
 	}
 
 	if len(realtimeData.Vehicles) == 0 {
-		TrackedVehiclesGauge.WithLabelValues(agencyID).Set(0)
+		TrackedVehiclesGauge.WithLabelValues(agencyID, server.AgencyName).Set(0)
 		return nil
 	}
 
@@ -150,8 +150,8 @@ func trackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLast
 		}
 
 		interval := now.Sub(seenAt).Seconds()
-		VehicleReportCount.WithLabelValues(vehicleID, agencyID).Inc()
-		VehicleReportInterval.WithLabelValues(vehicleID, agencyID).Set(interval)
+		VehicleReportCount.WithLabelValues(vehicleID, agencyID, server.AgencyName).Inc()
+		VehicleReportInterval.WithLabelValues(vehicleID, agencyID, server.AgencyName).Set(interval)
 
 		// Compute speed
 		prev, ok := vehicleLastSeen.Get(agencyID, vehicleID)
@@ -161,14 +161,14 @@ func trackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLast
 				distance := geo.HaversineDistance(prev.Lat, prev.Lon, lat, lon)
 				computedSpeed := distance / timeDelta
 
-				VehicleSpeedGauge.WithLabelValues(vehicleID, agencyID).Set(computedSpeed)
+				VehicleSpeedGauge.WithLabelValues(vehicleID, agencyID, server.AgencyName).Set(computedSpeed)
 
 				// Compare reported speed with computed speed
 				if vehicle.Position.Speed != nil {
 					reportedSpeed := float64(*vehicle.Position.Speed)
 					if reportedSpeed > 0 {
 						diffRatio := math.Abs(computedSpeed-reportedSpeed) / reportedSpeed
-						VehicleSpeedDiscrepancyRatioGauge.WithLabelValues(vehicleID, agencyID).Set(diffRatio)
+						VehicleSpeedDiscrepancyRatioGauge.WithLabelValues(vehicleID, agencyID, server.AgencyName).Set(diffRatio)
 					}
 				}
 			}
@@ -182,7 +182,7 @@ func trackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLast
 		})
 	}
 
-	TrackedVehiclesGauge.WithLabelValues(agencyID).Set(float64(vehicleLastSeen.Count(agencyID)))
+	TrackedVehiclesGauge.WithLabelValues(agencyID, server.AgencyName).Set(float64(vehicleLastSeen.Count(agencyID)))
 
 	return nil
 }
@@ -256,8 +256,8 @@ func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, bounding
 		}
 	}
 
-	InvalidVehicleCoordinatesGauge.WithLabelValues(server.AgencyID).Set(float64(invalidCount))
-	StoppedOutOfBoundsVehiclesGauge.WithLabelValues(server.AgencyID).Set(float64(outOfBoundsCount))
+	InvalidVehicleCoordinatesGauge.WithLabelValues(server.AgencyID, server.AgencyName).Set(float64(invalidCount))
+	StoppedOutOfBoundsVehiclesGauge.WithLabelValues(server.AgencyID, server.AgencyName).Set(float64(outOfBoundsCount))
 
 	return nil
 }

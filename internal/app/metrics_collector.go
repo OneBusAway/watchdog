@@ -109,7 +109,7 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		report.ReportErrorWithSentryOptions(fmt.Errorf("skipping metrics collection for server %s due to backoff", server.ObaBaseURL), report.SentryReportOptions{
 			Tags: map[string]string{
 				"agency_id":   server.AgencyID,
-				"server_name": server.Name,
+				"agency_name": server.AgencyName,
 			},
 			ExtraContext: map[string]interface{}{
 				"oba_base_url": server.ObaBaseURL,
@@ -122,11 +122,11 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 	ok := app.MetricsService.ServerPing(server)
 	if !ok {
 		// On ping failure → increase backoff for this server
-		app.Logger.Error("Server ping failed", "agency_id", server.AgencyID, "server_name", server.Name)
+		app.Logger.Error("Server ping failed", "agency_id", server.AgencyID, "agency_name", server.AgencyName)
 		report.ReportErrorWithSentryOptions(fmt.Errorf("server ping failed for %s", server.ObaBaseURL), report.SentryReportOptions{
 			Tags: map[string]string{
 				"agency_id":   server.AgencyID,
-				"server_name": server.Name,
+				"agency_name": server.AgencyName,
 			},
 			ExtraContext: map[string]interface{}{
 				"oba_base_url": server.ObaBaseURL,
@@ -139,7 +139,7 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 	}
 
 	// On successful ping → reset backoff for this server
-	app.Logger.Info("Server ping successful", "agency_id", server.AgencyID, "server_name", server.Name)
+	app.Logger.Info("Server ping successful", "agency_id", server.AgencyID, "agency_name", server.AgencyName)
 	app.ConfigService.BackoffStore.ResetBackoff(server.AgencyID)
 
 	_, _, err := app.MetricsService.CheckBundleExpiration(time.Now().UTC(), server)
@@ -148,20 +148,20 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"agency_id":   server.AgencyID,
-				"server_name": server.Name,
+				"agency_name": server.AgencyName,
 			},
 			Level: sentry.LevelError,
 		})
 	}
 
-	err = app.MetricsService.FetchObaAPIMetrics(server.AgencyID, server.ObaBaseURL, server.ObaApiKey)
+	err = app.MetricsService.FetchObaAPIMetrics(server.AgencyID, server.AgencyName, server.ObaBaseURL, server.ObaApiKey)
 
 	if err != nil {
 		app.Logger.Error("Failed to fetch OBA API metrics", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"agency_id":   server.AgencyID,
-				"server_name": server.Name,
+				"agency_name": server.AgencyName,
 			},
 			ExtraContext: map[string]interface{}{
 				"oba_base_url": server.ObaBaseURL,
@@ -190,7 +190,7 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"agency_id":   server.AgencyID,
-				"server_name": server.Name,
+				"agency_name": server.AgencyName,
 			},
 			Level: sentry.LevelError,
 		})

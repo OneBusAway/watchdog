@@ -11,11 +11,12 @@ import (
 // series created for the stop can be deleted (via DeleteLabelValues) after the
 // stop has not been seen for a configured threshold.
 type trackedStop struct {
-	AgencyID string
-	StopName string
-	Lat      string
-	Lon      string
-	LastSeen time.Time
+	AgencyID   string
+	AgencyName string
+	StopName   string
+	Lat        string
+	Lon        string
+	LastSeen   time.Time
 }
 
 // clusterKey identifies a reported unmatched-stop cluster by its station, S2
@@ -32,9 +33,10 @@ type clusterKey struct {
 // cluster, so the cluster gauge series can be deleted after the cluster has
 // not been seen for a configured threshold.
 type trackedCluster struct {
-	AgencyID string
-	Key      clusterKey
-	LastSeen time.Time
+	AgencyID   string
+	AgencyName string
+	Key        clusterKey
+	LastSeen   time.Time
 }
 
 // UnmatchedStopTracker stores the most recent observation of each unmatched
@@ -60,7 +62,7 @@ func NewUnmatchedStopTracker() *UnmatchedStopTracker {
 
 // RecordLastSeen updates (or creates) the tracked entry for a stop that was just
 // reported as unmatched.
-func (t *UnmatchedStopTracker) RecordLastSeen(agencyID, stopID, stopName, lat, lon string) {
+func (t *UnmatchedStopTracker) RecordLastSeen(agencyID, agencyName, stopID, stopName, lat, lon string) {
 	t.Mu.Lock()
 	defer t.Mu.Unlock()
 
@@ -75,21 +77,22 @@ func (t *UnmatchedStopTracker) RecordLastSeen(agencyID, stopID, stopName, lat, l
 		// The stop changed its name or location, so the series labeled with its
 		// previous values is now stale. Delete it so both it and the new series
 		// are pruned correctly, instead of freezing the first-seen labels.
-		ObaUnmatchedStopInfo.DeleteLabelValues(entry.AgencyID, stopID, entry.StopName, entry.Lat, entry.Lon)
+		ObaUnmatchedStopInfo.DeleteLabelValues(entry.AgencyID, entry.AgencyName, stopID, entry.StopName, entry.Lat, entry.Lon)
 	}
 
 	stops[stopID] = trackedStop{
-		AgencyID: agencyID,
-		StopName: stopName,
-		Lat:      lat,
-		Lon:      lon,
-		LastSeen: time.Now().UTC(),
+		AgencyID:   agencyID,
+		AgencyName: agencyName,
+		StopName:   stopName,
+		Lat:        lat,
+		Lon:        lon,
+		LastSeen:   time.Now().UTC(),
 	}
 }
 
 // RecordClusterSeen updates (or creates) the tracked entry for an unmatched-stop
 // cluster that was just reported.
-func (t *UnmatchedStopTracker) RecordClusterSeen(agencyID, stationID, clusterID, lat, lon string) {
+func (t *UnmatchedStopTracker) RecordClusterSeen(agencyID, agencyName, stationID, clusterID, lat, lon string) {
 	t.Mu.Lock()
 	defer t.Mu.Unlock()
 
@@ -103,8 +106,9 @@ func (t *UnmatchedStopTracker) RecordClusterSeen(agencyID, stationID, clusterID,
 	entry, exists := clusters[cluster]
 	if !exists {
 		entry = trackedCluster{
-			AgencyID: agencyID,
-			Key:      cluster,
+			AgencyID:   agencyID,
+			AgencyName: agencyName,
+			Key:        cluster,
 		}
 	}
 
@@ -159,7 +163,7 @@ func (t *UnmatchedStopTracker) clearStops(now time.Time, threshold time.Duration
 				continue
 			}
 
-			ObaUnmatchedStopInfo.DeleteLabelValues(entry.AgencyID, stopID, entry.StopName, entry.Lat, entry.Lon)
+			ObaUnmatchedStopInfo.DeleteLabelValues(entry.AgencyID, entry.AgencyName, stopID, entry.StopName, entry.Lat, entry.Lon)
 			delete(stops, stopID)
 		}
 
@@ -180,7 +184,7 @@ func (t *UnmatchedStopTracker) clearClusters(now time.Time, threshold time.Durat
 				continue
 			}
 
-			UnmatchedStopClusterCount.DeleteLabelValues(entry.AgencyID, key.StationID, key.ClusterID, key.Lat, key.Lon)
+			UnmatchedStopClusterCount.DeleteLabelValues(entry.AgencyID, entry.AgencyName, key.StationID, key.ClusterID, key.Lat, key.Lon)
 			delete(clusters, key)
 		}
 

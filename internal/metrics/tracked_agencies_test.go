@@ -12,8 +12,8 @@ func TestReportTrackedAgencies(t *testing.T) {
 	resetTrackedAgenciesState()
 
 	servers := []models.ObaServer{
-		{Name: "Alpha", AgencyID: "agency-a", ObaBaseURL: "https://alpha.example.com"},
-		{Name: "Beta", AgencyID: "agency-b", ObaBaseURL: "https://beta.example.com"},
+		{AgencyName: "Alpha", AgencyID: "agency-a", ObaBaseURL: "https://alpha.example.com"},
+		{AgencyName: "Beta", AgencyID: "agency-b", ObaBaseURL: "https://beta.example.com"},
 	}
 
 	reportTrackedAgencies(servers)
@@ -28,7 +28,7 @@ func TestReportTrackedAgencies(t *testing.T) {
 
 	series := trackedAgencySeries(t)
 	for _, s := range servers {
-		if _, ok := findTrackedAgency(series, s.AgencyID, s.Name, s.ObaBaseURL); !ok {
+		if _, ok := findTrackedAgency(series, s.AgencyID, s.AgencyName, s.ObaBaseURL); !ok {
 			t.Errorf("Expected tracked agency series for %s, got %+v", s.AgencyID, series)
 		}
 	}
@@ -38,12 +38,12 @@ func TestReportTrackedAgenciesReflectsRemovedAgencies(t *testing.T) {
 	resetTrackedAgenciesState()
 
 	reportTrackedAgencies([]models.ObaServer{
-		{Name: "Alpha", AgencyID: "agency-a", ObaBaseURL: "https://alpha.example.com"},
-		{Name: "Beta", AgencyID: "agency-b", ObaBaseURL: "https://beta.example.com"},
+		{AgencyName: "Alpha", AgencyID: "agency-a", ObaBaseURL: "https://alpha.example.com"},
+		{AgencyName: "Beta", AgencyID: "agency-b", ObaBaseURL: "https://beta.example.com"},
 	})
 
 	reportTrackedAgencies([]models.ObaServer{
-		{Name: "Beta", AgencyID: "agency-b", ObaBaseURL: "https://beta.example.com"},
+		{AgencyName: "Beta", AgencyID: "agency-b", ObaBaseURL: "https://beta.example.com"},
 	})
 
 	count, err := gaugeValue(AgenciesTrackedCount)
@@ -67,11 +67,11 @@ func TestReportTrackedAgenciesSkipsUnchangedSet(t *testing.T) {
 	resetTrackedAgenciesState()
 
 	reportTrackedAgencies([]models.ObaServer{
-		{Name: "Alpha", AgencyID: "agency-a", ObaBaseURL: "https://alpha.example.com"},
+		{AgencyName: "Alpha", AgencyID: "agency-a", ObaBaseURL: "https://alpha.example.com"},
 	})
 
 	reportTrackedAgencies([]models.ObaServer{
-		{Name: "Alpha Renamed", AgencyID: "agency-a", ObaBaseURL: "https://alpha.example.com"},
+		{AgencyName: "Alpha Renamed", AgencyID: "agency-a", ObaBaseURL: "https://alpha.example.com"},
 	})
 
 	series := trackedAgencySeries(t)
@@ -116,7 +116,7 @@ func trackedAgencySeries(t *testing.T) []map[string]string {
 
 func findTrackedAgency(series []map[string]string, agencyID, name, url string) (map[string]string, bool) {
 	for _, labels := range series {
-		if labels["agency_id"] == agencyID && labels["server_name"] == name && labels["server_url"] == url {
+		if labels["agency_id"] == agencyID && labels["agency_name"] == name && labels["server_url"] == url {
 			return labels, true
 		}
 	}

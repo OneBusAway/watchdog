@@ -59,7 +59,7 @@ func validateLegacy(server legacyObaServer) error {
 // legacyToCurrent converts a validated legacy v1 server to the current schema.
 func legacyToCurrent(l legacyObaServer) models.ObaServer {
 	return models.ObaServer{
-		Name:       l.Name,
+		AgencyName: l.Name,
 		AgencyID:   l.AgencyID,
 		ObaBaseURL: l.ObaBaseURL,
 		ObaApiKey:  l.ObaApiKey,
@@ -111,20 +111,25 @@ func decodeServerEntry(raw json.RawMessage) (models.ObaServer, error) {
 	return server, nil
 }
 
-// serverTagsFromRaw extracts the name and agency ID from a raw entry for
+// serverTagsFromRaw extracts the agency name and ID from a raw entry for
 // error tagging. Unmarshal failures are ignored since the entry is already
 // invalid.
 func serverTagsFromRaw(raw json.RawMessage) map[string]string {
 	var tags struct {
-		Name     string `json:"name"`
-		AgencyID string `json:"agency_id"`
+		LegacyName string `json:"name"`
+		AgencyName string `json:"agency_name"`
+		AgencyID   string `json:"agency_id"`
 	}
 	if err := json.Unmarshal(raw, &tags); err != nil {
 		return nil
 	}
 	m := make(map[string]string, 2)
-	if tags.Name != "" {
-		m["server_name"] = tags.Name
+	agencyName := tags.AgencyName
+	if agencyName == "" {
+		agencyName = tags.LegacyName
+	}
+	if agencyName != "" {
+		m["agency_name"] = agencyName
 	}
 	if tags.AgencyID != "" {
 		m["agency_id"] = tags.AgencyID

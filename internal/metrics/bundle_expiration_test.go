@@ -10,7 +10,7 @@ import (
 )
 
 func TestCheckBundleExpiration(t *testing.T) {
-	testServer := models.ObaServer{AgencyID: "1"}
+	testServer := models.ObaServer{AgencyID: "1", AgencyName: "Test Agency"}
 
 	data := readFixture(t, "gtfs.zip")
 	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
@@ -38,7 +38,7 @@ func TestCheckBundleExpiration(t *testing.T) {
 		t.Errorf("Expected latest expiration days to be %d, got %d", expectedLatest, latest)
 	}
 
-	earliestMetric, err := getMetricValue(BundleEarliestExpirationGauge, map[string]string{"agency_id": testServer.AgencyID})
+	earliestMetric, err := getMetricValue(BundleEarliestExpirationGauge, map[string]string{"agency_id": testServer.AgencyID, "agency_name": testServer.AgencyName})
 	if err != nil {
 		t.Errorf("Failed to get earliest expiration metric value: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestCheckBundleExpiration(t *testing.T) {
 		t.Errorf("Expected earliest expiration metric to be %v, got %v", expectedEarliest, earliestMetric)
 	}
 
-	latestMetric, err := getMetricValue(BundleLatestExpirationGauge, map[string]string{"agency_id": testServer.AgencyID})
+	latestMetric, err := getMetricValue(BundleLatestExpirationGauge, map[string]string{"agency_id": testServer.AgencyID, "agency_name": testServer.AgencyName})
 	if err != nil {
 		t.Errorf("Failed to get latest expiration metric value: %v", err)
 	}

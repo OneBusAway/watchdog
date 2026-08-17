@@ -50,9 +50,9 @@ func testRealtimeStore(t *testing.T, agencyID string) *gtfs.RealtimeStore {
 
 // createTestServer creates and returns a mock ObaServer instance with the given parameters.
 // Useful for unit testing functions that depend on server configuration.
-func createTestServer(url, name string, apiKey, vehiclePositionURL, gtfsRTAPIKey, gtfsRTAPIValue, agencyID string) models.ObaServer {
+func createTestServer(url, agencyName string, apiKey, vehiclePositionURL, gtfsRTAPIKey, gtfsRTAPIValue, agencyID string) models.ObaServer {
 	return models.ObaServer{
-		Name:       name,
+		AgencyName: agencyName,
 		ObaBaseURL: url,
 		ObaApiKey:  apiKey,
 		AgencyID:   agencyID,

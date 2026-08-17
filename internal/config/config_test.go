@@ -23,7 +23,7 @@ func TestNewConfig(t *testing.T) {
 			env:  "development",
 			servers: []models.ObaServer{
 				{
-					Name:        "Test Server",
+					AgencyName:  "Test Server",
 					ObaBaseURL:  "https://test.onebusaway.org",
 					ObaApiKey:   "test-key",
 					AgencyID:    "agency-1",
@@ -48,12 +48,12 @@ func TestNewConfig(t *testing.T) {
 			env:  "staging",
 			servers: []models.ObaServer{
 				{
-					Name:       "Server 1",
+					AgencyName: "Server 1",
 					ObaBaseURL: "https://test1.onebusaway.org",
 					AgencyID:   "agency-1",
 				},
 				{
-					Name:       "Server 2",
+					AgencyName: "Server 2",
 					ObaBaseURL: "https://test2.onebusaway.org",
 					AgencyID:   "agency-2",
 				},
@@ -122,13 +122,13 @@ func TestConfigFields(t *testing.T) {
 
 func TestUpdateConfig(t *testing.T) {
 	initialServers := []models.ObaServer{
-		{AgencyID: "agency-1", Name: "Server 1"},
+		{AgencyID: "agency-1", AgencyName: "Server 1"},
 	}
 	config := NewConfig(1, "testing", initialServers)
 
 	newServers := []models.ObaServer{
-		{AgencyID: "agency-1", Name: "Server 1 Updated"},
-		{AgencyID: "agency-2", Name: "Server 2"},
+		{AgencyID: "agency-1", AgencyName: "Server 1 Updated"},
+		{AgencyID: "agency-2", AgencyName: "Server 2"},
 	}
 
 	config.UpdateConfig(newServers)
@@ -137,7 +137,7 @@ func TestUpdateConfig(t *testing.T) {
 		t.Errorf("Expected 2 servers, got %d", len(config.Servers))
 	}
 
-	if config.Servers[0].Name != "Server 1 Updated" {
-		t.Errorf("Expected server name to be updated to 'Server 1 Updated', got %s", config.Servers[0].Name)
+	if config.Servers[0].AgencyName != "Server 1 Updated" {
+		t.Errorf("Expected server name to be updated to 'Server 1 Updated', got %s", config.Servers[0].AgencyName)
 	}
 }

@@ -3,7 +3,7 @@ package models
 // ObaServer represents a OneBusAway server configuration
 // TODO: Some server have multiple Agencies, so we should have a list of Agencies
 type ObaServer struct {
-	Name        string       `json:"name"`
+	AgencyName  string       `json:"agency_name"`
 	AgencyID    string       `json:"agency_id"`
 	ObaBaseURL  string       `json:"oba_base_url"`
 	ObaApiKey   string       `json:"oba_api_key"`
@@ -22,6 +22,6 @@ type GtfsRTFeed struct {
 }
 
 // NewObaServer creates a new ObaServer instance with the provided configuration.
-func NewObaServer(name, agencyID, baseURL, apiKey string, gtfsURLs []string, gtfsRTFeeds []GtfsRTFeed) *ObaServer {
-	return &ObaServer{Name: name, AgencyID: agencyID, ObaBaseURL: baseURL, ObaApiKey: apiKey, GtfsURLs: gtfsURLs, GtfsRTFeeds: gtfsRTFeeds}
+func NewObaServer(agencyName, agencyID, baseURL, apiKey string, gtfsURLs []string, gtfsRTFeeds []GtfsRTFeed) *ObaServer {
+	return &ObaServer{AgencyName: agencyName, AgencyID: agencyID, ObaBaseURL: baseURL, ObaApiKey: apiKey, GtfsURLs: gtfsURLs, GtfsRTFeeds: gtfsRTFeeds}
 }
