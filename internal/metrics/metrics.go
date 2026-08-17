@@ -106,7 +106,7 @@ var (
 	ObaRealtimeRecords = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "oba_realtime_records_count",
-			Help: "Total number of realtime records",
+			Help: "Number of realtime trip/vehicle records processed during a feed update",
 		},
 		[]string{"agency_id", "agency_name"},
 	)
