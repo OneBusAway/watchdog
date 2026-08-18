@@ -13,9 +13,9 @@ type LastSeen struct {
 	Lon  float64
 }
 
-// VehicleLastSeen stores the most recent known location and timestamp for each vehicle per server.
+// VehicleLastSeen stores the most recent known location and timestamp for each vehicle per agency.
 //
-// The outer map key is the server ID (int), and the inner map key is the vehicle ID (string).
+// The outer map key is the agency ID (string), and the inner map key is the vehicle ID (string).
 // Each entry stores a `LastSeen` struct containing the last known latitude, longitude, and timestamp.
 //
 // This cache is used to:
@@ -36,10 +36,10 @@ func NewVehicleLastSeen() *VehicleLastSeen {
 	}
 }
 
-// Get retrieves the LastSeen data for a specific vehicle on a given server.
+// Get retrieves the LastSeen data for a specific vehicle on a given agency.
 // It returns the LastSeen value and a boolean indicating whether the vehicle was found.
 //
-// serverID: ID of the server.
+// agencyID: ID of the agency.
 // vehicleID: Unique identifier of the vehicle.
 func (vehicleLastSeen *VehicleLastSeen) Get(agencyID, vehicleID string) (LastSeen, bool) {
 	vehicleLastSeen.Mu.RLock()
@@ -56,9 +56,9 @@ func (vehicleLastSeen *VehicleLastSeen) Get(agencyID, vehicleID string) (LastSee
 	return LastSeen{}, false
 }
 
-// Set stores or updates the LastSeen data for a specific vehicle on a given server.
+// Set stores or updates the LastSeen data for a specific vehicle on a given agency.
 //
-// serverID: ID of the server.
+// agencyID: ID of the agency.
 // vehicleID: Unique identifier of the vehicle.
 // lastSeen: LastSeen object containing the latest observation time and related data.
 func (vehicleLastSeen *VehicleLastSeen) Set(agencyID, vehicleID string, lastSeen LastSeen) {
@@ -71,9 +71,9 @@ func (vehicleLastSeen *VehicleLastSeen) Set(agencyID, vehicleID string, lastSeen
 	vehicleLastSeen.Store[agencyID][vehicleID] = lastSeen
 }
 
-// Count returns the number of tracked vehicles for a given server.
+// Count returns the number of tracked vehicles for a given agency.
 //
-// serverID: ID of the server to count vehicles for.
+// agencyID: ID of the agency to count vehicles for.
 func (v *VehicleLastSeen) Count(agencyID string) int {
 	v.Mu.RLock()
 	defer v.Mu.RUnlock()
@@ -115,16 +115,16 @@ func (vehicleLastSeen *VehicleLastSeen) clear(threshold time.Duration) {
 
 	now := time.Now().UTC()
 
-	for serverID, vehicles := range vehicleLastSeen.Store {
+	for agencyID, vehicles := range vehicleLastSeen.Store {
 
 		for vehicleID, lastSeen := range vehicles {
 			if lastSeen.Time.Before(now) && now.Sub(lastSeen.Time) > threshold {
-				delete(vehicleLastSeen.Store[serverID], vehicleID)
+				delete(vehicleLastSeen.Store[agencyID], vehicleID)
 			}
 		}
 
-		if len(vehicleLastSeen.Store[serverID]) == 0 {
-			delete(vehicleLastSeen.Store, serverID)
+		if len(vehicleLastSeen.Store[agencyID]) == 0 {
+			delete(vehicleLastSeen.Store, agencyID)
 		}
 
 	}

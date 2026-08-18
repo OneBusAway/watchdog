@@ -23,7 +23,7 @@ import (
 // For each server, it starts a dedicated goroutine that:
 //   1. Attempts to download and parse the GTFS static bundle from the server’s GTFS URL,
 //      using exponential backoff with retries (up to maxRetries).
-//   2. Stores the parsed GTFS static data in the provided StaticStore, keyed by server ID.
+//   2. Stores the parsed GTFS static data in the provided StaticStore, keyed by agency ID.
 //   3. Computes a geographic bounding box from the stop locations in the static data.
 //   4. Stores the bounding box in the provided BoundingBoxStore.
 //
@@ -37,7 +37,7 @@ import (
 //   - servers: A list of OBA servers, each containing a GTFS URL and unique ID.
 //   - logger: A structured logger for recording success/failure logs.
 //   - boundingBoxStore: A store for computed bounding boxes, one per server.
-//   - staticStore: A store for parsed GTFS static data, keyed by server ID.
+//   - staticStore: A store for parsed GTFS static data, keyed by agency ID.
 //   - maxRetries: The maximum number of retries (with exponential backoff) when downloading a bundle.
 //
 // This function does not return an error; failures are handled and reported individually per server.
@@ -112,9 +112,9 @@ func refreshGTFSBundles(ctx context.Context, servers []models.ObaServer, logger 
 	}
 }
 
-// downloadAndStoreGTFSBundle fetches a GTFS static bundle from the provided URL,
+// downloadGTFSBundle fetches a GTFS static bundle from the provided URL,
 // parses it, and stores the resulting static data in the given StaticStore using
-// the serverID as the key. Requests are executed with exponential backoff to handle
+// the agencyID as the key. Requests are executed with exponential backoff to handle
 // transient network errors (e.g., timeouts, connection failures).
 //
 // It performs the following steps:
@@ -124,8 +124,8 @@ func refreshGTFSBundles(ctx context.Context, servers []models.ObaServer, logger 
 //
 // Parameters:
 //   - url: The URL of the GTFS static bundle (usually a zip file).
-//   - serverID: The identifier used to store and retrieve the static data from the store.
-//   - staticStore: The in-memory store that holds GTFS static data indexed by server ID.
+//   - agencyID: The identifier used to store and retrieve the static data from the store.
+//   - staticStore: The in-memory store that holds GTFS static data indexed by agency ID.
 //   - maxRetries: The maximum number of retry attempts allowed during exponential backoff
 //                 before giving up on reaching the server
 //

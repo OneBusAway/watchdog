@@ -1,7 +1,6 @@
 package models
 
 // ObaServer represents a OneBusAway server configuration
-// TODO: Some server have multiple Agencies, so we should have a list of Agencies
 type ObaServer struct {
 	AgencyName      string       `json:"agency_name"`
 	AgencyID        string       `json:"agency_id"`

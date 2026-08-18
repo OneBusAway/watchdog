@@ -20,7 +20,8 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
 - **Possible causes:** Server downtime, network issues, wrong URL.  
 - **Example alert:**  
 ```promql
-  oba_api_status == 0
+  # one series per endpoint; aggregate to alert once per agency
+  min by (agency_id) (oba_api_status) == 0
 ```
 
 ---

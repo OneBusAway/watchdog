@@ -35,9 +35,9 @@ func (gs *GtfsService) DownloadGTFSBundles(ctx context.Context, servers []models
 
 // This service method downloads a GTFS static bundle from the provided URL,
 // currently we uses (DownloadGTFSBundles) to fetch GTFS data for all servers.
-// which internally calls downloadAndStoreGTFSBundle for each server.
+// which internally calls downloadGTFSBundle for each server.
 // but this public method can be used to download a single GTFS bundle.
-// It parses the GTFS data and stores it in the StaticStore using the serverID as the key.
+// It parses the GTFS data and stores it in the StaticStore using the agencyID as the key.
 // It returns an error if the download or parsing fails.
 func (gs *GtfsService) DownloadGTFSBundle(ctx context.Context, url, agencyID string, maxRetires int) (*remoteGtfs.Static, error) {
 	return downloadGTFSBundle(ctx, url, agencyID, maxRetires)
