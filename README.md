@@ -76,6 +76,22 @@ export CONFIG_AUTH_USER="username"
 export CONFIG_AUTH_PASS="password"
 ```
 
+### Backward Compatibility (v1 → v2)
+
+Watchdog used to accept a flat, single-server config schema. Legacy (v1) configs are still supported: they're **silently converted** to the current array-based schema (v2) at load time, so upgrading doesn't require changing your config or interrupt monitoring.
+
+When a v1 entry is loaded, Watchdog maps it like this:
+
+- `name` → `agency_name`
+- `gtfs_url` → a single-entry `gtfs-static-feeds`
+- `vehicle_position_url` / `trip_update_url` → the matching `gtfs_rt_feeds` entries
+- `gtfs_rt_api_key` / `gtfs_rt_api_value` → the per-feed auth fields
+- `id` → ignored
+
+One caveat: v1 and v2 fields can't be mixed in the same entry. If an entry contains both schemas (e.g. a legacy `gtfs_url` alongside `gtfs-static-feeds`), it's rejected and reported to Sentry. Each entry must use one schema or the other.
+
+Migrating to v2 is recommended whenever convenient — it's the only way to configure multiple static or RT feeds per agency. v1 supports just one of each.
+
 ### Application Options
 
 - **Fetch Interval** → default `30s` (`--fetch-interval <seconds>`)
