@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -102,12 +103,35 @@ func TestFetchObaAPIMetrics(t *testing.T) {
 				if !strings.Contains(err.Error(), tt.errString) {
 					t.Errorf("expected error to contain %q, got %q", tt.errString, err.Error())
 				}
+				status, err := getMetricValue(ObaApiStatus, map[string]string{
+					"agency_id":   tt.agencyID,
+					"agency_name": tt.agencyName,
+					"server_url":  baseURL + metricsEndpoint,
+				})
+				if err != nil {
+					t.Fatalf("failed to read oba_api_status: %v", err)
+				}
+				if status != 0 {
+					t.Fatalf("expected oba_api_status to be 0 on failure, got %v", status)
+				}
 				return
 			}
 
 			if err != nil {
 				t.Errorf("unexpected error: %v", err)
 				return
+			}
+
+			status, err := getMetricValue(ObaApiStatus, map[string]string{
+				"agency_id":   tt.agencyID,
+				"agency_name": tt.agencyName,
+				"server_url":  baseURL + metricsEndpoint,
+			})
+			if err != nil {
+				t.Fatalf("failed to read oba_api_status: %v", err)
+			}
+			if status != 1 {
+				t.Fatalf("expected oba_api_status to be 1 on success, got %v", status)
 			}
 
 			records, err := getMetricValue(ObaRealtimeRecords, map[string]string{"agency_id": tt.agencyID, "agency_name": tt.agencyName})
@@ -298,5 +322,114 @@ func TestFetchObaAPIMetrics_ErrorDoesNotLeakAPIKey(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), apiKey) || strings.Contains(err.Error(), "key=") || strings.Contains(err.Error(), "user:pass") {
 		t.Fatalf("credential leaked in error message: %v", err)
+	}
+}
+
+func TestFetchObaAPIMetrics_SetsStatusZeroOnFailure(t *testing.T) {
+	staticStore := gtfs.NewStaticStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	tracker := NewUnmatchedStopTracker()
+
+	server404 := setupObaServer(t, "", http.StatusNotFound)
+	defer server404.Close()
+
+	server500 := setupObaServer(t, `{"code":500}`, http.StatusInternalServerError)
+	defer server500.Close()
+
+	serverBadJSON := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		// #nosec G104
+		w.Write([]byte(`{not json`))
+	}))
+	defer serverBadJSON.Close()
+
+	serverClosed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	closedURL := serverClosed.URL
+	serverClosed.Close()
+
+	tests := []struct {
+		name    string
+		baseURL string
+	}{
+		{"404", server404.URL},
+		{"500", server500.URL},
+		{"malformed JSON", serverBadJSON.URL},
+		{"connection refused", closedURL},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := fetchObaAPIMetrics("fail-status", "Fail Status", tt.baseURL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker)
+			if err == nil {
+				t.Fatal("expected error but got none")
+			}
+
+			status, err := getMetricValue(ObaApiStatus, map[string]string{
+				"agency_id":   "fail-status",
+				"agency_name": "Fail Status",
+				"server_url":  tt.baseURL + metricsEndpoint,
+			})
+			if err != nil {
+				t.Fatalf("failed to read oba_api_status: %v", err)
+			}
+			if status != 0 {
+				t.Fatalf("expected oba_api_status to be 0 for %s, got %v", tt.name, status)
+			}
+		})
+	}
+}
+
+func TestFetchObaAPIMetrics_StatusResetsFromOneToZero(t *testing.T) {
+	// A metrics-endpoint outage must flip the previously-successful series back
+	// to 0; it must not stay 1 forever after the first success.
+	var mu sync.Mutex
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		call := calls
+		mu.Unlock()
+		if call == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			// #nosec G104
+			w.Write([]byte(`{"code":200,"text":"OK","version":2,"currentTime":123,"data":{"entry":{"agenciesWithCoverageCount":0,"agencyIDs":["status-reset"]}}}`))
+			return
+		}
+		http.Error(w, "gone", http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	staticStore := gtfs.NewStaticStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	tracker := NewUnmatchedStopTracker()
+
+	statusLabels := map[string]string{
+		"agency_id":   "status-reset",
+		"agency_name": "Status Reset",
+		"server_url":  server.URL + metricsEndpoint,
+	}
+
+	if err := fetchObaAPIMetrics("status-reset", "Status Reset", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
+		t.Fatalf("first call: unexpected error: %v", err)
+	}
+	status, err := getMetricValue(ObaApiStatus, statusLabels)
+	if err != nil {
+		t.Fatalf("failed to read oba_api_status after success: %v", err)
+	}
+	if status != 1 {
+		t.Fatalf("expected oba_api_status to be 1 after success, got %v", status)
+	}
+
+	if err := fetchObaAPIMetrics("status-reset", "Status Reset", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err == nil {
+		t.Fatal("expected error on second call")
+	}
+	status, err = getMetricValue(ObaApiStatus, statusLabels)
+	if err != nil {
+		t.Fatalf("failed to read oba_api_status after failure: %v", err)
+	}
+	if status != 0 {
+		t.Fatalf("expected oba_api_status to reset to 0 after failure, got %v", status)
 	}
 }

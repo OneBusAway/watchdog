@@ -12,6 +12,9 @@ import (
 	"watchdog.onebusaway.org/internal/utils"
 )
 
+// metricsEndpoint is the OBA API metrics endpoint probed by fetchObaAPIMetrics.
+const metricsEndpoint = "/api/where/metrics.json"
+
 type OBAMetrics struct {
 	Code        int    `json:"code"`
 	CurrentTime int64  `json:"currentTime"`
@@ -81,6 +84,7 @@ func fetchObaAPIMetrics(agencyID, agencyName, serverBaseUrl, apiKey string, clie
 				"url": sanitizedURL,
 			},
 		})
+		setObaApiMetricsStatus(agencyID, agencyName, serverBaseUrl, false)
 		return err
 	}
 	defer resp.Body.Close()
@@ -100,6 +104,7 @@ func fetchObaAPIMetrics(agencyID, agencyName, serverBaseUrl, apiKey string, clie
 			},
 		})
 
+		setObaApiMetricsStatus(agencyID, agencyName, serverBaseUrl, false)
 		return wrappedErr
 	}
 
@@ -112,9 +117,10 @@ func fetchObaAPIMetrics(agencyID, agencyName, serverBaseUrl, apiKey string, clie
 				"url": sanitizedURL,
 			},
 		})
+		setObaApiMetricsStatus(agencyID, agencyName, serverBaseUrl, false)
 		return err
 	}
-	ObaApiStatus.WithLabelValues(agencyID, agencyName, utils.SanitizeServerURL(url)).Set(1)
+	setObaApiMetricsStatus(agencyID, agencyName, serverBaseUrl, true)
 
 	if fetchTime, ok := staticStore.GetFetchTime(agencyID); ok {
 		GtfsBundleLastFetchedTimestamp.WithLabelValues(agencyID, agencyName).Set(float64(fetchTime.Unix()))
@@ -236,4 +242,16 @@ func fetchObaAPIMetrics(agencyID, agencyName, serverBaseUrl, apiKey string, clie
 	}
 	reportUnmatchedStopClusters(agencyID, agencyName, stopInfoMap, unmatchedStopTracker)
 	return nil
+}
+
+// setObaApiMetricsStatus records the availability of a server's /metrics.json
+// endpoint as a boolean gauge series. It is set to 1 on a successful request
+// and to 0 on any failure so the series reflects failures instead of only
+// successes.
+func setObaApiMetricsStatus(agencyID, agencyName, serverBaseUrl string, up bool) {
+	value := 0.0
+	if up {
+		value = 1
+	}
+	ObaApiStatus.WithLabelValues(agencyID, agencyName, utils.SanitizeServerURL(serverBaseUrl+metricsEndpoint)).Set(value)
 }
