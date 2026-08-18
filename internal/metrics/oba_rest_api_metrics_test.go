@@ -433,3 +433,14 @@ func TestFetchObaAPIMetrics_StatusResetsFromOneToZero(t *testing.T) {
 		t.Fatalf("expected oba_api_status to reset to 0 after failure, got %v", status)
 	}
 }
+
+func TestFetchObaAPIMetricsNilClient(t *testing.T) {
+	staticStore := gtfs.NewStaticStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	tracker := NewUnmatchedStopTracker()
+
+	err := fetchObaAPIMetrics("nil-client", "Nil Client", "http://example.com", "key", nil, staticStore, logger, tracker)
+	if err == nil {
+		t.Fatal("expected error when passing nil http client, got none")
+	}
+}

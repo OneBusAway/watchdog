@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/report"
@@ -56,16 +55,22 @@ type OBAMetrics struct {
 //     so observers can identify the agency without decoding its ID.
 //   - serverBaseUrl: the base URL of the OBA server (e.g., https://example.org).
 //   - apiKey: the API key used to authenticate with the OBA server.
-//   - client: an optional custom HTTP client; if nil, a default client with a timeout is used.
+//   - client: the HTTP client used for the request. It must be non-nil; it is
+//     injected (via MetricsService) so requests flow through the instrumented
+//     transport. A nil client is treated as a programming error.
 //
 // Returns:
 //   - error: any error encountered during request, decoding, or Prometheus reporting.
 
 func fetchObaAPIMetrics(agencyID, agencyName, serverBaseUrl, apiKey string, client *http.Client, staticStore *gtfs.StaticStore, logger *slog.Logger, unmatchedStopTracker *UnmatchedStopTracker) error {
 	if client == nil {
-		client = &http.Client{
-			Timeout: 10 * time.Second,
-		}
+		err := fmt.Errorf("nil http client passed to fetchObaAPIMetrics for agency %s", agencyID)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: map[string]string{
+				"agency_id": agencyID,
+			},
+		})
+		return err
 	}
 
 	url := fmt.Sprintf("%s/api/where/metrics.json?key=%s", serverBaseUrl, apiKey)

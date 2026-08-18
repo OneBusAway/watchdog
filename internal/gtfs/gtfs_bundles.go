@@ -42,7 +42,7 @@ import (
 //
 // This function does not return an error; failures are handled and reported individually per server.
 
-func downloadGTFSBundles(ctx context.Context, servers []models.ObaServer, logger *slog.Logger, boundingBoxStore *geo.BoundingBoxStore, staticStore *StaticStore, maxRetries int) {
+func downloadGTFSBundles(ctx context.Context, client *http.Client, servers []models.ObaServer, logger *slog.Logger, boundingBoxStore *geo.BoundingBoxStore, staticStore *StaticStore, maxRetries int) {
 	var wg sync.WaitGroup
 	for _, server := range servers {
 		s := server
@@ -51,7 +51,7 @@ func downloadGTFSBundles(ctx context.Context, servers []models.ObaServer, logger
 			defer wg.Done()
 			bundles := make([]*remoteGtfs.Static, 0, len(s.GtfsStaticFeeds))
 			for _, gtfsURL := range s.GtfsStaticFeeds {
-				staticBundle, err := downloadGTFSBundle(ctx, gtfsURL, s.AgencyID, maxRetries)
+				staticBundle, err := downloadGTFSBundle(ctx, client, gtfsURL, s.AgencyID, maxRetries)
 				if err == nil {
 					bundles = append(bundles, staticBundle)
 					continue
@@ -97,7 +97,7 @@ func downloadGTFSBundles(ctx context.Context, servers []models.ObaServer, logger
 //   - staticStore: Store to keep parsed GTFS static data per server.
 //   - maxRetries: Maximum number of retries (with exponential backoff) for each server’s bundle download.
 
-func refreshGTFSBundles(ctx context.Context, servers []models.ObaServer, logger *slog.Logger, interval time.Duration, boundingBoxstore *geo.BoundingBoxStore, staticStore *StaticStore, maxRetries int) {
+func refreshGTFSBundles(ctx context.Context, client *http.Client, servers []models.ObaServer, logger *slog.Logger, interval time.Duration, boundingBoxstore *geo.BoundingBoxStore, staticStore *StaticStore, maxRetries int) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -107,7 +107,7 @@ func refreshGTFSBundles(ctx context.Context, servers []models.ObaServer, logger 
 			return
 		case <-ticker.C:
 			logger.Info("Refreshing GTFS bundles")
-			downloadGTFSBundles(ctx, servers, logger, boundingBoxstore, staticStore, maxRetries)
+			downloadGTFSBundles(ctx, client, servers, logger, boundingBoxstore, staticStore, maxRetries)
 		}
 	}
 }
@@ -133,8 +133,7 @@ func refreshGTFSBundles(ctx context.Context, servers []models.ObaServer, logger 
 //   - gtfs static data
 //   - error: Describes what went wrong, or nil if the operation was successful.
 
-func downloadGTFSBundle(ctx context.Context, url, agencyID string, maxRetries int) (*remoteGtfs.Static, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
+func downloadGTFSBundle(ctx context.Context, client *http.Client, url, agencyID string, maxRetries int) (*remoteGtfs.Static, error) {
 	sanitizedURL := utils.SanitizeServerURL(url)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {

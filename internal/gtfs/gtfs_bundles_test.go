@@ -24,7 +24,8 @@ func TestDownloadGTFSBundles(t *testing.T) {
 	boundingBoxStore := geo.NewBoundingBoxStore()
 	staticStore := NewStaticStore()
 	ctx := context.Background()
-	downloadGTFSBundles(ctx, servers, logger, boundingBoxStore, staticStore, 1)
+	client := &http.Client{Timeout: 10 * time.Second}
+	downloadGTFSBundles(ctx, client, servers, logger, boundingBoxStore, staticStore, 1)
 
 }
 
@@ -37,7 +38,8 @@ func TestRefreshGTFSBundles(t *testing.T) {
 	staticStore := NewStaticStore()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go refreshGTFSBundles(ctx, servers, logger, 10*time.Millisecond, boundingBoxStore, staticStore, 1)
+	client := &http.Client{Timeout: 10 * time.Second}
+	go refreshGTFSBundles(ctx, client, servers, logger, 10*time.Millisecond, boundingBoxStore, staticStore, 1)
 
 	time.Sleep(15 * time.Millisecond)
 
@@ -48,8 +50,9 @@ func TestDownloadGTFSBundle(t *testing.T) {
 	mockServer := setupGtfsServer(t, "gtfs.zip")
 	agencyID := "agency-1"
 	ctx := context.Background()
+	client := &http.Client{Timeout: 10 * time.Second}
 	t.Run("Success Response", func(t *testing.T) {
-		staticBundle, err := downloadGTFSBundle(ctx, mockServer.URL, agencyID, 1)
+		staticBundle, err := downloadGTFSBundle(ctx, client, mockServer.URL, agencyID, 1)
 		if err != nil {
 			t.Fatalf("DownloadGTFSBundle failed: %v", err)
 		}
@@ -100,7 +103,7 @@ func TestDownloadGTFSBundle(t *testing.T) {
 
 	t.Run("Invalid URL", func(t *testing.T) {
 		invalidURL := "http://invalid-url"
-		_, err := downloadGTFSBundle(ctx, invalidURL, "agency-2", 1)
+		_, err := downloadGTFSBundle(ctx, client, invalidURL, "agency-2", 1)
 		if err == nil {
 			t.Errorf("Expected error for invalid URL, got none")
 		}

@@ -30,7 +30,7 @@ func NewGtfsService(staticStore *StaticStore, realtimeStore *RealtimeStore, boun
 }
 
 func (gs *GtfsService) DownloadGTFSBundles(ctx context.Context, servers []models.ObaServer, maxRetries int) {
-	downloadGTFSBundles(ctx, servers, gs.Logger, gs.BoundingBoxStore, gs.StaticStore, maxRetries)
+	downloadGTFSBundles(ctx, gs.Client, servers, gs.Logger, gs.BoundingBoxStore, gs.StaticStore, maxRetries)
 }
 
 // This service method downloads a GTFS static bundle from the provided URL,
@@ -40,7 +40,7 @@ func (gs *GtfsService) DownloadGTFSBundles(ctx context.Context, servers []models
 // It parses the GTFS data and stores it in the StaticStore using the agencyID as the key.
 // It returns an error if the download or parsing fails.
 func (gs *GtfsService) DownloadGTFSBundle(ctx context.Context, url, agencyID string, maxRetires int) (*remoteGtfs.Static, error) {
-	return downloadGTFSBundle(ctx, url, agencyID, maxRetires)
+	return downloadGTFSBundle(ctx, gs.Client, url, agencyID, maxRetires)
 }
 
 func (gs *GtfsService) StoreGTFSBundle(staticBundle *remoteGtfs.Static, agencyID string) error {
@@ -48,7 +48,7 @@ func (gs *GtfsService) StoreGTFSBundle(staticBundle *remoteGtfs.Static, agencyID
 }
 
 func (gs *GtfsService) RefreshGTFSBundles(ctx context.Context, servers []models.ObaServer, interval time.Duration, maxRetries int) {
-	refreshGTFSBundles(ctx, servers, gs.Logger, interval, gs.BoundingBoxStore, gs.StaticStore, maxRetries)
+	refreshGTFSBundles(ctx, gs.Client, servers, gs.Logger, interval, gs.BoundingBoxStore, gs.StaticStore, maxRetries)
 }
 
 func (gs *GtfsService) FetchAndStoreGTFSRTFeed(server models.ObaServer) error {
