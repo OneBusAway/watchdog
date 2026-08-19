@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/getsentry/sentry-go"
@@ -141,7 +142,7 @@ func serverTagsFromRaw(raw json.RawMessage) map[string]string {
 // converting legacy v1 entries. Invalid entries and entries that mix schemas
 // are reported to Sentry and dropped, and duplicate agency IDs are rejected, so
 // one misconfigured entry cannot block monitoring of the rest of the fleet.
-func decodeServers(rawEntries []json.RawMessage) []models.ObaServer {
+func decodeServers(rawEntries []json.RawMessage, logger *slog.Logger) []models.ObaServer {
 	valid := make([]models.ObaServer, 0, len(rawEntries))
 	seenAgencies := make(map[string]struct{})
 	for _, raw := range rawEntries {
@@ -154,7 +155,21 @@ func decodeServers(rawEntries []json.RawMessage) []models.ObaServer {
 			continue
 		}
 		if _, exists := seenAgencies[server.AgencyID]; exists {
-			report.ReportError(fmt.Errorf("duplicate agency_id %q", server.AgencyID))
+			logger.Error("Dropping server with duplicate agency_id",
+				"agency_id", server.AgencyID,
+				"agency_name", server.AgencyName,
+				"oba_base_url", server.ObaBaseURL,
+			)
+			report.ReportErrorWithSentryOptions(fmt.Errorf("duplicate agency_id %q", server.AgencyID), report.SentryReportOptions{
+				Tags: map[string]string{
+					"agency_id":   server.AgencyID,
+					"agency_name": server.AgencyName,
+				},
+				ExtraContext: map[string]interface{}{
+					"oba_base_url": server.ObaBaseURL,
+				},
+				Level: sentry.LevelError,
+			})
 			continue
 		}
 		seenAgencies[server.AgencyID] = struct{}{}

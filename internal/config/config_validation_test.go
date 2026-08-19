@@ -1,8 +1,10 @@
 package config
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -124,7 +126,7 @@ func TestLoadConfigFromFileFiltersInvalidServers(t *testing.T) {
 		t.Fatalf("write config.json: %v", err)
 	}
 
-	servers, err := loadConfigFromFile(fp)
+	servers, err := loadConfigFromFile(fp, testLogger())
 	if err != nil {
 		t.Fatalf("loadConfigFromFile failed: %v", err)
 	}
@@ -168,7 +170,7 @@ func TestLoadConfigFromURLFiltersInvalidServers(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	servers, err := loadConfigFromURL(context.Background(), &http.Client{Timeout: 10 * time.Second}, ts.URL, "", "", 1)
+	servers, err := loadConfigFromURL(context.Background(), &http.Client{Timeout: 10 * time.Second}, ts.URL, "", "", 1, testLogger())
 	if err != nil {
 		t.Fatalf("loadConfigFromURL failed: %v", err)
 	}
@@ -216,7 +218,7 @@ func TestDecodeServers(t *testing.T) {
 		}
 
 		// Interleave valid and invalid: valid, invalid, valid, invalid.
-		got := decodeServers(rawEntries)
+		got := decodeServers(rawEntries, testLogger())
 
 		if len(got) != 2 {
 			t.Fatalf("expected 2 valid servers, got %d: %+v", len(got), got)
@@ -227,6 +229,9 @@ func TestDecodeServers(t *testing.T) {
 	})
 
 	t.Run("drops duplicate agency ids", func(t *testing.T) {
+		var logBuf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+
 		rawEntries := []json.RawMessage{
 			json.RawMessage(`{
 				"agency_name": "First",
@@ -246,12 +251,15 @@ func TestDecodeServers(t *testing.T) {
 			}`),
 		}
 
-		got := decodeServers(rawEntries)
+		got := decodeServers(rawEntries, logger)
 		if len(got) != 1 {
 			t.Fatalf("expected 1 server after dedup, got %d", len(got))
 		}
 		if got[0].AgencyName != "First" {
 			t.Fatalf("expected the first entry to be kept, got %q", got[0].AgencyName)
+		}
+		if !strings.Contains(logBuf.String(), "Dropping server with duplicate agency_id") {
+			t.Errorf("expected the duplicate drop to be logged, got logs:\n%s", logBuf.String())
 		}
 	})
 
@@ -266,14 +274,14 @@ func TestDecodeServers(t *testing.T) {
 				"agency_id": "agency-bad"
 			}`),
 		}
-		got := decodeServers(rawEntries)
+		got := decodeServers(rawEntries, testLogger())
 		if len(got) != 0 {
 			t.Fatalf("expected 0 valid servers, got %d", len(got))
 		}
 	})
 
 	t.Run("empty input yields an empty slice", func(t *testing.T) {
-		got := decodeServers(nil)
+		got := decodeServers(nil, testLogger())
 		if len(got) != 0 {
 			t.Fatalf("expected 0 servers, got %d", len(got))
 		}

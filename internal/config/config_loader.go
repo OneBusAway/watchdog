@@ -64,7 +64,7 @@ func refreshConfig(ctx context.Context, client *http.Client, configURL, configAu
 			logger.Info("Stopping config refresh routine")
 			return
 		default:
-			newServers, err := loadConfigFromURL(ctx, client, configURL, configAuthUser, configAuthPass, maxRetries)
+			newServers, err := loadConfigFromURL(ctx, client, configURL, configAuthUser, configAuthPass, maxRetries, logger)
 			if err != nil {
 				report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 					Tags:  utils.MakeMap("config_url", configURL),
@@ -94,7 +94,7 @@ func refreshConfig(ctx context.Context, client *http.Client, configURL, configAu
 //
 // This function is used when the application is configured to load its server list
 // from a static file using the --config-file flag.
-func loadConfigFromFile(filePath string) ([]models.ObaServer, error) {
+func loadConfigFromFile(filePath string, logger *slog.Logger) ([]models.ObaServer, error) {
 	if filepath.Base(filePath) != "config.json" {
 		return nil, fmt.Errorf("invalid config file name: %s (only config.json is allowed)", filePath)
 	}
@@ -118,7 +118,7 @@ func loadConfigFromFile(filePath string) ([]models.ObaServer, error) {
 		return nil, fmt.Errorf("failed to unmarshal JSON: %v", err)
 	}
 
-	return decodeServers(rawEntries), nil
+	return decodeServers(rawEntries, logger), nil
 }
 
 // loadConfigFromURL fetches a JSON configuration from a remote HTTP(S) endpoint,
@@ -132,7 +132,7 @@ func loadConfigFromFile(filePath string) ([]models.ObaServer, error) {
 // with increasing delays, up to `maxRetries` attempts.
 //
 // Errors are logged and reported to Sentry for observability.
-func loadConfigFromURL(ctx context.Context, client *http.Client, url, authUser, authPass string, maxRetries int) ([]models.ObaServer, error) {
+func loadConfigFromURL(ctx context.Context, client *http.Client, url, authUser, authPass string, maxRetries int, logger *slog.Logger) ([]models.ObaServer, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -184,5 +184,5 @@ func loadConfigFromURL(ctx context.Context, client *http.Client, url, authUser, 
 		return nil, fmt.Errorf("failed to unmarshal JSON: %v", err)
 	}
 
-	return decodeServers(rawEntries), nil
+	return decodeServers(rawEntries, logger), nil
 }

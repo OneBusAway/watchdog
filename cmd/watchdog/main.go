@@ -90,9 +90,9 @@ func main() {
 	// If a config URL is specified, fetch it over HTTP(S).
 	var servers []models.ObaServer
 	if *configFile != "" {
-		servers, err = config.LoadConfigFromFile(*configFile)
+		servers, err = config.LoadConfigFromFile(*configFile, logger)
 	} else if *configURL != "" {
-		servers, err = config.LoadConfigFromURL(ctx, client, *configURL, configAuthUser, configAuthPass, 20)
+		servers, err = config.LoadConfigFromURL(ctx, client, *configURL, configAuthUser, configAuthPass, 20, logger)
 	}
 
 	if err != nil {
