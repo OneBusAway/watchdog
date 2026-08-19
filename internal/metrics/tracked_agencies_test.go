@@ -71,15 +71,35 @@ func TestReportTrackedAgenciesSkipsUnchangedSet(t *testing.T) {
 	})
 
 	reportTrackedAgencies([]models.ObaServer{
-		{AgencyName: "Alpha Renamed", AgencyID: "agency-a", ObaBaseURL: "https://alpha.example.com"},
+		{AgencyName: "Alpha", AgencyID: "agency-a", ObaBaseURL: "https://alpha.example.com"},
 	})
 
 	series := trackedAgencySeries(t)
 	if _, ok := findTrackedAgency(series, "agency-a", "Alpha", "https://alpha.example.com"); !ok {
 		t.Errorf("Expected unchanged set to be a no-op, got %+v", series)
 	}
-	if _, ok := findTrackedAgency(series, "agency-a", "Alpha Renamed", "https://alpha.example.com"); ok {
-		t.Errorf("Expected unchanged set to be a no-op, but series was re-emitted: %+v", series)
+	if len(series) != 1 {
+		t.Errorf("Expected exactly one series after no-op re-report, got %+v", series)
+	}
+}
+
+func TestReportTrackedAgenciesPropagatesLabelChanges(t *testing.T) {
+	resetTrackedAgenciesState()
+
+	reportTrackedAgencies([]models.ObaServer{
+		{AgencyName: "Alpha", AgencyID: "agency-a", ObaBaseURL: "https://alpha.example.com"},
+	})
+
+	reportTrackedAgencies([]models.ObaServer{
+		{AgencyName: "Alpha Renamed", AgencyID: "agency-a", ObaBaseURL: "https://renamed.example.com"},
+	})
+
+	series := trackedAgencySeries(t)
+	if _, ok := findTrackedAgency(series, "agency-a", "Alpha Renamed", "https://renamed.example.com"); !ok {
+		t.Errorf("Expected renamed agency series to be re-emitted, got %+v", series)
+	}
+	if _, ok := findTrackedAgency(series, "agency-a", "Alpha", "https://alpha.example.com"); ok {
+		t.Errorf("Expected stale series to be gone after rename, got %+v", series)
 	}
 }
 

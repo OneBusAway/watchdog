@@ -4,24 +4,34 @@ import (
 	"watchdog.onebusaway.org/internal/models"
 )
 
-// trackedAgencyIDs returns the set of agency IDs currently being observed by
-// Watchdog. It is used to detect when the configured server set changes so the
-// tracked-agency metrics are only re-emitted on change.
-func trackedAgencyIDs(servers []models.ObaServer) map[string]struct{} {
-	ids := make(map[string]struct{}, len(servers))
-	for _, s := range servers {
-		ids[s.AgencyID] = struct{}{}
-	}
-	return ids
+// trackedAgencyKey identifies a tracked agency by its ID, name, and base URL.
+// The name and URL are part of the key so that label changes (e.g., a remote
+// config refresh renames an agency or moves it to a new OBA base URL) are
+// detected as a change rather than silently dropping out.
+type trackedAgencyKey struct {
+	agencyID   string
+	agencyName string
+	baseURL    string
 }
 
-// sameAgencySet reports whether two agency ID sets are identical.
-func sameAgencySet(a, b map[string]struct{}) bool {
+// trackedAgencyKeys returns the set of (id, name, url) tuples currently being
+// observed by Watchdog. It is used to detect when the configured server set
+// changes so the tracked-agency metrics are only re-emitted on change.
+func trackedAgencyKeys(servers []models.ObaServer) map[trackedAgencyKey]struct{} {
+	keys := make(map[trackedAgencyKey]struct{}, len(servers))
+	for _, s := range servers {
+		keys[trackedAgencyKey{s.AgencyID, s.AgencyName, s.ObaBaseURL}] = struct{}{}
+	}
+	return keys
+}
+
+// sameAgencySet reports whether two tracked agency sets are identical.
+func sameAgencySet(a, b map[trackedAgencyKey]struct{}) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	for id := range a {
-		if _, ok := b[id]; !ok {
+	for key := range a {
+		if _, ok := b[key]; !ok {
 			return false
 		}
 	}

@@ -7,7 +7,7 @@ import (
 // lastTrackedAgencies remembers the last agency set emitted to the
 // tracked-agency metrics so subsequent calls with an unchanged set are no-ops.
 var (
-	lastTrackedAgencies     map[string]struct{}
+	lastTrackedAgencies     map[trackedAgencyKey]struct{}
 	trackedAgenciesReported bool
 )
 
@@ -21,14 +21,15 @@ var (
 // name, and base URL.
 //
 // This is called once at startup and again only when the configured server set
-// changes (e.g., a remote config refresh adds or removes an agency), never on
-// the periodic metric collection tick. Re-reporting an unchanged set is a no-op.
+// changes (e.g., a remote config refresh adds or removes an agency, or changes
+// an agency's name or base URL), never on the periodic metric collection tick.
+// Re-reporting an unchanged set is a no-op.
 func reportTrackedAgencies(servers []models.ObaServer) {
-	ids := trackedAgencyIDs(servers)
-	if trackedAgenciesReported && sameAgencySet(ids, lastTrackedAgencies) {
+	keys := trackedAgencyKeys(servers)
+	if trackedAgenciesReported && sameAgencySet(keys, lastTrackedAgencies) {
 		return
 	}
-	lastTrackedAgencies = ids
+	lastTrackedAgencies = keys
 	trackedAgenciesReported = true
 
 	AgenciesTrackedInfo.Reset()
