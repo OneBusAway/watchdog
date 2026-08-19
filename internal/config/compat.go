@@ -140,11 +140,14 @@ func serverTagsFromRaw(raw json.RawMessage) map[string]string {
 
 // decodeServers decodes each raw config entry into the current schema,
 // converting legacy v1 entries. Invalid entries and entries that mix schemas
-// are reported to Sentry and dropped, and duplicate agency IDs are rejected, so
-// one misconfigured entry cannot block monitoring of the rest of the fleet.
+// are reported to Sentry and dropped, and duplicate servers (same oba_base_url
+// and agency_id) are rejected, so one misconfigured entry cannot block
+// monitoring of the rest of the fleet. Distinct deployments that happen to
+// share an agency_id are kept, since agency IDs are only unique within a single
+// OBA server.
 func decodeServers(rawEntries []json.RawMessage, logger *slog.Logger) []models.ObaServer {
 	valid := make([]models.ObaServer, 0, len(rawEntries))
-	seenAgencies := make(map[string]struct{})
+	seenServers := make(map[string]struct{})
 	for _, raw := range rawEntries {
 		server, err := decodeServerEntry(raw)
 		if err != nil {
@@ -154,25 +157,28 @@ func decodeServers(rawEntries []json.RawMessage, logger *slog.Logger) []models.O
 			})
 			continue
 		}
-		if _, exists := seenAgencies[server.AgencyID]; exists {
-			logger.Error("Dropping server with duplicate agency_id",
+		serverKey := server.ServerKey()
+		if _, exists := seenServers[serverKey]; exists {
+			logger.Error("Dropping server with duplicate oba_base_url and agency_id",
 				"agency_id", server.AgencyID,
 				"agency_name", server.AgencyName,
 				"oba_base_url", server.ObaBaseURL,
+				"server_key", serverKey,
 			)
-			report.ReportErrorWithSentryOptions(fmt.Errorf("duplicate agency_id %q", server.AgencyID), report.SentryReportOptions{
+			report.ReportErrorWithSentryOptions(fmt.Errorf("duplicate server key %q", serverKey), report.SentryReportOptions{
 				Tags: map[string]string{
 					"agency_id":   server.AgencyID,
 					"agency_name": server.AgencyName,
 				},
 				ExtraContext: map[string]interface{}{
 					"oba_base_url": server.ObaBaseURL,
+					"server_key":   serverKey,
 				},
 				Level: sentry.LevelError,
 			})
 			continue
 		}
-		seenAgencies[server.AgencyID] = struct{}{}
+		seenServers[serverKey] = struct{}{}
 		valid = append(valid, server)
 	}
 	return valid

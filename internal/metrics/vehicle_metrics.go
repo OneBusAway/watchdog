@@ -36,7 +36,7 @@ func countVehiclePositions(server models.ObaServer, realtimeStore *gtfs.Realtime
 		})
 		return 0, err
 	}
-	realtimeData := realtimeStore.Get(server.AgencyID)
+	realtimeData := realtimeStore.Get(server.ServerKey())
 	if realtimeData == nil {
 		err := fmt.Errorf("no GTFS-RT data available for agency %s", server.AgencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -114,7 +114,7 @@ func trackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLast
 	agencyID := server.AgencyID
 	now := time.Now().UTC()
 
-	realtimeData := realtimeStore.Get(agencyID)
+	realtimeData := realtimeStore.Get(server.ServerKey())
 	if realtimeData == nil {
 		err := fmt.Errorf("no GTFS-RT data available for agency %s", agencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -150,7 +150,7 @@ func trackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLast
 		VehicleReportInterval.WithLabelValues(vehicleID, agencyID, server.AgencyName).Set(interval)
 
 		// Compute speed
-		prev, ok := vehicleLastSeen.Get(agencyID, vehicleID)
+		prev, ok := vehicleLastSeen.Get(server.ServerKey(), vehicleID)
 		if ok {
 			timeDelta := seenAt.Sub(prev.Time).Seconds()
 			if timeDelta > 0 {
@@ -171,14 +171,14 @@ func trackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLast
 		}
 
 		// Save last seen data
-		vehicleLastSeen.Set(agencyID, vehicleID, LastSeen{
+		vehicleLastSeen.Set(server.ServerKey(), vehicleID, LastSeen{
 			Time: seenAt,
 			Lat:  lat,
 			Lon:  lon,
 		})
 	}
 
-	TrackedVehiclesGauge.WithLabelValues(agencyID, server.AgencyName).Set(float64(vehicleLastSeen.Count(agencyID)))
+	TrackedVehiclesGauge.WithLabelValues(agencyID, server.AgencyName).Set(float64(vehicleLastSeen.Count(server.ServerKey())))
 
 	return nil
 }
@@ -213,7 +213,7 @@ const VehicleStatusStoppedAtStop = 1
 // - InvalidVehicleCoordinatesGauge: for invalid or missing coordinates
 // - StoppedOutOfBoundsVehiclesGauge: for vehicles stopped outside the bounding box
 func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, boundingBoxStore *geo.BoundingBoxStore, realtimeStore *gtfs.RealtimeStore) error {
-	realtimeData := realtimeStore.Get(server.AgencyID)
+	realtimeData := realtimeStore.Get(server.ServerKey())
 	if realtimeData == nil {
 		err := fmt.Errorf("no GTFS-RT data available for agency %s", server.AgencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -222,9 +222,9 @@ func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, bounding
 		return err
 	}
 
-	boundingBox, ok := boundingBoxStore.Get(server.AgencyID)
+	boundingBox, ok := boundingBoxStore.Get(server.ServerKey())
 	if !ok {
-		return fmt.Errorf("no bounding box found for agency ID %s", server.AgencyID)
+		return fmt.Errorf("no bounding box found for server key %s", server.ServerKey())
 	}
 
 	invalidCount := 0

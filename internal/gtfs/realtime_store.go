@@ -30,23 +30,27 @@ func NewRealtimeStore() *RealtimeStore {
 // It is typically called once by the function responsible for fetching the feed.
 //
 // Parameters:
+//   - serverKey: The composite server key (oba_base_url + agency_id).
 //   - newData: The parsed GTFS-RT feed to store.
-func (s *RealtimeStore) Set(agencyID string, newData *models.RealtimeData) {
+func (s *RealtimeStore) Set(serverKey string, newData *models.RealtimeData) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.data == nil {
 		s.data = make(map[string]*models.RealtimeData)
 	}
-	s.data[agencyID] = newData
+	s.data[serverKey] = newData
 }
 
 // Get retrieves the most recently stored GTFS-RT data in a thread-safe way.
 // It can be safely called by multiple consumers concurrently.
 //
+// Parameters:
+//   - serverKey: The composite server key (oba_base_url + agency_id).
+//
 // Returns:
 //   - A pointer to the parsed GTFS-RT feed, or nil if not set.
-func (s *RealtimeStore) Get(agencyID string) *models.RealtimeData {
+func (s *RealtimeStore) Get(serverKey string) *models.RealtimeData {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.data[agencyID]
+	return s.data[serverKey]
 }

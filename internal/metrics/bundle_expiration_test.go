@@ -10,7 +10,7 @@ import (
 )
 
 func TestCheckBundleExpiration(t *testing.T) {
-	testServer := models.ObaServer{AgencyID: "1", AgencyName: "Test Agency"}
+	testServer := models.ObaServer{AgencyID: "1", AgencyName: "Test Agency", ObaBaseURL: "https://test.example.com"}
 
 	data := readFixture(t, "gtfs.zip")
 	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
@@ -19,7 +19,7 @@ func TestCheckBundleExpiration(t *testing.T) {
 	}
 	staticData := models.NewStaticData(staticBundle)
 	staticStore := gtfs.NewStaticStore()
-	staticStore.Set(testServer.AgencyID, staticData)
+	staticStore.Set(testServer.ServerKey(), staticData)
 	fixedTime := time.Date(2025, 1, 12, 20, 16, 38, 0, time.UTC)
 
 	earliest, latest, err := checkBundleExpiration(staticStore, fixedTime, testServer)

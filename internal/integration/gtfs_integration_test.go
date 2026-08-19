@@ -38,7 +38,7 @@ func TestDownloadGTFSBundles(t *testing.T) {
 					t.Errorf("failed to download GTFS bundle for agency %s : %v", srv.AgencyID, err)
 					return
 				}
-				err = gtfsService.StoreGTFSBundle(staticBundle, srv.AgencyID)
+				err = gtfsService.StoreGTFSBundle(staticBundle, srv.ServerKey())
 				if err != nil {
 					t.Errorf("failed to store GTFS bundle for agency %s : %v", srv.AgencyID, err)
 					return

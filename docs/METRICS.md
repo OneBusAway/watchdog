@@ -4,7 +4,11 @@ This document describes all Prometheus metrics exposed by the application, their
 
 Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practices/naming/) and are grouped by subsystem.
 
-**Label convention:** Every metric that carries an `agency_id` label also carries a `agency_name` label (the configured `name` of the watched OBA server). This is a 1:1 mapping — config validation rejects duplicate `agency_id`s — so operators can identify an agency by its human-readable name even when the ID is not descriptive, e.g. in Grafana legends `{{agency_name}} ({{agency_id}})` or a PromQL filter on `agency_name`. Because the pairing is fixed per `agency_id`, the `agency_name` label adds no extra cardinality to any series.
+**Label convention:** Every metric that carries an `agency_id` label also carries a `agency_name` label (the configured `name` of the watched OBA server). In a single deployment this is effectively a 1:1 mapping, so operators can identify an agency by its human-readable name even when the ID is not descriptive, e.g. in Grafana legends `{{agency_name}} ({{agency_id}})` or a PromQL filter on `agency_name`. Because the pairing is fixed per `agency_id`, the `agency_name` label adds no extra cardinality to any series.
+
+**Identity — the Server Key:** The unique identity of a monitored deployment is the composite of its `oba_base_url` plus `agency_id`. GTFS `agency_id` values are only unique *within* a single OBA server, so two distinct deployments can legitimately reuse the same `agency_id` (e.g. both use `"1"` or `"MTA"`). All Watchdog stores (GTFS static/real-time bundles, bounding boxes, backoff state, vehicle last-seen, unmatched-stop tracking) and config validation are keyed on this composite, so both deployments are monitored independently. Config validation only rejects *exact* duplicates — the same `oba_base_url` **and** `agency_id` — since those are genuine mistakes.
+
+**Known limitation (shared `agency_id` across deployments):** The metric series labeled with `agency_id`/`agency_name` (and the vehicle metrics that add a `vehicle_id` label) do **not** carry the base URL, so observations from two deployments that share an `agency_id` produce colliding series — the later observation overwrites the earlier one in Prometheus. The stores themselves never collide; this is purely a metric-label gap. `oba_api_status` and `oba_tracked_agencies_info` are unaffected because they already carry a `server_url` label. Extending `server_url` to the remaining metrics is a known follow-up.
 
 ---
 
@@ -54,7 +58,7 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
 **Interpretation Guide:**
 - **Normal:** `oba_tracked_agencies_count` equals the number of servers in the config that passed validation.
 - **Investigate if:** The count doesn't match the number of servers you expect in the config.
-- **Possible causes:** A config entry failed validation (missing required fields, duplicate `agency_id`) and was dropped; or a refresh source (see `--config-url`) removed an agency.
+- **Possible causes:** A config entry failed validation (missing required fields, exact `oba_base_url` + `agency_id` duplicate) and was dropped; or a refresh source (see `--config-url`) removed an agency.
 - **Notes:**
   - These metrics are emitted once at startup and re-emitted only when the tracked set changes (a remote config refresh adds or removes an agency) — never on the periodic collection tick.
   - Stale series are pruned when an agency is removed, so `sum(oba_tracked_agencies_info) == oba_tracked_agencies_count`.

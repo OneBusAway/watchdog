@@ -11,12 +11,14 @@ import (
 )
 
 func TestCountVehiclePositionsUsesAgencyStore(t *testing.T) {
-	store := testRealtimeStore(t, "agency-a")
-	count, err := countVehiclePositions(models.ObaServer{AgencyID: "agency-a"}, store)
+	serverA := models.ObaServer{AgencyID: "agency-a", ObaBaseURL: "https://a.example.com", AgencyName: "Agency A"}
+	serverB := models.ObaServer{AgencyID: "agency-b", ObaBaseURL: "https://b.example.com", AgencyName: "Agency B"}
+	store := testRealtimeStore(t, serverA)
+	count, err := countVehiclePositions(serverA, store)
 	if err != nil || count == 0 {
 		t.Fatalf("count=%d err=%v", count, err)
 	}
-	if _, err := countVehiclePositions(models.ObaServer{AgencyID: "agency-b"}, store); err == nil {
+	if _, err := countVehiclePositions(serverB, store); err == nil {
 		t.Fatal("expected missing agency feed error")
 	}
 }
@@ -36,14 +38,15 @@ func TestCountActiveVehiclesForAgency(t *testing.T) {
 }
 
 func TestTrackInvalidVehiclesUsesAgencyBounds(t *testing.T) {
-	const agencyID = "agency-a"
-	store := testRealtimeStore(t, agencyID)
+	server := models.ObaServer{AgencyID: "agency-a", ObaBaseURL: "https://a.example.com", AgencyName: "Agency A"}
+	missing := models.ObaServer{AgencyID: "missing", ObaBaseURL: "https://missing.example.com", AgencyName: "Missing"}
+	store := testRealtimeStore(t, server)
 	bounds := geo.NewBoundingBoxStore()
-	bounds.Set(agencyID, geo.BoundingBox{MinLat: -90, MaxLat: 90, MinLon: -180, MaxLon: 180})
-	if err := trackInvalidVehiclesAndStoppedOutOfBounds(models.ObaServer{AgencyID: agencyID}, bounds, store); err != nil {
+	bounds.Set(server.ServerKey(), geo.BoundingBox{MinLat: -90, MaxLat: 90, MinLon: -180, MaxLon: 180})
+	if err := trackInvalidVehiclesAndStoppedOutOfBounds(server, bounds, store); err != nil {
 		t.Fatal(err)
 	}
-	if err := trackInvalidVehiclesAndStoppedOutOfBounds(models.ObaServer{AgencyID: "missing"}, bounds, store); err == nil {
+	if err := trackInvalidVehiclesAndStoppedOutOfBounds(missing, bounds, store); err == nil {
 		t.Fatal("expected missing feed error")
 	}
 }

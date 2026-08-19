@@ -228,10 +228,42 @@ func TestDecodeServers(t *testing.T) {
 		}
 	})
 
-	t.Run("drops duplicate agency ids", func(t *testing.T) {
+	t.Run("drops duplicate servers with identical oba_base_url and agency_id", func(t *testing.T) {
 		var logBuf bytes.Buffer
 		logger := slog.New(slog.NewTextHandler(&logBuf, nil))
 
+		rawEntries := []json.RawMessage{
+			json.RawMessage(`{
+				"agency_name": "First",
+				"oba_base_url": "https://first.example.com",
+				"oba_api_key": "key",
+				"gtfs-static-feeds": ["https://gtfs.example.com"],
+				"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle.example.com"}],
+				"agency_id": "agency-1"
+			}`),
+			json.RawMessage(`{
+				"agency_name": "Second",
+				"oba_base_url": "https://first.example.com",
+				"oba_api_key": "key",
+				"gtfs-static-feeds": ["https://gtfs.example.com"],
+				"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle.example.com"}],
+				"agency_id": "agency-1"
+			}`),
+		}
+
+		got := decodeServers(rawEntries, logger)
+		if len(got) != 1 {
+			t.Fatalf("expected 1 server after dedup, got %d", len(got))
+		}
+		if got[0].AgencyName != "First" {
+			t.Fatalf("expected the first entry to be kept, got %q", got[0].AgencyName)
+		}
+		if !strings.Contains(logBuf.String(), "Dropping server with duplicate oba_base_url and agency_id") {
+			t.Errorf("expected the duplicate drop to be logged, got logs:\n%s", logBuf.String())
+		}
+	})
+
+	t.Run("keeps servers that share an agency_id across different base URLs", func(t *testing.T) {
 		rawEntries := []json.RawMessage{
 			json.RawMessage(`{
 				"agency_name": "First",
@@ -251,15 +283,9 @@ func TestDecodeServers(t *testing.T) {
 			}`),
 		}
 
-		got := decodeServers(rawEntries, logger)
-		if len(got) != 1 {
-			t.Fatalf("expected 1 server after dedup, got %d", len(got))
-		}
-		if got[0].AgencyName != "First" {
-			t.Fatalf("expected the first entry to be kept, got %q", got[0].AgencyName)
-		}
-		if !strings.Contains(logBuf.String(), "Dropping server with duplicate agency_id") {
-			t.Errorf("expected the duplicate drop to be logged, got logs:\n%s", logBuf.String())
+		got := decodeServers(rawEntries, testLogger())
+		if len(got) != 2 {
+			t.Fatalf("expected both servers kept (distinct base URLs, shared agency_id), got %d: %+v", len(got), got)
 		}
 	})
 

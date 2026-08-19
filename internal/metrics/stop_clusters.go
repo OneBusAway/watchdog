@@ -23,11 +23,13 @@ import (
 //     and the cluster's latitude/longitude.
 //
 // Parameters:
-// - agencyID: the GTFS agency identifier
-// - agencyName: the human-readable server/agency name, used as a metric label
-// - unmatchedStops: a map of stop IDs to GTFS stop objects not matched to gtfs static data
-// - tracker: used to record cluster observations so stale cluster series can be cleaned up later.
-func reportUnmatchedStopClusters(agencyID, agencyName string, unmatchedStops map[string]remoteGtfs.Stop, tracker *UnmatchedStopTracker) {
+//   - serverKey: the composite server key (oba_base_url + agency_id) used to key
+//     the tracker's outer map
+//   - agencyID: the GTFS agency identifier
+//   - agencyName: the human-readable server/agency name, used as a metric label
+//   - unmatchedStops: a map of stop IDs to GTFS stop objects not matched to gtfs static data
+//   - tracker: used to record cluster observations so stale cluster series can be cleaned up later.
+func reportUnmatchedStopClusters(serverKey, agencyID, agencyName string, unmatchedStops map[string]remoteGtfs.Stop, tracker *UnmatchedStopTracker) {
 	type clusterKey struct {
 		stationID string
 		clusterID string
@@ -52,7 +54,7 @@ func reportUnmatchedStopClusters(agencyID, agencyName string, unmatchedStops map
 	// cluster series can be pruned once the cluster stops appearing.
 	for key, count := range clusterCount {
 		lat, lon := clusterLocation[key][0], clusterLocation[key][1]
-		tracker.RecordClusterSeen(agencyID, agencyName, key.stationID, key.clusterID, lat, lon)
+		tracker.RecordClusterSeen(serverKey, agencyID, agencyName, key.stationID, key.clusterID, lat, lon)
 		UnmatchedStopClusterCount.WithLabelValues(agencyID, agencyName, key.stationID, key.clusterID, lat, lon).Set(float64(count))
 	}
 }

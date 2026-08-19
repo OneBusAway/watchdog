@@ -44,41 +44,41 @@ func NewBackoffStore() *BackoffStore {
 	}
 }
 
-// NextRetryAt retrieves the next retry time for the given server ID.
+// NextRetryAt retrieves the next retry time for the given server key.
 // It returns the timestamp in UTC and a boolean indicating whether the server has an active backoff.
-func (s *BackoffStore) NextRetryAt(agencyID string) (time.Time, bool) {
+func (s *BackoffStore) NextRetryAt(serverKey string) (time.Time, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if backoff, exists := s.backoffs[agencyID]; exists {
+	if backoff, exists := s.backoffs[serverKey]; exists {
 		return backoff.NextRetryAt.UTC(), true
 	}
 	return time.Time{}, false
 }
 
-// UpdateBackoff updates the backoff delay and next retry time for the given server ID.
+// UpdateBackoff updates the backoff delay and next retry time for the given server key.
 // If no backoff exists for the server, it initializes one with BASE_BACKOFF.
-func (s *BackoffStore) UpdateBackoff(agencyID string) {
+func (s *BackoffStore) UpdateBackoff(serverKey string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if backoff, exists := s.backoffs[agencyID]; exists {
+	if backoff, exists := s.backoffs[serverKey]; exists {
 		backoff.BackoffDelay = calculateNewBackoffDelay(backoff.BackoffDelay)
 		backoff.NextRetryAt = calculateNextRetryAt(backoff.BackoffDelay)
-		s.backoffs[agencyID] = backoff
+		s.backoffs[serverKey] = backoff
 	} else {
-		s.backoffs[agencyID] = backoffData{
+		s.backoffs[serverKey] = backoffData{
 			BackoffDelay: BASE_BACKOFF,
 			NextRetryAt:  calculateNextRetryAt(BASE_BACKOFF),
 		}
 	}
 }
 
-// ResetBackoff removes any existing backoff data for the given server ID.
-func (s *BackoffStore) ResetBackoff(agencyID string) {
+// ResetBackoff removes any existing backoff data for the given server key.
+func (s *BackoffStore) ResetBackoff(serverKey string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	delete(s.backoffs, agencyID)
+	delete(s.backoffs, serverKey)
 }
 
 // DoWithBackoff executes an HTTP request with exponential backoff on failure.

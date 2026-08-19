@@ -43,8 +43,8 @@ func (gs *GtfsService) DownloadGTFSBundle(ctx context.Context, url, agencyID str
 	return downloadGTFSBundle(ctx, gs.Client, url, agencyID, maxRetires)
 }
 
-func (gs *GtfsService) StoreGTFSBundle(staticBundle *remoteGtfs.Static, agencyID string) error {
-	return storeGTFSBundle(staticBundle, agencyID, gs.StaticStore, gs.BoundingBoxStore)
+func (gs *GtfsService) StoreGTFSBundle(staticBundle *remoteGtfs.Static, serverKey string) error {
+	return storeGTFSBundle(staticBundle, serverKey, gs.StaticStore, gs.BoundingBoxStore)
 }
 
 func (gs *GtfsService) RefreshGTFSBundles(ctx context.Context, servers []models.ObaServer, interval time.Duration, maxRetries int) {
@@ -64,6 +64,6 @@ func GetEarliestAndLatestServiceDates(staticData *models.StaticData) (earliest, 
 	return earliestTime, latestTime, nil
 }
 
-func GetStopLocationsByIDs(agencyID string, stopIDs []string, staticStore *StaticStore) (map[string]remoteGtfs.Stop, error) {
-	return getStopLocationsByIDs(agencyID, stopIDs, staticStore)
+func GetStopLocationsByIDs(serverKey string, stopIDs []string, staticStore *StaticStore) (map[string]remoteGtfs.Stop, error) {
+	return getStopLocationsByIDs(serverKey, stopIDs, staticStore)
 }

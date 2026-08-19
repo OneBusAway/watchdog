@@ -13,9 +13,10 @@ type LastSeen struct {
 	Lon  float64
 }
 
-// VehicleLastSeen stores the most recent known location and timestamp for each vehicle per agency.
+// VehicleLastSeen stores the most recent known location and timestamp for each vehicle per server.
 //
-// The outer map key is the agency ID (string), and the inner map key is the vehicle ID (string).
+// The outer map key is the composite server key (oba_base_url + agency_id), and the
+// inner map key is the vehicle ID (string).
 // Each entry stores a `LastSeen` struct containing the last known latitude, longitude, and timestamp.
 //
 // This cache is used to:
@@ -36,12 +37,12 @@ func NewVehicleLastSeen() *VehicleLastSeen {
 	}
 }
 
-// Get retrieves the LastSeen data for a specific vehicle on a given agency.
+// Get retrieves the LastSeen data for a specific vehicle on a given server key.
 // It returns the LastSeen value and a boolean indicating whether the vehicle was found.
 //
-// agencyID: ID of the agency.
+// serverKey: Composite key of the deployment (oba_base_url + agency_id).
 // vehicleID: Unique identifier of the vehicle.
-func (vehicleLastSeen *VehicleLastSeen) Get(agencyID, vehicleID string) (LastSeen, bool) {
+func (vehicleLastSeen *VehicleLastSeen) Get(serverKey, vehicleID string) (LastSeen, bool) {
 	vehicleLastSeen.Mu.RLock()
 	defer vehicleLastSeen.Mu.RUnlock()
 
@@ -49,36 +50,36 @@ func (vehicleLastSeen *VehicleLastSeen) Get(agencyID, vehicleID string) (LastSee
 		return LastSeen{}, false
 	}
 
-	if vehicles, ok := vehicleLastSeen.Store[agencyID]; ok {
+	if vehicles, ok := vehicleLastSeen.Store[serverKey]; ok {
 		lastSeen, ok := vehicles[vehicleID]
 		return lastSeen, ok
 	}
 	return LastSeen{}, false
 }
 
-// Set stores or updates the LastSeen data for a specific vehicle on a given agency.
+// Set stores or updates the LastSeen data for a specific vehicle on a given server key.
 //
-// agencyID: ID of the agency.
+// serverKey: Composite key of the deployment (oba_base_url + agency_id).
 // vehicleID: Unique identifier of the vehicle.
 // lastSeen: LastSeen object containing the latest observation time and related data.
-func (vehicleLastSeen *VehicleLastSeen) Set(agencyID, vehicleID string, lastSeen LastSeen) {
+func (vehicleLastSeen *VehicleLastSeen) Set(serverKey, vehicleID string, lastSeen LastSeen) {
 	vehicleLastSeen.Mu.Lock()
 	defer vehicleLastSeen.Mu.Unlock()
 
-	if _, ok := vehicleLastSeen.Store[agencyID]; !ok {
-		vehicleLastSeen.Store[agencyID] = make(map[string]LastSeen)
+	if _, ok := vehicleLastSeen.Store[serverKey]; !ok {
+		vehicleLastSeen.Store[serverKey] = make(map[string]LastSeen)
 	}
-	vehicleLastSeen.Store[agencyID][vehicleID] = lastSeen
+	vehicleLastSeen.Store[serverKey][vehicleID] = lastSeen
 }
 
-// Count returns the number of tracked vehicles for a given agency.
+// Count returns the number of tracked vehicles for a given server key.
 //
-// agencyID: ID of the agency to count vehicles for.
-func (v *VehicleLastSeen) Count(agencyID string) int {
+// serverKey: Composite key of the deployment (oba_base_url + agency_id).
+func (v *VehicleLastSeen) Count(serverKey string) int {
 	v.Mu.RLock()
 	defer v.Mu.RUnlock()
 
-	return len(v.Store[agencyID])
+	return len(v.Store[serverKey])
 }
 
 // ClearRoutine runs a background process that periodically removes vehicles

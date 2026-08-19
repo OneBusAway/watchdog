@@ -8,14 +8,14 @@ import (
 )
 
 // StaticStore is a thread-safe in-memory store for GTFS static bundles,
-// indexed by agency ID. It allows concurrent access to GTFS data
-// using read-write locks using a sync.RWMutex.
+// indexed by server key (oba_base_url + agency_id). It allows concurrent access
+// to GTFS data using read-write locks using a sync.RWMutex.
 type StaticStore struct {
 	mu   sync.RWMutex
 	data map[string]*models.StaticData
 
 	// lastFetched records when Watchdog last downloaded the GTFS static bundle
-	// for each agency. It backs the `gtfs_bundle_last_fetched_timestamp_seconds`
+	// for each server key. It backs the `gtfs_bundle_last_fetched_timestamp_seconds`
 	// Prometheus metric.
 	//
 	// Why this exists: the OBA server's unmatched-stop list is relative to the
@@ -41,56 +41,56 @@ func NewStaticStore() *StaticStore {
 	return &StaticStore{}
 }
 
-// Set stores the given GTFS static data for the specified agency ID.
+// Set stores the given GTFS static data for the specified server key.
 // If the internal map is not initialized, it creates it.
 // This method is thread-safe and uses a write lock.
 //
 // Parameters:
-//   - agencyID: The unique identifier for the agency.
+//   - serverKey: The composite server key (oba_base_url + agency_id).
 //   - newData: A pointer to the GTFS static data to store.
-func (s *StaticStore) Set(agencyID string, newData *models.StaticData) {
+func (s *StaticStore) Set(serverKey string, newData *models.StaticData) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.data == nil {
 		s.data = make(map[string]*models.StaticData)
 	}
-	s.data[agencyID] = newData
+	s.data[serverKey] = newData
 }
 
-// Get retrieves the GTFS static data for the specified agency ID.
+// Get retrieves the GTFS static data for the specified server key.
 // This method is thread-safe and uses a read lock.
 //
 // Parameters:
-//   - agencyID: The unique identifier for the agency.
+//   - serverKey: The composite server key (oba_base_url + agency_id).
 //
 // Returns:
 //   - *remoteGtfs.Static: A pointer to the GTFS static data, if present.
-//   - bool: True if data exists for the given agency ID, false otherwise.
-func (s *StaticStore) Get(agencyID string) (*models.StaticData, bool) {
+//   - bool: True if data exists for the given server key, false otherwise.
+func (s *StaticStore) Get(serverKey string) (*models.StaticData, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	data, exists := s.data[agencyID]
+	data, exists := s.data[serverKey]
 	return data, exists
 }
 
 // SetFetchTime records when the GTFS static bundle was last downloaded for the
-// specified agency ID. If the internal map is not initialized, it creates it.
+// specified server key. If the internal map is not initialized, it creates it.
 // This method is thread-safe and uses a write lock.
-func (s *StaticStore) SetFetchTime(agencyID string, fetchTime time.Time) {
+func (s *StaticStore) SetFetchTime(serverKey string, fetchTime time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.lastFetched == nil {
 		s.lastFetched = make(map[string]time.Time)
 	}
-	s.lastFetched[agencyID] = fetchTime
+	s.lastFetched[serverKey] = fetchTime
 }
 
 // GetFetchTime returns when the GTFS static bundle was last downloaded for the
-// specified agency ID. It returns the timestamp and a boolean indicating whether
+// specified server key. It returns the timestamp and a boolean indicating whether
 // a fetch time is recorded.
-func (s *StaticStore) GetFetchTime(agencyID string) (time.Time, bool) {
+func (s *StaticStore) GetFetchTime(serverKey string) (time.Time, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	fetchTime, exists := s.lastFetched[agencyID]
+	fetchTime, exists := s.lastFetched[serverKey]
 	return fetchTime, exists
 }

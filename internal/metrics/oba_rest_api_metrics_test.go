@@ -89,7 +89,7 @@ func TestFetchObaAPIMetrics(t *testing.T) {
 			}
 
 			staticStore := gtfs.NewStaticStore()
-			staticStore.Set(tt.agencyID, staticData)
+			staticStore.Set(models.ServerKey(baseURL, tt.agencyID), staticData)
 			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 			tracker := NewUnmatchedStopTracker()
 

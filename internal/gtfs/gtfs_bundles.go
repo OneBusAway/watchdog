@@ -23,7 +23,8 @@ import (
 // For each server, it starts a dedicated goroutine that:
 //   1. Attempts to download and parse the GTFS static bundle from the server’s GTFS URL,
 //      using exponential backoff with retries (up to maxRetries).
-//   2. Stores the parsed GTFS static data in the provided StaticStore, keyed by agency ID.
+//   2. Stores the parsed GTFS static data in the provided StaticStore, keyed by
+//      server key (oba_base_url + agency_id).
 //   3. Computes a geographic bounding box from the stop locations in the static data.
 //   4. Stores the bounding box in the provided BoundingBoxStore.
 //
@@ -37,7 +38,8 @@ import (
 //   - servers: A list of OBA servers, each containing a GTFS URL and unique ID.
 //   - logger: A structured logger for recording success/failure logs.
 //   - boundingBoxStore: A store for computed bounding boxes, one per server.
-//   - staticStore: A store for parsed GTFS static data, keyed by agency ID.
+//   - staticStore: A store for parsed GTFS static data, keyed by server key
+//     (oba_base_url + agency_id).
 //   - maxRetries: The maximum number of retries (with exponential backoff) when downloading a bundle.
 //
 // This function does not return an error; failures are handled and reported individually per server.
@@ -70,7 +72,7 @@ func downloadGTFSBundles(ctx context.Context, client *http.Client, servers []mod
 				logger.Error("No GTFS bundles downloaded for agency", "agency_id", s.AgencyID)
 				return
 			}
-			if err := storeGTFSBundles(bundles, s.AgencyID, staticStore, boundingBoxStore); err != nil {
+			if err := storeGTFSBundles(bundles, s.ServerKey(), staticStore, boundingBoxStore); err != nil {
 				report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 					Tags:  utils.MakeMap("agency_id", s.AgencyID),
 					Level: sentry.LevelError,
@@ -129,7 +131,8 @@ func refreshGTFSBundles(ctx context.Context, client *http.Client, servers []mode
 // Parameters:
 //   - url: The URL of the GTFS static bundle (usually a zip file).
 //   - agencyID: The identifier used to store and retrieve the static data from the store.
-//   - staticStore: The in-memory store that holds GTFS static data indexed by agency ID.
+//   - staticStore: The in-memory store that holds GTFS static data indexed by
+//     server key (oba_base_url + agency_id).
 //   - maxRetries: The maximum number of retry attempts allowed during exponential backoff
 //                 before giving up on reaching the server
 //
@@ -210,18 +213,19 @@ func downloadGTFSBundle(ctx context.Context, client *http.Client, url, agencyID 
 //      and appends all service entries.
 //   3. Computes the bounding box from all merged stops.
 //   4. Stores the merged StaticData, fetch time, and bounding box in the stores,
-//      keyed by agency ID.
+//      keyed by the server's composite key (oba_base_url + agency_id).
 //
 // Parameters:
 //   - staticBundles: The parsed GTFS static bundles to merge.
-//   - agencyID: The identifier used to store and retrieve data for a specific agency.
-//   - staticStore: The in-memory store holding GTFS static data indexed by agency ID.
+//   - serverKey: The composite server key (oba_base_url + agency_id) used to
+//     store and retrieve data for a specific deployment.
+//   - staticStore: The in-memory store holding GTFS static data indexed by server key.
 //   - boundingBoxStore: The in-memory store holding computed bounding boxes for GTFS data.
 //
 // Returns:
 //   - error: If computing the bounding box fails, an error is returned. Otherwise, nil.
 
-func storeGTFSBundles(staticBundles []*remoteGtfs.Static, agencyID string, staticStore *StaticStore, boundingBoxStore *geo.BoundingBoxStore) error {
+func storeGTFSBundles(staticBundles []*remoteGtfs.Static, serverKey string, staticStore *StaticStore, boundingBoxStore *geo.BoundingBoxStore) error {
 	staticData := &models.StaticData{}
 	stops := make(map[string]struct{})
 	agencies := make(map[string]struct{})
@@ -250,27 +254,27 @@ func storeGTFSBundles(staticBundles []*remoteGtfs.Static, agencyID string, stati
 	}
 	bbox, err := geo.ComputeBoundingBox(staticData.Stops)
 	if err != nil {
-		return fmt.Errorf("could not compute bounding box for agency_id %s: %w", agencyID, err)
+		return fmt.Errorf("could not compute bounding box for server key %s: %w", serverKey, err)
 	}
-	staticStore.Set(agencyID, staticData)
-	staticStore.SetFetchTime(agencyID, time.Now().UTC())
-	boundingBoxStore.Set(agencyID, bbox)
+	staticStore.Set(serverKey, staticData)
+	staticStore.SetFetchTime(serverKey, time.Now().UTC())
+	boundingBoxStore.Set(serverKey, bbox)
 	return nil
 }
 
-func storeGTFSBundle(staticBundle *remoteGtfs.Static, agencyID string, staticStore *StaticStore, boundingBoxStore *geo.BoundingBoxStore) error {
-	return storeGTFSBundles([]*remoteGtfs.Static{staticBundle}, agencyID, staticStore, boundingBoxStore)
+func storeGTFSBundle(staticBundle *remoteGtfs.Static, serverKey string, staticStore *StaticStore, boundingBoxStore *geo.BoundingBoxStore) error {
+	return storeGTFSBundles([]*remoteGtfs.Static{staticBundle}, serverKey, staticStore, boundingBoxStore)
 }
 
 // getStopLocationsByIDs retrieves stop locations by their IDs from the GTFS cache.
 // It returns a map of stop IDs to gtfs.Stop objects.
 
-func getStopLocationsByIDs(agencyID string, stopIDs []string, staticStore *StaticStore) (map[string]remoteGtfs.Stop, error) {
-	staticData, ok := staticStore.Get(agencyID)
+func getStopLocationsByIDs(serverKey string, stopIDs []string, staticStore *StaticStore) (map[string]remoteGtfs.Stop, error) {
+	staticData, ok := staticStore.Get(serverKey)
 	if !ok || staticData == nil {
-		err := fmt.Errorf("no GTFS static data found for agency ID %s", agencyID)
+		err := fmt.Errorf("no GTFS static data found for server key %s", serverKey)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("agency_id", agencyID),
+			Tags: map[string]string{"server_key": serverKey},
 		})
 		return nil, err
 	}
@@ -375,7 +379,7 @@ func fetchAndStoreGTFSRTFeed(server models.ObaServer, realtimeStore *RealtimeSto
 			merged.Vehicles = append(merged.Vehicles, vehicle)
 		}
 	}
-	realtimeStore.Set(server.AgencyID, merged)
+	realtimeStore.Set(server.ServerKey(), merged)
 	return nil
 }
 

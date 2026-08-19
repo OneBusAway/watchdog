@@ -40,13 +40,13 @@ type trackedCluster struct {
 }
 
 // UnmatchedStopTracker stores the most recent observation of each unmatched
-// stop and unmatched-stop cluster per agency. Stop series and cluster series
+// stop and unmatched-stop cluster per server. Stop series and cluster series
 // are tracked independently: a cluster series is deleted once the cluster
 // itself has not been seen for the TTL, regardless of which stops are (or were)
 // its members.
 //
-// The outer map key is the agency ID and the innermost map key is the stop ID
-// (Entries) or the cluster key (Clusters).
+// The outer map key is the composite server key (oba_base_url + agency_id) and
+// the innermost map key is the stop ID (Entries) or the cluster key (Clusters).
 type UnmatchedStopTracker struct {
 	Mu       sync.RWMutex
 	Entries  map[string]map[string]trackedStop
@@ -61,15 +61,16 @@ func NewUnmatchedStopTracker() *UnmatchedStopTracker {
 }
 
 // RecordLastSeen updates (or creates) the tracked entry for a stop that was just
-// reported as unmatched.
-func (t *UnmatchedStopTracker) RecordLastSeen(agencyID, agencyName, stopID, stopName, lat, lon string) {
+// reported as unmatched. serverKey key is the outer map key; the agencyID and
+// agencyName are the label values of the emitted metric series.
+func (t *UnmatchedStopTracker) RecordLastSeen(serverKey, agencyID, agencyName, stopID, stopName, lat, lon string) {
 	t.Mu.Lock()
 	defer t.Mu.Unlock()
 
-	stops, ok := t.Entries[agencyID]
+	stops, ok := t.Entries[serverKey]
 	if !ok {
 		stops = make(map[string]trackedStop)
-		t.Entries[agencyID] = stops
+		t.Entries[serverKey] = stops
 	}
 
 	entry, exists := stops[stopID]
@@ -91,15 +92,16 @@ func (t *UnmatchedStopTracker) RecordLastSeen(agencyID, agencyName, stopID, stop
 }
 
 // RecordClusterSeen updates (or creates) the tracked entry for an unmatched-stop
-// cluster that was just reported.
-func (t *UnmatchedStopTracker) RecordClusterSeen(agencyID, agencyName, stationID, clusterID, lat, lon string) {
+// cluster that was just reported. serverKey is the outer map key; the agencyID
+// and agencyName are the label values of the emitted metric series.
+func (t *UnmatchedStopTracker) RecordClusterSeen(serverKey, agencyID, agencyName, stationID, clusterID, lat, lon string) {
 	t.Mu.Lock()
 	defer t.Mu.Unlock()
 
-	clusters, ok := t.Clusters[agencyID]
+	clusters, ok := t.Clusters[serverKey]
 	if !ok {
 		clusters = make(map[clusterKey]trackedCluster)
-		t.Clusters[agencyID] = clusters
+		t.Clusters[serverKey] = clusters
 	}
 
 	cluster := clusterKey{StationID: stationID, ClusterID: clusterID, Lat: lat, Lon: lon}
@@ -157,7 +159,7 @@ func (t *UnmatchedStopTracker) clearStops(now time.Time, threshold time.Duration
 		return
 	}
 
-	for agencyID, stops := range t.Entries {
+	for serverKey, stops := range t.Entries {
 		for stopID, entry := range stops {
 			if now.Sub(entry.LastSeen) <= threshold {
 				continue
@@ -168,7 +170,7 @@ func (t *UnmatchedStopTracker) clearStops(now time.Time, threshold time.Duration
 		}
 
 		if len(stops) == 0 {
-			delete(t.Entries, agencyID)
+			delete(t.Entries, serverKey)
 		}
 	}
 }
@@ -178,7 +180,7 @@ func (t *UnmatchedStopTracker) clearClusters(now time.Time, threshold time.Durat
 		return
 	}
 
-	for agencyID, clusters := range t.Clusters {
+	for serverKey, clusters := range t.Clusters {
 		for key, entry := range clusters {
 			if now.Sub(entry.LastSeen) <= threshold {
 				continue
@@ -189,7 +191,7 @@ func (t *UnmatchedStopTracker) clearClusters(now time.Time, threshold time.Durat
 		}
 
 		if len(clusters) == 0 {
-			delete(t.Clusters, agencyID)
+			delete(t.Clusters, serverKey)
 		}
 	}
 }

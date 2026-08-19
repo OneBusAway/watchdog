@@ -2,6 +2,7 @@ package models
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -52,5 +53,24 @@ func TestNewObaServer(t *testing.T) {
 	}
 	if !reflect.DeepEqual(server.GtfsRTFeeds, gtfsRTFeeds) {
 		t.Errorf("NewObaServer() GtfsRTFeeds = %v, want %v", server.GtfsRTFeeds, gtfsRTFeeds)
+	}
+}
+
+func TestServerKey(t *testing.T) {
+	// Two distinct deployments that reuse the same agency ID must not collide.
+	first := ObaServer{AgencyID: "1", ObaBaseURL: "https://first.example.com"}
+	second := ObaServer{AgencyID: "1", ObaBaseURL: "https://second.example.com"}
+
+	if first.ServerKey() == second.ServerKey() {
+		t.Fatalf("distinct deployments must have distinct server keys, got %q", first.ServerKey())
+	}
+	if first.ServerKey() != ServerKey(first.ObaBaseURL, first.AgencyID) {
+		t.Fatalf("method and package function disagree for the same server")
+	}
+
+	// Exact duplicates (same base URL and agency ID) must produce one key.
+	dup := ServerKey(first.ObaBaseURL, first.AgencyID)
+	if !strings.Contains(dup, "first.example.com") || !strings.Contains(dup, "|1") {
+		t.Fatalf("expected server key to embed sanitized base URL and agency ID, got %q", dup)
 	}
 }

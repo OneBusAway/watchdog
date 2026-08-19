@@ -35,8 +35,8 @@ func readFixture(t *testing.T, fixturePath string) []byte {
 }
 
 // testRealtimeStore creates an in-memory realtime store seeded with the
-// vehicles fixture, scoped to the given agency ID.
-func testRealtimeStore(t *testing.T, agencyID string) *gtfs.RealtimeStore {
+// vehicles fixture, scoped to the given server's composite key.
+func testRealtimeStore(t *testing.T, server models.ObaServer) *gtfs.RealtimeStore {
 	t.Helper()
 	data := readFixture(t, "gtfs_rt_feed_vehicles.pb")
 	parsed, err := remoteGtfs.ParseRealtime(data, &remoteGtfs.ParseRealtimeOptions{})
@@ -44,7 +44,7 @@ func testRealtimeStore(t *testing.T, agencyID string) *gtfs.RealtimeStore {
 		t.Fatal(err)
 	}
 	store := gtfs.NewRealtimeStore()
-	store.Set(agencyID, models.NewRealtimeData(parsed))
+	store.Set(server.ServerKey(), models.NewRealtimeData(parsed))
 	return store
 }
 

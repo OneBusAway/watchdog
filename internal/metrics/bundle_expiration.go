@@ -29,9 +29,9 @@ import (
 //   - error: any error encountered during processing.
 func checkBundleExpiration(staticStore *gtfs.StaticStore, currentTime time.Time, server models.ObaServer) (int, int, error) {
 	currentTime = currentTime.UTC()
-	staticData, ok := staticStore.Get(server.AgencyID)
+	staticData, ok := staticStore.Get(server.ServerKey())
 	if !ok {
-		err := fmt.Errorf("there is no bundle for agency %s", server.AgencyID)
+		err := fmt.Errorf("there is no bundle for server key %s", server.ServerKey())
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags:  utils.MakeMap("agency_id", server.AgencyID),
 			Level: sentry.LevelWarning,
@@ -39,7 +39,7 @@ func checkBundleExpiration(staticStore *gtfs.StaticStore, currentTime time.Time,
 		return 0, 0, err
 	}
 	if staticData == nil {
-		err := fmt.Errorf("static data is nil for agency %s", server.AgencyID)
+		err := fmt.Errorf("static data is nil for server key %s", server.ServerKey())
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags:  utils.MakeMap("agency_id", server.AgencyID),
 			Level: sentry.LevelWarning,

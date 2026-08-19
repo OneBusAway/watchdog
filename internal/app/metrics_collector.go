@@ -102,7 +102,7 @@ func (app *Application) StartMetricsCollection(ctx context.Context) {
 //   - Dependencies are injected (via app fields) to support testability and separation of concerns.
 func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 	// Check if server has an active backoff period
-	nextRetryAt, exists := app.ConfigService.BackoffStore.NextRetryAt(server.AgencyID)
+	nextRetryAt, exists := app.ConfigService.BackoffStore.NextRetryAt(server.ServerKey())
 	if exists && time.Now().UTC().Before(nextRetryAt) {
 		// Still in backoff → skip metrics collection
 		app.Logger.Info("Skipping metrics collection for agency due to backoff", "agency_id", server.AgencyID, "next_retry_at", nextRetryAt)
@@ -133,14 +133,14 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 			},
 			Level: sentry.LevelError,
 		})
-		app.ConfigService.BackoffStore.UpdateBackoff(server.AgencyID)
+		app.ConfigService.BackoffStore.UpdateBackoff(server.ServerKey())
 		app.Logger.Info("Skipping further metrics collection for server due to ping failure")
 		return
 	}
 
 	// On successful ping → reset backoff for this server
 	app.Logger.Info("Server ping successful", "agency_id", server.AgencyID, "agency_name", server.AgencyName)
-	app.ConfigService.BackoffStore.ResetBackoff(server.AgencyID)
+	app.ConfigService.BackoffStore.ResetBackoff(server.ServerKey())
 
 	_, _, err := app.MetricsService.CheckBundleExpiration(time.Now().UTC(), server)
 	if err != nil {

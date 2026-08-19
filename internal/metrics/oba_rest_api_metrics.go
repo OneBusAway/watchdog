@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"watchdog.onebusaway.org/internal/gtfs"
+	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
 	"watchdog.onebusaway.org/internal/utils"
 )
@@ -73,6 +74,8 @@ func fetchObaAPIMetrics(agencyID, agencyName, serverBaseUrl, apiKey string, clie
 		return err
 	}
 
+	serverKey := models.ServerKey(serverBaseUrl, agencyID)
+
 	url := fmt.Sprintf("%s/api/where/metrics.json?key=%s", serverBaseUrl, apiKey)
 	sanitizedURL := utils.SanitizeServerURL(url)
 
@@ -127,7 +130,7 @@ func fetchObaAPIMetrics(agencyID, agencyName, serverBaseUrl, apiKey string, clie
 	}
 	setObaApiMetricsStatus(agencyID, agencyName, serverBaseUrl, true)
 
-	if fetchTime, ok := staticStore.GetFetchTime(agencyID); ok {
+	if fetchTime, ok := staticStore.GetFetchTime(serverKey); ok {
 		GtfsBundleLastFetchedTimestamp.WithLabelValues(agencyID, agencyName).Set(float64(fetchTime.Unix()))
 	}
 
@@ -210,7 +213,7 @@ func fetchObaAPIMetrics(agencyID, agencyName, serverBaseUrl, apiKey string, clie
 		return nil
 	}
 
-	stopInfoMap, err := gtfs.GetStopLocationsByIDs(agencyID, unmatchedStopIDs, staticStore)
+	stopInfoMap, err := gtfs.GetStopLocationsByIDs(serverKey, unmatchedStopIDs, staticStore)
 	if err != nil {
 		ObaUnmatchedStopUnresolved.WithLabelValues(agencyID, agencyName).Set(float64(len(unmatchedStopIDs)))
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -236,7 +239,7 @@ func fetchObaAPIMetrics(agencyID, agencyName, serverBaseUrl, apiKey string, clie
 			lonStr,
 		).Set(1)
 		resolved++
-		unmatchedStopTracker.RecordLastSeen(agencyID, agencyName, stopID, stop.Name, latStr, lonStr)
+		unmatchedStopTracker.RecordLastSeen(serverKey, agencyID, agencyName, stopID, stop.Name, latStr, lonStr)
 	}
 
 	unresolved := len(unmatchedStopIDs) - resolved
@@ -245,7 +248,7 @@ func fetchObaAPIMetrics(agencyID, agencyName, serverBaseUrl, apiKey string, clie
 		logger.Warn("OBA unmatched stop IDs could not be resolved against the local GTFS bundle",
 			"agency_id", agencyID, "requested", len(unmatchedStopIDs), "resolved", resolved)
 	}
-	reportUnmatchedStopClusters(agencyID, agencyName, stopInfoMap, unmatchedStopTracker)
+	reportUnmatchedStopClusters(serverKey, agencyID, agencyName, stopInfoMap, unmatchedStopTracker)
 	return nil
 }
 
