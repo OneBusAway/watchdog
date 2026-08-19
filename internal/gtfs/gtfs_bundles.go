@@ -64,6 +64,10 @@ func downloadGTFSBundles(ctx context.Context, client *http.Client, servers []mod
 					Level: sentry.LevelError,
 				})
 				logger.Error("Failed to download GTFS bundle", "agency_id", s.AgencyID, "error", err)
+				continue
+			}
+			if len(bundles) == 0 {
+				logger.Error("No GTFS bundles downloaded for agency", "agency_id", s.AgencyID)
 				return
 			}
 			if err := storeGTFSBundles(bundles, s.AgencyID, staticStore, boundingBoxStore); err != nil {
