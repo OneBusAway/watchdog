@@ -13,6 +13,7 @@ import (
 type trackedStop struct {
 	AgencyID   string
 	AgencyName string
+	ServerURL  string
 	StopName   string
 	Lat        string
 	Lon        string
@@ -35,6 +36,7 @@ type clusterKey struct {
 type trackedCluster struct {
 	AgencyID   string
 	AgencyName string
+	ServerURL  string
 	Key        clusterKey
 	LastSeen   time.Time
 }
@@ -61,9 +63,9 @@ func NewUnmatchedStopTracker() *UnmatchedStopTracker {
 }
 
 // RecordLastSeen updates (or creates) the tracked entry for a stop that was just
-// reported as unmatched. serverKey key is the outer map key; the agencyID and
-// agencyName are the label values of the emitted metric series.
-func (t *UnmatchedStopTracker) RecordLastSeen(serverKey, agencyID, agencyName, stopID, stopName, lat, lon string) {
+// reported as unmatched. serverKey is the outer map key; the agencyID, agencyName,
+// and serverURL are the label values of the emitted metric series.
+func (t *UnmatchedStopTracker) RecordLastSeen(serverKey, agencyID, agencyName, serverURL, stopID, stopName, lat, lon string) {
 	t.Mu.Lock()
 	defer t.Mu.Unlock()
 
@@ -78,12 +80,13 @@ func (t *UnmatchedStopTracker) RecordLastSeen(serverKey, agencyID, agencyName, s
 		// The stop changed its name or location, so the series labeled with its
 		// previous values is now stale. Delete it so both it and the new series
 		// are pruned correctly, instead of freezing the first-seen labels.
-		ObaUnmatchedStopInfo.DeleteLabelValues(entry.AgencyID, entry.AgencyName, stopID, entry.StopName, entry.Lat, entry.Lon)
+		ObaUnmatchedStopInfo.DeleteLabelValues(entry.AgencyID, entry.AgencyName, entry.ServerURL, stopID, entry.StopName, entry.Lat, entry.Lon)
 	}
 
 	stops[stopID] = trackedStop{
 		AgencyID:   agencyID,
 		AgencyName: agencyName,
+		ServerURL:  serverURL,
 		StopName:   stopName,
 		Lat:        lat,
 		Lon:        lon,
@@ -92,9 +95,9 @@ func (t *UnmatchedStopTracker) RecordLastSeen(serverKey, agencyID, agencyName, s
 }
 
 // RecordClusterSeen updates (or creates) the tracked entry for an unmatched-stop
-// cluster that was just reported. serverKey is the outer map key; the agencyID
-// and agencyName are the label values of the emitted metric series.
-func (t *UnmatchedStopTracker) RecordClusterSeen(serverKey, agencyID, agencyName, stationID, clusterID, lat, lon string) {
+// cluster that was just reported. serverKey is the outer map key; the agencyID,
+// agencyName, and serverURL are the label values of the emitted metric series.
+func (t *UnmatchedStopTracker) RecordClusterSeen(serverKey, agencyID, agencyName, serverURL, stationID, clusterID, lat, lon string) {
 	t.Mu.Lock()
 	defer t.Mu.Unlock()
 
@@ -110,6 +113,7 @@ func (t *UnmatchedStopTracker) RecordClusterSeen(serverKey, agencyID, agencyName
 		entry = trackedCluster{
 			AgencyID:   agencyID,
 			AgencyName: agencyName,
+			ServerURL:  serverURL,
 			Key:        cluster,
 		}
 	}
@@ -165,7 +169,7 @@ func (t *UnmatchedStopTracker) clearStops(now time.Time, threshold time.Duration
 				continue
 			}
 
-			ObaUnmatchedStopInfo.DeleteLabelValues(entry.AgencyID, entry.AgencyName, stopID, entry.StopName, entry.Lat, entry.Lon)
+			ObaUnmatchedStopInfo.DeleteLabelValues(entry.AgencyID, entry.AgencyName, entry.ServerURL, stopID, entry.StopName, entry.Lat, entry.Lon)
 			delete(stops, stopID)
 		}
 
@@ -186,7 +190,7 @@ func (t *UnmatchedStopTracker) clearClusters(now time.Time, threshold time.Durat
 				continue
 			}
 
-			UnmatchedStopClusterCount.DeleteLabelValues(entry.AgencyID, entry.AgencyName, key.StationID, key.ClusterID, key.Lat, key.Lon)
+			UnmatchedStopClusterCount.DeleteLabelValues(entry.AgencyID, entry.AgencyName, entry.ServerURL, key.StationID, key.ClusterID, key.Lat, key.Lon)
 			delete(clusters, key)
 		}
 

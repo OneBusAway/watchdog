@@ -23,6 +23,53 @@ func TestCountVehiclePositionsUsesAgencyStore(t *testing.T) {
 	}
 }
 
+func TestCountVehiclePositionsKeepsDistinctServersWithSameAgencyIDDisjoint(t *testing.T) {
+	// Two deployments share the same agency ID but run on different base URLs.
+	// Their series must not collide: the server_url label keeps them distinct,
+	// mirroring the composite ServerKey used by the stores.
+	serverA := models.ObaServer{AgencyID: "agency-a", ObaBaseURL: "https://a.example.com", AgencyName: "Agency A"}
+	serverB := models.ObaServer{AgencyID: "agency-a", ObaBaseURL: "https://b.example.com", AgencyName: "Agency A Clone"}
+
+	storeA := testRealtimeStore(t, serverA)
+	storeB := testRealtimeStore(t, serverB)
+
+	countA, err := countVehiclePositions(serverA, storeA)
+	if err != nil || countA == 0 {
+		t.Fatalf("server A: count=%d err=%v", countA, err)
+	}
+	countB, err := countVehiclePositions(serverB, storeB)
+	if err != nil || countB == 0 {
+		t.Fatalf("server B: count=%d err=%v", countB, err)
+	}
+	if countA != countB {
+		t.Fatalf("fixture feeds should contain the same vehicle count, got %d vs %d", countA, countB)
+	}
+
+	metricA, err := getMetricValue(RealtimeVehiclePositions, map[string]string{
+		"agency_id":   serverA.AgencyID,
+		"agency_name": serverA.AgencyName,
+		"server_url":  "https://a.example.com",
+	})
+	if err != nil {
+		t.Fatalf("failed to read series for %s: %v", serverA.ObaBaseURL, err)
+	}
+	metricB, err := getMetricValue(RealtimeVehiclePositions, map[string]string{
+		"agency_id":   serverB.AgencyID,
+		"agency_name": serverB.AgencyName,
+		"server_url":  "https://b.example.com",
+	})
+	if err != nil {
+		t.Fatalf("failed to read series for %s: %v", serverB.ObaBaseURL, err)
+	}
+
+	if metricA != float64(countA) {
+		t.Fatalf("expected %s series to be %d, got %v", serverA.ObaBaseURL, countA, metricA)
+	}
+	if metricB != float64(countB) {
+		t.Fatalf("expected %s series to be %d, got %v", serverB.ObaBaseURL, countB, metricB)
+	}
+}
+
 func TestCountActiveVehiclesForAgency(t *testing.T) {
 	ts := setupObaServer(t, `{"data":{"list":[{"vehicleId":"1"},{"vehicleId":"2"}]}}`, http.StatusOK)
 	defer ts.Close()

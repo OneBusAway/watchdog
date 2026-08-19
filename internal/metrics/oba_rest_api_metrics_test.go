@@ -18,6 +18,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/utils"
 )
 
 func TestFetchObaAPIMetrics(t *testing.T) {
@@ -134,7 +135,11 @@ func TestFetchObaAPIMetrics(t *testing.T) {
 				t.Fatalf("expected oba_api_status to be 1 on success, got %v", status)
 			}
 
-			records, err := getMetricValue(ObaRealtimeRecords, map[string]string{"agency_id": tt.agencyID, "agency_name": tt.agencyName})
+			records, err := getMetricValue(ObaRealtimeRecords, map[string]string{
+				"agency_id":   tt.agencyID,
+				"agency_name": tt.agencyName,
+				"server_url":  utils.SanitizeServerURL(baseURL),
+			})
 			if err != nil {
 				t.Fatalf("failed to read records for %s: %v", tt.agencyID, err)
 			}
@@ -223,7 +228,11 @@ func TestFetchObaAPIMetrics_LabelsWithConfiguredAgencyID(t *testing.T) {
 		t.Fatalf("server B: unexpected error: %v", err)
 	}
 
-	recordsA, err := getMetricValue(ObaRealtimeRecords, map[string]string{"agency_id": "unitrans-a", "agency_name": "Unitrans A"})
+	recordsA, err := getMetricValue(ObaRealtimeRecords, map[string]string{
+		"agency_id":   "unitrans-a",
+		"agency_name": "Unitrans A",
+		"server_url":  utils.SanitizeServerURL(serverA.URL),
+	})
 	if err != nil {
 		t.Fatalf("failed to read records for unitrans-a: %v", err)
 	}
@@ -231,7 +240,11 @@ func TestFetchObaAPIMetrics_LabelsWithConfiguredAgencyID(t *testing.T) {
 		t.Fatalf("expected oba_realtime_records_count{agency_id=\"unitrans-a\"} to be 3, got %v", recordsA)
 	}
 
-	recordsB, err := getMetricValue(ObaRealtimeRecords, map[string]string{"agency_id": "unitrans-b", "agency_name": "Unitrans B"})
+	recordsB, err := getMetricValue(ObaRealtimeRecords, map[string]string{
+		"agency_id":   "unitrans-b",
+		"agency_name": "Unitrans B",
+		"server_url":  utils.SanitizeServerURL(serverB.URL),
+	})
 	if err != nil {
 		t.Fatalf("failed to read records for unitrans-b: %v", err)
 	}

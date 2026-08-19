@@ -46,7 +46,7 @@ func countVehiclePositions(server models.ObaServer, realtimeStore *gtfs.Realtime
 	}
 	count := len(realtimeData.Vehicles)
 
-	RealtimeVehiclePositions.WithLabelValues(server.AgencyID, server.AgencyName).Set(float64(count))
+	RealtimeVehiclePositions.WithLabelValues(server.AgencyID, server.AgencyName, utils.SanitizeServerURL(server.ObaBaseURL)).Set(float64(count))
 
 	return count, nil
 }
@@ -83,7 +83,7 @@ func countActiveVehiclesForAgency(client *onebusaway.Client, server models.ObaSe
 		return 0, nil
 	}
 
-	AgencyActiveVehiclesGauge.WithLabelValues(server.AgencyID, server.AgencyName).Set(float64(len(response.Data.List)))
+	AgencyActiveVehiclesGauge.WithLabelValues(server.AgencyID, server.AgencyName, utils.SanitizeServerURL(server.ObaBaseURL)).Set(float64(len(response.Data.List)))
 
 	return len(response.Data.List), nil
 }
@@ -112,6 +112,7 @@ func countActiveVehiclesForAgency(client *onebusaway.Client, server models.ObaSe
 //   - An error if the feed cannot be fetched or parsed, otherwise nil.
 func trackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLastSeen, realtimeStore *gtfs.RealtimeStore) error {
 	agencyID := server.AgencyID
+	serverURL := utils.SanitizeServerURL(server.ObaBaseURL)
 	now := time.Now().UTC()
 
 	realtimeData := realtimeStore.Get(server.ServerKey())
@@ -124,7 +125,7 @@ func trackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLast
 	}
 
 	if len(realtimeData.Vehicles) == 0 {
-		TrackedVehiclesGauge.WithLabelValues(agencyID, server.AgencyName).Set(0)
+		TrackedVehiclesGauge.WithLabelValues(agencyID, server.AgencyName, serverURL).Set(0)
 		return nil
 	}
 
@@ -146,8 +147,8 @@ func trackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLast
 		}
 
 		interval := now.Sub(seenAt).Seconds()
-		VehicleReportCount.WithLabelValues(vehicleID, agencyID, server.AgencyName).Inc()
-		VehicleReportInterval.WithLabelValues(vehicleID, agencyID, server.AgencyName).Set(interval)
+		VehicleReportCount.WithLabelValues(vehicleID, agencyID, server.AgencyName, serverURL).Inc()
+		VehicleReportInterval.WithLabelValues(vehicleID, agencyID, server.AgencyName, serverURL).Set(interval)
 
 		// Compute speed
 		prev, ok := vehicleLastSeen.Get(server.ServerKey(), vehicleID)
@@ -157,14 +158,14 @@ func trackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLast
 				distance := geo.HaversineDistance(prev.Lat, prev.Lon, lat, lon)
 				computedSpeed := distance / timeDelta
 
-				VehicleSpeedGauge.WithLabelValues(vehicleID, agencyID, server.AgencyName).Set(computedSpeed)
+				VehicleSpeedGauge.WithLabelValues(vehicleID, agencyID, server.AgencyName, serverURL).Set(computedSpeed)
 
 				// Compare reported speed with computed speed
 				if vehicle.Position.Speed != nil {
 					reportedSpeed := float64(*vehicle.Position.Speed)
 					if reportedSpeed > 0 {
 						diffRatio := math.Abs(computedSpeed-reportedSpeed) / reportedSpeed
-						VehicleSpeedDiscrepancyRatioGauge.WithLabelValues(vehicleID, agencyID, server.AgencyName).Set(diffRatio)
+						VehicleSpeedDiscrepancyRatioGauge.WithLabelValues(vehicleID, agencyID, server.AgencyName, serverURL).Set(diffRatio)
 					}
 				}
 			}
@@ -178,7 +179,7 @@ func trackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLast
 		})
 	}
 
-	TrackedVehiclesGauge.WithLabelValues(agencyID, server.AgencyName).Set(float64(vehicleLastSeen.Count(server.ServerKey())))
+	TrackedVehiclesGauge.WithLabelValues(agencyID, server.AgencyName, serverURL).Set(float64(vehicleLastSeen.Count(server.ServerKey())))
 
 	return nil
 }
@@ -252,8 +253,9 @@ func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, bounding
 		}
 	}
 
-	InvalidVehicleCoordinatesGauge.WithLabelValues(server.AgencyID, server.AgencyName).Set(float64(invalidCount))
-	StoppedOutOfBoundsVehiclesGauge.WithLabelValues(server.AgencyID, server.AgencyName).Set(float64(outOfBoundsCount))
+	serverURL := utils.SanitizeServerURL(server.ObaBaseURL)
+	InvalidVehicleCoordinatesGauge.WithLabelValues(server.AgencyID, server.AgencyName, serverURL).Set(float64(invalidCount))
+	StoppedOutOfBoundsVehiclesGauge.WithLabelValues(server.AgencyID, server.AgencyName, serverURL).Set(float64(outOfBoundsCount))
 
 	return nil
 }

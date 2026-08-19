@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/utils"
 )
 
 // lastTrackedAgencies remembers the last agency set emitted to the
@@ -39,7 +40,7 @@ func reportTrackedAgencies(servers []models.ObaServer) {
 		AgenciesTrackedInfo.WithLabelValues(
 			server.AgencyID,
 			server.AgencyName,
-			server.ObaBaseURL,
+			utils.SanitizeServerURL(server.ObaBaseURL),
 		).Set(1)
 	}
 }
