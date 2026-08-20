@@ -129,7 +129,9 @@ func trackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLast
 		return nil
 	}
 
-	for _, vehicle := range realtimeData.Vehicles {
+	for _, realtimeVehicle := range realtimeData.Vehicles {
+		vehicle := realtimeVehicle.Vehicle
+		feedID := realtimeVehicle.FeedID
 		if vehicle.ID == nil || vehicle.ID.ID == "" {
 			continue
 		}
@@ -147,32 +149,32 @@ func trackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLast
 		}
 
 		interval := now.Sub(seenAt).Seconds()
-		VehicleReportCount.WithLabelValues(vehicleID, agencyID, server.AgencyName, serverURL).Inc()
-		VehicleReportInterval.WithLabelValues(vehicleID, agencyID, server.AgencyName, serverURL).Set(interval)
+		VehicleReportCount.WithLabelValues(vehicleID, agencyID, server.AgencyName, serverURL, feedID).Inc()
+		VehicleReportInterval.WithLabelValues(vehicleID, agencyID, server.AgencyName, serverURL, feedID).Set(interval)
 
 		// Compute speed
-		prev, ok := vehicleLastSeen.Get(server.ServerKey(), vehicleID)
+		prev, ok := vehicleLastSeen.Get(server.ServerKey(), feedID, vehicleID)
 		if ok {
 			timeDelta := seenAt.Sub(prev.Time).Seconds()
 			if timeDelta > 0 {
 				distance := geo.HaversineDistance(prev.Lat, prev.Lon, lat, lon)
 				computedSpeed := distance / timeDelta
 
-				VehicleSpeedGauge.WithLabelValues(vehicleID, agencyID, server.AgencyName, serverURL).Set(computedSpeed)
+				VehicleSpeedGauge.WithLabelValues(vehicleID, agencyID, server.AgencyName, serverURL, feedID).Set(computedSpeed)
 
 				// Compare reported speed with computed speed
 				if vehicle.Position.Speed != nil {
 					reportedSpeed := float64(*vehicle.Position.Speed)
 					if reportedSpeed > 0 {
 						diffRatio := math.Abs(computedSpeed-reportedSpeed) / reportedSpeed
-						VehicleSpeedDiscrepancyRatioGauge.WithLabelValues(vehicleID, agencyID, server.AgencyName, serverURL).Set(diffRatio)
+						VehicleSpeedDiscrepancyRatioGauge.WithLabelValues(vehicleID, agencyID, server.AgencyName, serverURL, feedID).Set(diffRatio)
 					}
 				}
 			}
 		}
 
 		// Save last seen data
-		vehicleLastSeen.Set(server.ServerKey(), vehicleID, LastSeen{
+		vehicleLastSeen.Set(server.ServerKey(), feedID, vehicleID, LastSeen{
 			Time: seenAt,
 			Lat:  lat,
 			Lon:  lon,
@@ -231,7 +233,8 @@ func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, bounding
 	invalidCount := 0
 	outOfBoundsCount := 0
 
-	for _, v := range realtimeData.Vehicles {
+	for _, realtimeVehicle := range realtimeData.Vehicles {
+		v := realtimeVehicle.Vehicle
 		if v.Position == nil || v.Position.Latitude == nil || v.Position.Longitude == nil {
 			invalidCount++
 			continue

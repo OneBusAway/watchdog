@@ -72,18 +72,33 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
 
 | Metric Name                                | Type    | Labels                                 | Unit          | Description                                                   |
 | ------------------------------------------ | ------- | -------------------------------------- | ------------- | ------------------------------------------------------------- |
-| `realtime_vehicle_positions_count_gtfs_rt` | Gauge   | `agency_id`, `agency_name`, `server_url`           | count         | Number of realtime vehicle positions in the GTFS-RT feed.     |
+| `realtime_vehicle_positions_count_gtfs_rt` | Gauge   | `agency_id`, `agency_name`, `server_url`           | count         | Number of realtime vehicle positions in the GTFS-RT feeds. Each feed is an independent vehicle namespace, so the same vehicle ID in two feeds counts twice (two distinct physical vehicles). |
 | `oba_agency_active_vehicles_count`         | Gauge   | `agency_id`, `agency_name`, `server_url`           | count         | Number of active vehicles reported for the agency by the OBA vehicles-for-agency API. |
-| `vehicle_position_report_interval_seconds` | Gauge   | `vehicle_id`, `agency_id`, `agency_name`, `server_url` | seconds       | Time since each vehicle last reported a GTFS-RT position.     |
-| `vehicle_report_total`                     | Counter | `vehicle_id`, `agency_id`, `agency_name`, `server_url` | count         | Total number of GTFS-RT updates received per vehicle.         |
-| `gtfs_rt_vehicle_computed_speed`           | Gauge   | `vehicle_id`, `agency_id`, `agency_name`, `server_url` | m/s           | Computed vehicle speed from GTFS-RT positions.                |
-| `gtfs_rt_vehicle_speed_discrepancy_ratio`  | Gauge   | `vehicle_id`, `agency_id`, `agency_name`, `server_url` | ratio         | Ratio of computed to reported vehicle speed.                  |
+| `vehicle_position_report_interval_seconds` | Gauge   | `vehicle_id`, `feed`, `agency_id`, `agency_name`, `server_url` | seconds       | Time since each vehicle last reported a GTFS-RT position.     |
+| `vehicle_report_total`                     | Counter | `vehicle_id`, `feed`, `agency_id`, `agency_name`, `server_url` | count         | Total number of GTFS-RT updates received per vehicle.         |
+| `gtfs_rt_vehicle_computed_speed`           | Gauge   | `vehicle_id`, `feed`, `agency_id`, `agency_name`, `server_url` | m/s           | Computed vehicle speed from GTFS-RT positions.                |
+| `gtfs_rt_vehicle_speed_discrepancy_ratio`  | Gauge   | `vehicle_id`, `feed`, `agency_id`, `agency_name`, `server_url` | ratio         | Ratio of computed to reported vehicle speed.                  |
 | `gtfs_rt_invalid_vehicle_coordinates`      | Gauge   | `agency_id`, `agency_name`, `server_url`           | count         | Number of GTFS-RT vehicle positions with invalid coordinates. |
 | `gtfs_rt_stopped_out_of_bounds_vehicles`   | Gauge   | `agency_id`, `agency_name`, `server_url`           | count         | Vehicles outside bounding box while stopped.                  |
 | `gtfs_rt_tracked_vehicles_count`           | Gauge   | `agency_id`, `agency_name`, `server_url`           | count         | Number of vehicles currently being tracked.                   |
 
 **Interpretation Guide:**
 - **Vehicle counts:** Sudden drop may indicate feed outage.
+- **Per-vehicle metrics and the `feed` label:** GTFS-RT vehicle IDs are only unique *within a single feed*. A deployment may scrape multiple feeds whose vehicles all belong to the same umbrella agency, and two feeds can legitimately reuse the same numeric vehicle ID (e.g. `"101"`) for different physical vehicles. Watchdog therefore treats each feed as an independent vehicle namespace: cross-feed IDs are never deduplicated, and every vehicle is tagged with the zero-based index of the feed it came from (`feed = "0"`, `"1"`, … matching the order of `gtfs_rt_feeds` in the config). The four per-vehicle metrics (`vehicle_position_report_interval_seconds`, `vehicle_report_total`, `gtfs_rt_vehicle_computed_speed`, `gtfs_rt_vehicle_speed_discrepancy_ratio`) are labeled with `(vehicle_id, feed)`, so two different buses that happen to share a vehicle ID do not collide in one series. This also means `realtime_vehicle_positions_count_gtfs_rt` counts each feed's vehicles independently (no cross-feed dedup).
+  - View one feed's vehicles:
+  ```promql
+  vehicle_report_total{feed="0"}
+  ```
+  - Aggregate across all feeds into one line per vehicle:
+  ```promql
+  sum by (vehicle_id) (vehicle_report_total{agency_id="unitrans"})
+  # or, equivalently
+  sum(vehicle_report_total{vehicle_id="101"}) without (feed)
+  ```
+  - Worst-case report interval per bus across all feeds (gauges roll up differently than counters):
+  ```promql
+  max by (vehicle_id) (vehicle_position_report_interval_seconds{agency_id="unitrans"})
+  ```
 - **Report intervals:** If significantly longer than agency update policy, data is stale.
 - **Speed discrepancy ratio:** Persistent high ratios may mean faulty onboard GPS.
 - **Invalid coordinates:** If >0, indicates bad GPS or malformed feed data.

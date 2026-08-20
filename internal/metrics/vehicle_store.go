@@ -13,10 +13,18 @@ type LastSeen struct {
 	Lon  float64
 }
 
+// vehicleKey composes the inner store key from the feed identity and vehicle
+// ID. GTFS-RT vehicle IDs are only unique within a single feed, so the feed
+// identity is part of the key: two different feeds that reuse the same vehicle
+// ID for different physical vehicles stay separate.
+func vehicleKey(feedID, vehicleID string) string {
+	return feedID + "|" + vehicleID
+}
+
 // VehicleLastSeen stores the most recent known location and timestamp for each vehicle per server.
 //
 // The outer map key is the composite server key (oba_base_url + agency_id), and the
-// inner map key is the vehicle ID (string).
+// inner map key is the feed identity plus vehicle ID (feedID|vehicleID).
 // Each entry stores a `LastSeen` struct containing the last known latitude, longitude, and timestamp.
 //
 // This cache is used to:
@@ -41,8 +49,9 @@ func NewVehicleLastSeen() *VehicleLastSeen {
 // It returns the LastSeen value and a boolean indicating whether the vehicle was found.
 //
 // serverKey: Composite key of the deployment (oba_base_url + agency_id).
-// vehicleID: Unique identifier of the vehicle.
-func (vehicleLastSeen *VehicleLastSeen) Get(serverKey, vehicleID string) (LastSeen, bool) {
+// feedID: Identity of the GTFS-RT feed the vehicle was observed in.
+// vehicleID: Unique identifier of the vehicle within its feed.
+func (vehicleLastSeen *VehicleLastSeen) Get(serverKey, feedID, vehicleID string) (LastSeen, bool) {
 	vehicleLastSeen.Mu.RLock()
 	defer vehicleLastSeen.Mu.RUnlock()
 
@@ -51,7 +60,7 @@ func (vehicleLastSeen *VehicleLastSeen) Get(serverKey, vehicleID string) (LastSe
 	}
 
 	if vehicles, ok := vehicleLastSeen.Store[serverKey]; ok {
-		lastSeen, ok := vehicles[vehicleID]
+		lastSeen, ok := vehicles[vehicleKey(feedID, vehicleID)]
 		return lastSeen, ok
 	}
 	return LastSeen{}, false
@@ -60,16 +69,17 @@ func (vehicleLastSeen *VehicleLastSeen) Get(serverKey, vehicleID string) (LastSe
 // Set stores or updates the LastSeen data for a specific vehicle on a given server key.
 //
 // serverKey: Composite key of the deployment (oba_base_url + agency_id).
-// vehicleID: Unique identifier of the vehicle.
+// feedID: Identity of the GTFS-RT feed the vehicle was observed in.
+// vehicleID: Unique identifier of the vehicle within its feed.
 // lastSeen: LastSeen object containing the latest observation time and related data.
-func (vehicleLastSeen *VehicleLastSeen) Set(serverKey, vehicleID string, lastSeen LastSeen) {
+func (vehicleLastSeen *VehicleLastSeen) Set(serverKey, feedID, vehicleID string, lastSeen LastSeen) {
 	vehicleLastSeen.Mu.Lock()
 	defer vehicleLastSeen.Mu.Unlock()
 
 	if _, ok := vehicleLastSeen.Store[serverKey]; !ok {
 		vehicleLastSeen.Store[serverKey] = make(map[string]LastSeen)
 	}
-	vehicleLastSeen.Store[serverKey][vehicleID] = lastSeen
+	vehicleLastSeen.Store[serverKey][vehicleKey(feedID, vehicleID)] = lastSeen
 }
 
 // Count returns the number of tracked vehicles for a given server key.

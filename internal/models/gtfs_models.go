@@ -26,6 +26,20 @@ func NewStaticData(GtfsStaticBundle *remoteGtfs.Static) *StaticData {
 	}
 }
 
+// RealtimeVehicle carries one GTFS-RT vehicle position together with the
+// identity of the feed it came from.
+//
+// GTFS-RT vehicle IDs are only unique within a single feed. A deployment may
+// scrape multiple feeds whose vehicles all belong to the same umbrella agency,
+// and two feeds can legitimately reuse the same numeric vehicle ID for
+// different physical vehicles. FeedID records which feed a vehicle was
+// observed in so downstream consumers can key per-vehicle identity on the
+// (feed, vehicle_id) pair instead of the vehicle ID alone.
+type RealtimeVehicle struct {
+	Vehicle remoteGtfs.Vehicle
+	FeedID  string
+}
+
 // RealtimeData represents the realtime GTFS data structure.
 // It contains parts we uses from GTFS Realtime bundels
 // which are vehicles.
@@ -34,11 +48,16 @@ func NewStaticData(GtfsStaticBundle *remoteGtfs.Static) *StaticData {
 // to include more fields from the GTFS Realtime bundle.
 // Don't forget to include them here
 type RealtimeData struct {
-	Vehicles []remoteGtfs.Vehicle
+	Vehicles []RealtimeVehicle
 }
 
+// NewRealtimeData wraps every vehicle in a bundle with an empty FeedID. It is
+// used by code paths that work with a single (already feed-scoped) bundle;
+// multi-feed fetching stamps the FeedID explicitly.
 func NewRealtimeData(GtfsRealtimeBundle *remoteGtfs.Realtime) *RealtimeData {
-	return &RealtimeData{
-		Vehicles: append([]remoteGtfs.Vehicle(nil), GtfsRealtimeBundle.Vehicles...),
+	vehicles := make([]RealtimeVehicle, 0, len(GtfsRealtimeBundle.Vehicles))
+	for _, vehicle := range GtfsRealtimeBundle.Vehicles {
+		vehicles = append(vehicles, RealtimeVehicle{Vehicle: vehicle})
 	}
+	return &RealtimeData{Vehicles: vehicles}
 }

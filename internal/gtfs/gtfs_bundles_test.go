@@ -11,6 +11,8 @@ import (
 	"time"
 
 	remoteGtfs "github.com/OneBusAway/go-gtfs"
+	gtfsrt "github.com/OneBusAway/go-gtfs/proto"
+	"google.golang.org/protobuf/proto"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/models"
 )
@@ -346,31 +348,46 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 			t.Fatalf("Make sure that data contains at least one vehicle in the GTFS-RT feed in testdata/gtfs_rt_feed_vehicles.pb")
 		}
 
-		if len(realtimeData.Vehicles) != len(expectedRtData.Vehicles) {
-			t.Fatalf("Expected %d vehicles, got %d", len(expectedRtData.Vehicles), len(realtimeData.Vehicles))
+		// The test server is configured with two feeds pointing at the same URL.
+		// Each feed is an independent vehicle namespace, so every vehicle is
+		// retained once per feed: the merged count is twice the single-feed
+		// count. A shared cross-feed dedup map would have collapsed this to 1x,
+		// silently dropping distinct vehicles.
+		if len(realtimeData.Vehicles) != 2*len(expectedRtData.Vehicles) {
+			t.Fatalf("Expected %d vehicles (2 feeds), got %d", 2*len(expectedRtData.Vehicles), len(realtimeData.Vehicles))
 		}
 
 		expectedMap := make(map[string]remoteGtfs.Vehicle)
 		for _, vehicle := range expectedRtData.Vehicles {
-			if vehicle.ID != nil {
-				expectedMap[vehicle.ID.ID] = vehicle
+			if vehicle.Vehicle.ID != nil {
+				expectedMap[vehicle.Vehicle.ID.ID] = vehicle.Vehicle
 			}
 		}
 		countExpectedNilIDs := len(expectedRtData.Vehicles) - len(expectedMap)
 		countNilIDs := 0
-		for _, vehicle := range realtimeData.Vehicles {
-			if vehicle.ID != nil {
-				expectedVehicle, exists := expectedMap[vehicle.ID.ID]
+		byFeed := make(map[string]int)
+		for _, realtimeVehicle := range realtimeData.Vehicles {
+			byFeed[realtimeVehicle.FeedID]++
+			if realtimeVehicle.Vehicle.ID != nil {
+				expectedVehicle, exists := expectedMap[realtimeVehicle.Vehicle.ID.ID]
 				if !exists {
-					t.Errorf("Unexpected vehicle ID %s found in GTFS-RT data", vehicle.ID.ID)
+					t.Errorf("Unexpected vehicle ID %s found in GTFS-RT data", realtimeVehicle.Vehicle.ID.ID)
 				}
-				assertVehicle(t, &vehicle, &expectedVehicle)
+				assertVehicle(t, &realtimeVehicle.Vehicle, &expectedVehicle)
 			} else {
 				countNilIDs++
 			}
 		}
-		if countNilIDs != countExpectedNilIDs {
-			t.Errorf("Expected %d vehicles with nil IDs, got %d", countExpectedNilIDs, countNilIDs)
+		if countNilIDs != 2*countExpectedNilIDs {
+			t.Errorf("Expected %d vehicles with nil IDs, got %d", 2*countExpectedNilIDs, countNilIDs)
+		}
+		if len(byFeed) != 2 {
+			t.Errorf("Expected vehicles to be split across 2 feeds, got %d: %v", len(byFeed), byFeed)
+		}
+		for feedID, count := range byFeed {
+			if count != len(expectedRtData.Vehicles) {
+				t.Errorf("Feed %s should contain %d vehicles, got %d", feedID, len(expectedRtData.Vehicles), count)
+			}
 		}
 	})
 
@@ -459,4 +476,89 @@ func TestFetchAndStoreGTFSRTFeedKeepsDistinctServersWithSameAgencyIDIsolated(t *
 	if store.Get(first.ServerKey()) != firstData {
 		t.Fatal("second deployment fetch replaced the first deployment's realtime data")
 	}
+}
+
+func TestFetchAndStoreGTFSRTFeedKeepsSameIDAcrossFeeds(t *testing.T) {
+	// Two feeds both report vehicle "101" but at different positions. GTFS-RT
+	// vehicle IDs are only unique within a feed, so these are two distinct
+	// physical vehicles and must BOTH be retained, each tagged with its feed.
+	feedA := marshalVehicleFeed(t, "101", 47.60, -122.30)
+	feedB := marshalVehicleFeed(t, "101", 47.65, -122.35)
+	serverA := serveBytes(t, feedA)
+	serverB := serveBytes(t, feedB)
+	defer serverA.Close()
+	defer serverB.Close()
+
+	server := models.ObaServer{
+		AgencyID: "agency-1",
+		GtfsRTFeeds: []models.GtfsRTFeed{
+			{VehiclePositionURL: serverA.URL},
+			{VehiclePositionURL: serverB.URL},
+		},
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	store := NewRealtimeStore()
+	if err := fetchAndStoreGTFSRTFeed(server, store, client); err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+
+	realtimeData := store.Get(server.ServerKey())
+	if realtimeData == nil {
+		t.Fatal("expected realtime data")
+	}
+	if len(realtimeData.Vehicles) != 2 {
+		t.Fatalf("expected both same-ID vehicles to be retained, got %d", len(realtimeData.Vehicles))
+	}
+
+	latByFeed := make(map[string]float32)
+	for _, realtimeVehicle := range realtimeData.Vehicles {
+		if realtimeVehicle.Vehicle.ID == nil || realtimeVehicle.Vehicle.ID.ID != "101" {
+			t.Fatalf("unexpected vehicle descriptor: %+v", realtimeVehicle.Vehicle.ID)
+		}
+		if realtimeVehicle.Vehicle.Position == nil || realtimeVehicle.Vehicle.Position.Latitude == nil {
+			t.Fatal("vehicle position missing")
+		}
+		latByFeed[realtimeVehicle.FeedID] = *realtimeVehicle.Vehicle.Position.Latitude
+	}
+
+	if latByFeed["0"] == latByFeed["1"] {
+		t.Fatalf("expected vehicles tagged with distinct feed IDs and positions, got %v", latByFeed)
+	}
+}
+
+func marshalVehicleFeed(t *testing.T, id string, lat, lon float32) []byte {
+	t.Helper()
+
+	feed := &gtfsrt.FeedMessage{
+		Header: &gtfsrt.FeedHeader{
+			GtfsRealtimeVersion: proto.String("2.0"),
+			Timestamp:           proto.Uint64(1_700_000_000),
+		},
+		Entity: []*gtfsrt.FeedEntity{
+			{
+				Id: proto.String("1"),
+				Vehicle: &gtfsrt.VehiclePosition{
+					Vehicle:   &gtfsrt.VehicleDescriptor{Id: proto.String(id)},
+					Position:  &gtfsrt.Position{Latitude: proto.Float32(lat), Longitude: proto.Float32(lon)},
+					Timestamp: proto.Uint64(1_700_000_000),
+				},
+			},
+		},
+	}
+	data, err := proto.Marshal(feed)
+	if err != nil {
+		t.Fatalf("marshal GTFS-RT feed: %v", err)
+	}
+	return data
+}
+
+func serveBytes(t *testing.T, data []byte) *httptest.Server {
+	t.Helper()
+
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		// Writing to ResponseWriter in tests, error can be safely ignored.
+		// #nosec G104
+		w.Write(data)
+	}))
 }

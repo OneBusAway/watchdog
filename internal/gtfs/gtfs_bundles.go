@@ -298,13 +298,22 @@ func getStopLocationsByIDs(serverKey string, stopIDs []string, staticStore *Stat
 // provided RealtimeStore.
 //
 // The realtimeStore is designed to be thread-safe, and this function ensures
-// that the parsed data is written using the store’s locking mechanisms,
+// that the parsed data is written using the store's locking mechanisms,
 // making it safe for concurrent access across goroutines.
+//
+// A server may expose multiple GTFS-RT feeds. Each feed is treated as an
+// independent vehicle namespace: GTFS-RT vehicle IDs are only unique within a
+// single feed, so two feeds that both report vehicle "101" refer to two
+// distinct physical vehicles and are BOTH retained. Deduplication only guards
+// against repeats within one feed (a malformed feed repeating an ID). Every
+// retained vehicle is tagged with the zero-based index of the feed it came
+// from (see models.RealtimeVehicle.FeedID) so consumers can key per-vehicle
+// identity on the (feed, vehicle_id) pair.
 
 func fetchAndStoreGTFSRTFeed(server models.ObaServer, realtimeStore *RealtimeStore, client *http.Client) error {
 	merged := &models.RealtimeData{}
-	vehicleIDs := make(map[string]struct{})
-	for _, feed := range server.GtfsRTFeeds {
+	for feedIdx, feed := range server.GtfsRTFeeds {
+		feedID := fmt.Sprintf("%d", feedIdx)
 		sanitizedURL := utils.SanitizeServerURL(feed.VehiclePositionURL)
 		req, err := http.NewRequest(http.MethodGet, feed.VehiclePositionURL, nil)
 		if err != nil {
@@ -365,6 +374,7 @@ func fetchAndStoreGTFSRTFeed(server models.ObaServer, realtimeStore *RealtimeSto
 			})
 			return err
 		}
+		vehicleIDs := make(map[string]struct{})
 		for _, vehicle := range parsed.Vehicles {
 			id := ""
 			if vehicle.ID != nil {
@@ -376,7 +386,7 @@ func fetchAndStoreGTFSRTFeed(server models.ObaServer, realtimeStore *RealtimeSto
 				}
 				vehicleIDs[id] = struct{}{}
 			}
-			merged.Vehicles = append(merged.Vehicles, vehicle)
+			merged.Vehicles = append(merged.Vehicles, models.RealtimeVehicle{Vehicle: vehicle, FeedID: feedID})
 		}
 	}
 	realtimeStore.Set(server.ServerKey(), merged)

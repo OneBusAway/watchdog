@@ -54,19 +54,19 @@ var (
 	VehicleReportInterval = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "vehicle_position_report_interval_seconds",
 		Help: "Time in seconds since each vehicle last reported a GTFS-RT position",
-	}, []string{"vehicle_id", "agency_id", "agency_name", "server_url"})
+	}, []string{"vehicle_id", "agency_id", "agency_name", "server_url", "feed"})
 
 	VehicleReportCount = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "vehicle_report_total",
 		Help: "Total number of GTFS-RT updates received from each vehicle",
-	}, []string{"vehicle_id", "agency_id", "agency_name", "server_url"})
+	}, []string{"vehicle_id", "agency_id", "agency_name", "server_url", "feed"})
 
 	VehicleSpeedGauge = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "gtfs_rt_vehicle_computed_speed",
 			Help: "Computed speed of the vehicle in m/s based on GTFS-RT positions and timestamps",
 		},
-		[]string{"vehicle_id", "agency_id", "agency_name", "server_url"},
+		[]string{"vehicle_id", "agency_id", "agency_name", "server_url", "feed"},
 	)
 
 	VehicleSpeedDiscrepancyRatioGauge = promauto.NewGaugeVec(
@@ -74,7 +74,7 @@ var (
 			Name: "gtfs_rt_vehicle_speed_discrepancy_ratio",
 			Help: "Ratio between computed and reported speed (|computed - reported| / reported)",
 		},
-		[]string{"vehicle_id", "agency_id", "agency_name", "server_url"},
+		[]string{"vehicle_id", "agency_id", "agency_name", "server_url", "feed"},
 	)
 
 	InvalidVehicleCoordinatesGauge = promauto.NewGaugeVec(

@@ -3,10 +3,13 @@ package metrics
 import (
 	"net/http"
 	"testing"
+	"time"
 
+	remoteGtfs "github.com/OneBusAway/go-gtfs"
 	onebusaway "github.com/OneBusAway/go-sdk"
 	"github.com/OneBusAway/go-sdk/option"
 	"watchdog.onebusaway.org/internal/geo"
+	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
 )
 
@@ -96,4 +99,50 @@ func TestTrackInvalidVehiclesUsesAgencyBounds(t *testing.T) {
 	if err := trackInvalidVehiclesAndStoppedOutOfBounds(missing, bounds, store); err == nil {
 		t.Fatal("expected missing feed error")
 	}
+}
+
+func TestTrackVehicleTelemetrySeparatesSameIDAcrossFeeds(t *testing.T) {
+	server := models.ObaServer{AgencyID: "agency-a", ObaBaseURL: "https://a.example.com", AgencyName: "Agency A"}
+
+	now := time.Now().UTC()
+	vehicleA := remoteGtfs.Vehicle{
+		ID:        &remoteGtfs.VehicleID{ID: "101"},
+		Position:  &remoteGtfs.Position{Latitude: float32Ptr(47.60), Longitude: float32Ptr(-122.30)},
+		Timestamp: &now,
+	}
+	vehicleB := remoteGtfs.Vehicle{
+		ID:        &remoteGtfs.VehicleID{ID: "101"},
+		Position:  &remoteGtfs.Position{Latitude: float32Ptr(47.65), Longitude: float32Ptr(-122.35)},
+		Timestamp: &now,
+	}
+
+	data := &models.RealtimeData{Vehicles: []models.RealtimeVehicle{
+		{Vehicle: vehicleA, FeedID: "0"},
+		{Vehicle: vehicleB, FeedID: "1"},
+	}}
+	store := gtfs.NewRealtimeStore()
+	store.Set(server.ServerKey(), data)
+
+	lastSeen := NewVehicleLastSeen()
+	if err := trackVehicleTelemetry(server, lastSeen, store); err != nil {
+		t.Fatalf("track: %v", err)
+	}
+
+	// Same vehicle ID from different feeds must not share a last-seen slot:
+	// they are two distinct physical vehicles.
+	lastSeen0, ok0 := lastSeen.Get(server.ServerKey(), "0", "101")
+	lastSeen1, ok1 := lastSeen.Get(server.ServerKey(), "1", "101")
+	if !ok0 || !ok1 {
+		t.Fatalf("expected both feeds' vehicle 101 to be tracked, got feed0=%v feed1=%v", ok0, ok1)
+	}
+	if got := lastSeen.Count(server.ServerKey()); got != 2 {
+		t.Fatalf("expected 2 tracked vehicles (same ID, distinct feeds), got %d", got)
+	}
+	if lastSeen0.Lat == lastSeen1.Lat {
+		t.Fatalf("expected separate last-seen slots per feed, got %+v and %+v", lastSeen0, lastSeen1)
+	}
+}
+
+func float32Ptr(v float32) *float32 {
+	return &v
 }
