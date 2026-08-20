@@ -76,10 +76,11 @@ func (t *UnmatchedStopTracker) RecordLastSeen(serverKey, agencyID, agencyName, s
 	}
 
 	entry, exists := stops[stopID]
-	if exists && (entry.StopName != stopName || entry.Lat != lat || entry.Lon != lon) {
-		// The stop changed its name or location, so the series labeled with its
-		// previous values is now stale. Delete it so both it and the new series
-		// are pruned correctly, instead of freezing the first-seen labels.
+	if exists && (entry.AgencyName != agencyName || entry.StopName != stopName || entry.Lat != lat || entry.Lon != lon) {
+		// The stop changed its agency name, name, or location, so the series
+		// labeled with its previous values is now stale. Delete it so both it and
+		// the new series are pruned correctly, instead of freezing the
+		// first-seen labels.
 		ObaUnmatchedStopInfo.DeleteLabelValues(entry.AgencyID, entry.AgencyName, entry.ServerURL, stopID, entry.StopName, entry.Lat, entry.Lon)
 	}
 
