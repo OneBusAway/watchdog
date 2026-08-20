@@ -26,7 +26,7 @@ func TestLoadConfigFromFile(t *testing.T) {
 		"agency_name": "Test Server",
 		"oba_base_url": "https://test.example.com",
 		"oba_api_key": "test-key",
-		"gtfs-static-feeds": ["https://gtfs.example.com"],
+		"gtfs_static_feeds": ["https://gtfs.example.com"],
 		"gtfs_rt_feeds": [{"trip_update_url": "https://trip.example.com", "vehicle_position_url": "https://vehicle.example.com"}],
 		"agency_id": "agency-1"
 		}]`
@@ -97,7 +97,7 @@ func TestLoadConfigFromURL(t *testing.T) {
 			w.Write([]byte(`[{"agency_name": "Test Server",
 			 "oba_base_url": "https://test.example.com",
 			 "oba_api_key": "test-key",
-			 "gtfs-static-feeds": ["https://gtfs.example.com"],
+			 "gtfs_static_feeds": ["https://gtfs.example.com"],
 			 "gtfs_rt_feeds": [{"trip_update_url": "https://trip.example.com", "vehicle_position_url": "https://vehicle.example.com"}],
 			 "agency_id": "agency-1"
 			}]`))
@@ -306,7 +306,7 @@ func TestRefreshConfig(t *testing.T) {
 							"agency_name": "Refreshed Test Server",
 							"oba_base_url": "https://refreshed.example.com",
 							"oba_api_key": "refreshed-key",
-							"gtfs-static-feeds": ["https://refreshed.example.com/gtfs.zip"],
+							"gtfs_static_feeds": ["https://refreshed.example.com/gtfs.zip"],
 							"gtfs_rt_feeds": [{"vehicle_position_url": "https://refreshed.example.com/vehicles"}],
 							"agency_id": "agency-999"
 					}

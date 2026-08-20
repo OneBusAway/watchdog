@@ -86,7 +86,7 @@ func decodeServerEntry(raw json.RawMessage) (models.ObaServer, error) {
 	}
 
 	hasV1 := fields["gtfs_url"] != nil || fields["trip_update_url"] != nil || fields["vehicle_position_url"] != nil
-	hasV2 := fields["gtfs-static-feeds"] != nil || fields["gtfs_rt_feeds"] != nil
+	hasV2 := fields["gtfs_static_feeds"] != nil || fields["gtfs_rt_feeds"] != nil
 	if hasV1 && hasV2 {
 		return models.ObaServer{}, fmt.Errorf("server entry mixes legacy (v1) and current (v2) fields; use either the flat schema or the array schema, not both")
 	}

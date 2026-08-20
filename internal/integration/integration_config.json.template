@@ -4,7 +4,7 @@
     "agency_id": "agency-1",
     "oba_base_url": "https://test1.example.com",
     "oba_api_key": "test-key-1",
-    "gtfs-static-feeds": ["https://gtfs1.example.com"],
+    "gtfs_static_feeds": ["https://gtfs1.example.com"],
     "gtfs_rt_feeds": [{
       "trip_update_url": "https://trip1.example.com",
       "vehicle_position_url": "https://vehicle1.example.com",
@@ -18,7 +18,7 @@
     "agency_id": "agency-2",
     "oba_base_url": "https://test2.example.com",
     "oba_api_key": "test-key-2",
-    "gtfs-static-feeds": ["https://gtfs2.example.com"],
+    "gtfs_static_feeds": ["https://gtfs2.example.com"],
     "gtfs_rt_feeds": [{
       "trip_update_url": "https://trip2.example.com",
       "vehicle_position_url": "https://vehicle2.example.com",

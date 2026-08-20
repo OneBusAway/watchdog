@@ -31,11 +31,11 @@ func ValidateServer(server models.ObaServer) error {
 		{"agency_id", server.AgencyID},
 	}
 	if len(server.GtfsStaticFeeds) == 0 {
-		missing = append(missing, "gtfs-static-feeds")
+		missing = append(missing, "gtfs_static_feeds")
 	}
 	for i, gtfsStaticFeed := range server.GtfsStaticFeeds {
 		if strings.TrimSpace(gtfsStaticFeed) == "" {
-			missing = append(missing, fmt.Sprintf("gtfs-static-feeds[%d]", i))
+			missing = append(missing, fmt.Sprintf("gtfs_static_feeds[%d]", i))
 		}
 	}
 	if len(server.GtfsRTFeeds) == 0 {

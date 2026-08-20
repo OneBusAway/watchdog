@@ -92,7 +92,7 @@ func TestDecodeServerEntry(t *testing.T) {
 			"agency_name": "Test Server",
 			"oba_base_url": "https://test.example.com",
 			"oba_api_key": "test-key",
-			"gtfs-static-feeds": ["https://gtfs.example.com"],
+			"gtfs_static_feeds": ["https://gtfs.example.com"],
 			"gtfs_rt_feeds": [{"trip_update_url": "https://trip.example.com", "vehicle_position_url": "https://vehicle.example.com"}],
 			"agency_id": "agency-1"
 		}`)
@@ -124,7 +124,7 @@ func TestDecodeServerEntry(t *testing.T) {
 			"oba_base_url": "https://test.example.com",
 			"oba_api_key": "test-key",
 			"gtfs_url": "https://gtfs.example.com",
-			"gtfs-static-feeds": ["https://gtfs.example.com"],
+			"gtfs_static_feeds": ["https://gtfs.example.com"],
 			"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle.example.com"}],
 			"agency_id": "agency-1"
 		}`)
@@ -143,7 +143,7 @@ func TestDecodeServerEntry(t *testing.T) {
 			"agency_name": "Partial Auth",
 			"oba_base_url": "https://test.example.com",
 			"oba_api_key": "test-key",
-			"gtfs-static-feeds": ["https://gtfs.example.com"],
+			"gtfs_static_feeds": ["https://gtfs.example.com"],
 			"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle.example.com", "gtfs_rt_api_key": "only-key"}],
 			"agency_id": "agency-1"
 		}`)
@@ -189,7 +189,7 @@ func TestLoadConfigFromFileLegacy(t *testing.T) {
 		t.Fatalf("expected agency-legacy, got %q", servers[0].AgencyID)
 	}
 	if !reflect.DeepEqual(servers[0].GtfsStaticFeeds, []string{"https://gtfs.example.com"}) {
-		t.Errorf("expected gtfs-static-feeds from legacy gtfs_url, got %+v", servers[0].GtfsStaticFeeds)
+		t.Errorf("expected gtfs_static_feeds from legacy gtfs_url, got %+v", servers[0].GtfsStaticFeeds)
 	}
 	if len(servers[0].GtfsRTFeeds) != 1 || servers[0].GtfsRTFeeds[0].VehiclePositionURL != "https://vehicle.example.com" {
 		t.Errorf("expected converted feed, got %+v", servers[0].GtfsRTFeeds)
@@ -213,7 +213,7 @@ func TestLoadConfigFromFileMixedEntries(t *testing.T) {
 			"agency_name": "Current Server",
 			"oba_base_url": "https://current.example.com",
 			"oba_api_key": "current-key",
-			"gtfs-static-feeds": ["https://gtfs.example.com"],
+			"gtfs_static_feeds": ["https://gtfs.example.com"],
 			"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle.example.com"}],
 			"agency_id": "agency-current"
 		},
@@ -221,7 +221,7 @@ func TestLoadConfigFromFileMixedEntries(t *testing.T) {
 			"agency_name": "Broken Server",
 			"oba_base_url": "https://broken.example.com",
 			"oba_api_key": "broken-key",
-			"gtfs-static-feeds": null,
+			"gtfs_static_feeds": null,
 			"gtfs_rt_feeds": null,
 			"agency_id": "agency-broken"
 		}
@@ -276,6 +276,6 @@ func TestLoadConfigFromURLLegacy(t *testing.T) {
 		t.Fatalf("expected the legacy server to be converted, got %+v", servers)
 	}
 	if !reflect.DeepEqual(servers[0].GtfsStaticFeeds, []string{"https://gtfs.example.com"}) {
-		t.Errorf("expected gtfs-static-feeds from legacy gtfs_url, got %+v", servers[0].GtfsStaticFeeds)
+		t.Errorf("expected gtfs_static_feeds from legacy gtfs_url, got %+v", servers[0].GtfsStaticFeeds)
 	}
 }

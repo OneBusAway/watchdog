@@ -22,7 +22,7 @@ type ObaServer struct {
 	AgencyID        string       `json:"agency_id"`
 	ObaBaseURL      string       `json:"oba_base_url"`
 	ObaApiKey       string       `json:"oba_api_key"`
-	GtfsStaticFeeds []string     `json:"gtfs-static-feeds"`
+	GtfsStaticFeeds []string     `json:"gtfs_static_feeds"`
 	GtfsRTFeeds     []GtfsRTFeed `json:"gtfs_rt_feeds"`
 }
 

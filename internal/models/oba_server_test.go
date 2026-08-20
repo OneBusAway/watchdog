@@ -1,10 +1,21 @@
 package models
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestObaServerUnmarshalJSONStaticFeedsKey(t *testing.T) {
+	var s ObaServer
+	if err := json.Unmarshal([]byte(`{"agency_id":"a","gtfs_static_feeds":["https://a.example.com/gtfs.zip"]}`), &s); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if !reflect.DeepEqual(s.GtfsStaticFeeds, []string{"https://a.example.com/gtfs.zip"}) {
+		t.Errorf("expected canonical static feeds, got %+v", s.GtfsStaticFeeds)
+	}
+}
 
 func TestNewObaServer(t *testing.T) {
 	agencyName := "Test Server"
