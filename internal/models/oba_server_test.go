@@ -32,6 +32,7 @@ func TestNewObaServer(t *testing.T) {
 	}}
 
 	server := NewObaServer(
+		"Test Server",
 		agencyName,
 		agencyID,
 		baseURL,

@@ -5,8 +5,12 @@ import (
 )
 
 // StaticData represents the static GTFS data structure.
-// It contains parts we uses from GTFS Static bundels
-// which are stops, agencies, and services.
+// It contains parts we use from GTFS static bundles
+// (stops, agencies, services, and routes).
+//
+// Routes are kept so the route → agency index can be populated when the bundle
+// is parsed: every route carries an agency_id in routes.txt, which is how we
+// attribute GTFS-RT vehicles to agencies in server-mode.
 //
 // IMPORTANT:
 // In the future, we may need to extend this structure
@@ -16,6 +20,7 @@ type StaticData struct {
 	Stops    []remoteGtfs.Stop
 	Agencies []remoteGtfs.Agency
 	Services []remoteGtfs.Service
+	Routes   []remoteGtfs.Route
 }
 
 func NewStaticData(GtfsStaticBundle *remoteGtfs.Static) *StaticData {
@@ -23,6 +28,7 @@ func NewStaticData(GtfsStaticBundle *remoteGtfs.Static) *StaticData {
 		Stops:    append([]remoteGtfs.Stop(nil), GtfsStaticBundle.Stops...),
 		Agencies: append([]remoteGtfs.Agency(nil), GtfsStaticBundle.Agencies...),
 		Services: append([]remoteGtfs.Service(nil), GtfsStaticBundle.Services...),
+		Routes:   append([]remoteGtfs.Route(nil), GtfsStaticBundle.Routes...),
 	}
 }
 

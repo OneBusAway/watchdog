@@ -16,10 +16,20 @@ func ServerKey(baseURL, agencyID string) string {
 	return utils.SanitizeServerURL(baseURL) + "|" + agencyID
 }
 
-// ObaServer represents a OneBusAway server configuration
+// ObaServer represents a OneBusAway server configuration.
+//
+// Scoping: every entry carries a ServerName that identifies the OBA deployment.
+// AgencyID and AgencyName are optional. When AgencyID is set the entry is
+// scoped to that single agency (today's behavior); when AgencyID is absent the
+// entry is server-scoped and Watchdog discovers the agencies it serves from
+// /api/where/metrics.json cross-referenced with each static feed's agency.txt.
+// In server-mode the Operator must list every static feed the server exposes;
+// Watchdog refuses to guess agency ownership from a feed whose agency.txt is
+// empty or ambiguous (it logs to Sentry and skips the feed's pipeline).
 type ObaServer struct {
-	AgencyName      string       `json:"agency_name"`
-	AgencyID        string       `json:"agency_id"`
+	ServerName      string       `json:"server_name"`
+	AgencyName      string       `json:"agency_name,omitempty"`
+	AgencyID        string       `json:"agency_id,omitempty"`
 	ObaBaseURL      string       `json:"oba_base_url"`
 	ObaApiKey       string       `json:"oba_api_key"`
 	GtfsStaticFeeds []string     `json:"gtfs_static_feeds"`
@@ -37,8 +47,8 @@ type GtfsRTFeed struct {
 }
 
 // NewObaServer creates a new ObaServer instance with the provided configuration.
-func NewObaServer(agencyName, agencyID, baseURL, apiKey string, gtfsStaticFeeds []string, gtfsRTFeeds []GtfsRTFeed) *ObaServer {
-	return &ObaServer{AgencyName: agencyName, AgencyID: agencyID, ObaBaseURL: baseURL, ObaApiKey: apiKey, GtfsStaticFeeds: gtfsStaticFeeds, GtfsRTFeeds: gtfsRTFeeds}
+func NewObaServer(serverName, agencyName, agencyID, baseURL, apiKey string, gtfsStaticFeeds []string, gtfsRTFeeds []GtfsRTFeed) *ObaServer {
+	return &ObaServer{ServerName: serverName, AgencyName: agencyName, AgencyID: agencyID, ObaBaseURL: baseURL, ObaApiKey: apiKey, GtfsStaticFeeds: gtfsStaticFeeds, GtfsRTFeeds: gtfsRTFeeds}
 }
 
 // ServerKey returns the unique identity of this deployment (sanitized base URL
