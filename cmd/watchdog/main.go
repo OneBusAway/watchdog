@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/getsentry/sentry-go"
@@ -14,6 +15,7 @@ import (
 	"watchdog.onebusaway.org/internal/config"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
+	"watchdog.onebusaway.org/internal/utils"
 )
 
 // Application version injected at build time via ldflags.
@@ -151,7 +153,9 @@ func main() {
 	app.StartMetricsCollection(ctx)
 
 	// Cron job to download GTFS bundles for all servers every 24 hours
-	go app.GtfsService.RefreshGTFSBundles(ctx, servers, 24*time.Hour, 5)
+	// Read the server list on every tick rather than capturing it here: with
+	// --config-url the set of servers changes while we run.
+	go app.GtfsService.RefreshGTFSBundles(ctx, app.ConfigService.Config.GetServers, 24*time.Hour, 5)
 
 	// Cron job to delete the data of vehicles that has not sent updates for 1 hour
 	go app.MetricsService.VehicleLastSeen.ClearRoutine(ctx, 15*time.Minute, time.Hour)
@@ -163,6 +167,16 @@ func main() {
 	if *configURL != "" {
 		go app.ConfigService.RefreshConfig(ctx, *configURL, configAuthUser, configAuthPass, time.Minute, 20, func(updated []models.ObaServer) {
 			app.MetricsService.ReportTrackedAgencies(updated)
+
+			// Servers that left the config keep their store entries and their
+			// Prometheus series until they are explicitly retired.
+			app.PruneStaleServers(updated)
+
+			// Servers that just joined would otherwise wait for the next 24h
+			// refresh before any static-derived metric appeared for them.
+			if newcomers := serversWithoutBundles(app, updated); len(newcomers) > 0 {
+				go app.GtfsService.DownloadGTFSBundles(ctx, newcomers, 5)
+			}
 		})
 	}
 
@@ -189,4 +203,27 @@ func main() {
 	report.FlushSentry()
 	logger.Error(err.Error())
 	os.Exit(1)
+}
+
+// serversWithoutBundles returns the entries that have no static bundle stored
+// yet, i.e. servers the config refresh just introduced. Server-scoped entries
+// are keyed per discovered agency, so we look for any key under their
+// oba_base_url rather than for the entry's own key.
+func serversWithoutBundles(application *app.Application, servers []models.ObaServer) []models.ObaServer {
+	var newcomers []models.ObaServer
+	for _, server := range servers {
+		prefix := utils.SanitizeServerURL(server.ObaBaseURL) + "|"
+		found := false
+		application.GtfsService.StaticStore.Range(func(serverKey string, _ *models.StaticData) bool {
+			if strings.HasPrefix(serverKey, prefix) {
+				found = true
+				return false
+			}
+			return true
+		})
+		if !found {
+			newcomers = append(newcomers, server)
+		}
+	}
+	return newcomers
 }

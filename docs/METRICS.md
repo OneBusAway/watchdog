@@ -99,6 +99,8 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
   ```promql
   max by (vehicle_id) (vehicle_position_report_interval_seconds{agency_id="unitrans"})
   ```
+- **Per-agency attribution in server-mode:** A server-scoped config entry (no `agency_id`) exposes one merged GTFS-RT feed covering several agencies. Watchdog walks that feed once per tick and attributes each vehicle to an agency by resolving its `TripDescriptor.route_id` against the agencies declared in the static feeds, so `agency_id` on every metric in this section means the agency that actually owns the vehicle. Vehicles whose trip carries no `route_id`, whose route is unknown to any static feed, or whose route belongs to an agency the server is not currently reporting are counted in `gtfs_rt_unattributed_vehicles_count` and left out of the per-agency series — a persistently non-zero value there means the static feeds do not cover everything the RT feed references.
+- **The bounding box is still server-wide:** `gtfs_rt_stopped_out_of_bounds_vehicles` is attributed per agency, but the box it tests against is computed over the union of *every* configured static feed's stops. On a multi-agency server a vehicle stopped in one agency's territory is validated against a rectangle covering all of them, so treat this metric as a loose bound rather than a precise one.
 - **Report intervals:** If significantly longer than agency update policy, data is stale.
 - **Speed discrepancy ratio:** Persistent high ratios may mean faulty onboard GPS.
 - **Invalid coordinates:** If >0, indicates bad GPS or malformed feed data.

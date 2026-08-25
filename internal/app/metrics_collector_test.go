@@ -61,13 +61,13 @@ func TestCollectMetricsForServer(t *testing.T) {
 func TestCollectVehicleMetricsIsStandalone(t *testing.T) {
 	// collectVehicleMetrics should be safe to invoke independently of the
 	// pre-RT steps (server-ping, FetchObaAPIMetrics, etc.). This is the
-	// shared helper that server-mode calls inside the per-agency loop after
-	// the RT feed has been fetched once and shared across agencies.
+	// shared helper server-mode calls once per tick, after the RT feed has
+	// been fetched for the whole server.
 	app := newTestApplication(t)
 	testServer := app.ConfigService.Config.Servers[0]
 
 	// No panic, no error path requiring GTFS-RT data we haven't fetched.
-	app.collectVehicleMetrics(testServer)
+	app.collectVehicleMetrics(testServer, nil)
 }
 
 // Agency-scoped entries must fetch their own GTFS-RT feed as part of the

@@ -180,6 +180,14 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 			logger.Error("Could not compute bounding box", "server_key", serverKey, "error", bboxErr)
 		} else {
 			boundingBoxStore.Set(serverKey, bbox)
+			// Server-mode also publishes the box under the server-scoped key
+			// (empty agency_id), because the GTFS-RT vehicle pass runs once
+			// for the whole server and reads that key. The box is the union
+			// over every configured feed either way, so this is the same
+			// value, not a second computation.
+			if strings.TrimSpace(server.AgencyID) == "" {
+				boundingBoxStore.Set(models.ServerKey(server.ObaBaseURL, ""), bbox)
+			}
 		}
 
 		if observer != nil {
@@ -360,7 +368,11 @@ func agencyIDFromRoute(route remoteGtfs.Route) string {
 //  3. Updates geographic bounding boxes based on the downloaded data.
 //
 // The function listens to context cancellation (`ctx.Done()`) to gracefully stop the refresh routine.
-func refreshGTFSBundles(ctx context.Context, client *http.Client, servers []models.ObaServer, logger *slog.Logger, interval time.Duration, boundingBoxstore *geo.BoundingBoxStore, staticStore *StaticStore, routeAgencyIndex *RouteAgencyIndex, observer StaticBundleObserver, maxRetries int) {
+// servers is a supplier rather than a slice because the configuration can
+// change while the routine runs (--config-url). Capturing the boot-time slice
+// meant a server added later never had its bundle downloaded at all, and one
+// removed later kept being fetched.
+func refreshGTFSBundles(ctx context.Context, client *http.Client, servers func() []models.ObaServer, logger *slog.Logger, interval time.Duration, boundingBoxstore *geo.BoundingBoxStore, staticStore *StaticStore, routeAgencyIndex *RouteAgencyIndex, observer StaticBundleObserver, maxRetries int) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -370,7 +382,7 @@ func refreshGTFSBundles(ctx context.Context, client *http.Client, servers []mode
 			return
 		case <-ticker.C:
 			logger.Info("Refreshing GTFS bundles")
-			downloadGTFSBundles(ctx, client, servers, logger, boundingBoxstore, staticStore, routeAgencyIndex, observer, maxRetries)
+			downloadGTFSBundles(ctx, client, servers(), logger, boundingBoxstore, staticStore, routeAgencyIndex, observer, maxRetries)
 		}
 	}
 }
@@ -498,17 +510,16 @@ func getEarliestAndLatestServiceDates(staticData *models.StaticData) (earliestEn
 	return earliestEndDate, latestEndDate, nil
 }
 
-// fetchAndStoreGTFSRTFeedOnce fetches the GTFS-Realtime feed(s) for a single
-// OBA server, parses the vehicle positions, and stores the merged result in
-// the RealtimeStore under every serverKey supplied in storeKeys.
+// fetchAndStoreGTFSRTFeed fetches the GTFS-Realtime feed(s) for a single OBA
+// server, parses the vehicle positions, and stores the merged result in the
+// RealtimeStore under server.ServerKey().
 //
-// Pointer-sharing: the same `*models.RealtimeData` is registered under every
-// key in storeKeys. Memory stays O(1) regardless of how many agencies the RT
-// data is registered against — important for server-mode where one RT feed
-// can serve many agencies.
-//
-// If storeKeys is empty the function does nothing (callers should pass at
-// least one key when there are live agencies to monitor).
+// One key, one fetch, per tick. For a server-scoped entry the key is the
+// server-scoped one (empty agency_id), because the vehicle pass reads the
+// merged feed once for the whole server and attributes each vehicle to its
+// owning agency through the route -> agency index. Registering the same feed
+// under every agency's key would only invite a per-agency pass, which
+// double-counts.
 //
 // A server may expose multiple GTFS-RT feeds. Each feed is treated as an
 // independent vehicle namespace: GTFS-RT vehicle IDs are only unique within
@@ -518,14 +529,7 @@ func getEarliestAndLatestServiceDates(staticData *models.StaticData) (earliestEn
 // Every retained vehicle is tagged with the zero-based index of the feed it
 // came from (see models.RealtimeVehicle.FeedID) so consumers can key
 // per-vehicle identity on the (feed, vehicle_id) pair.
-func fetchAndStoreGTFSRTFeedOnce(server models.ObaServer, storeKeys []string, realtimeStore *RealtimeStore, client *http.Client) error {
-	if len(storeKeys) == 0 {
-		// No agencies to register the RT data against this tick. Skip the
-		// HTTP fetch entirely — in server-mode this is the common case when
-		// /metrics.json reports no agencies, and we'd otherwise waste a fetch
-		// and a parse per tick.
-		return nil
-	}
+func fetchAndStoreGTFSRTFeed(server models.ObaServer, realtimeStore *RealtimeStore, client *http.Client) error {
 	merged, err := parseGTFSRTFeeds(server, client)
 	if err != nil {
 		return err
@@ -533,21 +537,8 @@ func fetchAndStoreGTFSRTFeedOnce(server models.ObaServer, storeKeys []string, re
 	if merged == nil {
 		return nil
 	}
-	for _, key := range storeKeys {
-		realtimeStore.Set(key, merged)
-	}
+	realtimeStore.Set(server.ServerKey(), merged)
 	return nil
-}
-
-// fetchAndStoreGTFSRTFeed is the single-key convenience wrapper kept for
-// agency-mode callers. Server-mode uses fetchAndStoreGTFSRTFeedOnce so a
-// single fetch is shared across every agency's serverKey.
-//
-// In server-mode the metrics-collector calls FetchAndStoreGTFSRTFeedOnce
-// instead, which fetches once and registers the same *RealtimeData under
-// every agency's serverKey (one HTTP fetch instead of N).
-func fetchAndStoreGTFSRTFeed(server models.ObaServer, realtimeStore *RealtimeStore, client *http.Client) error {
-	return fetchAndStoreGTFSRTFeedOnce(server, []string{server.ServerKey()}, realtimeStore, client)
 }
 
 // parseGTFSRTFeeds performs the actual HTTP fetch + protobuf parse for every

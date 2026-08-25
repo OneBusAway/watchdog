@@ -130,8 +130,14 @@ func ResolveScope(server models.ObaServer, staticStore *gtfs.StaticStore, routeA
 // every declared agency. This is deliberate (memory stays O(bundles) via
 // pointer sharing), but it loses the many-to-many relationship between
 // agencies and configured feeds: we don't know which feeds declared which
-// agency, so per-agency bbox, stop resolution, and route attribution can't
-// be scoped to the agency's actual coverage.
+// agency, so per-agency bbox and stop resolution can't be scoped to the
+// agency's actual coverage.
+//
+// Vehicle attribution is NOT part of this any more: the RT vehicle pass
+// resolves route_id -> agency_id through gtfs.RouteAgencyIndex, which is
+// built per route rather than per feed, so per-agency vehicle metrics are
+// already correct. What remains is geometry — see the bbox NOTE in
+// storeStaticForServer.
 //
 // The fix: change the storage shape so each agency is scoped to the merged
 // feed(s) associated with it, rather than every agency pointing to the same

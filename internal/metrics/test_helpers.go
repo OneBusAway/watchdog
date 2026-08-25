@@ -117,3 +117,23 @@ func countSeries(collector prometheus.Collector) int {
 	}
 	return count
 }
+
+// getCounterValue retrieves the current float64 value of a Prometheus
+// CounterVec metric for the given set of labels. Like getMetricValue it
+// creates the series if it does not already exist, so pair it with
+// countSeries when asserting that nothing was emitted.
+func getCounterValue(metric *prometheus.CounterVec, labels map[string]string) (float64, error) {
+	c := make(chan prometheus.Metric, 1)
+	metric.With(labels).Collect(c)
+
+	m := <-c
+
+	pb := &dto.Metric{}
+	if err := m.Write(pb); err != nil {
+		return 0, err
+	}
+	if pb.Counter != nil {
+		return pb.Counter.GetValue(), nil
+	}
+	return 0, nil
+}

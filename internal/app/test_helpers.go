@@ -9,6 +9,7 @@ import (
 
 	remoteGtfs "github.com/OneBusAway/go-gtfs"
 	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"watchdog.onebusaway.org/internal/config"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
@@ -121,4 +122,20 @@ func readTestFixture(t *testing.T, path string) []byte {
 		t.Fatalf("failed to read fixture %s: %v", path, err)
 	}
 	return data
+}
+
+// readCounter returns the current value of a CounterVec series. Like the
+// prometheus client's own With, it materializes the series if it is absent, so
+// a returned 0 means "no increments", not "never emitted".
+func readCounter(t *testing.T, vec *prometheus.CounterVec, labels map[string]string) float64 {
+	t.Helper()
+
+	ch := make(chan prometheus.Metric, 1)
+	vec.With(labels).Collect(ch)
+
+	pb := &dto.Metric{}
+	if err := (<-ch).Write(pb); err != nil {
+		t.Fatalf("failed to read counter: %v", err)
+	}
+	return pb.GetCounter().GetValue()
 }

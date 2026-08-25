@@ -131,3 +131,23 @@ func (idx *RouteAgencyIndex) Clear(baseURL string) {
 	defer idx.mu.Unlock()
 	delete(idx.byServer, baseURL)
 }
+
+// PruneServers removes every server whose base URL the keep predicate rejects
+// and returns the removed base URLs.
+//
+// Unlike the other stores this index is keyed by the raw oba_base_url the
+// writer used, not by a serverKey, so callers must sanitize on their side of
+// the predicate rather than expecting a serverKey here.
+func (idx *RouteAgencyIndex) PruneServers(keep func(baseURL string) bool) []string {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	var removed []string
+	for baseURL := range idx.byServer {
+		if !keep(baseURL) {
+			removed = append(removed, baseURL)
+			delete(idx.byServer, baseURL)
+		}
+	}
+	return removed
+}
