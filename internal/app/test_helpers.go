@@ -110,3 +110,15 @@ func getMetricsForTesting(t *testing.T, metric *prometheus.GaugeVec) {
 		t.Logf("Found metric: %v", m.Desc())
 	}
 }
+
+// readTestFixture reads a fixture file, failing the test if it cannot be read.
+func readTestFixture(t *testing.T, path string) []byte {
+	t.Helper()
+	// Safe: path is a test-local constant, never user input.
+	// #nosec G304
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read fixture %s: %v", path, err)
+	}
+	return data
+}

@@ -121,7 +121,7 @@
             "type": "prometheus"
           },
           "editorMode": "code",
-          "expr": "oba_api_status{agency_id=~\"$agency_id\"}",
+          "expr": "oba_api_status{server_url=~\"$server_url\"}",
           "legendFormat": "{{agency_name}} ({{agency_id}}) \u00b7 {{server_url}}",
           "range": true,
           "refId": "A"

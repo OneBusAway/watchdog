@@ -101,3 +101,19 @@ func setupObaServer(t *testing.T, response string, statusCode int) *httptest.Ser
 		w.Write([]byte(response))
 	}))
 }
+
+// countSeries returns the number of series a collector currently exposes.
+// Unlike getMetricValue it never creates a series as a side effect, so it is
+// safe for asserting that a code path emitted nothing.
+func countSeries(collector prometheus.Collector) int {
+	ch := make(chan prometheus.Metric)
+	go func() {
+		collector.Collect(ch)
+		close(ch)
+	}()
+	count := 0
+	for range ch {
+		count++
+	}
+	return count
+}

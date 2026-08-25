@@ -325,7 +325,11 @@ func TestFetchObaAPIMetrics_ErrorDoesNotLeakAPIKey(t *testing.T) {
 	}
 }
 
-func TestFetchObaAPIMetrics_SetsStatusZeroOnFailure(t *testing.T) {
+// A failing /metrics.json call must surface an error and must not emit any
+// per-agency series. It deliberately does NOT assert on oba_api_status: that
+// gauge is owned by serverPing now, and getMetricValue would create the series
+// on read, so such an assertion could never fail.
+func TestFetchObaAPIMetrics_EmitsNoAgencyMetricsOnFailure(t *testing.T) {
 	staticStore := gtfs.NewStaticStore()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	tracker := NewUnmatchedStopTracker()
@@ -358,6 +362,8 @@ func TestFetchObaAPIMetrics_SetsStatusZeroOnFailure(t *testing.T) {
 		{"connection refused", closedURL},
 	}
 
+	baseline := countSeries(ObaRealtimeRecords)
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := fetchObaAPIMetrics("fail-status", "Fail Status", "test-server", tt.baseURL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker)
@@ -365,15 +371,8 @@ func TestFetchObaAPIMetrics_SetsStatusZeroOnFailure(t *testing.T) {
 				t.Fatal("expected error but got none")
 			}
 
-			status, err := getMetricValue(ObaApiStatus, map[string]string{
-				"server_name": "test-server",
-				"server_url":  tt.baseURL + metricsEndpoint,
-			})
-			if err != nil {
-				t.Fatalf("failed to read oba_api_status: %v", err)
-			}
-			if status != 0 {
-				t.Fatalf("expected oba_api_status to be 0 for %s, got %v", tt.name, status)
+			if got := countSeries(ObaRealtimeRecords); got != baseline {
+				t.Fatalf("expected no new oba_realtime_records_count series for %s, series count went %d -> %d", tt.name, baseline, got)
 			}
 		})
 	}

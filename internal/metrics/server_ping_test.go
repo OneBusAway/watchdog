@@ -8,6 +8,7 @@ import (
 	onebusaway "github.com/OneBusAway/go-sdk"
 	"github.com/OneBusAway/go-sdk/option"
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/utils"
 )
 
 func TestCheckServer(t *testing.T) {
@@ -27,7 +28,7 @@ func TestCheckServer(t *testing.T) {
 		metricValue, err := getMetricValue(ObaApiStatus, map[string]string{
 
 			"server_name": testServer.ServerName,
-			"server_url":  testServer.ObaBaseURL + currentTimeEndpoint,
+			"server_url":  utils.SanitizeServerURL(testServer.ObaBaseURL),
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -54,7 +55,7 @@ func TestCheckServer(t *testing.T) {
 		metricValue, err := getMetricValue(ObaApiStatus, map[string]string{
 
 			"server_name": testServer.ServerName,
-			"server_url":  testServer.ObaBaseURL + currentTimeEndpoint,
+			"server_url":  utils.SanitizeServerURL(testServer.ObaBaseURL),
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -78,7 +79,7 @@ func TestCheckServer(t *testing.T) {
 		metricValue, err := getMetricValue(ObaApiStatus, map[string]string{
 
 			"server_name": testServer.ServerName,
-			"server_url":  testServer.ObaBaseURL + currentTimeEndpoint,
+			"server_url":  utils.SanitizeServerURL(testServer.ObaBaseURL),
 		})
 		if err != nil {
 			t.Fatal(err)

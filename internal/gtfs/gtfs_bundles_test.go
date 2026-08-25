@@ -239,23 +239,50 @@ func TestStoreGTFSBundleRecordsFetchTime(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// storeStaticForServer keys bundles by the agency declared in agency.txt,
-	// not by the configured agency_id. Look up the bundle's actual agency_id
-	// (gtfs.zip ships agency_id "40") to retrieve the fetch time.
-	if len(staticBundle.Agencies) == 0 {
-		t.Fatal("expected the fixture to declare at least one agency")
-	}
-	declaredAgency := staticBundle.Agencies[0].Id
-	if declaredAgency == "" {
-		t.Fatal("expected the fixture's agency to declare an agency_id")
-	}
-	storeKey := models.ServerKey(server.ObaBaseURL, declaredAgency)
+	// In agency-mode the bundle must be stored under the CONFIGURED agency_id,
+	// because that is the key every reader derives from the config entry
+	// (checkBundleExpiration, getStopLocationsByIDs, the bbox lookup all call
+	// server.ServerKey()). The fixture's agency.txt declares a different
+	// agency_id ("40"), so keying off agency.txt would leave every one of those
+	// lookups missing.
+	storeKey := server.ServerKey()
 	fetchTime, ok := staticStore.GetFetchTime(storeKey)
 	if !ok {
 		t.Fatalf("expected a fetch time to be recorded for server key %s", storeKey)
 	}
 	if time.Since(fetchTime) > time.Minute {
 		t.Fatalf("fetch time should be recent, got %s", fetchTime)
+	}
+	if _, ok := staticStore.Get(storeKey); !ok {
+		t.Fatalf("expected the bundle to be stored under the configured server key %s", storeKey)
+	}
+	if _, ok := boundingBoxStore.Get(storeKey); !ok {
+		t.Fatalf("expected a bounding box under the configured server key %s", storeKey)
+	}
+}
+
+// In server-mode (no configured agency_id) agency.txt is the sole source of
+// agency identity, so the bundle is keyed by every agency it declares.
+func TestStoreStaticForServerModeKeysByDeclaredAgency(t *testing.T) {
+	server := models.ObaServer{ServerName: "test", ObaBaseURL: "https://test.example.com"}
+	data := readFixture(t, "gtfs.zip")
+	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
+	if err != nil {
+		t.Fatal("failed to parse gtfs static data")
+	}
+	if len(staticBundle.Agencies) == 0 || staticBundle.Agencies[0].Id == "" {
+		t.Fatal("expected the fixture to declare an agency_id")
+	}
+	staticStore := NewStaticStore()
+
+	err = storeStaticForServer(server, []*remoteGtfs.Static{staticBundle}, staticStore, geo.NewBoundingBoxStore(), NewRouteAgencyIndex(), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	storeKey := models.ServerKey(server.ObaBaseURL, staticBundle.Agencies[0].Id)
+	if _, ok := staticStore.Get(storeKey); !ok {
+		t.Fatalf("expected the bundle to be stored under the declared agency key %s", storeKey)
 	}
 }
 

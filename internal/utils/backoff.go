@@ -49,7 +49,7 @@ func DoWithBackoff(ctx context.Context, client *http.Client, req *http.Request, 
 		case <-time.After(backoffDelay):
 		}
 
-		backoffDelay = calculateNewBackoffDelay(backoffDelay)
+		backoffDelay = CalculateNewBackoffDelay(backoffDelay)
 		retries++
 	}
 }
@@ -69,23 +69,6 @@ func CalculateNextRetryAt(backoff time.Duration) time.Time {
 // CalculateNewBackoffDelay increases the given backoff delay by BackoffFactor.
 // The result is capped at MaxBackoff.
 func CalculateNewBackoffDelay(backoffDelay time.Duration) time.Duration {
-	backoffDelay *= BackoffFactor
-	if backoffDelay >= MaxBackoff {
-		backoffDelay = MaxBackoff
-	}
-	return backoffDelay
-}
-
-func calculateNextRetryAt(backoff time.Duration) time.Time {
-	jitter := time.Duration(rand.Float64() * float64(backoff) * JitterFactor)
-	backoff += jitter
-	if backoff > MaxBackoff {
-		backoff = MaxBackoff
-	}
-	return time.Now().Add(backoff).UTC()
-}
-
-func calculateNewBackoffDelay(backoffDelay time.Duration) time.Duration {
 	backoffDelay *= BackoffFactor
 	if backoffDelay >= MaxBackoff {
 		backoffDelay = MaxBackoff

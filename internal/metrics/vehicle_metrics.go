@@ -197,10 +197,19 @@ func trackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLast
 const VehicleStatusStoppedAtStop = 1
 
 // trackInvalidVehiclesAndStoppedOutOfBounds collects and reports metrics related
-// to vehicle position validity. Like trackVehicleTelemetry, it attributes
-// vehicles to agencies via the RouteAgencyIndex in server-mode and skips
-// vehicles whose route_id is unattributable.
-func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, boundingBoxStore *geo.BoundingBoxStore, realtimeStore *gtfs.RealtimeStore, routeAgencyIndex *gtfs.RouteAgencyIndex) error {
+// to vehicle position validity:
+//  1. Invalid coordinate check: vehicles with missing or out-of-range lat/lon.
+//  2. Bounding box check: vehicles that are *stopped at a stop* but located
+//     outside the bounding box derived from the static GTFS stops.
+//
+// Unlike trackVehicleTelemetry this function does NOT attribute vehicles to
+// agencies via the RouteAgencyIndex. In server-mode the realtime store holds
+// one merged feed shared by every agency on the server, so both gauges report
+// the whole server's counts under each agency's labels. Attributing per agency
+// requires the per-agency scoping described in the TODO(scoped-store) note in
+// config/scoping.go; until that lands, read these two series per server rather
+// than per agency.
+func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, boundingBoxStore *geo.BoundingBoxStore, realtimeStore *gtfs.RealtimeStore) error {
 	realtimeData := realtimeStore.Get(server.ServerKey())
 	if realtimeData == nil {
 		err := fmt.Errorf("no GTFS-RT data available for agency %s", server.AgencyID)

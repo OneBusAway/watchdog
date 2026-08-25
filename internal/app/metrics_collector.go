@@ -13,6 +13,7 @@ import (
 	"watchdog.onebusaway.org/internal/metrics"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
+	"watchdog.onebusaway.org/internal/utils"
 )
 
 // StartMetricsCollection begins a background goroutine that continuously
@@ -63,7 +64,8 @@ func (app *Application) StartMetricsCollection(ctx context.Context) {
 // collectForScope dispatches a single configured ObaServer entry through the
 // per-scope collection pipeline.
 //
-//   - AgencyScope: delegates to CollectMetricsForServer (today's behavior).
+//   - AgencyScope: delegates to CollectMetricsForServer, which fetches this
+//     entry's own GTFS-RT feed as part of the pipeline (today's behavior).
 //   - ServerScope: probes /metrics.json, then runs the per-agency pipeline
 //     once for every agency that has a static bundle AND is reported by
 //     OBA. Static-only agencies (configured but not currently live) get
@@ -92,6 +94,15 @@ func (app *Application) collectForScope(ctx context.Context, server models.ObaSe
 func (app *Application) collectForServerScope(ctx context.Context, server models.ObaServer, scope config.ServerScope) {
 	if len(scope.StaticAgencies) == 0 {
 		app.Logger.Info("Server-scope entry has no static agencies yet; skipping tick", "server_name", server.ServerName)
+		return
+	}
+
+	// Honour the backoff written below on ping failure. Without this check the
+	// server-scope path would re-ping a dead server on every tick and the
+	// backoff state stored under the agency-less serverKey would never be read.
+	if nextRetryAt, exists := app.ConfigService.BackoffStore.NextRetryAt(server.ServerKey()); exists && time.Now().UTC().Before(nextRetryAt) {
+		app.Logger.Info("Skipping server-scope collection due to backoff",
+			"server_name", server.ServerName, "next_retry_at", nextRetryAt)
 		return
 	}
 
@@ -133,23 +144,28 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 	// pointer-shared, so each agency's per-tick pipeline sees the same
 	// vehicle set without redundant HTTP fetches.
 	liveAgencyKeys := make([]string, 0, len(scope.StaticAgencies))
+	// Every other metric labels server_url with the sanitized base URL, and the
+	// dashboard's $server_url variable is sourced from those series. Use the
+	// same form here so these gauges join with the rest (and so credentials
+	// embedded in the configured URL never reach a label).
+	serverURL := utils.SanitizeServerURL(server.ObaBaseURL)
 	for _, agency := range scope.StaticAgencies {
 		isLive := liveAgencies[agency.AgencyID]
 		metrics.GtfsStaticAgencyCurrentlyLive.WithLabelValues(
 			agency.AgencyID,
 			agency.AgencyName,
 			server.ServerName,
-			server.ObaBaseURL,
+			serverURL,
 		).Set(boolToFloat(isLive))
 
 		// attribution_status for every configured feed URL on this server.
 		for _, feedURL := range server.GtfsStaticFeeds {
 			metrics.GtfsStaticFeedAttributionStatus.WithLabelValues(
-				feedURL,
+				utils.SanitizeServerURL(feedURL),
 				agency.AgencyID,
 				agency.AgencyName,
 				server.ServerName,
-				server.ObaBaseURL,
+				serverURL,
 			).Set(boolToFloat(isLive))
 		}
 
@@ -159,10 +175,11 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 	}
 
 	// Fetch the RT feed ONCE for the whole server and register the result
-	// under every live agency's serverKey. If the fetch fails we still run
-	// the per-agency pipelines — they'll just see a stale realtime store
-	// from the previous tick and emit the appropriate counts. The error is
-	// reported to Sentry once for visibility.
+	// under every live agency's serverKey. If the fetch fails the per-agency
+	// pipelines still run, but they will read whatever the previous tick left
+	// in the realtime store (or nothing at all on the first tick). The error is
+	// reported to Sentry once for visibility. When no agency is live we skip
+	// the fetch entirely and no per-agency pipeline runs this tick.
 	if len(liveAgencyKeys) > 0 {
 		if err := app.GtfsService.FetchAndStoreGTFSRTFeedOnce(server, liveAgencyKeys); err != nil {
 			app.Logger.Error("Failed to fetch and store GTFS-RT feed",
@@ -210,30 +227,33 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 			continue
 		}
 		agencyServer := serverForAgency(server, agency.AgencyID, agency.AgencyName)
-		app.CollectMetricsForServer(agencyServer)
+		app.collectMetricsForServer(agencyServer, false)
 	}
 }
 
 // CollectMetricsForServer performs all metric collection and validation logic
-// for a single OBA server / agency.
+// for a single OBA server / agency, including fetching that entry's GTFS-RT
+// feed. This is the agency-mode entry point.
+func (app *Application) CollectMetricsForServer(server models.ObaServer) {
+	app.collectMetricsForServer(server, true)
+}
+
+// collectMetricsForServer is the shared pipeline behind CollectMetricsForServer.
 //
 // It sequentially runs a series of probes and validations against the given
 // server. Ordering constraints:
 //   - Backoff is non-blocking and lives in BackoffStore — not a time.Sleep.
 //     Before each cycle it checks NextRetryAt; if a server is still backing
 //     off, its entire collection is skipped this tick.
-//   - The GTFS-RT feed must be in the realtime store before this function
-//     runs. Agency-mode callers invoke GtfsService.FetchAndStoreGTFSRTFeed
-//     before calling this method. Server-mode callers invoke
-//     GtfsService.FetchAndStoreGTFSRTFeedOnce once per tick before the
-//     per-agency loop.
-//
-// Every metric function called after the RT gate reads the realtime store,
-// so any caller must ensure FetchAndStoreGTFSRTFeed (or Once) has succeeded
-// for this tick. Calling CountVehiclePositions, TrackVehicleTelemetry, or
-// TrackInvalidVehiclesAndStoppedOutOfBounds without a fresh fetch will use
-// stale data.
-func (app *Application) CollectMetricsForServer(server models.ObaServer) {
+//   - The GTFS-RT feed must be in the realtime store before the vehicle
+//     metrics run. When fetchRealtime is true (agency-mode) this function
+//     fetches it via GtfsService.FetchAndStoreGTFSRTFeed and returns early on
+//     failure, because every check after that point reads the realtime store.
+//     Server-mode passes false: collectForServerScope has already invoked
+//     GtfsService.FetchAndStoreGTFSRTFeedOnce once for the whole server and
+//     registered the result under every live agency's serverKey, so re-fetching
+//     per agency would be N redundant HTTP calls per tick.
+func (app *Application) collectMetricsForServer(server models.ObaServer, fetchRealtime bool) {
 	// Check if server has an active backoff period
 	nextRetryAt, exists := app.ConfigService.BackoffStore.NextRetryAt(server.ServerKey())
 	if exists && time.Now().UTC().Before(nextRetryAt) {
@@ -318,6 +338,24 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		})
 	}
 
+	// Fetch and store the GTFS-RT feed. Every check in collectVehicleMetrics
+	// reads the realtime store, so a failure here is a hard gate: we return
+	// rather than emit metrics derived from a stale (or absent) feed.
+	if fetchRealtime {
+		if err := app.GtfsService.FetchAndStoreGTFSRTFeed(server); err != nil {
+			app.Logger.Error("Failed to fetch and store GTFS-RT feed", "error", err)
+			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+				Tags: map[string]string{
+					"agency_id":   server.AgencyID,
+					"agency_name": server.AgencyName,
+					"server_name": server.ServerName,
+				},
+				Level: sentry.LevelError,
+			})
+			return
+		}
+	}
+
 	app.collectVehicleMetrics(server)
 }
 
@@ -383,16 +421,6 @@ func boolToFloat(b bool) float64 {
 	return 0
 }
 
-// metricsResponse mirrors the relevant fields of the OBA /metrics.json
-// response. We only need entry.AgencyIDs to drive the liveness check.
-type metricsResponse struct {
-	Data struct {
-		Entry struct {
-			AgencyIDs []string `json:"agencyIDs"`
-		} `json:"entry"`
-	} `json:"data"`
-}
-
 // probeLiveAgencies fetches /api/where/metrics.json for the given server and
 // returns the set of agency IDs OBA currently reports. Returns an empty map
 // (not an error) if the response is missing or malformed — the caller treats
@@ -416,7 +444,9 @@ func (app *Application) probeLiveAgencies(ctx context.Context, server models.Oba
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("/metrics.json returned %d", resp.StatusCode)
 	}
-	var decoded metricsResponse
+	// Reuse the metrics package's response type so the two decoders of this
+	// endpoint can never drift apart. Only entry.AgencyIDs is read here.
+	var decoded metrics.OBAMetrics
 	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
 		return nil, fmt.Errorf("decode /metrics.json: %w", err)
 	}

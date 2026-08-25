@@ -70,18 +70,25 @@ func validateLegacy(server legacyObaServer) error {
 // server-scoped. The legacy `id` (int) field is dropped — it was unused in v2
 // and is not part of the server-scope redesign.
 func legacyToCurrent(l legacyObaServer) models.ObaServer {
+	feed := models.GtfsRTFeed{
+		TripUpdateURL:      l.TripUpdateUrl,
+		VehiclePositionURL: l.VehiclePositionUrl,
+		GtfsRTAPIKey:       l.GtfsRtApiKey,
+		GtfsRTAPIValue:     l.GtfsRtApiValue,
+	}
+	// Only record an agency for the feed when the legacy entry actually named
+	// one; []string{""} would advertise a feed serving an agency with an empty
+	// id, which is exactly what server-mode discovery must not see.
+	if strings.TrimSpace(l.AgencyID) != "" {
+		feed.AgencyIDs = []string{l.AgencyID}
+	}
+
 	out := models.ObaServer{
 		ServerName:      l.Name,
 		ObaBaseURL:      l.ObaBaseURL,
 		ObaApiKey:       l.ObaApiKey,
 		GtfsStaticFeeds: []string{l.GtfsUrl},
-		GtfsRTFeeds: []models.GtfsRTFeed{{
-			TripUpdateURL:      l.TripUpdateUrl,
-			VehiclePositionURL: l.VehiclePositionUrl,
-			GtfsRTAPIKey:       l.GtfsRtApiKey,
-			GtfsRTAPIValue:     l.GtfsRtApiValue,
-			AgencyIDs:          []string{l.AgencyID},
-		}},
+		GtfsRTFeeds:     []models.GtfsRTFeed{feed},
 	}
 	if strings.TrimSpace(l.AgencyID) != "" {
 		out.AgencyID = l.AgencyID

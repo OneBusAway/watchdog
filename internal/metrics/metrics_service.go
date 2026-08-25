@@ -69,7 +69,7 @@ func (ms *MetricsService) TrackVehicleTelemetry(server models.ObaServer) error {
 }
 
 func (ms *MetricsService) TrackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer) error {
-	return trackInvalidVehiclesAndStoppedOutOfBounds(server, ms.BoundingBoxStore, ms.RealtimeStore, ms.RouteAgencyIndex)
+	return trackInvalidVehiclesAndStoppedOutOfBounds(server, ms.BoundingBoxStore, ms.RealtimeStore)
 }
 
 // StaticBundleObserver returns a callback suitable for GtfsService.SetBundleObserver.

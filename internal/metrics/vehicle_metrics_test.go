@@ -95,10 +95,10 @@ func TestTrackInvalidVehiclesUsesAgencyBounds(t *testing.T) {
 	store := testRealtimeStore(t, server)
 	bounds := geo.NewBoundingBoxStore()
 	bounds.Set(server.ServerKey(), geo.BoundingBox{MinLat: -90, MaxLat: 90, MinLon: -180, MaxLon: 180})
-	if err := trackInvalidVehiclesAndStoppedOutOfBounds(server, bounds, store, gtfs.NewRouteAgencyIndex()); err != nil {
+	if err := trackInvalidVehiclesAndStoppedOutOfBounds(server, bounds, store); err != nil {
 		t.Fatal(err)
 	}
-	if err := trackInvalidVehiclesAndStoppedOutOfBounds(missing, bounds, store, gtfs.NewRouteAgencyIndex()); err == nil {
+	if err := trackInvalidVehiclesAndStoppedOutOfBounds(missing, bounds, store); err == nil {
 		t.Fatal("expected missing feed error")
 	}
 }

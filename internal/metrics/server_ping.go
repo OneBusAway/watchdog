@@ -10,12 +10,8 @@ import (
 	"watchdog.onebusaway.org/internal/utils"
 )
 
-// currentTimeEndpoint is the OBA API endpoint pinged by serverPing to verify
-// server availability.
-const currentTimeEndpoint = "/api/where/current-time.json"
-
-// serverPing pings the `/current-time` endpoint of the given OneBusAway server
-// to verify the API is reachable and returning valid data.
+// serverPing pings the `/api/where/current-time.json` endpoint of the given
+// OneBusAway server to verify the API is reachable and returning valid data.
 //
 // The ping is server-wide (the endpoint takes no agency parameter), so the
 // ObaApiStatus gauge is labeled with server identity only. Errors are reported
@@ -36,7 +32,10 @@ func serverPing(client *onebusaway.Client, server models.ObaServer) bool {
 	ctx := context.Background()
 	response, err := client.CurrentTime.Get(ctx)
 
-	serverURL := utils.SanitizeServerURL(server.ObaBaseURL + currentTimeEndpoint)
+	// Label with the bare sanitized base URL — the same value every per-agency
+	// metric and the dashboard's $server_url variable use. Appending the probed
+	// endpoint here would produce a server_url that never joins with the rest.
+	serverURL := utils.SanitizeServerURL(server.ObaBaseURL)
 
 	if err != nil {
 		err := fmt.Errorf("failed to ping OBA server %s: %v", server.ObaBaseURL, err)

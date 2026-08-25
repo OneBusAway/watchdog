@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -115,7 +116,25 @@ func downloadGTFSBundles(ctx context.Context, client *http.Client, servers []mod
 // gtfs package needing to import it.
 func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static, staticStore *StaticStore, boundingBoxStore *geo.BoundingBoxStore, routeAgencyIndex *RouteAgencyIndex, observer StaticBundleObserver, logger *slog.Logger) error {
 	mergedbundle, declaredAgencies := mergeStaticAndDiscoverAgencies(bundles)
-	if len(declaredAgencies) == 0 {
+
+	// Agency-mode: the operator named the agency, so the bundle is stored
+	// exactly once under server.ServerKey() — the same key every agency-mode
+	// reader (checkBundleExpiration, getStopLocationsByIDs, the bbox lookup)
+	// derives from the configured entry. Deriving the key from agency.txt
+	// instead would silently miss whenever the feed's agency_id differs from
+	// the configured one, or is blank — which is legal for a single-agency
+	// feed and would leave nothing stored at all.
+	storageAgencies := declaredAgencies
+	if strings.TrimSpace(server.AgencyID) != "" {
+		agencyName := server.AgencyName
+		for _, declared := range declaredAgencies {
+			if declared.AgencyID == server.AgencyID && declared.AgencyName != "" {
+				agencyName = declared.AgencyName
+				break
+			}
+		}
+		storageAgencies = []declaredAgency{{AgencyID: server.AgencyID, AgencyName: agencyName}}
+	} else if len(declaredAgencies) == 0 {
 		logger.Warn("No agency_id declared in any static feed for server; skipping per-agency storage",
 			"server_name", server.ServerName,
 			"oba_base_url", server.ObaBaseURL)
@@ -132,7 +151,7 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 	// Per-agency storage. The merged StaticData is pointer-shared across all
 	// serverKeys — one allocation regardless of how many agencies the server
 	// serves. Memory cost stays O(bundles) not O(bundles × agencies).
-	for _, declaredAgency := range declaredAgencies {
+	for _, declaredAgency := range storageAgencies {
 		serverKey := models.ServerKey(server.ObaBaseURL, declaredAgency.AgencyID)
 		staticStore.Set(serverKey, mergedbundle)
 		staticStore.SetFetchTime(serverKey, time.Now().UTC())
@@ -190,6 +209,9 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 	}
 	routeAgencyIndex.Set(server.ObaBaseURL, routeMap)
 	for _, decl := range declaredAgencies {
+		routeAgencyIndex.SetAgencyName(server.ObaBaseURL, decl.AgencyID, decl.AgencyName)
+	}
+	for _, decl := range storageAgencies {
 		routeAgencyIndex.SetAgencyName(server.ObaBaseURL, decl.AgencyID, decl.AgencyName)
 	}
 

@@ -43,10 +43,10 @@ func NewRouteAgencyIndex() *RouteAgencyIndex {
 // static-feed parse: the caller hands in a map covering every route declared
 // in every feed attributed to that server.
 //
-// baseURL is the OBA server's base URL; it must match the value the metrics
-// collector uses to look up the server, otherwise attribution fails silently.
-// We store the index under the sanitized base URL to keep keying stable across
-// cosmetic URL differences (trailing slash, scheme case, etc.).
+// baseURL is the OBA server's base URL, stored verbatim — it is NOT sanitized
+// here. Every reader (Get, AgencyNameFor) must therefore pass the same raw
+// oba_base_url the writer used, or attribution fails silently. Callers that
+// hold a sanitized URL must not mix the two forms.
 func (idx *RouteAgencyIndex) Set(baseURL string, routes map[string]string) {
 	if routes == nil {
 		routes = map[string]string{}
