@@ -19,8 +19,10 @@ type vectorDeleter interface {
 // monitors. DeleteSeriesForServer walks this slice to retire them.
 //
 // The slice is populated by tracked() at package-variable initialization, so
-// a vector added to metrics.go is covered automatically — there is no second
-// list to keep in sync.
+// there is no second list of vector names to keep in sync. Coverage is not
+// automatic, though: a new vector declared WITHOUT the tracked(...) wrapper is
+// silently never retired, which would quietly undo the pruning this file
+// exists to provide. TestEveryMetricVectorIsTracked guards that.
 var trackedVectors []vectorDeleter
 
 // tracked registers a metric vector for pruning and returns it unchanged, so
@@ -48,10 +50,25 @@ func DeleteSeriesForServer(serverURL string) int {
 // e.g. oba_api_status) are deliberately left alone: the server is still being
 // monitored. Returns the number of series deleted.
 func DeleteSeriesForAgency(serverURL, agencyID string) int {
-	if agencyID == "" {
-		return 0
-	}
 	return deleteMatching(prometheus.Labels{"server_url": serverURL, "agency_id": agencyID})
+}
+
+// DeleteSeriesForServerScope retires the series a server-scoped entry emits
+// that belong to no agency: the agency_id="" catch-all that carries vehicles
+// the route index could not attribute, plus the server-scoped
+// gtfs_rt_unattributed_vehicles_count, which has no agency_id label at all and
+// so cannot be reached by a match on that label.
+//
+// This is the conversion case: an operator replaces a server-scoped entry with
+// agency-scoped entries on the same oba_base_url. The URL is still configured,
+// so the server never counts as departed, but nothing writes those series any
+// more and they would otherwise sit frozen at their final server-mode values —
+// including gtfs_rt_unattributed_vehicles_count, the gauge operators are told
+// to alert on for static-feed coverage.
+func DeleteSeriesForServerScope(serverURL string) int {
+	deleted := deleteMatching(prometheus.Labels{"server_url": serverURL, "agency_id": ""})
+	deleted += GtfsRtUnattributedVehicles.DeletePartialMatch(prometheus.Labels{"server_url": serverURL})
+	return deleted
 }
 
 func deleteMatching(labels prometheus.Labels) int {

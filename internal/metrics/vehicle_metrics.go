@@ -56,7 +56,10 @@ func agencyIndex(agencies []models.ObaServer) map[string]models.ObaServer {
 // agency index and matched against the live agency set. A vehicle whose trip
 // carries no route_id, whose route is unknown to the index, or whose route
 // belongs to an agency the server is not currently reporting cannot be
-// attributed; the caller counts it in GtfsRtUnattributedVehicles.
+// attributed. Callers must still account for such a vehicle rather than drop
+// it: trackVehicleTelemetry counts it in GtfsRtUnattributedVehicles, and
+// trackInvalidVehiclesAndStoppedOutOfBounds files it under the server-scoped
+// entry's labels.
 func attributeVehicle(server models.ObaServer, agencyByID map[string]models.ObaServer, routeAgencyIndex *gtfs.RouteAgencyIndex, vehicle remoteGtfs.Vehicle) (models.ObaServer, bool) {
 	if agencyByID == nil {
 		return server, true
@@ -88,6 +91,9 @@ func countVehiclePositions(server models.ObaServer, agencies []models.ObaServer,
 	}
 	realtimeData := realtimeStore.Get(server.ServerKey())
 	if realtimeData == nil {
+		// An absent feed reads as zero vehicles, not as a skipped tick; see the
+		// equivalent guard in trackVehicleTelemetry.
+		emitAgencyPositions(server, agencies, nil, utils.SanitizeServerURL(server.ObaBaseURL))
 		err := fmt.Errorf("no GTFS-RT data available for agency %s", server.AgencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
@@ -110,11 +116,23 @@ func countVehiclePositions(server models.ObaServer, agencies []models.ObaServer,
 			perAgency[agency.AgencyID]++
 		}
 	}
+	emitAgencyPositions(server, agencies, perAgency, serverURL)
+
+	return total, nil
+}
+
+// emitAgencyPositions writes RealtimeVehiclePositions for every entry the pass
+// covers. A nil tally emits zeros, which is what an absent feed means; an
+// agency missing from a non-nil tally also reports 0, so a series cannot
+// freeze at a previous tick's count.
+func emitAgencyPositions(server models.ObaServer, agencies []models.ObaServer, perAgency map[string]int, serverURL string) {
+	if len(agencies) == 0 {
+		RealtimeVehiclePositions.WithLabelValues(server.AgencyID, server.AgencyName, server.ServerName, serverURL).Set(float64(perAgency[server.AgencyID]))
+		return
+	}
 	for _, agency := range agencies {
 		RealtimeVehiclePositions.WithLabelValues(agency.AgencyID, agency.AgencyName, agency.ServerName, serverURL).Set(float64(perAgency[agency.AgencyID]))
 	}
-
-	return total, nil
 }
 
 // countActiveVehiclesForAgency calls the OneBusAway VehiclesForAgency API for the given server,
@@ -154,6 +172,15 @@ func countActiveVehiclesForAgency(client *onebusaway.Client, server models.ObaSe
 // a Counter, so a second pass over the same feed within one tick would
 // permanently inflate it, and vehicleLastSeen entries are keyed by the agency
 // that owns the vehicle rather than by whichever agency is being iterated.
+//
+// In server-mode a vehicle whose route does not resolve to a live agency, or
+// which carries no vehicle ID, is counted in GtfsRtUnattributedVehicles. That
+// gauge is NOT a complete reconciliation of the feed against the per-agency
+// series: a vehicle that is attributable and has an ID but carries no usable
+// position is dropped from the per-vehicle series here and counted by
+// trackInvalidVehiclesAndStoppedOutOfBounds under
+// gtfs_rt_invalid_vehicle_coordinates instead. Any query that tries to
+// reconcile the two has to account for all three paths.
 func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer, vehicleLastSeen *VehicleLastSeen, realtimeStore *gtfs.RealtimeStore, routeAgencyIndex *gtfs.RouteAgencyIndex) error {
 	serverURL := utils.SanitizeServerURL(server.ObaBaseURL)
 	serverName := server.ServerName
@@ -162,6 +189,14 @@ func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer,
 
 	realtimeData := realtimeStore.Get(server.ServerKey())
 	if realtimeData == nil {
+		// Zero the gauges before returning. "No feed in the store" is reachable
+		// on the first tick and whenever the fetch failed — and server-mode runs
+		// this pass anyway after a failed fetch — so returning without emitting
+		// would freeze every gauge below at the last good tick's values, which
+		// is the exact failure this function's summary emitter exists to
+		// prevent. An absent feed and an empty feed should look identical here;
+		// only the fetch error distinguishes them, and it goes to Sentry.
+		emitTickSummary(server, agencies, vehicleLastSeen, tickSummary{feedEmpty: true}, serverURL)
 		err := fmt.Errorf("no GTFS-RT data available for agency %s", server.AgencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": serverName},
@@ -172,9 +207,18 @@ func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer,
 	if len(realtimeData.Vehicles) == 0 {
 		// Nothing is reporting right now. Say so immediately rather than
 		// coasting on last-seen entries, which ClearRoutine will not expire
-		// for another hour.
-		setTrackedVehicles(server, agencies, nil, serverURL)
+		// for another hour; nothing in an empty feed can be unattributed
+		// either, so that gauge zeroes with it.
+		emitTickSummary(server, agencies, vehicleLastSeen, tickSummary{feedEmpty: true}, serverURL)
 		return nil
+	}
+
+	// Build each agency's store key once. models.ServerKey re-parses the base
+	// URL, which is wasted work per vehicle on a feed with thousands of them.
+	agencyKeys := make(map[string]string, len(agencies)+1)
+	agencyKeys[server.AgencyID] = server.ServerKey()
+	for _, agency := range agencies {
+		agencyKeys[agency.AgencyID] = models.ServerKey(server.ObaBaseURL, agency.AgencyID)
 	}
 
 	unattributed := 0
@@ -183,6 +227,14 @@ func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer,
 		vehicle := realtimeVehicle.Vehicle
 		feedID := realtimeVehicle.FeedID
 		if vehicle.ID == nil || vehicle.ID.ID == "" {
+			// Every per-vehicle series is keyed by vehicle_id, so an entity
+			// without one cannot be reported anywhere else. In server-mode it
+			// still has to be accounted for, otherwise a malformed vehicle
+			// lands in no metric at all. Agency-mode does not publish this
+			// gauge, so nothing changes there.
+			if agencyByID != nil {
+				unattributed++
+			}
 			continue
 		}
 		vehicleID := vehicle.ID.ID
@@ -192,7 +244,7 @@ func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer,
 			unattributed++
 			continue
 		}
-		agencyKey := models.ServerKey(server.ObaBaseURL, agency.AgencyID)
+		agencyKey := agencyKeys[agency.AgencyID]
 
 		if vehicle.Position == nil || vehicle.Position.Latitude == nil || vehicle.Position.Longitude == nil {
 			continue
@@ -236,25 +288,36 @@ func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer,
 		})
 	}
 
-	if agencyByID != nil {
-		GtfsRtUnattributedVehicles.WithLabelValues(serverName, serverURL).Set(float64(unattributed))
-	}
-
-	setTrackedVehicles(server, agencies, vehicleLastSeen, serverURL)
+	emitTickSummary(server, agencies, vehicleLastSeen, tickSummary{unattributed: unattributed}, serverURL)
 
 	return nil
 }
 
-// setTrackedVehicles emits TrackedVehiclesGauge for every agency the pass
-// covers, reading each agency's own last-seen slot. Agencies with nothing
-// tracked report 0 rather than retaining a stale value.
+// tickSummary carries the per-tick facts emitTickSummary needs beyond the
+// last-seen store. feedEmpty is stated rather than signalled by a nil store,
+// so "the feed reported nothing" cannot be confused with "there is no store".
+type tickSummary struct {
+	unattributed int
+	feedEmpty    bool
+}
+
+// emitTickSummary publishes every gauge trackVehicleTelemetry owes per tick,
+// for both the empty-feed and the populated-feed path. Both paths funnel
+// through here on purpose: each of these gauges must be written on EVERY tick
+// or it freezes at its last value, and a second exit that emitted only some of
+// them is exactly how gtfs_rt_unattributed_vehicles came to sit pinned at a
+// stale count while every other vehicle metric correctly dropped to 0.
 //
-// A nil vehicleLastSeen means "report zero for everyone" — the empty-feed
-// case, where the store's contents are not evidence that anything is still
-// being tracked.
-func setTrackedVehicles(server models.ObaServer, agencies []models.ObaServer, vehicleLastSeen *VehicleLastSeen, serverURL string) {
+// TrackedVehiclesGauge is emitted for every agency the pass covers, reading
+// each agency's own last-seen slot; agencies with nothing tracked report 0
+// rather than retaining a stale value.
+//
+// GtfsRtUnattributedVehicles is server-scoped and meaningless for a
+// single-agency entry, so agency-mode publishes no series for it at all. See
+// the scope-dispatch comment at the top of this file.
+func emitTickSummary(server models.ObaServer, agencies []models.ObaServer, vehicleLastSeen *VehicleLastSeen, summary tickSummary, serverURL string) {
 	count := func(serverKey string) float64 {
-		if vehicleLastSeen == nil {
+		if summary.feedEmpty {
 			return 0
 		}
 		return float64(vehicleLastSeen.Count(serverKey))
@@ -269,6 +332,7 @@ func setTrackedVehicles(server models.ObaServer, agencies []models.ObaServer, ve
 		TrackedVehiclesGauge.WithLabelValues(agency.AgencyID, agency.AgencyName, agency.ServerName, serverURL).
 			Set(count(models.ServerKey(server.ObaBaseURL, agency.AgencyID)))
 	}
+	GtfsRtUnattributedVehicles.WithLabelValues(server.ServerName, serverURL).Set(float64(summary.unattributed))
 }
 
 // VehicleStatusStoppedAtStop represents the GTFS-realtime vehicle stop status
@@ -293,6 +357,15 @@ const VehicleStatusStoppedAtStop = 1
 //
 // Both counts are attributed per agency (see the scope-dispatch comment at the
 // top of this file), and agencies with nothing to report are set to 0.
+//
+// Coordinate validity is judged BEFORE attribution, and vehicles that cannot
+// be attributed are counted under the server-scoped entry (empty agency_id /
+// agency_name in server-mode) rather than dropped. Attributing first would
+// hide the malformed entities these gauges exist to surface — an entity with
+// no TripDescriptor and no position has no route_id to attribute with — and
+// would break the invariant that
+// `sum by (server_url) (gtfs_rt_invalid_vehicle_coordinates)` equals the
+// server-wide count.
 //
 // The bounding box itself is still server-wide: it is computed over the union
 // of every static feed's stops, so a vehicle stopped in agency A's territory is
@@ -324,28 +397,30 @@ func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, agencies
 	for _, realtimeVehicle := range realtimeData.Vehicles {
 		v := realtimeVehicle.Vehicle
 
-		agency, attributed := attributeVehicle(server, agencyByID, routeAgencyIndex, v)
-		if !attributed {
-			continue
+		// Judge the coordinates BEFORE attribution. The most malformed
+		// entities — no TripDescriptor, so no route_id to resolve, and no
+		// position — are exactly the ones attribution cannot place, and
+		// exactly the ones this gauge exists to catch. Attributing first and
+		// skipping the failures would make the worst feed data invisible.
+		lat, lon, coordsValid := vehicleLatLon(v)
+
+		// Vehicles that cannot be placed with an agency fall to the
+		// server-scoped entry, whose agency labels are empty in server-mode.
+		// That keeps sum by (server_url) equal to the server-wide count.
+		bucket := server.AgencyID
+		if agency, attributed := attributeVehicle(server, agencyByID, routeAgencyIndex, v); attributed {
+			bucket = agency.AgencyID
 		}
 
-		if v.Position == nil || v.Position.Latitude == nil || v.Position.Longitude == nil {
-			invalid[agency.AgencyID]++
-			continue
-		}
-
-		lat := float64(*v.Position.Latitude)
-		lon := float64(*v.Position.Longitude)
-
-		if !geo.IsValidLatLon(lat, lon) {
-			invalid[agency.AgencyID]++
+		if !coordsValid {
+			invalid[bucket]++
 			continue
 		}
 
 		// Check bounding box only if vehicle is stopped at the stop
 		if v.CurrentStatus != nil && *v.CurrentStatus == VehicleStatusStoppedAtStop {
 			if !boundingBox.Contains(lat, lon) {
-				outOfBounds[agency.AgencyID]++
+				outOfBounds[bucket]++
 			}
 		}
 	}
@@ -362,6 +437,22 @@ func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, agencies
 	for _, agency := range agencies {
 		emit(agency)
 	}
+	// The server-scoped catch-all is emitted unconditionally, including its
+	// zero, so it can never freeze at a stale count once the bad vehicles
+	// leave the feed.
+	emit(server)
 
 	return nil
+}
+
+// vehicleLatLon returns a vehicle's position and whether it is usable: a
+// vehicle with no position, a half-populated one, or coordinates outside the
+// WGS-84 range reports false.
+func vehicleLatLon(v remoteGtfs.Vehicle) (lat, lon float64, valid bool) {
+	if v.Position == nil || v.Position.Latitude == nil || v.Position.Longitude == nil {
+		return 0, 0, false
+	}
+	lat = float64(*v.Position.Latitude)
+	lon = float64(*v.Position.Longitude)
+	return lat, lon, geo.IsValidLatLon(lat, lon)
 }

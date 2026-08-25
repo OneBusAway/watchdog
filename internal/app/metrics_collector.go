@@ -151,6 +151,12 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 	// same form here so these gauges join with the rest (and so credentials
 	// embedded in the configured URL never reach a label).
 	serverURL := utils.SanitizeServerURL(server.ObaBaseURL)
+	// The feed URLs do not vary by agency, so sanitize them once rather than
+	// re-parsing every feed URL for every agency on the server.
+	sanitizedFeeds := make([]string, len(server.GtfsStaticFeeds))
+	for i, feedURL := range server.GtfsStaticFeeds {
+		sanitizedFeeds[i] = utils.SanitizeServerURL(feedURL)
+	}
 	for _, agency := range scope.StaticAgencies {
 		isLive := liveAgencies[agency.AgencyID]
 		metrics.GtfsStaticAgencyCurrentlyLive.WithLabelValues(
@@ -161,9 +167,9 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 		).Set(boolToFloat(isLive))
 
 		// attribution_status for every configured feed URL on this server.
-		for _, feedURL := range server.GtfsStaticFeeds {
+		for _, feedURL := range sanitizedFeeds {
 			metrics.GtfsStaticFeedAttributionStatus.WithLabelValues(
-				utils.SanitizeServerURL(feedURL),
+				feedURL,
 				agency.AgencyID,
 				agency.AgencyName,
 				server.ServerName,
@@ -176,25 +182,37 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 		}
 	}
 
+	// No live agency means there is nothing agency-scoped to check, nothing to
+	// attribute a vehicle to, and no reason to spend an RT fetch. Returning
+	// here rather than falling through also matters for correctness:
+	// collectVehicleMetrics reads an empty agency slice as agency-mode, which
+	// over a server-scoped entry would attribute every vehicle in the merged
+	// feed to an empty agency_id.
+	if len(liveAgencyEntries) == 0 {
+		return
+	}
+
 	// Fetch the RT feed ONCE for the whole server, stored under the
 	// server-scoped key (oba_base_url + empty agency). The vehicle pass reads
 	// that one key and attributes each vehicle to its owning agency, so there
 	// is no need to register the same feed under every agency's key. If the
 	// fetch fails the pass still runs against whatever the previous tick left
 	// in the store (nothing at all on the first tick); the error is reported to
-	// Sentry once for visibility. When no agency is live we skip the fetch and
-	// the pass entirely.
-	if len(liveAgencyEntries) > 0 {
-		if err := app.GtfsService.FetchAndStoreGTFSRTFeed(server); err != nil {
-			app.Logger.Error("Failed to fetch and store GTFS-RT feed",
-				"server_name", server.ServerName, "error", err)
-			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-				Tags: map[string]string{
-					"server_name": server.ServerName,
-				},
-				Level: sentry.LevelError,
-			})
-		}
+	// Sentry once for visibility. This is a deliberate divergence from
+	// agency-mode, where the same failure is a hard gate (see
+	// CollectMetricsForServer): here the fetch is one step shared by every
+	// agency on the server, so we surface it and keep going rather than drop
+	// the whole server's vehicle pass, accepting that the pass may recompute
+	// from a feed one or more ticks old.
+	if err := app.GtfsService.FetchAndStoreGTFSRTFeed(server); err != nil {
+		app.Logger.Error("Failed to fetch and store GTFS-RT feed",
+			"server_name", server.ServerName, "error", err)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: map[string]string{
+				"server_name": server.ServerName,
+			},
+			Level: sentry.LevelError,
+		})
 	}
 
 	// Per-agency metric loop. Each iteration runs only the agency-scoped
@@ -226,11 +244,7 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 	// on MetricsService.FetchObaAPIMetrics so agency-mode callers don't
 	// have to change). fetchObaAPIMetrics carries a one-line pointer to
 	// this TODO at its definition site.
-	for _, agency := range scope.StaticAgencies {
-		if !liveAgencies[agency.AgencyID] {
-			continue
-		}
-		agencyServer := serverForAgency(server, agency.AgencyID, agency.AgencyName)
+	for _, agencyServer := range liveAgencyEntries {
 		app.collectAgencyChecks(agencyServer)
 	}
 
@@ -238,9 +252,7 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 	// loop above would re-walk the same merged feed once per agency, which
 	// inflates the VehicleReportCount counter by the agency count on every
 	// tick and files every vehicle under every agency's last-seen slot.
-	if len(liveAgencyEntries) > 0 {
-		app.collectVehicleMetrics(server, liveAgencyEntries)
-	}
+	app.collectVehicleMetrics(server, liveAgencyEntries)
 }
 
 // CollectMetricsForServer performs all metric collection and validation logic

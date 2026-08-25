@@ -158,3 +158,29 @@ func TestServerScopeAttributesVehiclesToOwningAgency(t *testing.T) {
 		}
 	}
 }
+
+// TestServerScopeCountsEachVehicleOnceAcrossTicks extends the single-tick
+// regression test to the bug's actual signature. The defect was permanent
+// inflation: a regression that stayed correct on the first tick and duplicated
+// on the second would satisfy the single-tick test while still doubling every
+// rate() an operator computes.
+func TestServerScopeCountsEachVehicleOnceAcrossTicks(t *testing.T) {
+	app, server, scope := newTwoAgencyServerScope(t)
+
+	const ticks = 3
+	for i := 0; i < ticks; i++ {
+		app.collectForScope(context.Background(), server, scope)
+	}
+
+	got := readCounter(t, metrics.VehicleReportCount, map[string]string{
+		"vehicle_id":  "va",
+		"agency_id":   "agency-a",
+		"agency_name": "Agency A",
+		"server_name": "multi",
+		"server_url":  server.ObaBaseURL,
+		"feed":        "0",
+	})
+	if got != ticks {
+		t.Fatalf("expected exactly one increment per tick over %d ticks, got %v", ticks, got)
+	}
+}

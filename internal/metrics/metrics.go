@@ -103,16 +103,20 @@ var (
 		[]string{"agency_id", "agency_name", "server_name", "server_url"},
 	))
 
-	// GtfsRtUnattributedVehicles counts RT vehicles whose TripDescriptor.route_id
-	// could not be resolved to a server-reported agency. This is the operator's
-	// signal that their static feeds are missing routes the RT feed references
-	// — typically because a feed is stale or a new service was added without a
-	// matching static bundle. The gauge is server-scoped because we don't know
-	// the agency until attribution succeeds.
+	// GtfsRtUnattributedVehicles counts RT vehicles the telemetry pass could not
+	// publish a per-agency series for: those whose TripDescriptor.route_id did
+	// not resolve to a server-reported agency, and those carrying no vehicle ID
+	// (every per-vehicle series is keyed by vehicle_id, so an ID-less entity
+	// has nowhere else to land). This is the operator's signal that their
+	// static feeds are missing routes the RT feed references — typically
+	// because a feed is stale or a new service was added without a matching
+	// static bundle — or that the feed itself is malformed. The gauge is
+	// server-scoped because we don't know the agency until attribution
+	// succeeds.
 	GtfsRtUnattributedVehicles = tracked(promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "gtfs_rt_unattributed_vehicles_count",
-			Help: "Number of GTFS-RT vehicles with route_id not resolvable to a server-reported agency_id",
+			Help: "Number of GTFS-RT vehicles not attributable to a server-reported agency_id (unresolvable route_id, or no vehicle ID)",
 		},
 		[]string{"server_name", "server_url"},
 	))

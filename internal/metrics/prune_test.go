@@ -1,10 +1,13 @@
 package metrics
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"strings"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
-	dto "github.com/prometheus/client_model/go"
 )
 
 // TestDeleteSeriesForServerRetiresEverySeries covers the other half of
@@ -66,41 +69,72 @@ func TestDeleteSeriesForAgencyLeavesServerScopedSeries(t *testing.T) {
 	}
 }
 
-// seriesExists reports whether a collector currently exposes a series with
-// exactly the given labels, without creating it as a side effect.
+// seriesExists reports whether a collector currently exposes a series carrying
+// exactly the given labels. Exact rather than subset matching, because these
+// assertions name the whole label set of the series they mean.
 func seriesExists(collector prometheus.Collector, want prometheus.Labels) bool {
-	ch := make(chan prometheus.Metric)
-	go func() {
-		collector.Collect(ch)
-		close(ch)
-	}()
-
-	found := false
-	for m := range ch {
-		if found {
-			continue // drain, so Collect never blocks
-		}
-		pb := &dto.Metric{}
-		if err := m.Write(pb); err != nil {
-			continue
-		}
-		labels := make(prometheus.Labels, len(pb.Label))
-		for _, l := range pb.Label {
-			labels[l.GetName()] = l.GetValue()
-		}
-		if len(labels) != len(want) {
-			continue
-		}
-		match := true
-		for k, v := range want {
-			if labels[k] != v {
-				match = false
-				break
-			}
-		}
-		if match {
-			found = true
+	for _, pb := range seriesMatching(collector, want) {
+		if len(pb.Label) == len(want) {
+			return true
 		}
 	}
-	return found
+	return false
+}
+
+// TestEveryMetricVectorIsTracked guards the one invariant in this package
+// whose violation is silent and would undo pruning entirely: a metric vector
+// declared without the tracked(...) wrapper never gets its series retired, so a
+// departed server keeps advertising it on /metrics forever.
+//
+// It parses metrics.go rather than counting, so the failure message names the
+// offending vector instead of just reporting that a number changed.
+func TestEveryMetricVectorIsTracked(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "metrics.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse metrics.go: %v", err)
+	}
+
+	var untracked []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		spec, ok := n.(*ast.ValueSpec)
+		if !ok {
+			return true
+		}
+		for i, value := range spec.Values {
+			name := "<unnamed>"
+			if i < len(spec.Names) {
+				name = spec.Names[i].Name
+			}
+			if isVectorConstructor(value) {
+				untracked = append(untracked, name)
+			}
+		}
+		return true
+	})
+
+	if len(untracked) > 0 {
+		t.Errorf("these metric vectors are not wrapped in tracked(...), so their series "+
+			"would never be retired when a server leaves the config: %v", untracked)
+	}
+}
+
+// isVectorConstructor reports whether expr is a bare promauto.NewXxxVec(...)
+// call — that is, one that is NOT wrapped in tracked(...). A wrapped
+// declaration presents as tracked(...) at the top level, so its inner call is
+// never inspected here.
+func isVectorConstructor(expr ast.Expr) bool {
+	call, ok := expr.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok || pkg.Name != "promauto" {
+		return false
+	}
+	return strings.HasPrefix(sel.Sel.Name, "New") && strings.HasSuffix(sel.Sel.Name, "Vec")
 }

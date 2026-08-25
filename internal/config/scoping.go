@@ -91,7 +91,7 @@ func MetaFrom(server models.ObaServer) ServerMeta {
 func ResolveScope(server models.ObaServer, staticStore *gtfs.StaticStore, routeAgencyIndex *gtfs.RouteAgencyIndex) Scope {
 	meta := MetaFrom(server)
 
-	if strings.TrimSpace(server.AgencyID) != "" {
+	if !server.IsServerScoped() {
 		return AgencyScope{
 			ServerMeta: meta,
 			AgencyID:   server.AgencyID,
@@ -151,7 +151,7 @@ func ResolveScope(server models.ObaServer, staticStore *gtfs.StaticStore, routeA
 // See also the bbox NOTE + TODO in storeStaticForServer — both touch the
 // same underlying storage-shape question.
 func discoverAgenciesForServer(obaBaseURL string, staticStore *gtfs.StaticStore, routeAgencyIndex *gtfs.RouteAgencyIndex) []AgencyIdentity {
-	prefix := utils.SanitizeServerURL(obaBaseURL) + "|"
+	prefix := models.ServerKeyPrefix(obaBaseURL)
 	// agenciesByID indexes the agencies discovered under this server's
 	// oba_base_url prefix by their agency_id. We use *AgencyIdentity values
 	// (not values) so the two-pass fill below can update AgencyName in

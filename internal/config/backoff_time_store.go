@@ -73,3 +73,26 @@ func (s *BackoffStore) ResetBackoff(serverKey string) {
 
 	delete(s.backoffs, serverKey)
 }
+
+// Prune removes the backoff state of every server key the keep predicate
+// rejects and returns the removed keys. See gtfs.StaticStore.Prune for why
+// this exists.
+//
+// Backoff state has no TTL of its own — ResetBackoff is only reached by a
+// successful ping — so a departed server's entry would otherwise outlive the
+// configuration that created it. Beyond the leak, dropping it means a server
+// that is later re-added starts from a clean slate instead of inheriting a
+// stale NextRetryAt that skips its first collection ticks.
+func (s *BackoffStore) Prune(keep func(serverKey string) bool) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var removed []string
+	for serverKey := range s.backoffs {
+		if !keep(serverKey) {
+			removed = append(removed, serverKey)
+			delete(s.backoffs, serverKey)
+		}
+	}
+	return removed
+}

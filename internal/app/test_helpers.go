@@ -93,6 +93,7 @@ func newTestApplication(t *testing.T) *Application {
 		ConfigService:  config.NewConfigService(logger, client, cfg, backoffStore),
 		GtfsService:    gtfs.NewGtfsService(staticStore, realtimeStore, boundingBoxStore, routeAgencyIndex, logger, client),
 		MetricsService: metrics.NewMetricsService(staticStore, realtimeStore, boundingBoxStore, routeAgencyIndex, vehicleLastSeen, unmatchedStopTracker, logger, client, obaSDKClientCache.For),
+		KnownServers:   NewKnownServerSet(cfg.GetServers()),
 		Version:        "1.0.0",
 		Logger:         logger,
 	}

@@ -6,7 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -125,7 +124,7 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 	// the configured one, or is blank — which is legal for a single-agency
 	// feed and would leave nothing stored at all.
 	storageAgencies := declaredAgencies
-	if strings.TrimSpace(server.AgencyID) != "" {
+	if !server.IsServerScoped() {
 		agencyName := server.AgencyName
 		for _, declared := range declaredAgencies {
 			if declared.AgencyID == server.AgencyID && declared.AgencyName != "" {
@@ -185,7 +184,7 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 			// for the whole server and reads that key. The box is the union
 			// over every configured feed either way, so this is the same
 			// value, not a second computation.
-			if strings.TrimSpace(server.AgencyID) == "" {
+			if server.IsServerScoped() {
 				boundingBoxStore.Set(models.ServerKey(server.ObaBaseURL, ""), bbox)
 			}
 		}

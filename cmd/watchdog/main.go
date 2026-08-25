@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/getsentry/sentry-go"
@@ -15,7 +14,6 @@ import (
 	"watchdog.onebusaway.org/internal/config"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
-	"watchdog.onebusaway.org/internal/utils"
 )
 
 // Application version injected at build time via ldflags.
@@ -166,17 +164,7 @@ func main() {
 	// If a remote URL is specified, refresh the configuration every minute
 	if *configURL != "" {
 		go app.ConfigService.RefreshConfig(ctx, *configURL, configAuthUser, configAuthPass, time.Minute, 20, func(updated []models.ObaServer) {
-			app.MetricsService.ReportTrackedAgencies(updated)
-
-			// Servers that left the config keep their store entries and their
-			// Prometheus series until they are explicitly retired.
-			app.PruneStaleServers(updated)
-
-			// Servers that just joined would otherwise wait for the next 24h
-			// refresh before any static-derived metric appeared for them.
-			if newcomers := serversWithoutBundles(app, updated); len(newcomers) > 0 {
-				go app.GtfsService.DownloadGTFSBundles(ctx, newcomers, 5)
-			}
+			app.OnConfigUpdated(ctx, updated)
 		})
 	}
 
@@ -203,27 +191,4 @@ func main() {
 	report.FlushSentry()
 	logger.Error(err.Error())
 	os.Exit(1)
-}
-
-// serversWithoutBundles returns the entries that have no static bundle stored
-// yet, i.e. servers the config refresh just introduced. Server-scoped entries
-// are keyed per discovered agency, so we look for any key under their
-// oba_base_url rather than for the entry's own key.
-func serversWithoutBundles(application *app.Application, servers []models.ObaServer) []models.ObaServer {
-	var newcomers []models.ObaServer
-	for _, server := range servers {
-		prefix := utils.SanitizeServerURL(server.ObaBaseURL) + "|"
-		found := false
-		application.GtfsService.StaticStore.Range(func(serverKey string, _ *models.StaticData) bool {
-			if strings.HasPrefix(serverKey, prefix) {
-				found = true
-				return false
-			}
-			return true
-		})
-		if !found {
-			newcomers = append(newcomers, server)
-		}
-	}
-	return newcomers
 }

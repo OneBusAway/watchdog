@@ -16,7 +16,7 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
 
 | Metric Name      | Type  | Labels                    | Unit          | Description                                                        |
 | ---------------- | ----- | ------------------------- | ------------- | ------------------------------------------------------------------ |
-| `oba_api_status` | Gauge | `agency_id`, `agency_name`, `server_url` | boolean (0/1) | Status of the OneBusAway API Server (0 = not working, 1 = working). One series per probed endpoint: `server_url` carries the full sanitized endpoint path, so `/api/where/current-time.json` and `/api/where/metrics.json` are reported separately. |
+| `oba_api_status` | Gauge | `server_name`, `server_url` | boolean (0/1) | Status of the OneBusAway API Server (0 = not working, 1 = working). One series per server: the ping targets `/api/where/current-time.json`, which takes no agency parameter, so this metric carries no `agency_id` and `server_url` is the bare sanitized base URL — the same value every per-agency metric uses, so the two join. |
 
 **Interpretation Guide:**  
 - **Normal:** Always `1` (working).  
@@ -33,9 +33,9 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
 
 | Metric Name                                  | Type  | Labels      | Unit | Description                                     |
 | -------------------------------------------- | ----- | ----------- | ---- | ----------------------------------------------- |
-| `gtfs_bundle_days_until_earliest_expiration` | Gauge | `agency_id`, `agency_name`, `server_url` | days | Days until the earliest GTFS bundle expiration. |
-| `gtfs_bundle_days_until_latest_expiration`   | Gauge | `agency_id`, `agency_name`, `server_url` | days | Days until the latest GTFS bundle expiration.   |
-| `gtfs_bundle_last_fetched_timestamp_seconds` | Gauge | `agency_id`, `agency_name`, `server_url` | unix_timestamp | When Watchdog last downloaded the server's GTFS static bundle. |
+| `gtfs_bundle_days_until_earliest_expiration` | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url` | days | Days until the earliest GTFS bundle expiration. |
+| `gtfs_bundle_days_until_latest_expiration`   | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url` | days | Days until the latest GTFS bundle expiration.   |
+| `gtfs_bundle_last_fetched_timestamp_seconds` | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url` | unix_timestamp | When Watchdog last downloaded the server's GTFS static bundle. |
 
 **Interpretation Guide:**
 
@@ -53,7 +53,7 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
 | Metric Name                    | Type  | Labels                              | Unit    | Description                                                              |
 | ------------------------------ | ----- | ----------------------------------- | ------- | ------------------------------------------------------------------------ |
 | `oba_tracked_agencies_count`   | Gauge | (none)                              | count   | Number of agencies currently tracked by Watchdog (validated config entries). |
-| `oba_tracked_agencies_info`    | Gauge | `agency_id`, `agency_name`, `server_url` | presence | One series per tracked agency (always 1), listing the agencies themselves. |
+| `oba_tracked_agencies_info`    | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url` | presence | One series per tracked agency (always 1), listing the agencies themselves. |
 
 **Interpretation Guide:**
 - **Normal:** `oba_tracked_agencies_count` equals the number of servers in the config that passed validation.
@@ -72,15 +72,16 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
 
 | Metric Name                                | Type    | Labels                                 | Unit          | Description                                                   |
 | ------------------------------------------ | ------- | -------------------------------------- | ------------- | ------------------------------------------------------------- |
-| `realtime_vehicle_positions_count_gtfs_rt` | Gauge   | `agency_id`, `agency_name`, `server_url`           | count         | Number of realtime vehicle positions in the GTFS-RT feeds. Each feed is an independent vehicle namespace, so the same vehicle ID in two feeds counts twice (two distinct physical vehicles). |
-| `oba_agency_active_vehicles_count`         | Gauge   | `agency_id`, `agency_name`, `server_url`           | count         | Number of active vehicles reported for the agency by the OBA vehicles-for-agency API. |
-| `vehicle_position_report_interval_seconds` | Gauge   | `vehicle_id`, `feed`, `agency_id`, `agency_name`, `server_url` | seconds       | Time since each vehicle last reported a GTFS-RT position.     |
-| `vehicle_report_total`                     | Counter | `vehicle_id`, `feed`, `agency_id`, `agency_name`, `server_url` | count         | Total number of GTFS-RT updates received per vehicle.         |
-| `gtfs_rt_vehicle_computed_speed`           | Gauge   | `vehicle_id`, `feed`, `agency_id`, `agency_name`, `server_url` | m/s           | Computed vehicle speed from GTFS-RT positions.                |
-| `gtfs_rt_vehicle_speed_discrepancy_ratio`  | Gauge   | `vehicle_id`, `feed`, `agency_id`, `agency_name`, `server_url` | ratio         | Ratio of computed to reported vehicle speed.                  |
-| `gtfs_rt_invalid_vehicle_coordinates`      | Gauge   | `agency_id`, `agency_name`, `server_url`           | count         | Number of GTFS-RT vehicle positions with invalid coordinates. |
-| `gtfs_rt_stopped_out_of_bounds_vehicles`   | Gauge   | `agency_id`, `agency_name`, `server_url`           | count         | Vehicles outside bounding box while stopped.                  |
-| `gtfs_rt_tracked_vehicles_count`           | Gauge   | `agency_id`, `agency_name`, `server_url`           | count         | Number of vehicles currently being tracked.                   |
+| `realtime_vehicle_positions_count_gtfs_rt` | Gauge   | `agency_id`, `agency_name`, `server_name`, `server_url`           | count         | Number of realtime vehicle positions in the GTFS-RT feeds. Each feed is an independent vehicle namespace, so the same vehicle ID in two feeds counts twice (two distinct physical vehicles). |
+| `oba_agency_active_vehicles_count`         | Gauge   | `agency_id`, `agency_name`, `server_name`, `server_url`           | count         | Number of active vehicles reported for the agency by the OBA vehicles-for-agency API. |
+| `vehicle_position_report_interval_seconds` | Gauge   | `vehicle_id`, `feed`, `agency_id`, `agency_name`, `server_name`, `server_url` | seconds       | Time since each vehicle last reported a GTFS-RT position.     |
+| `vehicle_report_total`                     | Counter | `vehicle_id`, `feed`, `agency_id`, `agency_name`, `server_name`, `server_url` | count         | Total number of GTFS-RT updates received per vehicle.         |
+| `gtfs_rt_vehicle_computed_speed`           | Gauge   | `vehicle_id`, `feed`, `agency_id`, `agency_name`, `server_name`, `server_url` | m/s           | Computed vehicle speed from GTFS-RT positions.                |
+| `gtfs_rt_vehicle_speed_discrepancy_ratio`  | Gauge   | `vehicle_id`, `feed`, `agency_id`, `agency_name`, `server_name`, `server_url` | ratio         | Ratio of computed to reported vehicle speed.                  |
+| `gtfs_rt_invalid_vehicle_coordinates`      | Gauge   | `agency_id`, `agency_name`, `server_name`, `server_url`           | count         | Number of GTFS-RT vehicle positions with invalid coordinates. In server-mode, vehicles that cannot be attributed to an agency are counted under an empty `agency_id`, so the series always sum to the server-wide count. |
+| `gtfs_rt_stopped_out_of_bounds_vehicles`   | Gauge   | `agency_id`, `agency_name`, `server_name`, `server_url`           | count         | Vehicles outside bounding box while stopped. Same empty-`agency_id` fallback as the metric above. |
+| `gtfs_rt_tracked_vehicles_count`           | Gauge   | `agency_id`, `agency_name`, `server_name`, `server_url`           | count         | Number of vehicles currently being tracked.                   |
+| `gtfs_rt_unattributed_vehicles_count`      | Gauge   | `server_name`, `server_url`                        | count         | Server-mode only. Vehicles the per-vehicle series could not cover: route unresolvable to a reported agency, or no vehicle ID at all. |
 
 **Interpretation Guide:**
 - **Vehicle counts:** Sudden drop may indicate feed outage.
@@ -99,7 +100,18 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
   ```promql
   max by (vehicle_id) (vehicle_position_report_interval_seconds{agency_id="unitrans"})
   ```
-- **Per-agency attribution in server-mode:** A server-scoped config entry (no `agency_id`) exposes one merged GTFS-RT feed covering several agencies. Watchdog walks that feed once per tick and attributes each vehicle to an agency by resolving its `TripDescriptor.route_id` against the agencies declared in the static feeds, so `agency_id` on every metric in this section means the agency that actually owns the vehicle. Vehicles whose trip carries no `route_id`, whose route is unknown to any static feed, or whose route belongs to an agency the server is not currently reporting are counted in `gtfs_rt_unattributed_vehicles_count` and left out of the per-agency series — a persistently non-zero value there means the static feeds do not cover everything the RT feed references.
+- **Per-agency attribution in server-mode:** A server-scoped config entry (no `agency_id`) exposes one merged GTFS-RT feed covering several agencies. Watchdog walks that feed once per tick and attributes each vehicle to an agency by resolving its `TripDescriptor.route_id` against the agencies declared in the static feeds, so `agency_id` on every metric in this section means the agency that actually owns the vehicle. A vehicle is *unattributable* when its trip carries no `route_id`, its route is unknown to any static feed, or its route belongs to an agency the server is not currently reporting.
+- **Where unattributable vehicles land:** No vehicle disappears entirely, but the metric that accounts for it differs, and the three paths below do not add up to a single tidy identity — do not write an alert that assumes they do:
+  - **Per-vehicle series** (`vehicle_report_total`, `vehicle_position_report_interval_seconds`, `gtfs_rt_vehicle_computed_speed`, `gtfs_rt_vehicle_speed_discrepancy_ratio`) and `gtfs_rt_tracked_vehicles_count` and `realtime_vehicle_positions_count_gtfs_rt` omit them. They are counted instead in `gtfs_rt_unattributed_vehicles_count{server_name, server_url}`, along with vehicles carrying no vehicle ID (those have no `vehicle_id` label to be filed under). A persistently non-zero value there means the static feeds do not cover everything the RT feed references, or the feed is emitting malformed entities.
+  - **Attributable vehicles with no usable position** are a third case, counted in neither of the above: they are omitted from the per-vehicle series and from `gtfs_rt_unattributed_vehicles_count`, and appear only in `gtfs_rt_invalid_vehicle_coordinates`. This is why `sum(realtime_vehicle_positions_count_gtfs_rt) + gtfs_rt_unattributed_vehicles_count` does not equal the feed size in either direction.
+  - **The data-quality gauges** (`gtfs_rt_invalid_vehicle_coordinates`, `gtfs_rt_stopped_out_of_bounds_vehicles`) count them under the server-scoped series — the one with an empty `agency_id`/`agency_name`. Coordinate validity is judged *before* attribution precisely because the most malformed entities (no `TripDescriptor`, no position) are the ones attribution cannot place, and they are the ones these gauges exist to catch. So `sum by (server_url) (gtfs_rt_invalid_vehicle_coordinates)` is the true server-wide count, while the non-empty `agency_id` series give the breakdown:
+  ```promql
+  # server-wide, including unattributable vehicles
+  sum by (server_url) (gtfs_rt_invalid_vehicle_coordinates)
+  # just the vehicles that could not be placed with an agency
+  gtfs_rt_invalid_vehicle_coordinates{agency_id=""}
+  ```
+  In agency-mode (an entry with an `agency_id`) every vehicle belongs to the configured agency by definition, so no empty-`agency_id` series is emitted and `gtfs_rt_unattributed_vehicles_count` is not published at all.
 - **The bounding box is still server-wide:** `gtfs_rt_stopped_out_of_bounds_vehicles` is attributed per agency, but the box it tests against is computed over the union of *every* configured static feed's stops. On a multi-agency server a vehicle stopped in one agency's territory is validated against a rectangle covering all of them, so treat this metric as a loose bound rather than a precise one.
 - **Report intervals:** If significantly longer than agency update policy, data is stale.
 - **Speed discrepancy ratio:** Persistent high ratios may mean faulty onboard GPS.
@@ -112,18 +124,18 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
 
 | Metric Name                          | Type  | Labels                                                   | Unit    | Description                                        |
 | ------------------------------------ | ----- | -------------------------------------------------------- | ------- | -------------------------------------------------- |
-| `oba_realtime_records_count`         | Gauge | `agency_id`, `agency_name`, `server_url`                               | count   | Total realtime records received.                   |
-| `oba_realtime_trips_matched_count`   | Gauge | `agency_id`, `agency_name`, `server_url`                               | count   | Number of matched realtime trips.                  |
-| `oba_realtime_trips_unmatched_count` | Gauge | `agency_id`, `agency_name`, `server_url`                               | count   | Number of unmatched realtime trips.                |
-| `oba_scheduled_trips_count`          | Gauge | `agency_id`, `agency_name`, `server_url`                               | count   | Number of scheduled trips.                         |
-| `oba_stops_matched_count`            | Gauge | `agency_id`, `agency_name`, `server_url`                               | count   | Number of matched stops.                           |
-| `oba_stops_unmatched_count`          | Gauge | `agency_id`, `agency_name`, `server_url`                               | count   | Number of unmatched stops.                         |
-| `oba_realtime_trip_match_ratio`      | Gauge | `agency_id`, `agency_name`, `server_url`                               | ratio   | Ratio of matched realtime trips to total trips.    |
-| `oba_stop_match_ratio`               | Gauge | `agency_id`, `agency_name`, `server_url`                               | ratio   | Ratio of matched stops to total stops.             |
-| `oba_time_since_last_update_seconds` | Gauge | `agency_id`, `agency_name`, `server_url`                               | seconds | Time since last realtime update.                   |
-| `oba_unmatched_stop_info`            | Gauge | `agency_id`, `agency_name`, `server_url`, `stop_id`, `stop_name`, `lat`, `lon` | N/A     | Presence marker (always 1) for unmatched stops from static GTFS, with location as labels. |
-| `oba_unmatched_stop_unresolved`      | Gauge | `agency_id`, `agency_name`, `server_url`                               | count   | Number of stop IDs OBA reported as unmatched that Watchdog could not resolve against its local GTFS bundle. |
-| `oba_unmatched_stop_cluster_count`   | Gauge | `agency_id`, `agency_name`, `server_url`, `station_id`, `cluster_id`, `cluster_lat`, `cluster_lon` | count   | Number of unmatched stops grouped by station and S2 spatial cluster.      |
+| `oba_realtime_records_count`         | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url`                               | count   | Total realtime records received.                   |
+| `oba_realtime_trips_matched_count`   | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url`                               | count   | Number of matched realtime trips.                  |
+| `oba_realtime_trips_unmatched_count` | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url`                               | count   | Number of unmatched realtime trips.                |
+| `oba_scheduled_trips_count`          | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url`                               | count   | Number of scheduled trips.                         |
+| `oba_stops_matched_count`            | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url`                               | count   | Number of matched stops.                           |
+| `oba_stops_unmatched_count`          | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url`                               | count   | Number of unmatched stops.                         |
+| `oba_realtime_trip_match_ratio`      | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url`                               | ratio   | Ratio of matched realtime trips to total trips.    |
+| `oba_stop_match_ratio`               | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url`                               | ratio   | Ratio of matched stops to total stops.             |
+| `oba_time_since_last_update_seconds` | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url`                               | seconds | Time since last realtime update.                   |
+| `oba_unmatched_stop_info`            | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url`, `stop_id`, `stop_name`, `lat`, `lon` | N/A     | Presence marker (always 1) for unmatched stops from static GTFS, with location as labels. |
+| `oba_unmatched_stop_unresolved`      | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url`                               | count   | Number of stop IDs OBA reported as unmatched that Watchdog could not resolve against its local GTFS bundle. |
+| `oba_unmatched_stop_cluster_count`   | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url`, `station_id`, `cluster_id`, `cluster_lat`, `cluster_lon` | count   | Number of unmatched stops grouped by station and S2 spatial cluster.      |
 
 **Interpretation Guide:**
 - **Unmatched stop clusters:** Identify systemic coverage gaps. Each series is one `(station_id, cluster_id)` pair:

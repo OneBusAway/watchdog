@@ -359,3 +359,46 @@ func TestRefreshConfig(t *testing.T) {
 		t.Errorf("Config not updated with refreshed server data. Original: %+v, Updated: %+v", originalConfig, updatedServers)
 	}
 }
+
+// TestRefreshConfigKeepsPreviousConfigWhenResponseIsEmpty pins the guard that
+// keeps a momentarily-empty config endpoint from taking the whole fleet down.
+// decodeServers drops invalid entries rather than failing the document, so an
+// empty slice here is indistinguishable from "every server was removed";
+// applying it would stop collection for every server, and the refresh callback
+// downstream would prune every store and retire every metric series.
+func TestRefreshConfigKeepsPreviousConfigWhenResponseIsEmpty(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// #nosec G104
+		w.Write([]byte(`[]`))
+	}))
+	defer ts.Close()
+
+	existing := models.ObaServer{ServerName: "existing", AgencyID: "agency-a", ObaBaseURL: "https://existing.example.com"}
+	cfg := NewConfig(4000, "testing", []models.ObaServer{existing})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	callbackFired := make(chan struct{}, 1)
+	go refreshConfig(ctx, ts.Client(), ts.URL, "", "", cfg,
+		slog.New(slog.NewTextHandler(io.Discard, nil)), 10*time.Millisecond, 1,
+		func(updated []models.ObaServer) {
+			select {
+			case callbackFired <- struct{}{}:
+			default:
+			}
+		})
+
+	time.Sleep(60 * time.Millisecond)
+	cancel()
+
+	if got := len(cfg.GetServers()); got != 1 {
+		t.Fatalf("expected the previous configuration to survive an empty response, got %d servers", got)
+	}
+	select {
+	case <-callbackFired:
+		t.Fatal("the refresh callback must not fire for an empty configuration; it prunes every store")
+	default:
+	}
+}

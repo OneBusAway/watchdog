@@ -102,20 +102,50 @@ func setupObaServer(t *testing.T, response string, statusCode int) *httptest.Ser
 	}))
 }
 
-// countSeries returns the number of series a collector currently exposes.
-// Unlike getMetricValue it never creates a series as a side effect, so it is
-// safe for asserting that a code path emitted nothing.
-func countSeries(collector prometheus.Collector) int {
+// seriesMatching returns every series a collector currently exposes whose
+// labels include all of want (nil matches everything). It collects rather than
+// looking a series up by label, so unlike getMetricValue and getCounterValue it
+// never creates a series as a side effect — which is what makes it safe for
+// asserting that a code path emitted nothing. Reading a gauge to check it is
+// absent materializes it at 0 and passes vacuously; that trap has bitten this
+// package before, so prefer this helper for any absence or count assertion.
+//
+// Matching is by subset, not by exact label set: asking for {"server_url": u}
+// finds every series on that server regardless of its other labels.
+func seriesMatching(collector prometheus.Collector, want map[string]string) []*dto.Metric {
 	ch := make(chan prometheus.Metric)
 	go func() {
 		collector.Collect(ch)
 		close(ch)
 	}()
-	count := 0
-	for range ch {
-		count++
+
+	var matched []*dto.Metric
+	for m := range ch {
+		pb := &dto.Metric{}
+		if err := m.Write(pb); err != nil {
+			continue
+		}
+		labels := make(map[string]string, len(pb.Label))
+		for _, l := range pb.Label {
+			labels[l.GetName()] = l.GetValue()
+		}
+		hit := true
+		for name, value := range want {
+			if labels[name] != value {
+				hit = false
+				break
+			}
+		}
+		if hit {
+			matched = append(matched, pb)
+		}
 	}
-	return count
+	return matched
+}
+
+// countSeries returns the number of series a collector currently exposes.
+func countSeries(collector prometheus.Collector) int {
+	return len(seriesMatching(collector, nil))
 }
 
 // getCounterValue retrieves the current float64 value of a Prometheus
