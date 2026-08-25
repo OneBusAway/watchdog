@@ -51,6 +51,7 @@ func TestCountVehiclePositionsKeepsDistinctServersWithSameAgencyIDDisjoint(t *te
 	metricA, err := getMetricValue(RealtimeVehiclePositions, map[string]string{
 		"agency_id":   serverA.AgencyID,
 		"agency_name": serverA.AgencyName,
+		"server_name": serverA.ServerName,
 		"server_url":  "https://a.example.com",
 	})
 	if err != nil {
@@ -59,6 +60,7 @@ func TestCountVehiclePositionsKeepsDistinctServersWithSameAgencyIDDisjoint(t *te
 	metricB, err := getMetricValue(RealtimeVehiclePositions, map[string]string{
 		"agency_id":   serverB.AgencyID,
 		"agency_name": serverB.AgencyName,
+		"server_name": serverB.ServerName,
 		"server_url":  "https://b.example.com",
 	})
 	if err != nil {
@@ -93,10 +95,10 @@ func TestTrackInvalidVehiclesUsesAgencyBounds(t *testing.T) {
 	store := testRealtimeStore(t, server)
 	bounds := geo.NewBoundingBoxStore()
 	bounds.Set(server.ServerKey(), geo.BoundingBox{MinLat: -90, MaxLat: 90, MinLon: -180, MaxLon: 180})
-	if err := trackInvalidVehiclesAndStoppedOutOfBounds(server, bounds, store); err != nil {
+	if err := trackInvalidVehiclesAndStoppedOutOfBounds(server, bounds, store, gtfs.NewRouteAgencyIndex()); err != nil {
 		t.Fatal(err)
 	}
-	if err := trackInvalidVehiclesAndStoppedOutOfBounds(missing, bounds, store); err == nil {
+	if err := trackInvalidVehiclesAndStoppedOutOfBounds(missing, bounds, store, gtfs.NewRouteAgencyIndex()); err == nil {
 		t.Fatal("expected missing feed error")
 	}
 }
@@ -124,7 +126,7 @@ func TestTrackVehicleTelemetrySeparatesSameIDAcrossFeeds(t *testing.T) {
 	store.Set(server.ServerKey(), data)
 
 	lastSeen := NewVehicleLastSeen()
-	if err := trackVehicleTelemetry(server, lastSeen, store); err != nil {
+	if err := trackVehicleTelemetry(server, lastSeen, store, gtfs.NewRouteAgencyIndex()); err != nil {
 		t.Fatalf("track: %v", err)
 	}
 

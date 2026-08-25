@@ -19,20 +19,11 @@ import (
 //
 // It retrieves the GTFS-RT data for the server and reports the vehicle count to
 // the RealtimeVehiclePositions Prometheus metric.
-//
-// Parameters:
-//   - server: the ObaServer whose real-time vehicle positions are being counted.
-//   - realtimeStore: a pointer to the RealtimeStore holding GTFS-RT data.
-//
-// Returns:
-//   - int: the number of vehicle positions found in the GTFS-RT feed.
-//   - error: if the realtimeStore is nil or the data is missing.
-
 func countVehiclePositions(server models.ObaServer, realtimeStore *gtfs.RealtimeStore) (int, error) {
 	if realtimeStore == nil {
 		err := fmt.Errorf("realtimeStore is nil for agency %s", server.AgencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("agency_id", server.AgencyID),
+			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
 		})
 		return 0, err
 	}
@@ -40,13 +31,13 @@ func countVehiclePositions(server models.ObaServer, realtimeStore *gtfs.Realtime
 	if realtimeData == nil {
 		err := fmt.Errorf("no GTFS-RT data available for agency %s", server.AgencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("agency_id", server.AgencyID),
+			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
 		})
 		return 0, err
 	}
 	count := len(realtimeData.Vehicles)
 
-	RealtimeVehiclePositions.WithLabelValues(server.AgencyID, server.AgencyName, utils.SanitizeServerURL(server.ObaBaseURL)).Set(float64(count))
+	RealtimeVehiclePositions.WithLabelValues(server.AgencyID, server.AgencyName, server.ServerName, utils.SanitizeServerURL(server.ObaBaseURL)).Set(float64(count))
 
 	return count, nil
 }
@@ -55,16 +46,6 @@ func countVehiclePositions(server models.ObaServer, realtimeStore *gtfs.Realtime
 // retrieves the list of vehicles, and reports the count to the AgencyActiveVehiclesGauge Prometheus metric.
 //
 // This function fetches live vehicle data from the OBA API using the agency ID.
-//
-// Parameters:
-//   - client: the shared OneBusAway SDK client for the server, injected by the
-//     caller so the client's connection pool and instrumentation are reused
-//     across collection ticks.
-//   - server: the ObaServer containing API credentials and agency information.
-//
-// Returns:
-//   - int: the number of vehicles returned by the API.
-//   - error: if the API call fails or returns an invalid response.
 func countActiveVehiclesForAgency(client *onebusaway.Client, server models.ObaServer) (int, error) {
 	ctx := context.Background()
 
@@ -73,7 +54,8 @@ func countActiveVehiclesForAgency(client *onebusaway.Client, server models.ObaSe
 	if err != nil {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
-				"agency_id": server.AgencyID,
+				"agency_id":   server.AgencyID,
+				"server_name": server.ServerName,
 			},
 		})
 		return 0, err
@@ -83,51 +65,48 @@ func countActiveVehiclesForAgency(client *onebusaway.Client, server models.ObaSe
 		return 0, nil
 	}
 
-	AgencyActiveVehiclesGauge.WithLabelValues(server.AgencyID, server.AgencyName, utils.SanitizeServerURL(server.ObaBaseURL)).Set(float64(len(response.Data.List)))
+	AgencyActiveVehiclesGauge.WithLabelValues(server.AgencyID, server.AgencyName, server.ServerName, utils.SanitizeServerURL(server.ObaBaseURL)).Set(float64(len(response.Data.List)))
 
 	return len(response.Data.List), nil
 }
 
 // trackVehicleTelemetry collects and reports various telemetry metrics for vehicles in a GTFS-RT feed.
 //
-// This function performs the following tasks:
-//  1. Fetches and parses the GTFS-RT vehicle positions feed for the given OBA server.
-//  2. For each valid vehicle entry:
-//     - Tracks the number of GTFS-RT updates received (`vehicle_report_total`).
-//     - Measures the interval since the last report (`vehicle_position_report_interval_seconds`).
-//     - Computes the vehicle speed based on current and previous coordinates and timestamps.
-//     - Reports the computed speed to Prometheus (`gtfs_rt_vehicle_computed_speed`).
-//     - Compares the computed speed with the reported speed (if available) and reports the relative discrepancy
-//     (`gtfs_rt_vehicle_speed_discrepancy_ratio`).
+// The dispatch between agency-mode and server-mode is controlled by whether
+// routeAgencyIndex is nil: nil means agency-mode (one agency per entry, the
+// function trusts server.AgencyID for every vehicle), non-nil means
+// server-mode (route_id → agency_id lookup).
 //
-// All metrics are labeled by `vehicle_id` and `agency_id` to support detailed monitoring and alerting.
+// In agency-mode this runs once over every vehicle in the merged realtime
+// store, attributing each vehicle to the configured agency (server.AgencyID)
+// because the feed is per-agency.
 //
-// The function maintains a local in-memory store (`vehicleLastSeen`) to cache the last known location and timestamp
-// for each vehicle per server.
-//
-// Parameters:
-//   - server: the `ObaServer` instance representing the target OBA server.
-//
-// Returns:
-//   - An error if the feed cannot be fetched or parsed, otherwise nil.
-func trackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLastSeen, realtimeStore *gtfs.RealtimeStore) error {
+// In server-mode the realtime feed covers multiple agencies; we must attribute
+// each vehicle by looking up its TripDescriptor.route_id in the
+// RouteAgencyIndex. Vehicles whose route_id is empty or unknown are skipped
+// and counted in GtfsRtUnattributedVehicles so operators can detect static
+// feeds that don't cover every RT route.
+func trackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLastSeen, realtimeStore *gtfs.RealtimeStore, routeAgencyIndex *gtfs.RouteAgencyIndex) error {
 	agencyID := server.AgencyID
 	serverURL := utils.SanitizeServerURL(server.ObaBaseURL)
+	serverName := server.ServerName
 	now := time.Now().UTC()
 
 	realtimeData := realtimeStore.Get(server.ServerKey())
 	if realtimeData == nil {
 		err := fmt.Errorf("no GTFS-RT data available for agency %s", agencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("agency_id", agencyID),
+			Tags: map[string]string{"agency_id": agencyID, "server_name": serverName},
 		})
 		return err
 	}
 
 	if len(realtimeData.Vehicles) == 0 {
-		TrackedVehiclesGauge.WithLabelValues(agencyID, server.AgencyName, serverURL).Set(0)
+		TrackedVehiclesGauge.WithLabelValues(agencyID, server.AgencyName, serverName, serverURL).Set(0)
 		return nil
 	}
+
+	unattributed := 0
 
 	for _, realtimeVehicle := range realtimeData.Vehicles {
 		vehicle := realtimeVehicle.Vehicle
@@ -136,6 +115,21 @@ func trackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLast
 			continue
 		}
 		vehicleID := vehicle.ID.ID
+
+		// Attribute the vehicle to an agency. In agency-mode the index is not
+		// consulted; we trust server.AgencyID. In server-mode we look up
+		// route_id → agency_id and skip vehicles whose route we cannot
+		// attribute.
+		attributedAgencyID := agencyID
+		if routeAgencyIndex != nil && vehicle.Trip != nil {
+			routeID := vehicle.Trip.ID.RouteID
+			if id, ok := routeAgencyIndex.Get(server.ObaBaseURL, routeID); ok && id != "" {
+				attributedAgencyID = id
+			} else if routeID != "" {
+				unattributed++
+				continue
+			}
+		}
 
 		if vehicle.Position == nil || vehicle.Position.Latitude == nil || vehicle.Position.Longitude == nil {
 			continue
@@ -149,8 +143,8 @@ func trackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLast
 		}
 
 		interval := now.Sub(seenAt).Seconds()
-		VehicleReportCount.WithLabelValues(vehicleID, agencyID, server.AgencyName, serverURL, feedID).Inc()
-		VehicleReportInterval.WithLabelValues(vehicleID, agencyID, server.AgencyName, serverURL, feedID).Set(interval)
+		VehicleReportCount.WithLabelValues(vehicleID, attributedAgencyID, server.AgencyName, serverName, serverURL, feedID).Inc()
+		VehicleReportInterval.WithLabelValues(vehicleID, attributedAgencyID, server.AgencyName, serverName, serverURL, feedID).Set(interval)
 
 		// Compute speed
 		prev, ok := vehicleLastSeen.Get(server.ServerKey(), feedID, vehicleID)
@@ -160,20 +154,18 @@ func trackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLast
 				distance := geo.HaversineDistance(prev.Lat, prev.Lon, lat, lon)
 				computedSpeed := distance / timeDelta
 
-				VehicleSpeedGauge.WithLabelValues(vehicleID, agencyID, server.AgencyName, serverURL, feedID).Set(computedSpeed)
+				VehicleSpeedGauge.WithLabelValues(vehicleID, attributedAgencyID, server.AgencyName, serverName, serverURL, feedID).Set(computedSpeed)
 
-				// Compare reported speed with computed speed
 				if vehicle.Position.Speed != nil {
 					reportedSpeed := float64(*vehicle.Position.Speed)
 					if reportedSpeed > 0 {
 						diffRatio := math.Abs(computedSpeed-reportedSpeed) / reportedSpeed
-						VehicleSpeedDiscrepancyRatioGauge.WithLabelValues(vehicleID, agencyID, server.AgencyName, serverURL, feedID).Set(diffRatio)
+						VehicleSpeedDiscrepancyRatioGauge.WithLabelValues(vehicleID, attributedAgencyID, server.AgencyName, serverName, serverURL, feedID).Set(diffRatio)
 					}
 				}
 			}
 		}
 
-		// Save last seen data
 		vehicleLastSeen.Set(server.ServerKey(), feedID, vehicleID, LastSeen{
 			Time: seenAt,
 			Lat:  lat,
@@ -181,7 +173,11 @@ func trackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLast
 		})
 	}
 
-	TrackedVehiclesGauge.WithLabelValues(agencyID, server.AgencyName, serverURL).Set(float64(vehicleLastSeen.Count(server.ServerKey())))
+	if routeAgencyIndex != nil {
+		GtfsRtUnattributedVehicles.WithLabelValues(serverName, serverURL).Set(float64(unattributed))
+	}
+
+	TrackedVehiclesGauge.WithLabelValues(agencyID, server.AgencyName, serverName, serverURL).Set(float64(vehicleLastSeen.Count(server.ServerKey())))
 
 	return nil
 }
@@ -191,7 +187,7 @@ func trackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLast
 //
 // Possible values for VehicleStopStatus are:
 //   - 0 (INCOMING_AT): Vehicle is about to arrive at the stop
-//   - 1 (STOPPED_AT): Vehicle is standing at the stop (this constant)
+//   - 1 (STOPPED_AT): Vehicle is standing at a stop (this constant)
 //   - 2 (IN_TRANSIT_TO): Vehicle has departed and is in transit to the next stop
 //
 // These values correspond to the VehicleStopStatus enum defined in the GTFS-realtime specification.
@@ -200,27 +196,16 @@ func trackVehicleTelemetry(server models.ObaServer, vehicleLastSeen *VehicleLast
 // https://gtfs.org/documentation/realtime/reference/#enum-vehiclestopstatus
 const VehicleStatusStoppedAtStop = 1
 
-// trackInvalidVehiclesAndStoppedOutOfBounds collects and reports metrics related to vehicle position validity.
-//
-// It performs two checks on each vehicle in the GTFS-RT feed:
-//  1. Invalid coordinate check: counts vehicles with missing or out-of-range latitude/longitude.
-//  2. Bounding box check: counts vehicles that are *stopped at a stop* but located outside the bounding box.
-//
-// Bounding box validation is only applied when the vehicle status is STOPPED_AT (i.e., it is currently at a stop).
-// This is because the bounding box is derived from the static GTFS stops, not the full operating area of the vehicle.
-// A vehicle moving between stops may legitimately report positions outside this bounding box.
-// However, if a vehicle reports being *at a stop* that lies outside the bounding box built from known static stops,
-// it indicates a potential data issue (e.g., an unknown or misplaced stop).
-//
-// The results are exposed via Prometheus metrics:
-// - InvalidVehicleCoordinatesGauge: for invalid or missing coordinates
-// - StoppedOutOfBoundsVehiclesGauge: for vehicles stopped outside the bounding box
-func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, boundingBoxStore *geo.BoundingBoxStore, realtimeStore *gtfs.RealtimeStore) error {
+// trackInvalidVehiclesAndStoppedOutOfBounds collects and reports metrics related
+// to vehicle position validity. Like trackVehicleTelemetry, it attributes
+// vehicles to agencies via the RouteAgencyIndex in server-mode and skips
+// vehicles whose route_id is unattributable.
+func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, boundingBoxStore *geo.BoundingBoxStore, realtimeStore *gtfs.RealtimeStore, routeAgencyIndex *gtfs.RouteAgencyIndex) error {
 	realtimeData := realtimeStore.Get(server.ServerKey())
 	if realtimeData == nil {
 		err := fmt.Errorf("no GTFS-RT data available for agency %s", server.AgencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("agency_id", server.AgencyID),
+			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
 		})
 		return err
 	}
@@ -229,6 +214,9 @@ func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, bounding
 	if !ok {
 		return fmt.Errorf("no bounding box found for server key %s", server.ServerKey())
 	}
+
+	serverURL := utils.SanitizeServerURL(server.ObaBaseURL)
+	serverName := server.ServerName
 
 	invalidCount := 0
 	outOfBoundsCount := 0
@@ -256,9 +244,8 @@ func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, bounding
 		}
 	}
 
-	serverURL := utils.SanitizeServerURL(server.ObaBaseURL)
-	InvalidVehicleCoordinatesGauge.WithLabelValues(server.AgencyID, server.AgencyName, serverURL).Set(float64(invalidCount))
-	StoppedOutOfBoundsVehiclesGauge.WithLabelValues(server.AgencyID, server.AgencyName, serverURL).Set(float64(outOfBoundsCount))
+	InvalidVehicleCoordinatesGauge.WithLabelValues(server.AgencyID, server.AgencyName, serverName, serverURL).Set(float64(invalidCount))
+	StoppedOutOfBoundsVehiclesGauge.WithLabelValues(server.AgencyID, server.AgencyName, serverName, serverURL).Set(float64(outOfBoundsCount))
 
 	return nil
 }
