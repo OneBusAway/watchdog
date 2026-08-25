@@ -21,6 +21,7 @@ func newTestApplication(t *testing.T) *Application {
 
 	obaServer := models.NewObaServer(
 		"Test Server",
+		"Test Agency",
 		"test-agency",
 		"https://test.example.com",
 		"test-key",
@@ -82,14 +83,15 @@ func newTestApplication(t *testing.T) *Application {
 	realtimeStore := gtfs.NewRealtimeStore()
 	realtimeStore.Set(obaServer.ServerKey(), realtimeData)
 
+	routeAgencyIndex := gtfs.NewRouteAgencyIndex()
 	vehicleLastSeen := metrics.NewVehicleLastSeen()
 	unmatchedStopTracker := metrics.NewUnmatchedStopTracker()
 	backoffStore := config.NewBackoffStore()
 	obaSDKClientCache := NewObaSDKClientCache(client)
 	return &Application{
 		ConfigService:  config.NewConfigService(logger, client, cfg, backoffStore),
-		GtfsService:    gtfs.NewGtfsService(staticStore, realtimeStore, boundingBoxStore, logger, client),
-		MetricsService: metrics.NewMetricsService(staticStore, realtimeStore, boundingBoxStore, vehicleLastSeen, unmatchedStopTracker, logger, client, obaSDKClientCache.For),
+		GtfsService:    gtfs.NewGtfsService(staticStore, realtimeStore, boundingBoxStore, routeAgencyIndex, logger, client),
+		MetricsService: metrics.NewMetricsService(staticStore, realtimeStore, boundingBoxStore, routeAgencyIndex, vehicleLastSeen, unmatchedStopTracker, logger, client, obaSDKClientCache.For),
 		Version:        "1.0.0",
 		Logger:         logger,
 	}

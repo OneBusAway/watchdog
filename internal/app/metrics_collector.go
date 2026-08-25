@@ -2,37 +2,46 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/getsentry/sentry-go"
+	"watchdog.onebusaway.org/internal/config"
+	"watchdog.onebusaway.org/internal/metrics"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
 )
 
-// StartMetricsCollection begins a background goroutine that continuously collects metrics
-// from all configured OBA (OneBusAway) servers at a regular interval.
+// StartMetricsCollection begins a background goroutine that continuously
+// collects metrics from all configured OBA servers at a regular interval.
 //
-// It uses a time.Ticker based on the `FetchInterval` configured in the app's config that comes from "fetch-interval" command line flags.
-// The ticker triggers every `FetchInterval` seconds, allowing the application to periodically
-// collect and update metrics related to OBA servers listed in the config.
+// It uses a time.Ticker based on the FetchInterval from the configuration. The
+// ticker triggers every FetchInterval seconds, allowing the application to
+// periodically collect and update metrics related to OBA servers listed in
+// the config.
 //
-// The collection routine gracefully shuts down when the provided context is canceled,
-// allowing the application to cleanly exit or restart.
+// Server-scope behavior (added with the redesign):
+//   - For each configured entry, ResolveScope returns either an AgencyScope
+//     (one agency) or a ServerScope (potentially many agencies). The collector
+//     fans out into the per-agency pipeline once per live agency.
+//   - In server-mode, /api/where/metrics.json is probed every tick to discover
+//     which configured agencies are currently served. Static-derived metrics
+//     for unconfigured agencies are skipped (status-gauge flips to 0).
 //
-// This function is the central entry point for periodic monitoring of external systems
-// like GTFS static bundles, real-time GTFS-RT feeds, and OBA APIs.
+// The collection routine gracefully shuts down when the provided context is
+// canceled, allowing the application to cleanly exit or restart.
 //
 // Purpose:
-//   - Ensure consistent collection of operational, transit, and health-related metrics.
-//   - Drive metrics exposed on Prometheus endpoints, used in dashboards and alerts.
-//   - Monitor reliability and correctness of OBA and GTFS-RT server integrations.
-//
-// Behavior:
-//   - If no servers are configured, the function silently waits and retries on next tick.
-//   - On shutdown (context canceled), it logs the stop and exits the goroutine cleanly.
+//   - Ensure consistent collection of operational, transit, and health-related
+//     metrics.
+//   - Drive metrics exposed on Prometheus endpoints, used in dashboards and
+//     alerts.
+//   - Monitor reliability and correctness of OBA and GTFS-RT server
+//     integrations.
 func (app *Application) StartMetricsCollection(ctx context.Context) {
-
 	ticker := time.NewTicker(time.Duration(app.ConfigService.Config.FetchInterval) * time.Second)
 	go func() {
 		defer ticker.Stop()
@@ -42,74 +51,199 @@ func (app *Application) StartMetricsCollection(ctx context.Context) {
 				app.Logger.Info("Stopping metrics collection routine")
 				return
 			case <-ticker.C:
-
-				servers := app.ConfigService.Config.GetServers()
-
-				for _, server := range servers {
-					app.CollectMetricsForServer(server)
+				for _, server := range app.ConfigService.Config.GetServers() {
+					scope := config.ResolveScope(server, app.GtfsService.StaticStore, app.GtfsService.RouteAgencyIndex)
+					app.collectForScope(ctx, server, scope)
 				}
 			}
 		}
 	}()
 }
 
-// CollectMetricsForServer performs all metric collection and validation logic for a single OBA server.
+// collectForScope dispatches a single configured ObaServer entry through the
+// per-scope collection pipeline.
 //
-// It sequentially runs a series of probes and validations against the given server:
-//  1. Pings the server to track basic availability.
-//  2. Checks GTFS static bundle expiration.
-//  3. Collects metrics from the OBA API endpoints, including the live
-//     active vehicle count from the VehiclesForAgency API.
-//  4. Fetches and stores GTFS-RT (realtime) vehicle positions feed.
-//  5. Counts vehicle positions from the GTFS-RT feed.
-//  6. Tracks frequency of vehicle telemetry reporting over time.
-//  7. Flags invalid vehicles and vehicles stopped outside bounds.
+//   - AgencyScope: delegates to CollectMetricsForServer (today's behavior).
+//   - ServerScope: probes /metrics.json, then runs the per-agency pipeline
+//     once for every agency that has a static bundle AND is reported by
+//     OBA. Static-only agencies (configured but not currently live) get
+//     gtfs_static_agency_currently_live = 0; no per-agency RT pipeline runs.
+func (app *Application) collectForScope(ctx context.Context, server models.ObaServer, scope config.Scope) {
+	switch s := scope.(type) {
+	case config.AgencyScope:
+		app.CollectMetricsForServer(server)
+	case config.ServerScope:
+		app.collectForServerScope(ctx, server, s)
+	default:
+		app.Logger.Error("Unknown scope type", "server_name", server.ServerName)
+	}
+}
+
+// collectForServerScope runs the per-agency pipeline for every agency declared
+// in the static store under this server's oba_base_url, gated on whether OBA
+// currently reports the agency as live.
 //
-// Errors in each step are logged and reported to Sentry with contextual tags (e.g., server name, ID),
-// but the process continues unless the GTFS-RT feed fails — in which case the function returns early,
-// as later checks depend on the real-time data.
+// The RT feed is fetched exactly once per tick — before the agency loop —
+// and the same parsed *RealtimeData is registered under every agency's
+// serverKey via FetchAndStoreGTFSRTFeedOnce. The per-agency loop then runs
+// only the post-RT metric functions (collectVehicleMetrics) inside the
+// shared CollectMetricsForServer path. For an N-agency server this is
+// O(1) RT fetches instead of O(N).
+func (app *Application) collectForServerScope(ctx context.Context, server models.ObaServer, scope config.ServerScope) {
+	if len(scope.StaticAgencies) == 0 {
+		app.Logger.Info("Server-scope entry has no static agencies yet; skipping tick", "server_name", server.ServerName)
+		return
+	}
+
+	// Server-ping once per server (the /current-time.json endpoint takes no
+	// agency parameter; per the metrics relabeling in this redesign, the
+	// ObaApiStatus gauge is server-scoped, not agency-scoped).
+	ok := app.MetricsService.ServerPing(server)
+	if !ok {
+		app.ConfigService.BackoffStore.UpdateBackoff(server.ServerKey())
+		app.Logger.Info("Skipping server-scope collection due to ping failure",
+			"server_name", server.ServerName, "oba_base_url", server.ObaBaseURL)
+		report.ReportErrorWithSentryOptions(
+			fmt.Errorf("server ping failed for %s", server.ObaBaseURL),
+			report.SentryReportOptions{
+				Tags:         map[string]string{"server_name": server.ServerName},
+				ExtraContext: map[string]interface{}{"oba_base_url": server.ObaBaseURL},
+				Level:        sentry.LevelError,
+			},
+		)
+		return
+	}
+	app.ConfigService.BackoffStore.ResetBackoff(server.ServerKey())
+
+	// Probe /metrics.json for the live agency set.
+	liveAgencies, err := app.probeLiveAgencies(ctx, server)
+	if err != nil {
+		// Treat as "no agencies live" for this tick; static bundles stay
+		// stored so their introspection metrics keep emitting.
+		app.Logger.Warn("Failed to probe /metrics.json; treating no agencies as live this tick",
+			"server_name", server.ServerName, "error", err)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags:  map[string]string{"server_name": server.ServerName},
+			Level: sentry.LevelWarning,
+		})
+	}
+
+	// Resolve the set of agency serverKeys that are currently live. The RT
+	// feed (fetched once below) is registered under every one of these keys,
+	// pointer-shared, so each agency's per-tick pipeline sees the same
+	// vehicle set without redundant HTTP fetches.
+	liveAgencyKeys := make([]string, 0, len(scope.StaticAgencies))
+	for _, agency := range scope.StaticAgencies {
+		isLive := liveAgencies[agency.AgencyID]
+		metrics.GtfsStaticAgencyCurrentlyLive.WithLabelValues(
+			agency.AgencyID,
+			agency.AgencyName,
+			server.ServerName,
+			server.ObaBaseURL,
+		).Set(boolToFloat(isLive))
+
+		// attribution_status for every configured feed URL on this server.
+		for _, feedURL := range server.GtfsStaticFeeds {
+			metrics.GtfsStaticFeedAttributionStatus.WithLabelValues(
+				feedURL,
+				agency.AgencyID,
+				agency.AgencyName,
+				server.ServerName,
+				server.ObaBaseURL,
+			).Set(boolToFloat(isLive))
+		}
+
+		if isLive {
+			liveAgencyKeys = append(liveAgencyKeys, models.ServerKey(server.ObaBaseURL, agency.AgencyID))
+		}
+	}
+
+	// Fetch the RT feed ONCE for the whole server and register the result
+	// under every live agency's serverKey. If the fetch fails we still run
+	// the per-agency pipelines — they'll just see a stale realtime store
+	// from the previous tick and emit the appropriate counts. The error is
+	// reported to Sentry once for visibility.
+	if len(liveAgencyKeys) > 0 {
+		if err := app.GtfsService.FetchAndStoreGTFSRTFeedOnce(server, liveAgencyKeys); err != nil {
+			app.Logger.Error("Failed to fetch and store GTFS-RT feed",
+				"server_name", server.ServerName, "error", err)
+			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+				Tags: map[string]string{
+					"server_name": server.ServerName,
+				},
+				Level: sentry.LevelError,
+			})
+		}
+	}
+
+	// Per-agency metric loop. Each iteration runs the agency-scoped
+	// pre-RT steps (CheckBundleExpiration, FetchObaAPIMetrics,
+	// CountActiveVehiclesForAgency, ServerPing) and the post-RT vehicle
+	// metrics via collectVehicleMetrics. ServerPing is intentionally
+	// called once per agency here because the gauge is server-scoped —
+	// the per-agency call is cheap (one HTTP probe) and keeps the metric
+	// series up-to-date even if a single agency's pipeline bails out.
+	//
+	// TODO(server-mode dedup): In server-mode with N live agencies we
+	// call FetchObaAPIMetrics once per agency, which means N redundant
+	// HTTP fetches of the same /api/where/metrics.json endpoint per tick.
+	// The response was already fetched once by probeLiveAgencies at the
+	// top of this function.
+	//
+	// We accept this for now because the endpoint is small JSON designed
+	// for high-QPS polling and at 30s ticks the cost is at most a few
+	// redundant fetches/min. Threading the parsed body through
+	// FetchObaAPIMetrics / MetricsService.FetchObaAPIMetrics / the
+	// public CollectMetricsForServer path would require parameter
+	// plumbing across three layers and a parsed-body cache for the
+	// duration of one tick.
+	//
+	// Revisit if OBA starts rate-limiting /metrics.json, the fleet fans
+	// out across many agencies, or scrape latency becomes a concern. The
+	// fix is to widen probeLiveAgencies to return the parsed body and
+	// pass it into FetchObaAPIMetrics (probably as an optional parameter
+	// on MetricsService.FetchObaAPIMetrics so agency-mode callers don't
+	// have to change). fetchObaAPIMetrics carries a one-line pointer to
+	// this TODO at its definition site.
+	for _, agency := range scope.StaticAgencies {
+		if !liveAgencies[agency.AgencyID] {
+			continue
+		}
+		agencyServer := serverForAgency(server, agency.AgencyID, agency.AgencyName)
+		app.CollectMetricsForServer(agencyServer)
+	}
+}
+
+// CollectMetricsForServer performs all metric collection and validation logic
+// for a single OBA server / agency.
 //
-// Exponential Backoff:
+// It sequentially runs a series of probes and validations against the given
+// server. Ordering constraints:
+//   - Backoff is non-blocking and lives in BackoffStore — not a time.Sleep.
+//     Before each cycle it checks NextRetryAt; if a server is still backing
+//     off, its entire collection is skipped this tick.
+//   - The GTFS-RT feed must be in the realtime store before this function
+//     runs. Agency-mode callers invoke GtfsService.FetchAndStoreGTFSRTFeed
+//     before calling this method. Server-mode callers invoke
+//     GtfsService.FetchAndStoreGTFSRTFeedOnce once per tick before the
+//     per-agency loop.
 //
-//	Unlike typical blocking backoff (e.g., retry loops with time.Sleep), this function uses a
-//	per-server backoff map (BackoffStore). Each server has a backoff delay and a calculated
-//	nextRetryAt timestamp. Before attempting a ping, the function checks whether the current time
-//	is still before nextRetryAt; if so, the entire metrics collection for that server is skipped.
-//
-//	When a server fails, its backoff delay is increased exponentially and nextRetryAt is updated.
-//	When a server responds successfully, its backoff state is reset.
-//
-// Why this design?
-//
-//	  The StartMetricsCollection scheduler runs every `FetchInterval` (default: 30 seconds) for each server.
-//		If we used a standard blocking backoff inside CollectMetricsForServer, the backoff delay could exceed
-//	  30 seconds, causing overlapping goroutines (multiple retries running concurrently for the same
-//	  server). By storing backoff state per server and checking it on each scheduled run, we ensure:
-//	    - No overlapping goroutines per server.
-//	    - Retry intervals still grow exponentially.
-//	    - Retries align with the FetchInterval collection cycle, meaning the effective backoff wait time
-//	 			is always a multiple of FetchInterval.
-//	  This keeps retries predictable, efficient, and non-blocking across all monitored servers.
-//
-// Purpose:
-//   - Centralizes all server-level metric gathering for reusability and testability.
-//   - Ensures that all health and performance indicators are collected in one place.
-//   - Enables observability and alerting based on up-to-date, per-server insights.
-//
-// Design considerations:
-//   - Each metric function is isolated and logs its own errors to avoid full failure on one fault.
-//   - Sentry reports are tagged for fast debugging and correlation in distributed systems.
-//   - Dependencies are injected (via app fields) to support testability and separation of concerns.
+// Every metric function called after the RT gate reads the realtime store,
+// so any caller must ensure FetchAndStoreGTFSRTFeed (or Once) has succeeded
+// for this tick. Calling CountVehiclePositions, TrackVehicleTelemetry, or
+// TrackInvalidVehiclesAndStoppedOutOfBounds without a fresh fetch will use
+// stale data.
 func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 	// Check if server has an active backoff period
 	nextRetryAt, exists := app.ConfigService.BackoffStore.NextRetryAt(server.ServerKey())
 	if exists && time.Now().UTC().Before(nextRetryAt) {
-		// Still in backoff → skip metrics collection
-		app.Logger.Info("Skipping metrics collection for agency due to backoff", "agency_id", server.AgencyID, "next_retry_at", nextRetryAt)
+		app.Logger.Info("Skipping metrics collection due to backoff",
+			"agency_id", server.AgencyID, "server_name", server.ServerName, "next_retry_at", nextRetryAt)
 		report.ReportErrorWithSentryOptions(fmt.Errorf("skipping metrics collection for server %s due to backoff", server.ObaBaseURL), report.SentryReportOptions{
 			Tags: map[string]string{
 				"agency_id":   server.AgencyID,
 				"agency_name": server.AgencyName,
+				"server_name": server.ServerName,
 			},
 			ExtraContext: map[string]interface{}{
 				"oba_base_url": server.ObaBaseURL,
@@ -121,12 +255,13 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 
 	ok := app.MetricsService.ServerPing(server)
 	if !ok {
-		// On ping failure → increase backoff for this server
-		app.Logger.Error("Server ping failed", "agency_id", server.AgencyID, "agency_name", server.AgencyName)
+		app.Logger.Error("Server ping failed",
+			"agency_id", server.AgencyID, "agency_name", server.AgencyName, "server_name", server.ServerName)
 		report.ReportErrorWithSentryOptions(fmt.Errorf("server ping failed for %s", server.ObaBaseURL), report.SentryReportOptions{
 			Tags: map[string]string{
 				"agency_id":   server.AgencyID,
 				"agency_name": server.AgencyName,
+				"server_name": server.ServerName,
 			},
 			ExtraContext: map[string]interface{}{
 				"oba_base_url": server.ObaBaseURL,
@@ -138,8 +273,8 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		return
 	}
 
-	// On successful ping → reset backoff for this server
-	app.Logger.Info("Server ping successful", "agency_id", server.AgencyID, "agency_name", server.AgencyName)
+	app.Logger.Info("Server ping successful",
+		"agency_id", server.AgencyID, "agency_name", server.AgencyName, "server_name", server.ServerName)
 	app.ConfigService.BackoffStore.ResetBackoff(server.ServerKey())
 
 	_, _, err := app.MetricsService.CheckBundleExpiration(time.Now().UTC(), server)
@@ -149,19 +284,20 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 			Tags: map[string]string{
 				"agency_id":   server.AgencyID,
 				"agency_name": server.AgencyName,
+				"server_name": server.ServerName,
 			},
 			Level: sentry.LevelError,
 		})
 	}
 
-	err = app.MetricsService.FetchObaAPIMetrics(server.AgencyID, server.AgencyName, server.ObaBaseURL, server.ObaApiKey)
-
+	err = app.MetricsService.FetchObaAPIMetrics(server.AgencyID, server.AgencyName, server.ServerName, server.ObaBaseURL, server.ObaApiKey)
 	if err != nil {
 		app.Logger.Error("Failed to fetch OBA API metrics", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"agency_id":   server.AgencyID,
 				"agency_name": server.AgencyName,
+				"server_name": server.ServerName,
 			},
 			ExtraContext: map[string]interface{}{
 				"oba_base_url": server.ObaBaseURL,
@@ -175,59 +311,119 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 		app.Logger.Error("Failed to count vehicles from VehiclesForAgency API", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
-				"agency_id": server.AgencyID,
-			},
-			Level: sentry.LevelError,
-		})
-	}
-
-	// Fetch and store GTFS-RT feed
-	// Note : All functions after FetchAndStoreGTFSRTFeed depend on this function
-	// on failure of this function we return and don't proceed
-	err = app.GtfsService.FetchAndStoreGTFSRTFeed(server)
-	if err != nil {
-		app.Logger.Error("Failed to fetch and store GTFS-RT feed", "error", err)
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{
 				"agency_id":   server.AgencyID,
-				"agency_name": server.AgencyName,
+				"server_name": server.ServerName,
 			},
 			Level: sentry.LevelError,
 		})
-		return
 	}
 
-	err = app.MetricsService.CountVehiclePositions(server)
-	if err != nil {
+	app.collectVehicleMetrics(server)
+}
+
+// collectVehicleMetrics runs the three metric functions that read from the
+// GTFS-RT realtime store. Extracted so server-mode can fetch the RT feed
+// once per tick and call this for each agency without re-fetching.
+func (app *Application) collectVehicleMetrics(server models.ObaServer) {
+	if err := app.MetricsService.CountVehiclePositions(server); err != nil {
 		app.Logger.Error("Failed to count vehicle positions from GTFS-RT", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
-				"agency_id": server.AgencyID,
+				"agency_id":   server.AgencyID,
+				"server_name": server.ServerName,
 			},
 			Level: sentry.LevelError,
 		})
 	}
 
-	err = app.MetricsService.TrackVehicleTelemetry(server)
-	if err != nil {
+	if err := app.MetricsService.TrackVehicleTelemetry(server); err != nil {
 		app.Logger.Error("Failed to track vehicle reporting frequency", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
-				"agency_id": server.AgencyID,
+				"agency_id":   server.AgencyID,
+				"server_name": server.ServerName,
 			},
 			Level: sentry.LevelError,
 		})
 	}
 
-	err = app.MetricsService.TrackInvalidVehiclesAndStoppedOutOfBounds(server)
-	if err != nil {
+	if err := app.MetricsService.TrackInvalidVehiclesAndStoppedOutOfBounds(server); err != nil {
 		app.Logger.Error("Failed to count invalid vehicle coordinates", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
-				"agency_id": server.AgencyID,
+				"agency_id":   server.AgencyID,
+				"server_name": server.ServerName,
 			},
 			Level: sentry.LevelError,
 		})
 	}
+}
 
+// serverForAgency returns a copy of `server` with the given agency_id /
+// agency_name populated. Used by collectForServerScope to materialize the
+// per-agency entry the existing pipeline expects.
+func serverForAgency(server models.ObaServer, agencyID, agencyName string) models.ObaServer {
+	return models.ObaServer{
+		ServerName:      server.ServerName,
+		AgencyID:        agencyID,
+		AgencyName:      agencyName,
+		ObaBaseURL:      server.ObaBaseURL,
+		ObaApiKey:       server.ObaApiKey,
+		GtfsStaticFeeds: server.GtfsStaticFeeds,
+		GtfsRTFeeds:     server.GtfsRTFeeds,
+	}
+}
+
+// boolToFloat converts a bool to the float64 Prometheus expects for gauge
+// values (1.0 for true, 0.0 for false).
+func boolToFloat(b bool) float64 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// metricsResponse mirrors the relevant fields of the OBA /metrics.json
+// response. We only need entry.AgencyIDs to drive the liveness check.
+type metricsResponse struct {
+	Data struct {
+		Entry struct {
+			AgencyIDs []string `json:"agencyIDs"`
+		} `json:"entry"`
+	} `json:"data"`
+}
+
+// probeLiveAgencies fetches /api/where/metrics.json for the given server and
+// returns the set of agency IDs OBA currently reports. Returns an empty map
+// (not an error) if the response is missing or malformed — the caller treats
+// empty as "no agencies live this tick" so static-only metrics keep emitting.
+func (app *Application) probeLiveAgencies(ctx context.Context, server models.ObaServer) (map[string]bool, error) {
+	endpoint := fmt.Sprintf("%s/api/where/metrics.json?key=%s", server.ObaBaseURL, url.QueryEscape(server.ObaApiKey))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build /metrics.json request: %w", err)
+	}
+
+	client := app.MetricsService.Client
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch /metrics.json: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("/metrics.json returned %d", resp.StatusCode)
+	}
+	var decoded metricsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		return nil, fmt.Errorf("decode /metrics.json: %w", err)
+	}
+
+	out := make(map[string]bool, len(decoded.Data.Entry.AgencyIDs))
+	for _, id := range decoded.Data.Entry.AgencyIDs {
+		out[id] = true
+	}
+	return out, nil
 }

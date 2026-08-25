@@ -17,7 +17,7 @@ func TestMetricsEndpoint(t *testing.T) {
 	app := newTestApplication(t)
 
 	// Register the metric without starting the collection routine
-	metrics.ObaApiStatus.WithLabelValues("1", "Test Server", "https://test.example.com").Set(1)
+	metrics.ObaApiStatus.WithLabelValues("Test Server", "https://test.example.com/current-time.json").Set(1)
 	// Create a test server
 	ctx := context.Background()
 	ts := httptest.NewServer(app.Routes(ctx))
@@ -53,4 +53,16 @@ func TestCollectMetricsForServer(t *testing.T) {
 	app.CollectMetricsForServer(testServer)
 
 	getMetricsForTesting(t, metrics.ObaApiStatus)
+}
+
+func TestCollectVehicleMetricsIsStandalone(t *testing.T) {
+	// collectVehicleMetrics should be safe to invoke independently of the
+	// pre-RT steps (server-ping, FetchObaAPIMetrics, etc.). This is the
+	// shared helper that server-mode calls inside the per-agency loop after
+	// the RT feed has been fetched once and shared across agencies.
+	app := newTestApplication(t)
+	testServer := app.ConfigService.Config.Servers[0]
+
+	// No panic, no error path requiring GTFS-RT data we haven't fetched.
+	app.collectVehicleMetrics(testServer)
 }
