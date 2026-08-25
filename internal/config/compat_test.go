@@ -36,6 +36,7 @@ func TestDecodeServerEntry(t *testing.T) {
 		}
 
 		expected := models.ObaServer{
+			ServerName:      "Test Server 1",
 			AgencyName:      "Test Server 1",
 			AgencyID:        "agency-1",
 			ObaBaseURL:      "https://test1.example.com",
@@ -69,6 +70,51 @@ func TestDecodeServerEntry(t *testing.T) {
 		}
 	})
 
+	t.Run("legacy v1 entry without agency_id becomes server-scoped", func(t *testing.T) {
+		raw := json.RawMessage(`{
+			"name": "Server Only",
+			"oba_base_url": "https://server.example.com",
+			"oba_api_key": "key",
+			"gtfs_url": "https://gtfs.example.com",
+			"vehicle_position_url": "https://vehicle.example.com"
+		}`)
+
+		got, err := decodeServerEntry(raw)
+		if err != nil {
+			t.Fatalf("expected legacy entry without agency_id to decode, got: %v", err)
+		}
+		if got.AgencyID != "" {
+			t.Errorf("expected empty AgencyID for server-scoped legacy entry, got %q", got.AgencyID)
+		}
+		if got.ServerName != "Server Only" {
+			t.Errorf("expected ServerName='Server Only', got %q", got.ServerName)
+		}
+	})
+
+	t.Run("legacy v1 name becomes server_name", func(t *testing.T) {
+		raw := json.RawMessage(`{
+			"name": "Legacy Server",
+			"oba_base_url": "https://server.example.com",
+			"oba_api_key": "key",
+			"gtfs_url": "https://gtfs.example.com",
+			"vehicle_position_url": "https://vehicle.example.com",
+			"agency_id": "agency-legacy"
+		}`)
+
+		got, err := decodeServerEntry(raw)
+		if err != nil {
+			t.Fatalf("expected legacy entry to decode, got: %v", err)
+		}
+		if got.ServerName != "Legacy Server" {
+			t.Errorf("expected ServerName='Legacy Server', got %q", got.ServerName)
+		}
+		// When agency_id is present, name also fills agency_name (mirroring the
+		// previous v2 mapping).
+		if got.AgencyName != "Legacy Server" {
+			t.Errorf("expected AgencyName='Legacy Server', got %q", got.AgencyName)
+		}
+	})
+
 	t.Run("legacy v1 entry missing a required field is rejected with v1 field name", func(t *testing.T) {
 		raw := json.RawMessage(`{
 			"name": "No Vehicle URL",
@@ -89,6 +135,7 @@ func TestDecodeServerEntry(t *testing.T) {
 
 	t.Run("current v2 entry decodes unchanged", func(t *testing.T) {
 		raw := json.RawMessage(`{
+			"server_name": "Test Server",
 			"agency_name": "Test Server",
 			"oba_base_url": "https://test.example.com",
 			"oba_api_key": "test-key",
@@ -103,6 +150,7 @@ func TestDecodeServerEntry(t *testing.T) {
 		}
 
 		expected := models.ObaServer{
+			ServerName:      "Test Server",
 			AgencyName:      "Test Server",
 			AgencyID:        "agency-1",
 			ObaBaseURL:      "https://test.example.com",
@@ -210,6 +258,7 @@ func TestLoadConfigFromFileMixedEntries(t *testing.T) {
 			"agency_id": "agency-legacy"
 		},
 		{
+			"server_name": "Current Server",
 			"agency_name": "Current Server",
 			"oba_base_url": "https://current.example.com",
 			"oba_api_key": "current-key",
@@ -218,6 +267,7 @@ func TestLoadConfigFromFileMixedEntries(t *testing.T) {
 			"agency_id": "agency-current"
 		},
 		{
+			"server_name": "Broken Server",
 			"agency_name": "Broken Server",
 			"oba_base_url": "https://broken.example.com",
 			"oba_api_key": "broken-key",

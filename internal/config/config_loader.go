@@ -146,7 +146,7 @@ func loadConfigFromURL(ctx context.Context, client *http.Client, url, authUser, 
 		req.SetBasicAuth(authUser, authPass)
 	}
 
-	resp, err := DoWithBackoff(ctx, client, req, maxRetries)
+	resp, err := utils.DoWithBackoff(ctx, client, req, maxRetries)
 	if err != nil {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags:  utils.MakeMap("config_url", url),

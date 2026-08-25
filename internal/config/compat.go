@@ -31,6 +31,11 @@ type legacyObaServer struct {
 // schema to a legacy server. Unlike the current schema it does not require the
 // gtfs_rt_api_key / gtfs_rt_api_value header pair to be present together; both
 // are optional. The legacy id field is ignored.
+//
+// agency_id is also optional in the legacy schema under the server-scope
+// redesign: a v1 entry without agency_id becomes a server-scoped entry that
+// Watchdog will resolve against /api/where/metrics.json at runtime. We only
+// require the fields every entry needs (URL, key, feed URLs).
 func validateLegacy(server legacyObaServer) error {
 	var missing []string
 
@@ -43,7 +48,6 @@ func validateLegacy(server legacyObaServer) error {
 		{"oba_api_key", server.ObaApiKey},
 		{"gtfs_url", server.GtfsUrl},
 		{"vehicle_position_url", server.VehiclePositionUrl},
-		{"agency_id", server.AgencyID},
 	}
 	for _, field := range requiredStrings {
 		if strings.TrimSpace(field.value) == "" {
@@ -58,10 +62,16 @@ func validateLegacy(server legacyObaServer) error {
 }
 
 // legacyToCurrent converts a validated legacy v1 server to the current schema.
+//
+// The legacy `name` field is repurposed as the server-scoped `server_name`. In
+// agency-mode (when the legacy `agency_id` is present) it also fills
+// `agency_name`, mirroring the previous v2 mapping; in server-mode (no
+// `agency_id`) `agency_name` is left empty so the entry is unambiguously
+// server-scoped. The legacy `id` (int) field is dropped — it was unused in v2
+// and is not part of the server-scope redesign.
 func legacyToCurrent(l legacyObaServer) models.ObaServer {
-	return models.ObaServer{
-		AgencyName:      l.Name,
-		AgencyID:        l.AgencyID,
+	out := models.ObaServer{
+		ServerName:      l.Name,
 		ObaBaseURL:      l.ObaBaseURL,
 		ObaApiKey:       l.ObaApiKey,
 		GtfsStaticFeeds: []string{l.GtfsUrl},
@@ -73,6 +83,11 @@ func legacyToCurrent(l legacyObaServer) models.ObaServer {
 			AgencyIDs:          []string{l.AgencyID},
 		}},
 	}
+	if strings.TrimSpace(l.AgencyID) != "" {
+		out.AgencyID = l.AgencyID
+		out.AgencyName = l.Name
+	}
+	return out
 }
 
 // decodeServerEntry decodes a single raw config entry, accepting either the

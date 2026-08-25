@@ -23,6 +23,7 @@ import (
 func TestLoadConfigFromFile(t *testing.T) {
 	t.Run("ValidConfig", func(t *testing.T) {
 		content := `[{
+		"server_name": "Test Server",
 		"agency_name": "Test Server",
 		"oba_base_url": "https://test.example.com",
 		"oba_api_key": "test-key",
@@ -47,6 +48,7 @@ func TestLoadConfigFromFile(t *testing.T) {
 		}
 
 		expected := models.ObaServer{
+			ServerName:      "Test Server",
 			AgencyName:      "Test Server",
 			ObaBaseURL:      "https://test.example.com",
 			ObaApiKey:       "test-key",
@@ -94,7 +96,8 @@ func TestLoadConfigFromURL(t *testing.T) {
 	t.Run("ValidResponse", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`[{"agency_name": "Test Server",
+			w.Write([]byte(`[{"server_name": "Test Server",
+			 "agency_name": "Test Server",
 			 "oba_base_url": "https://test.example.com",
 			 "oba_api_key": "test-key",
 			 "gtfs_static_feeds": ["https://gtfs.example.com"],
@@ -114,6 +117,7 @@ func TestLoadConfigFromURL(t *testing.T) {
 		}
 
 		expected := models.ObaServer{
+			ServerName:      "Test Server",
 			AgencyName:      "Test Server",
 			ObaBaseURL:      "https://test.example.com",
 			ObaApiKey:       "test-key",
@@ -271,6 +275,7 @@ func TestValidateConfigFlags(t *testing.T) {
 func TestRefreshConfig(t *testing.T) {
 	obaServer := models.NewObaServer(
 		"Test Server",
+		"Test Server",
 		"test-agency",
 		"https://test.example.com",
 		"test-key",
@@ -303,6 +308,7 @@ func TestRefreshConfig(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintln(w, `[
 					{
+							"server_name": "Refreshed Test Server",
 							"agency_name": "Refreshed Test Server",
 							"oba_base_url": "https://refreshed.example.com",
 							"oba_api_key": "refreshed-key",

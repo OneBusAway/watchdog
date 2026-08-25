@@ -13,6 +13,19 @@ import (
 // then produces cryptic `unsupported protocol scheme ""` errors on every fetch
 // cycle. Validating up front turns that into a single actionable error.
 //
+// Server-scoping rules (added with the server-scope redesign):
+//   - server_name is always required; it identifies the OBA deployment and is
+//     emitted as a label on every per-agency metric so dashboards can group
+//     observations by server without parsing URLs.
+//   - agency_id, when present, requires agency_name (paired). agency_name
+//     without agency_id is ignored.
+//   - agency_id is OPTIONAL. When it is absent the entry is server-scoped and
+//     Watchdog discovers the agencies it serves from /api/where/metrics.json
+//     cross-referenced with each static feed's agency.txt.
+//   - Both gtfs_static_feeds and gtfs_rt_feeds are required. The static feed is
+//     the validation source for RT data; the RT feed is the live signal. We
+//     cannot monitor without either.
+//
 // The GTFS-RT auth header fields (gtfs_rt_api_key / gtfs_rt_api_value) are
 // optional, but when either is set the other must be set as well. trip_update_url
 // is optional and not validated here.
@@ -25,10 +38,12 @@ func ValidateServer(server models.ObaServer) error {
 		name  string
 		value string
 	}{
-		{"agency_name", server.AgencyName},
+		{"server_name", server.ServerName},
 		{"oba_base_url", server.ObaBaseURL},
 		{"oba_api_key", server.ObaApiKey},
-		{"agency_id", server.AgencyID},
+	}
+	if strings.TrimSpace(server.AgencyID) != "" && strings.TrimSpace(server.AgencyName) == "" {
+		missing = append(missing, "agency_name")
 	}
 	if len(server.GtfsStaticFeeds) == 0 {
 		missing = append(missing, "gtfs_static_feeds")
@@ -56,7 +71,7 @@ func ValidateServer(server models.ObaServer) error {
 	}
 
 	if len(missing) > 0 {
-		return fmt.Errorf("agency %q is missing required fields: %s", server.AgencyID, strings.Join(missing, ", "))
+		return fmt.Errorf("server %q is missing required fields: %s", server.ServerName, strings.Join(missing, ", "))
 	}
 	return nil
 }
