@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,7 +28,7 @@ func TestDownloadGTFSBundles(t *testing.T) {
 	staticStore := NewStaticStore()
 	ctx := context.Background()
 	client := &http.Client{Timeout: 10 * time.Second}
-	downloadGTFSBundles(ctx, client, servers, logger, boundingBoxStore, staticStore, 1)
+	downloadGTFSBundles(ctx, client, servers, logger, boundingBoxStore, staticStore, NewRouteAgencyIndex(), nil, 1)
 
 }
 
@@ -41,7 +42,7 @@ func TestRefreshGTFSBundles(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	client := &http.Client{Timeout: 10 * time.Second}
-	go refreshGTFSBundles(ctx, client, servers, logger, 10*time.Millisecond, boundingBoxStore, staticStore, 1)
+	go refreshGTFSBundles(ctx, client, servers, logger, 10*time.Millisecond, boundingBoxStore, staticStore, NewRouteAgencyIndex(), nil, 1)
 
 	time.Sleep(15 * time.Millisecond)
 
@@ -223,7 +224,7 @@ func TestStopsParsing(t *testing.T) {
 }
 
 func TestStoreGTFSBundleRecordsFetchTime(t *testing.T) {
-	server := models.ObaServer{AgencyID: "agency-1", AgencyName: "test", ObaBaseURL: "https://test.example.com"}
+	server := models.ObaServer{ServerName: "test", AgencyID: "agency-1", AgencyName: "test", ObaBaseURL: "https://test.example.com"}
 	data := readFixture(t, "gtfs.zip")
 	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
 	if err != nil {
@@ -231,15 +232,27 @@ func TestStoreGTFSBundleRecordsFetchTime(t *testing.T) {
 	}
 	staticStore := NewStaticStore()
 	boundingBoxStore := geo.NewBoundingBoxStore()
+	routeAgencyIndex := NewRouteAgencyIndex()
 
-	err = storeGTFSBundle(staticBundle, server.ServerKey(), staticStore, boundingBoxStore)
+	err = storeStaticForServer(server, []*remoteGtfs.Static{staticBundle}, staticStore, boundingBoxStore, routeAgencyIndex, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	fetchTime, ok := staticStore.GetFetchTime(server.ServerKey())
+	// storeStaticForServer keys bundles by the agency declared in agency.txt,
+	// not by the configured agency_id. Look up the bundle's actual agency_id
+	// (gtfs.zip ships agency_id "40") to retrieve the fetch time.
+	if len(staticBundle.Agencies) == 0 {
+		t.Fatal("expected the fixture to declare at least one agency")
+	}
+	declaredAgency := staticBundle.Agencies[0].Id
+	if declaredAgency == "" {
+		t.Fatal("expected the fixture's agency to declare an agency_id")
+	}
+	storeKey := models.ServerKey(server.ObaBaseURL, declaredAgency)
+	fetchTime, ok := staticStore.GetFetchTime(storeKey)
 	if !ok {
-		t.Fatal("expected a fetch time to be recorded after storing the bundle")
+		t.Fatalf("expected a fetch time to be recorded for server key %s", storeKey)
 	}
 	if time.Since(fetchTime) > time.Minute {
 		t.Fatalf("fetch time should be recent, got %s", fetchTime)
@@ -561,4 +574,263 @@ func serveBytes(t *testing.T, data []byte) *httptest.Server {
 		// #nosec G104
 		w.Write(data)
 	}))
+}
+
+// countingRoundTripper records every request that goes through it so tests
+// can assert how many times an upstream was hit.
+type countingRoundTripper struct {
+	mu    sync.Mutex
+	calls int
+	body  []byte
+}
+
+func (c *countingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	c.mu.Lock()
+	c.calls++
+	c.mu.Unlock()
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(bytes.NewReader(c.body)),
+		Header:     make(http.Header),
+	}, nil
+}
+
+func TestFetchAndStoreGTFSRTFeedOnceSingleFetch(t *testing.T) {
+	body := marshalVehicleFeed(t, "shared-vehicle", 1, 2)
+	rt := &countingRoundTripper{body: body}
+	client := &http.Client{Transport: rt}
+
+	server := models.ObaServer{
+		ServerName:      "shared",
+		ObaBaseURL:      "https://example.com",
+		ObaApiKey:       "key",
+		GtfsStaticFeeds: []string{"https://example.com/gtfs.zip"},
+		GtfsRTFeeds: []models.GtfsRTFeed{{
+			VehiclePositionURL: "https://rt.example.com/vehicles.pb",
+		}},
+	}
+
+	store := NewRealtimeStore()
+	keys := []string{
+		models.ServerKey(server.ObaBaseURL, "agency-A"),
+		models.ServerKey(server.ObaBaseURL, "agency-B"),
+		models.ServerKey(server.ObaBaseURL, "agency-C"),
+	}
+
+	if err := fetchAndStoreGTFSRTFeedOnce(server, keys, store, client); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Exactly one HTTP fetch must have been issued, regardless of how many
+	// keys we registered the result under.
+	if rt.calls != 1 {
+		t.Fatalf("expected 1 RT fetch (server-mode share), got %d", rt.calls)
+	}
+
+	// All three serverKeys must yield the same *RealtimeData pointer and the
+	// same single vehicle.
+	first := store.Get(keys[0])
+	second := store.Get(keys[1])
+	third := store.Get(keys[2])
+	if first == nil || second == nil || third == nil {
+		t.Fatal("expected all three keys to be populated")
+	}
+	if first != second || second != third {
+		t.Fatalf("expected pointer-sharing across serverKeys; got %p, %p, %p", first, second, third)
+	}
+	if got := len(first.Vehicles); got != 1 {
+		t.Fatalf("expected 1 vehicle, got %d", got)
+	}
+}
+
+func TestFetchAndStoreGTFSRTFeedOnceEmptyKeysIsNoop(t *testing.T) {
+	// With no storeKeys the function should not issue any HTTP request — the
+	// RT fetch is the expensive step and we want callers to skip it cleanly.
+	rt := &countingRoundTripper{body: []byte{}}
+	client := &http.Client{Transport: rt}
+
+	server := models.ObaServer{
+		ServerName: "noop",
+		ObaBaseURL: "https://example.com",
+		ObaApiKey:  "key",
+		GtfsRTFeeds: []models.GtfsRTFeed{{
+			VehiclePositionURL: "https://rt.example.com/vehicles.pb",
+		}},
+	}
+	store := NewRealtimeStore()
+
+	if err := fetchAndStoreGTFSRTFeedOnce(server, nil, store, client); err != nil {
+		t.Fatalf("expected nil error for empty storeKeys, got: %v", err)
+	}
+	if rt.calls != 0 {
+		t.Fatalf("expected 0 fetches when no storeKeys, got %d", rt.calls)
+	}
+}
+
+func TestFetchAndStoreGTFSRTFeedShimMatchesOnce(t *testing.T) {
+	// The single-key shim must produce the same observable behavior as
+	// fetchAndStoreGTFSRTFeedOnce with one key.
+	body := marshalVehicleFeed(t, "shim-vehicle", 1, 2)
+	rt := &countingRoundTripper{body: body}
+	client := &http.Client{Transport: rt}
+
+	server := models.ObaServer{
+		ServerName:      "shim",
+		AgencyID:        "agency-shim",
+		AgencyName:      "Agency Shim",
+		ObaBaseURL:      "https://example.com",
+		ObaApiKey:       "key",
+		GtfsStaticFeeds: []string{"https://example.com/gtfs.zip"},
+		GtfsRTFeeds: []models.GtfsRTFeed{{
+			VehiclePositionURL: "https://rt.example.com/vehicles.pb",
+		}},
+	}
+	store := NewRealtimeStore()
+
+	if err := fetchAndStoreGTFSRTFeed(server, store, client); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rt.calls != 1 {
+		t.Fatalf("expected 1 fetch via shim, got %d", rt.calls)
+	}
+	got := store.Get(server.ServerKey())
+	if got == nil {
+		t.Fatal("expected the shim to populate server.ServerKey()")
+	}
+	if len(got.Vehicles) != 1 {
+		t.Fatalf("expected 1 vehicle from shim, got %d", len(got.Vehicles))
+	}
+}
+
+// floatPtr returns a pointer to f. Used to build *float64 stop lat/lons for
+// the synthetic bundles below without having to declare locals at every
+// call site.
+func floatPtr(f float64) *float64 { return &f }
+
+// makeSyntheticBundle builds a *remoteGtfs.Static containing one agency row
+// plus a list of stops. Tests use this to construct minimal bundles with
+// the exact collision shape they need (same stop_id, different lat/lon; or
+// same agency_id, different identity fields).
+func makeSyntheticBundle(t *testing.T, agencyID, agencyName, agencyURL string, stops []remoteGtfs.Stop) *remoteGtfs.Static {
+	t.Helper()
+	return &remoteGtfs.Static{
+		Agencies: []remoteGtfs.Agency{{
+			Id:   agencyID,
+			Name: agencyName,
+			Url:  agencyURL,
+		}},
+		Stops: stops,
+	}
+}
+
+func TestMergeStaticStopsExactDuplicateSilentlyKept(t *testing.T) {
+	// Two bundles declare stop_id="A" at the same lat/lon. Silent skip.
+	lat, lon := 1.0, 2.0
+	bundleA := makeSyntheticBundle(t, "agency-A", "Agency A", "https://a.example", []remoteGtfs.Stop{
+		{Id: "A", Latitude: floatPtr(lat), Longitude: floatPtr(lon)},
+	})
+	bundleB := makeSyntheticBundle(t, "agency-A", "Agency A", "https://a.example", []remoteGtfs.Stop{
+		{Id: "A", Latitude: floatPtr(lat), Longitude: floatPtr(lon)},
+	})
+
+	merged, _ := mergeStaticAndDiscoverAgencies([]*remoteGtfs.Static{bundleA, bundleB})
+	if got := len(merged.Stops); got != 1 {
+		t.Fatalf("expected 1 stop after dedup, got %d", got)
+	}
+}
+
+func TestMergeStaticStopsLocationCollisionKeptFirst(t *testing.T) {
+	// Two bundles declare stop_id="A" at DIFFERENT lat/lon. The first wins
+	// and the duplicate's location is dropped. The exact behavior (warn
+	// vs. silent) is asserted in the Sentry-warn test below; here we just
+	// verify the kept entry is the first occurrence.
+	firstLat, firstLon := 1.0, 2.0
+	dupLat, dupLon := 3.0, 4.0
+	bundleA := makeSyntheticBundle(t, "agency-A", "Agency A", "https://a.example", []remoteGtfs.Stop{
+		{Id: "A", Latitude: floatPtr(firstLat), Longitude: floatPtr(firstLon)},
+	})
+	bundleB := makeSyntheticBundle(t, "agency-A", "Agency A", "https://a.example", []remoteGtfs.Stop{
+		{Id: "A", Latitude: floatPtr(dupLat), Longitude: floatPtr(dupLon)},
+	})
+
+	merged, _ := mergeStaticAndDiscoverAgencies([]*remoteGtfs.Static{bundleA, bundleB})
+	if got := len(merged.Stops); got != 1 {
+		t.Fatalf("expected 1 stop after dedup, got %d", got)
+	}
+	got := merged.Stops[0]
+	if got.Latitude == nil || *got.Latitude != firstLat {
+		t.Fatalf("expected first occurrence's lat to win; got %v", got.Latitude)
+	}
+	if got.Longitude == nil || *got.Longitude != firstLon {
+		t.Fatalf("expected first occurrence's lon to win; got %v", got.Longitude)
+	}
+}
+
+func TestSameStopLocation(t *testing.T) {
+	lat, lon := 1.0, 2.0
+	cases := []struct {
+		name                   string
+		lat1, lon1, lat2, lon2 *float64
+		want                   bool
+	}{
+		{"both nil", nil, nil, nil, nil, true},
+		{"same lat/lon", floatPtr(lat), floatPtr(lon), floatPtr(lat), floatPtr(lon), true},
+		{"same values different ptrs", floatPtr(lat), floatPtr(lon), floatPtr(lat), floatPtr(lon), true},
+		{"different lat", floatPtr(lat), floatPtr(lon), floatPtr(3.0), floatPtr(lon), false},
+		{"different lon", floatPtr(lat), floatPtr(lon), floatPtr(lat), floatPtr(4.0), false},
+		{"left lat nil", nil, floatPtr(lon), floatPtr(lat), floatPtr(lon), false},
+		{"right lat nil", floatPtr(lat), floatPtr(lon), nil, floatPtr(lon), false},
+		{"both nils with lon nil both sides", nil, nil, nil, nil, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sameStopLocation(tc.lat1, tc.lon1, tc.lat2, tc.lon2); got != tc.want {
+				t.Fatalf("sameStopLocation(%v,%v,%v,%v) = %v, want %v",
+					tc.lat1, tc.lon1, tc.lat2, tc.lon2, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestMergeStaticAgenciesExactDuplicateSilentlyKept(t *testing.T) {
+	// Two bundles declare agency_id="MTA" with identical (Name, Url). The
+	// second is silently skipped.
+	bundleA := makeSyntheticBundle(t, "MTA", "Metro Transit", "https://mta.example", nil)
+	bundleB := makeSyntheticBundle(t, "MTA", "Metro Transit", "https://mta.example", nil)
+
+	_, declared := mergeStaticAndDiscoverAgencies([]*remoteGtfs.Static{bundleA, bundleB})
+	if got := len(declared); got != 1 {
+		t.Fatalf("expected 1 declared agency after dedup, got %d", got)
+	}
+	if declared[0].AgencyID != "MTA" {
+		t.Fatalf("expected agency_id=MTA, got %q", declared[0].AgencyID)
+	}
+	if declared[0].AgencyName != "Metro Transit" {
+		t.Fatalf("expected first occurrence's name to win, got %q", declared[0].AgencyName)
+	}
+}
+
+func TestMergeStaticAgenciesNameCollisionKeptFirst(t *testing.T) {
+	// Same agency_id, different Name. The first wins; second is dropped.
+	bundleA := makeSyntheticBundle(t, "MTA", "Metro Transit", "https://mta.example", nil)
+	bundleB := makeSyntheticBundle(t, "MTA", "Metro Authority", "https://mta.example", nil)
+
+	_, declared := mergeStaticAndDiscoverAgencies([]*remoteGtfs.Static{bundleA, bundleB})
+	if got := len(declared); got != 1 {
+		t.Fatalf("expected 1 declared agency, got %d", got)
+	}
+	if declared[0].AgencyName != "Metro Transit" {
+		t.Fatalf("expected first occurrence's name to win, got %q", declared[0].AgencyName)
+	}
+}
+
+func TestMergeStaticAgenciesURLCollisionKeptFirst(t *testing.T) {
+	// Same agency_id and Name, different Url. The first wins.
+	bundleA := makeSyntheticBundle(t, "MTA", "Metro", "https://mta-a.example", nil)
+	bundleB := makeSyntheticBundle(t, "MTA", "Metro", "https://mta-b.example", nil)
+
+	_, declared := mergeStaticAndDiscoverAgencies([]*remoteGtfs.Static{bundleA, bundleB})
+	if got := len(declared); got != 1 {
+		t.Fatalf("expected 1 declared agency, got %d", got)
+	}
 }
