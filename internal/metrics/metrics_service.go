@@ -5,41 +5,51 @@ import (
 	"net/http"
 	"time"
 
+	onebusaway "github.com/OneBusAway/go-sdk"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/utils"
 )
 
 type MetricsService struct {
-	StaticStore      *gtfs.StaticStore
-	RealtimeStore    *gtfs.RealtimeStore
-	BoundingBoxStore *geo.BoundingBoxStore
-	VehicleLastSeen  *VehicleLastSeen
-	Logger           *slog.Logger
-	Client           *http.Client
+	StaticStore          *gtfs.StaticStore
+	RealtimeStore        *gtfs.RealtimeStore
+	BoundingBoxStore     *geo.BoundingBoxStore
+	RouteAgencyIndex     *gtfs.RouteAgencyIndex
+	VehicleLastSeen      *VehicleLastSeen
+	UnmatchedStopTracker *UnmatchedStopTracker
+	Logger               *slog.Logger
+	Client               *http.Client
+	NewObaClient         func(models.ObaServer) *onebusaway.Client
 }
 
-func NewMetricsService(static *gtfs.StaticStore, realtime *gtfs.RealtimeStore, bbox *geo.BoundingBoxStore, vehicleLastSeen *VehicleLastSeen, logger *slog.Logger, client *http.Client) *MetricsService {
+func NewMetricsService(static *gtfs.StaticStore, realtime *gtfs.RealtimeStore, bbox *geo.BoundingBoxStore, routeAgencyIndex *gtfs.RouteAgencyIndex, vehicleLastSeen *VehicleLastSeen, unmatchedStopTracker *UnmatchedStopTracker, logger *slog.Logger, client *http.Client, newObaClient func(models.ObaServer) *onebusaway.Client) *MetricsService {
 	return &MetricsService{
-		StaticStore:      static,
-		RealtimeStore:    realtime,
-		BoundingBoxStore: bbox,
-		VehicleLastSeen:  vehicleLastSeen,
-		Logger:           logger,
-		Client:           client,
+		StaticStore:          static,
+		RealtimeStore:        realtime,
+		BoundingBoxStore:     bbox,
+		RouteAgencyIndex:     routeAgencyIndex,
+		VehicleLastSeen:      vehicleLastSeen,
+		UnmatchedStopTracker: unmatchedStopTracker,
+		Logger:               logger,
+		Client:               client,
+		NewObaClient:         newObaClient,
 	}
 }
 
-func (ms *MetricsService) CheckVehicleCountMatch(server models.ObaServer) error {
-	return checkVehicleCountMatch(server, ms.RealtimeStore)
+func (ms *MetricsService) CountVehiclePositions(server models.ObaServer) error {
+	_, err := countVehiclePositions(server, ms.RealtimeStore)
+	return err
 }
 
-func (ms *MetricsService) CheckAgenciesWithCoverageMatch(server models.ObaServer) error {
-	if err := checkAgenciesWithCoverageMatch(ms.StaticStore, ms.Logger, server); err != nil {
-		return err
-	}
-	return nil
+func (ms *MetricsService) CountActiveVehiclesForAgency(server models.ObaServer) error {
+	_, err := countActiveVehiclesForAgency(ms.NewObaClient(server), server)
+	return err
+}
 
+func (ms *MetricsService) ReportTrackedAgencies(servers []models.ObaServer) {
+	reportTrackedAgencies(servers)
 }
 
 func (ms *MetricsService) CheckBundleExpiration(currentTime time.Time, server models.ObaServer) (int, int, error) {
@@ -47,17 +57,34 @@ func (ms *MetricsService) CheckBundleExpiration(currentTime time.Time, server mo
 }
 
 func (ms *MetricsService) ServerPing(server models.ObaServer) bool {
-	return serverPing(server)
+	return serverPing(ms.NewObaClient(server), server)
 }
 
-func (ms *MetricsService) FetchObaAPIMetrics(slugID string, serverID int, serverBaseUrl string, apiKey string) error {
-	return fetchObaAPIMetrics(slugID, serverID, serverBaseUrl, apiKey, ms.Client, ms.StaticStore)
+func (ms *MetricsService) FetchObaAPIMetrics(agencyID, agencyName, serverName, serverBaseURL, apiKey string) error {
+	return fetchObaAPIMetrics(agencyID, agencyName, serverName, serverBaseURL, apiKey, ms.Client, ms.StaticStore, ms.Logger, ms.UnmatchedStopTracker)
 }
 
 func (ms *MetricsService) TrackVehicleTelemetry(server models.ObaServer) error {
-	return trackVehicleTelemetry(server, ms.VehicleLastSeen, ms.RealtimeStore)
+	return trackVehicleTelemetry(server, ms.VehicleLastSeen, ms.RealtimeStore, ms.RouteAgencyIndex)
 }
 
 func (ms *MetricsService) TrackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer) error {
 	return trackInvalidVehiclesAndStoppedOutOfBounds(server, ms.BoundingBoxStore, ms.RealtimeStore)
+}
+
+// StaticBundleObserver returns a callback suitable for GtfsService.SetBundleObserver.
+// It emits the per-agency introspection gauges (stop count, route count) when
+// the gtfs layer has finished parsing and storing a bundle. Defined here
+// rather than inside the gtfs package to avoid a metrics → gtfs → metrics
+// import cycle.
+func (ms *MetricsService) StaticBundleObserver() func(server models.ObaServer, agencyID, agencyName string, bundle *models.StaticData) {
+	return func(server models.ObaServer, agencyID, agencyName string, bundle *models.StaticData) {
+		serverURL := utils.SanitizeServerURL(server.ObaBaseURL)
+		GtfsStaticStopsCount.WithLabelValues(
+			agencyID, agencyName, server.ServerName, serverURL,
+		).Set(float64(len(bundle.Stops)))
+		GtfsStaticRoutesCount.WithLabelValues(
+			agencyID, agencyName, server.ServerName, serverURL,
+		).Set(float64(len(bundle.Routes)))
+	}
 }

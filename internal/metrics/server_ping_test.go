@@ -4,6 +4,11 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	onebusaway "github.com/OneBusAway/go-sdk"
+	"github.com/OneBusAway/go-sdk/option"
+	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/utils"
 )
 
 func TestCheckServer(t *testing.T) {
@@ -11,14 +16,19 @@ func TestCheckServer(t *testing.T) {
 		ts := setupObaServer(t, `{"code":200,"currentTime":1234567890000,"text":"OK","version":2,"data":{"entry":{"readableTime":"Test Time"}}}`, http.StatusOK)
 		defer ts.Close()
 
-		testServer := createTestServer(ts.URL, "Test Server", 999, "test-key", "http://example.com", "test-api-value", "test-api-key", "1")
+		testServer := models.ObaServer{AgencyName: "Test Server", AgencyID: "1", ObaBaseURL: ts.URL, ObaApiKey: "test-key"}
 
-		serverPing(testServer)
+		client := onebusaway.NewClient(
+			option.WithAPIKey(testServer.ObaApiKey),
+			option.WithBaseURL(testServer.ObaBaseURL),
+		)
+		serverPing(client, testServer)
 		time.Sleep(100 * time.Millisecond)
 
 		metricValue, err := getMetricValue(ObaApiStatus, map[string]string{
-			"server_id":  "999",
-			"server_url": testServer.ObaBaseURL,
+
+			"server_name": testServer.ServerName,
+			"server_url":  utils.SanitizeServerURL(testServer.ObaBaseURL),
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -33,14 +43,19 @@ func TestCheckServer(t *testing.T) {
 		ts := setupObaServer(t, `{"code":200,"currentTime":1234567890000,"text":"OK","version":2,"data":{"entry":{}}}`, http.StatusOK)
 		defer ts.Close()
 
-		testServer := createTestServer(ts.URL, "Test Server No Time", 998, "test-key", "http://example.com", "test-api-value", "test-api-key", "1")
+		testServer := models.ObaServer{AgencyName: "Test Server No Time", AgencyID: "2", ObaBaseURL: ts.URL, ObaApiKey: "test-key"}
 
-		serverPing(testServer)
+		client := onebusaway.NewClient(
+			option.WithAPIKey(testServer.ObaApiKey),
+			option.WithBaseURL(testServer.ObaBaseURL),
+		)
+		serverPing(client, testServer)
 		time.Sleep(100 * time.Millisecond)
 
 		metricValue, err := getMetricValue(ObaApiStatus, map[string]string{
-			"server_id":  "998",
-			"server_url": testServer.ObaBaseURL,
+
+			"server_name": testServer.ServerName,
+			"server_url":  utils.SanitizeServerURL(testServer.ObaBaseURL),
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -52,14 +67,19 @@ func TestCheckServer(t *testing.T) {
 	})
 
 	t.Run("HTTP request failure", func(t *testing.T) {
-		testServer := createTestServer("http://invalid.url", "Test Server Invalid", 997, "test-key", "http://example.com", "test-api-value", "test-api-key", "1")
+		testServer := models.ObaServer{AgencyName: "Test Server Invalid", AgencyID: "3", ObaBaseURL: "http://invalid.url", ObaApiKey: "test-key"}
 
-		serverPing(testServer)
+		client := onebusaway.NewClient(
+			option.WithAPIKey(testServer.ObaApiKey),
+			option.WithBaseURL(testServer.ObaBaseURL),
+		)
+		serverPing(client, testServer)
 		time.Sleep(100 * time.Millisecond)
 
 		metricValue, err := getMetricValue(ObaApiStatus, map[string]string{
-			"server_id":  "997",
-			"server_url": testServer.ObaBaseURL,
+
+			"server_name": testServer.ServerName,
+			"server_url":  utils.SanitizeServerURL(testServer.ObaBaseURL),
 		})
 		if err != nil {
 			t.Fatal(err)

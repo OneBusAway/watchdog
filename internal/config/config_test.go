@@ -23,13 +23,12 @@ func TestNewConfig(t *testing.T) {
 			env:  "development",
 			servers: []models.ObaServer{
 				{
-					Name:               "Test Server",
-					ID:                 1,
-					ObaBaseURL:         "https://test.onebusaway.org",
-					ObaApiKey:          "test-key",
-					GtfsUrl:            "https://test.gtfs.url",
-					TripUpdateUrl:      "https://test.update.url",
-					VehiclePositionUrl: "https://test.vehicle.url",
+					AgencyName:      "Test Server",
+					ObaBaseURL:      "https://test.onebusaway.org",
+					ObaApiKey:       "test-key",
+					AgencyID:        "agency-1",
+					GtfsStaticFeeds: []string{"https://test.gtfs.url"},
+					GtfsRTFeeds:     []models.GtfsRTFeed{{TripUpdateURL: "https://test.update.url", VehiclePositionURL: "https://test.vehicle.url"}},
 				},
 			},
 			expectedPort: 4000,
@@ -49,14 +48,14 @@ func TestNewConfig(t *testing.T) {
 			env:  "staging",
 			servers: []models.ObaServer{
 				{
-					Name:       "Server 1",
-					ID:         1,
+					AgencyName: "Server 1",
 					ObaBaseURL: "https://test1.onebusaway.org",
+					AgencyID:   "agency-1",
 				},
 				{
-					Name:       "Server 2",
-					ID:         2,
+					AgencyName: "Server 2",
 					ObaBaseURL: "https://test2.onebusaway.org",
+					AgencyID:   "agency-2",
 				},
 			},
 			expectedPort: 3000,
@@ -123,13 +122,13 @@ func TestConfigFields(t *testing.T) {
 
 func TestUpdateConfig(t *testing.T) {
 	initialServers := []models.ObaServer{
-		{ID: 1, Name: "Server 1"},
+		{AgencyID: "agency-1", AgencyName: "Server 1"},
 	}
 	config := NewConfig(1, "testing", initialServers)
 
 	newServers := []models.ObaServer{
-		{ID: 1, Name: "Server 1 Updated"},
-		{ID: 2, Name: "Server 2"},
+		{AgencyID: "agency-1", AgencyName: "Server 1 Updated"},
+		{AgencyID: "agency-2", AgencyName: "Server 2"},
 	}
 
 	config.UpdateConfig(newServers)
@@ -138,7 +137,7 @@ func TestUpdateConfig(t *testing.T) {
 		t.Errorf("Expected 2 servers, got %d", len(config.Servers))
 	}
 
-	if config.Servers[0].Name != "Server 1 Updated" {
-		t.Errorf("Expected server name to be updated to 'Server 1 Updated', got %s", config.Servers[0].Name)
+	if config.Servers[0].AgencyName != "Server 1 Updated" {
+		t.Errorf("Expected server name to be updated to 'Server 1 Updated', got %s", config.Servers[0].AgencyName)
 	}
 }

@@ -27,6 +27,24 @@ func main() {
 	flag.StringVar(&cfg.Env, "env", "development", "Environment (development|staging|production)")
 	flag.IntVar(&cfg.FetchInterval, "fetch-interval", 30, "Interval (in seconds) at which the application fetches data from realtime APIs and updates Prometheus metrics")
 
+	// Server-scope design (deliberate decision, see README "Server vs. agency
+	// scoping" and config.json.template):
+	//
+	// Every entry in config.json is server-scoped at the top level: server_name
+	// is required, server_url is derived from oba_base_url, and the operator
+	// lists the static feeds each server exposes. agency_id is optional.
+	//   - With agency_id set, the entry is narrowed to one agency: today's
+	//     per-agency pipeline runs once per tick for that agency.
+	//   - Without agency_id, the entry is server-scoped: Watchdog probes
+	//     /api/where/metrics.json each tick, cross-references the live agency
+	//     IDs against the static feeds' agency.txt declarations, and runs the
+	//     per-agency pipeline for every agency that has BOTH a static bundle
+	//     AND is reported as currently served.
+	//
+	// Multi-agency static feeds are accepted (one bundle pointer-shared across
+	// serverKeys); ambiguous feeds (zero or multiple agency_id rows in
+	// agency.txt) are Sentry-warned and skipped at download time.
+
 	var (
 		showVersion = flag.Bool("version", false, "display version and exit")
 		configFile  = flag.String("config-file", "", "Path to a local JSON configuration file")
@@ -90,9 +108,9 @@ func main() {
 	// If a config URL is specified, fetch it over HTTP(S).
 	var servers []models.ObaServer
 	if *configFile != "" {
-		servers, err = config.LoadConfigFromFile(*configFile)
+		servers, err = config.LoadConfigFromFile(*configFile, logger)
 	} else if *configURL != "" {
-		servers, err = config.LoadConfigFromURL(ctx, client, *configURL, configAuthUser, configAuthPass, 20)
+		servers, err = config.LoadConfigFromURL(ctx, client, *configURL, configAuthUser, configAuthPass, 20, logger)
 	}
 
 	if err != nil {
@@ -117,6 +135,11 @@ func main() {
 	// and also take a look at service file in each package to see the dependencies and the exposed methods and function.
 	app := app.New(&cfg, logger, client, version)
 
+	// Report the agencies Watchdog is tracking (those that passed config
+	// validation). This runs once at startup; it is re-triggered only when the
+	// remote config adds or removes an agency, never on the collection tick.
+	app.MetricsService.ReportTrackedAgencies(servers)
+
 	// From here we set up all dependencies and we are ready to start business logic.
 
 	// On startup, download GTFS static bundles for all configured servers
@@ -133,9 +156,14 @@ func main() {
 	// Cron job to delete the data of vehicles that has not sent updates for 1 hour
 	go app.MetricsService.VehicleLastSeen.ClearRoutine(ctx, 15*time.Minute, time.Hour)
 
+	// Cron job to prune unmatched-stop gauge series that have not been seen for 24 hours
+	go app.MetricsService.UnmatchedStopTracker.ClearRoutine(ctx, 15*time.Minute, 24*time.Hour)
+
 	// If a remote URL is specified, refresh the configuration every minute
 	if *configURL != "" {
-		go app.ConfigService.RefreshConfig(ctx, *configURL, configAuthUser, configAuthPass, time.Minute, 20)
+		go app.ConfigService.RefreshConfig(ctx, *configURL, configAuthUser, configAuthPass, time.Minute, 20, func(updated []models.ObaServer) {
+			app.MetricsService.ReportTrackedAgencies(updated)
+		})
 	}
 
 	// Start the HTTP server to serve the API and metrics endpoints

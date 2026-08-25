@@ -14,7 +14,7 @@ import (
 // It ensures that multiple goroutines can safely read the same data after it is set once.
 type RealtimeStore struct {
 	mu   sync.RWMutex
-	data *models.RealtimeData
+	data map[string]*models.RealtimeData
 }
 
 // NewRealtimeStore creates and returns a new empty RealtimeStore instance.
@@ -30,20 +30,27 @@ func NewRealtimeStore() *RealtimeStore {
 // It is typically called once by the function responsible for fetching the feed.
 //
 // Parameters:
+//   - serverKey: The composite server key (oba_base_url + agency_id).
 //   - newData: The parsed GTFS-RT feed to store.
-func (s *RealtimeStore) Set(newData *models.RealtimeData) {
+func (s *RealtimeStore) Set(serverKey string, newData *models.RealtimeData) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.data = newData
+	if s.data == nil {
+		s.data = make(map[string]*models.RealtimeData)
+	}
+	s.data[serverKey] = newData
 }
 
 // Get retrieves the most recently stored GTFS-RT data in a thread-safe way.
 // It can be safely called by multiple consumers concurrently.
 //
+// Parameters:
+//   - serverKey: The composite server key (oba_base_url + agency_id).
+//
 // Returns:
 //   - A pointer to the parsed GTFS-RT feed, or nil if not set.
-func (s *RealtimeStore) Get() *models.RealtimeData {
+func (s *RealtimeStore) Get(serverKey string) *models.RealtimeData {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.data
+	return s.data[serverKey]
 }

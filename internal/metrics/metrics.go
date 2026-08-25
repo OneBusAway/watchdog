@@ -5,78 +5,71 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-var (
-	// ObaApiStatus API Status (up/down)
-	ObaApiStatus = promauto.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "oba_api_status",
-			Help: "Status of the OneBusAway API Server (0 = not working, 1 = working)",
-		},
-		[]string{"server_id", "server_url"},
-	)
+// ObaApiStatus tracks the reachability of an OBA server's /current-time.json
+// endpoint. The ping is server-wide (the endpoint takes no agency parameter),
+// so the metric is labeled with server identity only — agency_id / agency_name
+// labels were misleading from the start and have been dropped. server_url is
+// the technical identifier (matches what's on every other per-agency metric);
+// server_name is the human-friendly label that operators see in dashboards.
+var ObaApiStatus = promauto.NewGaugeVec(
+	prometheus.GaugeOpts{
+		Name: "oba_api_status",
+		Help: "Status of the OneBusAway API Server (0 = not working, 1 = working)",
+	},
+	[]string{"server_name", "server_url"},
 )
 
 var (
 	BundleEarliestExpirationGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "gtfs_bundle_days_until_earliest_expiration",
 		Help: "Number of days until the earliest GTFS bundle expiration",
-	}, []string{"server_id"})
+	}, []string{"agency_id", "agency_name", "server_name", "server_url"})
 
 	BundleLatestExpirationGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "gtfs_bundle_days_until_latest_expiration",
 		Help: "Number of days until the latest GTFS bundle expiration",
-	}, []string{"server_id"})
+	}, []string{"agency_id", "agency_name", "server_name", "server_url"})
 )
 
 var (
-	AgenciesInStaticGtfs = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "oba_agencies_in_static_gtfs",
-		Help: "Number of agencies in the static GTFS file",
-	}, []string{"server_id"})
+	AgenciesTrackedCount = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "oba_tracked_agencies_count",
+		Help: "Number of agencies currently tracked by Watchdog (validated config entries)",
+	})
 
-	AgenciesInCoverageEndpoint = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "oba_agencies_in_coverage_endpoint",
-		Help: "Number of agencies in the agencies-with-coverage endpoint",
-	}, []string{"server_id"})
-
-	AgenciesMatch = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "oba_agencies_match",
-		Help: "Whether the number of agencies in the static GTFS file matches the agencies-with-coverage endpoint (1 = match, 0 = no match)",
-	}, []string{"server_id"})
+	AgenciesTrackedInfo = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "oba_tracked_agencies_info",
+		Help: "One series per agency currently tracked by Watchdog (always 1)",
+	}, []string{"agency_id", "agency_name", "server_name", "server_url"})
 )
 
 var (
 	RealtimeVehiclePositions = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "realtime_vehicle_positions_count_gtfs_rt",
 		Help: "Number of realtime vehicle positions in the GTFS-RT feed",
-	}, []string{"gtfs_rt_url", "server_id"})
+	}, []string{"agency_id", "agency_name", "server_name", "server_url"})
 
-	VehicleCountAPI = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "vehicle_count_api",
-		Help: "Number of vehicles in the API response",
-	}, []string{"agency_id", "server_id"})
-
-	VehicleCountMatch = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "vehicle_count_match",
-		Help: "Whether the number of vehicles in the API response matches the number of vehicles in the static GTFS-RT file (1 = match, 0 = no match)",
-	}, []string{"agency_id", "server_id"})
+	AgencyActiveVehiclesGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "oba_agency_active_vehicles_count",
+		Help: "Number of active vehicles reported for the agency by the OBA vehicles-for-agency API",
+	}, []string{"agency_id", "agency_name", "server_name", "server_url"})
 
 	VehicleReportInterval = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "vehicle_position_report_interval_seconds",
 		Help: "Time in seconds since each vehicle last reported a GTFS-RT position",
-	}, []string{"vehicle_id", "server_id"})
+	}, []string{"vehicle_id", "agency_id", "agency_name", "server_name", "server_url", "feed"})
 
 	VehicleReportCount = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "vehicle_report_total",
 		Help: "Total number of GTFS-RT updates received from each vehicle",
-	}, []string{"vehicle_id", "server_id"})
+	}, []string{"vehicle_id", "agency_id", "agency_name", "server_name", "server_url", "feed"})
 
 	VehicleSpeedGauge = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "gtfs_rt_vehicle_computed_speed",
 			Help: "Computed speed of the vehicle in m/s based on GTFS-RT positions and timestamps",
 		},
-		[]string{"vehicle_id", "agency_id", "server_id"},
+		[]string{"vehicle_id", "agency_id", "agency_name", "server_name", "server_url", "feed"},
 	)
 
 	VehicleSpeedDiscrepancyRatioGauge = promauto.NewGaugeVec(
@@ -84,7 +77,7 @@ var (
 			Name: "gtfs_rt_vehicle_speed_discrepancy_ratio",
 			Help: "Ratio between computed and reported speed (|computed - reported| / reported)",
 		},
-		[]string{"vehicle_id", "agency_id", "server_id"},
+		[]string{"vehicle_id", "agency_id", "agency_name", "server_name", "server_url", "feed"},
 	)
 
 	InvalidVehicleCoordinatesGauge = promauto.NewGaugeVec(
@@ -92,7 +85,7 @@ var (
 			Name: "gtfs_rt_invalid_vehicle_coordinates",
 			Help: "Current number of GTFS-RT vehicle positions with invalid coordinates",
 		},
-		[]string{"server_id"},
+		[]string{"agency_id", "agency_name", "server_name", "server_url"},
 	)
 
 	StoppedOutOfBoundsVehiclesGauge = promauto.NewGaugeVec(
@@ -100,33 +93,39 @@ var (
 			Name: "gtfs_rt_stopped_out_of_bounds_vehicles",
 			Help: "Number of vehicles outside bounding box while stopped at a stop",
 		},
-		[]string{"server_id"},
+		[]string{"agency_id", "agency_name", "server_name", "server_url"},
 	)
 	TrackedVehiclesGauge = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "gtfs_rt_tracked_vehicles_count",
 			Help: "Number of vehicles currently being tracked (i.e., have a last seen position and timestamp)",
 		},
-		[]string{"server_id"},
+		[]string{"agency_id", "agency_name", "server_name", "server_url"},
+	)
+
+	// GtfsRtUnattributedVehicles counts RT vehicles whose TripDescriptor.route_id
+	// could not be resolved to a server-reported agency. This is the operator's
+	// signal that their static feeds are missing routes the RT feed references
+	// — typically because a feed is stale or a new service was added without a
+	// matching static bundle. The gauge is server-scoped because we don't know
+	// the agency until attribution succeeds.
+	GtfsRtUnattributedVehicles = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "gtfs_rt_unattributed_vehicles_count",
+			Help: "Number of GTFS-RT vehicles with route_id not resolvable to a server-reported agency_id",
+		},
+		[]string{"server_name", "server_url"},
 	)
 )
 
 // OBA REST API 2.6.0 >= Metrics
 var (
-	ObaAgenciesWithCoverage = promauto.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "oba_agencies_with_coverage_count",
-			Help: "Number of agencies with coverage",
-		},
-		[]string{"server"},
-	)
-
 	ObaRealtimeRecords = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "oba_realtime_records_count",
-			Help: "Total number of realtime records",
+			Help: "Number of realtime trip/vehicle records processed during a feed update",
 		},
-		[]string{"server", "agency"},
+		[]string{"agency_id", "agency_name", "server_name", "server_url"},
 	)
 
 	ObaRealtimeTripsMatched = promauto.NewGaugeVec(
@@ -134,7 +133,7 @@ var (
 			Name: "oba_realtime_trips_matched_count",
 			Help: "Number of matched realtime trips",
 		},
-		[]string{"server", "agency"},
+		[]string{"agency_id", "agency_name", "server_name", "server_url"},
 	)
 
 	ObaRealtimeTripsUnmatched = promauto.NewGaugeVec(
@@ -142,7 +141,7 @@ var (
 			Name: "oba_realtime_trips_unmatched_count",
 			Help: "Number of unmatched realtime trips",
 		},
-		[]string{"server", "agency"},
+		[]string{"agency_id", "agency_name", "server_name", "server_url"},
 	)
 
 	ObaScheduledTrips = promauto.NewGaugeVec(
@@ -150,7 +149,7 @@ var (
 			Name: "oba_scheduled_trips_count",
 			Help: "Number of scheduled trips",
 		},
-		[]string{"server", "agency"},
+		[]string{"agency_id", "agency_name", "server_name", "server_url"},
 	)
 
 	ObaStopsMatched = promauto.NewGaugeVec(
@@ -158,7 +157,7 @@ var (
 			Name: "oba_stops_matched_count",
 			Help: "Number of matched stops",
 		},
-		[]string{"server", "agency"},
+		[]string{"agency_id", "agency_name", "server_name", "server_url"},
 	)
 
 	ObaStopsUnmatched = promauto.NewGaugeVec(
@@ -166,25 +165,25 @@ var (
 			Name: "oba_stops_unmatched_count",
 			Help: "Number of unmatched stops",
 		},
-		[]string{"server", "agency"},
+		[]string{"agency_id", "agency_name", "server_name", "server_url"},
 	)
 
 	TripMatchRatio = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "oba_realtime_trip_match_ratio",
 		Help: "Ratio of matched realtime trips to total realtime trips",
-	}, []string{"server", "agency"})
+	}, []string{"agency_id", "agency_name", "server_name", "server_url"})
 
 	StopMatchRatio = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "oba_stop_match_ratio",
 		Help: "Ratio of matched stops to total stops",
-	}, []string{"server", "agency"})
+	}, []string{"agency_id", "agency_name", "server_name", "server_url"})
 
 	ObaTimeSinceUpdate = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "oba_time_since_last_update_seconds",
 			Help: "Time since last realtime update in seconds",
 		},
-		[]string{"server", "agency"},
+		[]string{"agency_id", "agency_name", "server_name", "server_url"},
 	)
 
 	ObaUnmatchedStopInfo = promauto.NewGaugeVec(
@@ -192,15 +191,81 @@ var (
 			Name: "oba_unmatched_stop_info",
 			Help: "Presence marker (always 1) for unmatched stops from static GTFS with their location as labels",
 		},
-		[]string{"server", "agency", "stop_id", "stop_name", "lat", "lon"},
+		[]string{"agency_id", "agency_name", "server_name", "server_url", "stop_id", "stop_name", "lat", "lon"},
+	)
+
+	ObaUnmatchedStopUnresolved = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "oba_unmatched_stop_unresolved",
+			Help: "Number of stop IDs reported as unmatched by the OBA metrics API that could not be resolved against the local GTFS static bundle",
+		},
+		[]string{"agency_id", "agency_name", "server_name", "server_url"},
+	)
+
+	GtfsBundleLastFetchedTimestamp = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "gtfs_bundle_last_fetched_timestamp_seconds",
+			Help: "Unix timestamp of when the GTFS static bundle was last downloaded for a server",
+		},
+		[]string{"agency_id", "agency_name", "server_name", "server_url"},
 	)
 
 	UnmatchedStopClusterCount = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "oba_unmatched_stop_cluster_count",
-			Help: "Number of unmatched stops grouped by station or spatial cluster",
+			Help: "Number of unmatched stops grouped by station and S2 spatial cluster",
 		},
-		[]string{"server", "agency", "cluster_id", "cluster_type"},
+		[]string{"agency_id", "agency_name", "server_name", "server_url", "station_id", "cluster_id", "cluster_lat", "cluster_lon"},
+	)
+)
+
+// Server-scope introspection metrics (new with the server-scope redesign).
+//
+// GtfsStaticStopsCount / GtfsStaticRoutesCount are emitted on every static
+// refresh for every agency we have a bundle for. They let operators alert on
+// sudden drops (e.g., a feed that lost all its routes overnight).
+//
+// GtfsStaticAgencyCurrentlyLive is set on every scrape: 1 if the agency has
+// a static bundle AND is reported by /api/where/metrics.json entry.AgencyIDs
+// in the current scrape, 0 otherwise. The 0 case is the operator's signal
+// that an agency is configured but not currently served.
+//
+// GtfsStaticFeedAttributionStatus flips to 0 when a configured feed's
+// agency_id cannot be matched to a server-reported agency (the feed's
+// agency.txt has zero rows, multiple ambiguous rows, or an agency OBA no
+// longer reports). Emitted per (feed_url, agency_id) so operators can tell
+// exactly which feed broke.
+var (
+	GtfsStaticStopsCount = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "gtfs_static_stops_count",
+			Help: "Number of stops parsed from the agency's static GTFS bundle(s)",
+		},
+		[]string{"agency_id", "agency_name", "server_name", "server_url"},
+	)
+
+	GtfsStaticRoutesCount = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "gtfs_static_routes_count",
+			Help: "Number of routes parsed from the agency's static GTFS bundle(s)",
+		},
+		[]string{"agency_id", "agency_name", "server_name", "server_url"},
+	)
+
+	GtfsStaticAgencyCurrentlyLive = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "gtfs_static_agency_currently_live",
+			Help: "1 if the agency has a static bundle AND is reported by /api/where/metrics.json entry.AgencyIDs in the current scrape, 0 otherwise",
+		},
+		[]string{"agency_id", "agency_name", "server_name", "server_url"},
+	)
+
+	GtfsStaticFeedAttributionStatus = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "gtfs_static_feed_attribution_status",
+			Help: "1 if the configured static feed was unambiguously attributed to a server-reported agency, 0 otherwise",
+		},
+		[]string{"feed_url", "agency_id", "agency_name", "server_name", "server_url"},
 	)
 )
 

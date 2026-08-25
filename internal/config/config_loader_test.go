@@ -11,7 +11,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,14 +23,12 @@ import (
 func TestLoadConfigFromFile(t *testing.T) {
 	t.Run("ValidConfig", func(t *testing.T) {
 		content := `[{
-		"name": "Test Server", "id": 1,
+		"server_name": "Test Server",
+		"agency_name": "Test Server",
 		"oba_base_url": "https://test.example.com",
 		"oba_api_key": "test-key",
-		"gtfs_url": "https://gtfs.example.com",
-		"trip_update_url": "https://trip.example.com",
-		"vehicle_position_url": "https://vehicle.example.com",
-		"gtfs_rt_api_key": "",
-		"gtfs_rt_api_value": "",
+		"gtfs_static_feeds": ["https://gtfs.example.com"],
+		"gtfs_rt_feeds": [{"trip_update_url": "https://trip.example.com", "vehicle_position_url": "https://vehicle.example.com"}],
 		"agency_id": "agency-1"
 		}]`
 
@@ -38,7 +38,7 @@ func TestLoadConfigFromFile(t *testing.T) {
 			t.Fatalf("write config.json: %v", err)
 		}
 
-		servers, err := loadConfigFromFile(fp)
+		servers, err := loadConfigFromFile(fp, testLogger())
 		if err != nil {
 			t.Fatalf("loadConfigFromFile failed: %v", err)
 		}
@@ -48,19 +48,19 @@ func TestLoadConfigFromFile(t *testing.T) {
 		}
 
 		expected := models.ObaServer{
-			Name:               "Test Server",
-			ID:                 1,
-			ObaBaseURL:         "https://test.example.com",
-			ObaApiKey:          "test-key",
-			GtfsUrl:            "https://gtfs.example.com",
-			TripUpdateUrl:      "https://trip.example.com",
-			VehiclePositionUrl: "https://vehicle.example.com",
-			GtfsRtApiKey:       "",
-			GtfsRtApiValue:     "",
-			AgencyID:           "agency-1",
+			ServerName:      "Test Server",
+			AgencyName:      "Test Server",
+			ObaBaseURL:      "https://test.example.com",
+			ObaApiKey:       "test-key",
+			AgencyID:        "agency-1",
+			GtfsStaticFeeds: []string{"https://gtfs.example.com"},
+			GtfsRTFeeds: []models.GtfsRTFeed{{
+				TripUpdateURL:      "https://trip.example.com",
+				VehiclePositionURL: "https://vehicle.example.com",
+			}},
 		}
 
-		if servers[0] != expected {
+		if !reflect.DeepEqual(servers[0], expected) {
 			t.Errorf("expected %+v, got %+v", expected, servers[0])
 		}
 	})
@@ -73,7 +73,7 @@ func TestLoadConfigFromFile(t *testing.T) {
 			t.Fatalf("write invalid config.json: %v", err)
 		}
 
-		if _, err := loadConfigFromFile(fp); err == nil {
+		if _, err := loadConfigFromFile(fp, testLogger()); err == nil {
 			t.Errorf("expected error with invalid JSON, got none")
 		}
 	})
@@ -82,7 +82,7 @@ func TestLoadConfigFromFile(t *testing.T) {
 		dir := t.TempDir()
 		fp := filepath.Join(dir, "config.json")
 
-		if _, err := loadConfigFromFile(fp); err == nil {
+		if _, err := loadConfigFromFile(fp, testLogger()); err == nil {
 			t.Errorf("expected error for non-existent file, got none")
 		}
 	})
@@ -96,21 +96,18 @@ func TestLoadConfigFromURL(t *testing.T) {
 	t.Run("ValidResponse", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`[{"name": "Test Server",
-			 "id": 1,
+			w.Write([]byte(`[{"server_name": "Test Server",
+			 "agency_name": "Test Server",
 			 "oba_base_url": "https://test.example.com",
 			 "oba_api_key": "test-key",
-			 "gtfs_url": "https://gtfs.example.com",
-			 "trip_update_url": "https://trip.example.com",
-			 "vehicle_position_url": "https://vehicle.example.com",
-			 "gtfs_rt_api_key": "",
-			 "gtfs_rt_api_value": "",
+			 "gtfs_static_feeds": ["https://gtfs.example.com"],
+			 "gtfs_rt_feeds": [{"trip_update_url": "https://trip.example.com", "vehicle_position_url": "https://vehicle.example.com"}],
 			 "agency_id": "agency-1"
 			}]`))
 		}))
 		defer ts.Close()
 
-		servers, err := loadConfigFromURL(ctx, client, ts.URL, "user", "pass", 1)
+		servers, err := loadConfigFromURL(ctx, client, ts.URL, "user", "pass", 1, testLogger())
 		if err != nil {
 			t.Fatalf("loadConfigFromURL failed: %v", err)
 		}
@@ -120,17 +117,19 @@ func TestLoadConfigFromURL(t *testing.T) {
 		}
 
 		expected := models.ObaServer{
-			Name:               "Test Server",
-			ID:                 1,
-			ObaBaseURL:         "https://test.example.com",
-			ObaApiKey:          "test-key",
-			GtfsUrl:            "https://gtfs.example.com",
-			TripUpdateUrl:      "https://trip.example.com",
-			VehiclePositionUrl: "https://vehicle.example.com",
-			AgencyID:           "agency-1",
+			ServerName:      "Test Server",
+			AgencyName:      "Test Server",
+			ObaBaseURL:      "https://test.example.com",
+			ObaApiKey:       "test-key",
+			AgencyID:        "agency-1",
+			GtfsStaticFeeds: []string{"https://gtfs.example.com"},
+			GtfsRTFeeds: []models.GtfsRTFeed{{
+				TripUpdateURL:      "https://trip.example.com",
+				VehiclePositionURL: "https://vehicle.example.com",
+			}},
 		}
 
-		if servers[0] != expected {
+		if !reflect.DeepEqual(servers[0], expected) {
 			t.Errorf("Expected server %+v, got %+v", expected, servers[0])
 		}
 	})
@@ -141,7 +140,7 @@ func TestLoadConfigFromURL(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		_, err := loadConfigFromURL(ctx, client, ts.URL, "", "", 1)
+		_, err := loadConfigFromURL(ctx, client, ts.URL, "", "", 1, testLogger())
 		if err == nil {
 			t.Errorf("Expected error with 500 response, got none")
 		}
@@ -154,13 +153,13 @@ func TestLoadConfigFromURL(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		_, err := loadConfigFromURL(ctx, client, ts.URL, "", "", 1)
+		_, err := loadConfigFromURL(ctx, client, ts.URL, "", "", 1, testLogger())
 		if err == nil {
 			t.Errorf("Expected error for invalid JSON response, got none")
 		}
 	})
 	t.Run("InvalidURL", func(t *testing.T) {
-		_, err := loadConfigFromURL(ctx, client, "://invalid-url", "", "", 1)
+		_, err := loadConfigFromURL(ctx, client, "://invalid-url", "", "", 1, testLogger())
 		if err == nil || !strings.Contains(err.Error(), "failed to create request") {
 			t.Errorf("Expected request creation error, got: %v", err)
 		}
@@ -276,15 +275,12 @@ func TestValidateConfigFlags(t *testing.T) {
 func TestRefreshConfig(t *testing.T) {
 	obaServer := models.NewObaServer(
 		"Test Server",
-		1,
+		"Test Server",
+		"test-agency",
 		"https://test.example.com",
 		"test-key",
-		"",
-		"",
-		"",
-		"",
-		"",
-		"",
+		[]string{"https://test.example.com/gtfs.zip"},
+		[]models.GtfsRTFeed{{VehiclePositionURL: "https://test.example.com/vehicles"}},
 	)
 
 	cfg := NewConfig(
@@ -299,9 +295,9 @@ func TestRefreshConfig(t *testing.T) {
 
 	testLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	var serverHitCount int
+	var serverHitCount atomic.Int32
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		serverHitCount++
+		serverHitCount.Add(1)
 
 		user, pass, hasAuth := r.BasicAuth()
 		if hasAuth && (user != "testuser" || pass != "testpass") {
@@ -312,12 +308,12 @@ func TestRefreshConfig(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintln(w, `[
 					{
-							"id": 999,
-							"name": "Refreshed Test Server",
+							"server_name": "Refreshed Test Server",
+							"agency_name": "Refreshed Test Server",
 							"oba_base_url": "https://refreshed.example.com",
 							"oba_api_key": "refreshed-key",
-							"gtfs_url": "https://refreshed.example.com/gtfs.zip",
-							"vehicle_position_url": "https://refreshed.example.com/vehicles",
+							"gtfs_static_feeds": ["https://refreshed.example.com/gtfs.zip"],
+							"gtfs_rt_feeds": [{"vehicle_position_url": "https://refreshed.example.com/vehicles"}],
 							"agency_id": "agency-999"
 					}
 			]`)
@@ -329,12 +325,20 @@ func TestRefreshConfig(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go refreshConfig(ctx, client, mockServer.URL, "testuser", "testpass", cfg, testLogger, 100*time.Millisecond, 1)
+
+	var callbackServers []models.ObaServer
+	go refreshConfig(ctx, client, mockServer.URL, "testuser", "testpass", cfg, testLogger, 100*time.Millisecond, 1, func(servers []models.ObaServer) {
+		callbackServers = servers
+	})
 
 	time.Sleep(200 * time.Millisecond)
 
-	if serverHitCount == 0 {
+	if serverHitCount.Load() == 0 {
 		t.Fatal("Mock server was never called")
+	}
+
+	if len(callbackServers) == 0 {
+		t.Fatal("onUpdated callback was never invoked with refreshed servers")
 	}
 
 	updatedServers := cfg.GetServers()
@@ -345,7 +349,7 @@ func TestRefreshConfig(t *testing.T) {
 
 	var found bool
 	for _, s := range updatedServers {
-		if s.ID == 999 && s.Name == "Refreshed Test Server" {
+		if s.AgencyID == "agency-999" && s.AgencyName == "Refreshed Test Server" {
 			found = true
 			break
 		}

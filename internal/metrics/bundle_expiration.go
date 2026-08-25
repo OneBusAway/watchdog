@@ -2,7 +2,6 @@ package metrics
 
 import (
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/getsentry/sentry-go"
@@ -30,19 +29,19 @@ import (
 //   - error: any error encountered during processing.
 func checkBundleExpiration(staticStore *gtfs.StaticStore, currentTime time.Time, server models.ObaServer) (int, int, error) {
 	currentTime = currentTime.UTC()
-	staticData, ok := staticStore.Get(server.ID)
+	staticData, ok := staticStore.Get(server.ServerKey())
 	if !ok {
-		err := fmt.Errorf("there is no bundle for server %v", server.ID)
+		err := fmt.Errorf("there is no bundle for server key %s", server.ServerKey())
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags:  utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+			Tags:  utils.MakeMap("agency_id", server.AgencyID),
 			Level: sentry.LevelWarning,
 		})
 		return 0, 0, err
 	}
 	if staticData == nil {
-		err := fmt.Errorf("static data is nil for server %v", server.ID)
+		err := fmt.Errorf("static data is nil for server key %s", server.ServerKey())
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags:  utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+			Tags:  utils.MakeMap("agency_id", server.AgencyID),
 			Level: sentry.LevelWarning,
 		})
 		return 0, 0, err
@@ -51,7 +50,7 @@ func checkBundleExpiration(staticStore *gtfs.StaticStore, currentTime time.Time,
 
 	if err != nil {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags:  utils.MakeMap("server_id", strconv.Itoa(server.ID)),
+			Tags:  utils.MakeMap("agency_id", server.AgencyID),
 			Level: sentry.LevelWarning,
 		})
 		return 0, 0, err
@@ -60,8 +59,8 @@ func checkBundleExpiration(staticStore *gtfs.StaticStore, currentTime time.Time,
 	daysUntilEarliestExpiration := int(earliestEndDate.Sub(currentTime).Hours() / 24)
 	daysUntilLatestExpiration := int(latestEndDate.Sub(currentTime).Hours() / 24)
 
-	BundleEarliestExpirationGauge.WithLabelValues(strconv.Itoa(server.ID)).Set(float64(daysUntilEarliestExpiration))
-	BundleLatestExpirationGauge.WithLabelValues(strconv.Itoa(server.ID)).Set(float64(daysUntilLatestExpiration))
+	BundleEarliestExpirationGauge.WithLabelValues(server.AgencyID, server.AgencyName, server.ServerName, utils.SanitizeServerURL(server.ObaBaseURL)).Set(float64(daysUntilEarliestExpiration))
+	BundleLatestExpirationGauge.WithLabelValues(server.AgencyID, server.AgencyName, server.ServerName, utils.SanitizeServerURL(server.ObaBaseURL)).Set(float64(daysUntilLatestExpiration))
 
 	return daysUntilEarliestExpiration, daysUntilLatestExpiration, nil
 }

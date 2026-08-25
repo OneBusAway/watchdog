@@ -3,13 +3,17 @@ package metrics
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
-	"time"
 
 	"watchdog.onebusaway.org/internal/gtfs"
+	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
 	"watchdog.onebusaway.org/internal/utils"
 )
+
+// metricsEndpoint is the OBA API metrics endpoint probed by fetchObaAPIMetrics.
+const metricsEndpoint = "/api/where/metrics.json"
 
 type OBAMetrics struct {
 	Code        int    `json:"code"`
@@ -33,49 +37,67 @@ type OBAMetrics struct {
 	} `json:"data"`
 }
 
-// fetchObaAPIMetrics retrieves and records metrics from the OneBusAway metrics API
-// for a given server and updates corresponding Prometheus metrics.
+// fetchObaAPIMetrics retrieves and records metrics from the OneBusAway metrics
+// API for a given agency on a given server and updates corresponding
+// Prometheus metrics.
 //
-// It performs an HTTP GET request to the server's `/metrics.json` endpoint using the provided
-// API key, decodes the response into structured fields, and populates Prometheus metrics such as:
+// It performs an HTTP GET request to the server's `/metrics.json` endpoint
+// using the provided API key, decodes the response into structured fields, and
+// populates per-agency Prometheus metrics (real-time and scheduled trip
+// counts, stop match ratios, time-since-update, etc.).
 //
-//   - Number of agencies with coverage
-//   - Real-time and scheduled trip counts (matched/unmatched)
-//   - Stop ID match/unmatch counts and ratios
-//   - Trip and stop match ratios
-//   - Time since last real-time update
-//   - Locations of unmatched stops (if available)
+// Server availability is *not* set here — that's the responsibility of the
+// server-ping routine, which labels ObaApiStatus with (server_name, server_url)
+// only. This function only emits per-agency metrics.
+//
+// In server-mode this function is called once per live agency per tick
+// against the same /api/where/metrics.json endpoint that probeLiveAgencies
+// already fetched. See the TODO in collectForServerScope (metrics_collector.go)
+// for why we accept the N+1 fetch pattern today.
 //
 // Parameters:
-//   - slugID: a string identifier used for metric labels.
-//   - serverID: the numeric ID of the OBA server.
+//   - agencyID: a string identifier used for metric labels and to look up the
+//     API-reported counts.
+//   - agencyName: the human-readable agency name, used as a metric label so
+//     observers can identify the agency without decoding its ID.
+//   - serverName: the human-readable server name, used as a metric label so
+//     observers can group agencies by server.
 //   - serverBaseUrl: the base URL of the OBA server (e.g., https://example.org).
 //   - apiKey: the API key used to authenticate with the OBA server.
-//   - client: an optional custom HTTP client; if nil, a default client with a timeout is used.
+//   - client: the HTTP client used for the request. It must be non-nil; it is
+//     injected (via MetricsService) so requests flow through the instrumented
+//     transport. A nil client is treated as a programming error.
 //
 // Returns:
-//   - error: any error encountered during request, decoding, or Prometheus reporting.
+//   - error: any error encountered during request or decoding.
 
-func fetchObaAPIMetrics(slugID string, serverID int, serverBaseUrl string, apiKey string, client *http.Client, staticStore *gtfs.StaticStore) error {
+func fetchObaAPIMetrics(agencyID, agencyName, serverName, serverBaseUrl, apiKey string, client *http.Client, staticStore *gtfs.StaticStore, logger *slog.Logger, unmatchedStopTracker *UnmatchedStopTracker) error {
 	if client == nil {
-		client = &http.Client{
-			Timeout: 10 * time.Second,
-		}
+		err := fmt.Errorf("nil http client passed to fetchObaAPIMetrics for agency %s", agencyID)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: map[string]string{
+				"agency_id":   agencyID,
+				"server_name": serverName,
+			},
+		})
+		return err
 	}
 
-	url := fmt.Sprintf("%s/api/where/metrics.json?key=%s", serverBaseUrl, apiKey)
+	serverKey := models.ServerKey(serverBaseUrl, agencyID)
+	serverURL := utils.SanitizeServerURL(serverBaseUrl)
 
-	fmt.Printf("Fetching metrics from %s\n", url)
+	url := fmt.Sprintf("%s/api/where/metrics.json?key=%s", serverBaseUrl, apiKey)
+	sanitizedURL := utils.SanitizeServerURL(url)
+
+	logger.Info("Fetching metrics from OBA server", "agency_id", agencyID, "server_name", serverName, "url", sanitizedURL)
 
 	resp, err := client.Get(url)
 	if err != nil {
-		err = fmt.Errorf("failed to fetch metrics from %s: %v", url, err)
+		err = fmt.Errorf("failed to fetch metrics from %s: %v", sanitizedURL, err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{
-				"slug_id": slugID,
-			},
+			Tags: map[string]string{"agency_id": agencyID, "server_name": serverName},
 			ExtraContext: map[string]interface{}{
-				"url": url,
+				"url": sanitizedURL,
 			},
 		})
 		return err
@@ -87,108 +109,149 @@ func fetchObaAPIMetrics(slugID string, serverID int, serverBaseUrl string, apiKe
 		if resp.StatusCode == http.StatusNotFound {
 			wrappedErr = fmt.Errorf("server %s does not support metrics API", serverBaseUrl)
 		} else {
-			wrappedErr = fmt.Errorf("unexpected status code from %s: %d", url, resp.StatusCode)
+			wrappedErr = fmt.Errorf("unexpected status code from %s: %d", sanitizedURL, resp.StatusCode)
 		}
 		report.ReportErrorWithSentryOptions(wrappedErr, report.SentryReportOptions{
-			Tags: utils.MakeMap("slug_id", slugID),
+			Tags: map[string]string{"agency_id": agencyID, "server_name": serverName},
 			ExtraContext: map[string]interface{}{
-				"url":         url,
+				"url":         sanitizedURL,
 				"status_code": resp.StatusCode,
 			},
 		})
-
 		return wrappedErr
 	}
 
 	var metrics OBAMetrics
 	if err := json.NewDecoder(resp.Body).Decode(&metrics); err != nil {
-		err = fmt.Errorf("failed to decode metrics from %s: %v", url, err)
+		err = fmt.Errorf("failed to decode metrics from %s: %v", sanitizedURL, err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("slug_id", slugID),
+			Tags: map[string]string{"agency_id": agencyID, "server_name": serverName},
 			ExtraContext: map[string]interface{}{
-				"url": url,
+				"url": sanitizedURL,
 			},
 		})
 		return err
 	}
 
-	ObaApiStatus.WithLabelValues(slugID, url).Set(1)
+	if fetchTime, ok := staticStore.GetFetchTime(serverKey); ok {
+		GtfsBundleLastFetchedTimestamp.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(float64(fetchTime.Unix()))
+	}
 
 	entry := metrics.Data.Entry
 
-	ObaAgenciesWithCoverage.WithLabelValues(slugID).Set(float64(entry.AgenciesWithCoverageCount))
-
-	for _, agencyID := range entry.AgencyIDs {
-		if count, ok := entry.RealtimeRecordsTotal[agencyID]; ok {
-			ObaRealtimeRecords.WithLabelValues(slugID, agencyID).Set(float64(count))
-		}
-
-		if count, ok := entry.RealtimeTripCountsMatched[agencyID]; ok {
-			ObaRealtimeTripsMatched.WithLabelValues(slugID, agencyID).Set(float64(count))
-		}
-
-		if count, ok := entry.RealtimeTripCountsUnmatched[agencyID]; ok {
-			ObaRealtimeTripsUnmatched.WithLabelValues(slugID, agencyID).Set(float64(count))
-		}
-
-		matched := entry.RealtimeTripCountsMatched[agencyID]
-		unmatched := entry.RealtimeTripCountsUnmatched[agencyID]
-		total := matched + unmatched
-		if total > 0 {
-			ratio := float64(matched) / float64(total)
-			TripMatchRatio.WithLabelValues(slugID, agencyID).Set(ratio)
-		}
-
-		if count, ok := entry.ScheduledTripsCount[agencyID]; ok {
-			ObaScheduledTrips.WithLabelValues(slugID, agencyID).Set(float64(count))
-		}
-
-		if count, ok := entry.StopIDsMatchedCount[agencyID]; ok {
-			ObaStopsMatched.WithLabelValues(slugID, agencyID).Set(float64(count))
-		}
-
-		if count, ok := entry.StopIDsUnmatchedCount[agencyID]; ok {
-			ObaStopsUnmatched.WithLabelValues(slugID, agencyID).Set(float64(count))
-		}
-
-		stopMatched := entry.StopIDsMatchedCount[agencyID]
-		stopUnmatched := entry.StopIDsUnmatchedCount[agencyID]
-		stopTotal := stopMatched + stopUnmatched
-		if stopTotal > 0 {
-			stopRatio := float64(stopMatched) / float64(stopTotal)
-			StopMatchRatio.WithLabelValues(slugID, agencyID).Set(stopRatio)
-		}
-
-		if seconds, ok := entry.TimeSinceLastRealtimeUpdate[agencyID]; ok {
-			ObaTimeSinceUpdate.WithLabelValues(slugID, agencyID).Set(float64(seconds))
-		}
-
-		unmatchedStopIDs := entry.StopIDsUnmatched[agencyID]
-		if len(unmatchedStopIDs) > 0 {
-			stopInfoMap, err := gtfs.GetStopLocationsByIDs(serverID, unmatchedStopIDs, staticStore)
-			if err != nil {
-				report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-					Tags:         utils.MakeMap("slug_id", slugID),
-					ExtraContext: map[string]interface{}{"reason": "failed to match stop IDs to GTFS"},
-				})
-				continue
-			}
-
-			for stopID, stop := range stopInfoMap {
-				if stop.Latitude == nil || stop.Longitude == nil {
-					continue
-				}
-				ObaUnmatchedStopInfo.WithLabelValues(
-					slugID,
-					agencyID,
-					stopID,
-					stop.Name,
-					fmt.Sprintf("%.6f", *stop.Latitude),
-					fmt.Sprintf("%.6f", *stop.Longitude),
-				).Set(1)
-			}
-			reportUnmatchedStopClusters(slugID, agencyID, stopInfoMap)
+	// The per-agency metrics below are only valid when the configured agencyID
+	// is actually one of the agencies the OBA server reports in entry.AgencyIDs.
+	// If it isn't, the server has no data for this agency, so report the
+	// mismatch and skip every per-agency metric for this cycle.
+	agencyFound := false
+	for _, reportedAgencyID := range entry.AgencyIDs {
+		if reportedAgencyID == agencyID {
+			agencyFound = true
+			break
 		}
 	}
+	if !agencyFound {
+		err := fmt.Errorf("configured agency %s not found in OBA metrics response for %s", agencyID, sanitizedURL)
+		logger.Error("Configured agency not found in OBA metrics response",
+			"agency_id", agencyID, "server_name", serverName, "url", sanitizedURL, "reported_agency_ids", entry.AgencyIDs)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: map[string]string{"agency_id": agencyID, "server_name": serverName},
+			ExtraContext: map[string]interface{}{
+				"url":                 sanitizedURL,
+				"reported_agency_ids": entry.AgencyIDs,
+			},
+		})
+		return nil
+	}
+
+	// Per-agency metrics below. Index the response maps with the configured
+	// agencyID so every series is labeled with it, and only report values when
+	// the server carries data for that agency.
+	if count, ok := entry.RealtimeRecordsTotal[agencyID]; ok {
+		ObaRealtimeRecords.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(float64(count))
+	}
+
+	if count, ok := entry.RealtimeTripCountsMatched[agencyID]; ok {
+		ObaRealtimeTripsMatched.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(float64(count))
+	}
+
+	if count, ok := entry.RealtimeTripCountsUnmatched[agencyID]; ok {
+		ObaRealtimeTripsUnmatched.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(float64(count))
+	}
+
+	matched := entry.RealtimeTripCountsMatched[agencyID]
+	unmatched := entry.RealtimeTripCountsUnmatched[agencyID]
+	total := matched + unmatched
+	if total > 0 {
+		TripMatchRatio.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(float64(matched) / float64(total))
+	}
+
+	if count, ok := entry.ScheduledTripsCount[agencyID]; ok {
+		ObaScheduledTrips.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(float64(count))
+	}
+
+	if count, ok := entry.StopIDsMatchedCount[agencyID]; ok {
+		ObaStopsMatched.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(float64(count))
+	}
+
+	if count, ok := entry.StopIDsUnmatchedCount[agencyID]; ok {
+		ObaStopsUnmatched.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(float64(count))
+	}
+
+	stopMatched := entry.StopIDsMatchedCount[agencyID]
+	stopUnmatched := entry.StopIDsUnmatchedCount[agencyID]
+	stopTotal := stopMatched + stopUnmatched
+	if stopTotal > 0 {
+		StopMatchRatio.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(float64(stopMatched) / float64(stopTotal))
+	}
+
+	if seconds, ok := entry.TimeSinceLastRealtimeUpdate[agencyID]; ok {
+		ObaTimeSinceUpdate.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(float64(seconds))
+	}
+
+	unmatchedStopIDs := entry.StopIDsUnmatched[agencyID]
+	if len(unmatchedStopIDs) == 0 {
+		ObaUnmatchedStopUnresolved.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(0)
+		return nil
+	}
+
+	stopInfoMap, err := gtfs.GetStopLocationsByIDs(serverKey, unmatchedStopIDs, staticStore)
+	if err != nil {
+		ObaUnmatchedStopUnresolved.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(float64(len(unmatchedStopIDs)))
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags:         map[string]string{"agency_id": agencyID, "server_name": serverName},
+			ExtraContext: map[string]interface{}{"reason": "failed to match stop IDs to GTFS"},
+		})
+		return nil
+	}
+
+	resolved := 0
+	for stopID, stop := range stopInfoMap {
+		if stop.Latitude == nil || stop.Longitude == nil {
+			continue
+		}
+		latStr := fmt.Sprintf("%.6f", *stop.Latitude)
+		lonStr := fmt.Sprintf("%.6f", *stop.Longitude)
+		ObaUnmatchedStopInfo.WithLabelValues(
+			agencyID,
+			agencyName,
+			serverName,
+			serverURL,
+			stopID,
+			stop.Name,
+			latStr,
+			lonStr,
+		).Set(1)
+		resolved++
+		unmatchedStopTracker.RecordLastSeen(serverKey, agencyID, agencyName, serverName, serverURL, stopID, stop.Name, latStr, lonStr)
+	}
+
+	unresolved := len(unmatchedStopIDs) - resolved
+	ObaUnmatchedStopUnresolved.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(float64(unresolved))
+	if unresolved > 0 {
+		logger.Warn("OBA unmatched stop IDs could not be resolved against the local GTFS bundle",
+			"agency_id", agencyID, "server_name", serverName, "requested", len(unmatchedStopIDs), "resolved", resolved)
+	}
+	reportUnmatchedStopClusters(serverKey, agencyID, agencyName, serverName, serverURL, stopInfoMap, unmatchedStopTracker)
 	return nil
 }

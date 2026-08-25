@@ -7,7 +7,7 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "GTFS-RT feed stale for {{ $labels.server }}"
+          summary: "GTFS-RT feed stale for {{ $labels.agency_name }} ({{ $labels.agency_id }})"
           description: >-
-            The realtime feed for server {{ $labels.server }} has had no update for {{ $value }} seconds,
-            exceeding the 900s staleness threshold for 5m+.
+            The realtime feed for {{ $labels.agency_name }} ({{ $labels.agency_id }}) at {{ $labels.server_url }}
+            has had no update for {{ $value }} seconds, exceeding the 900s staleness threshold for 5m+.

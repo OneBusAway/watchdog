@@ -31,6 +31,6 @@ func HaversineDistance(lat1, lon1, lat2, lon2 float64) float64 {
 	return haversineDistance(lat1, lon1, lat2, lon2)
 }
 
-func GetClusterID(stop remoteGtfs.Stop) (clusterID string, clusterType string, ok bool) {
+func GetClusterID(stop remoteGtfs.Stop) (Cluster, bool) {
 	return getClusterID(stop)
 }

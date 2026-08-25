@@ -7,10 +7,10 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "Low realtime trip match ratio for {{ $labels.server }}"
+          summary: "Low realtime trip match ratio for {{ $labels.agency_name }} ({{ $labels.agency_id }})"
           description: >-
-            Trip match ratio for server {{ $labels.server }} is {{ $value }},
-            below the 0.8 floor for 10m+.
+            Trip match ratio for {{ $labels.agency_name }} ({{ $labels.agency_id }}) at {{ $labels.server_url }}
+            is {{ $value }}, below the 0.8 floor for 10m+.
 
       - alert: LowStopMatchRatio
         expr: oba_stop_match_ratio < 0.8
@@ -18,7 +18,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "Low stop match ratio for {{ $labels.server }}"
+          summary: "Low stop match ratio for {{ $labels.agency_name }} ({{ $labels.agency_id }})"
           description: >-
-            Stop match ratio for server {{ $labels.server }} is {{ $value }},
-            below the 0.8 floor for 10m+.
+            Stop match ratio for {{ $labels.agency_name }} ({{ $labels.agency_id }}) at {{ $labels.server_url }}
+            is {{ $value }}, below the 0.8 floor for 10m+.

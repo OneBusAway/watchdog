@@ -2,12 +2,9 @@ package config
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
-	"github.com/getsentry/sentry-go"
 	"watchdog.onebusaway.org/internal/models"
-	"watchdog.onebusaway.org/internal/report"
 )
 
 // ValidateServer checks that an ObaServer has all the fields Watchdog requires
@@ -16,27 +13,56 @@ import (
 // then produces cryptic `unsupported protocol scheme ""` errors on every fetch
 // cycle. Validating up front turns that into a single actionable error.
 //
-// The GTFS-RT auth header pair (gtfs_rt_api_key / gtfs_rt_api_value) and
-// trip_update_url are intentionally optional and not validated here.
+// Server-scoping rules (added with the server-scope redesign):
+//   - server_name is always required; it identifies the OBA deployment and is
+//     emitted as a label on every per-agency metric so dashboards can group
+//     observations by server without parsing URLs.
+//   - agency_id, when present, requires agency_name (paired). agency_name
+//     without agency_id is ignored.
+//   - agency_id is OPTIONAL. When it is absent the entry is server-scoped and
+//     Watchdog discovers the agencies it serves from /api/where/metrics.json
+//     cross-referenced with each static feed's agency.txt.
+//   - Both gtfs_static_feeds and gtfs_rt_feeds are required. The static feed is
+//     the validation source for RT data; the RT feed is the live signal. We
+//     cannot monitor without either.
+//
+// The GTFS-RT auth header fields (gtfs_rt_api_key / gtfs_rt_api_value) are
+// optional, but when either is set the other must be set as well. trip_update_url
+// is optional and not validated here.
 //
 // It returns an error naming every missing field, or nil if the server is valid.
 func ValidateServer(server models.ObaServer) error {
 	var missing []string
 
-	if server.ID == 0 {
-		missing = append(missing, "id")
-	}
-
 	requiredStrings := []struct {
 		name  string
 		value string
 	}{
-		{"name", server.Name},
+		{"server_name", server.ServerName},
 		{"oba_base_url", server.ObaBaseURL},
 		{"oba_api_key", server.ObaApiKey},
-		{"gtfs_url", server.GtfsUrl},
-		{"vehicle_position_url", server.VehiclePositionUrl},
-		{"agency_id", server.AgencyID},
+	}
+	if strings.TrimSpace(server.AgencyID) != "" && strings.TrimSpace(server.AgencyName) == "" {
+		missing = append(missing, "agency_name")
+	}
+	if len(server.GtfsStaticFeeds) == 0 {
+		missing = append(missing, "gtfs_static_feeds")
+	}
+	for i, gtfsStaticFeed := range server.GtfsStaticFeeds {
+		if strings.TrimSpace(gtfsStaticFeed) == "" {
+			missing = append(missing, fmt.Sprintf("gtfs_static_feeds[%d]", i))
+		}
+	}
+	if len(server.GtfsRTFeeds) == 0 {
+		missing = append(missing, "gtfs_rt_feeds")
+	}
+	for i, feed := range server.GtfsRTFeeds {
+		if strings.TrimSpace(feed.VehiclePositionURL) == "" {
+			missing = append(missing, fmt.Sprintf("gtfs_rt_feeds[%d].vehicle_position_url", i))
+		}
+		if (strings.TrimSpace(feed.GtfsRTAPIKey) == "") != (strings.TrimSpace(feed.GtfsRTAPIValue) == "") {
+			missing = append(missing, fmt.Sprintf("gtfs_rt_feeds[%d].gtfs_rt_api_key/value", i))
+		}
 	}
 	for _, field := range requiredStrings {
 		if strings.TrimSpace(field.value) == "" {
@@ -45,29 +71,7 @@ func ValidateServer(server models.ObaServer) error {
 	}
 
 	if len(missing) > 0 {
-		return fmt.Errorf("server %q (id %d) is missing required fields: %s",
-			server.Name, server.ID, strings.Join(missing, ", "))
+		return fmt.Errorf("server %q is missing required fields: %s", server.ServerName, strings.Join(missing, ", "))
 	}
 	return nil
-}
-
-// filterValidServers returns only the servers that pass ValidateServer. Each
-// invalid server is reported to Sentry and dropped so that one misconfigured
-// entry (e.g. null feed URLs) cannot block monitoring of the rest of the fleet.
-func filterValidServers(servers []models.ObaServer) []models.ObaServer {
-	valid := make([]models.ObaServer, 0, len(servers))
-	for _, server := range servers {
-		if err := ValidateServer(server); err != nil {
-			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-				Tags: map[string]string{
-					"server_id":   strconv.Itoa(server.ID),
-					"server_name": server.Name,
-				},
-				Level: sentry.LevelError,
-			})
-			continue
-		}
-		valid = append(valid, server)
-	}
-	return valid
 }

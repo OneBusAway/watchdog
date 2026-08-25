@@ -1,196 +1,150 @@
 package metrics
 
 import (
-	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"testing"
+	"time"
 
 	remoteGtfs "github.com/OneBusAway/go-gtfs"
+	onebusaway "github.com/OneBusAway/go-sdk"
+	"github.com/OneBusAway/go-sdk/option"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
 )
 
-var realtimeStore *gtfs.RealtimeStore
+func TestCountVehiclePositionsUsesAgencyStore(t *testing.T) {
+	serverA := models.ObaServer{AgencyID: "agency-a", ObaBaseURL: "https://a.example.com", AgencyName: "Agency A"}
+	serverB := models.ObaServer{AgencyID: "agency-b", ObaBaseURL: "https://b.example.com", AgencyName: "Agency B"}
+	store := testRealtimeStore(t, serverA)
+	count, err := countVehiclePositions(serverA, store)
+	if err != nil || count == 0 {
+		t.Fatalf("count=%d err=%v", count, err)
+	}
+	if _, err := countVehiclePositions(serverB, store); err == nil {
+		t.Fatal("expected missing agency feed error")
+	}
+}
 
-func TestMain(m *testing.M) {
-	realtimeStore = gtfs.NewRealtimeStore()
+func TestCountVehiclePositionsKeepsDistinctServersWithSameAgencyIDDisjoint(t *testing.T) {
+	// Two deployments share the same agency ID but run on different base URLs.
+	// Their series must not collide: the server_url label keeps them distinct,
+	// mirroring the composite ServerKey used by the stores.
+	serverA := models.ObaServer{AgencyID: "agency-a", ObaBaseURL: "https://a.example.com", AgencyName: "Agency A"}
+	serverB := models.ObaServer{AgencyID: "agency-a", ObaBaseURL: "https://b.example.com", AgencyName: "Agency A Clone"}
 
-	absPath, err := filepath.Abs(filepath.Join("..", "..", "testdata", "gtfs_rt_feed_vehicles.pb"))
-	if err != nil {
-		fmt.Printf("Failed to get absolute path: %v\n", err)
-		os.Exit(1)
+	storeA := testRealtimeStore(t, serverA)
+	storeB := testRealtimeStore(t, serverB)
+
+	countA, err := countVehiclePositions(serverA, storeA)
+	if err != nil || countA == 0 {
+		t.Fatalf("server A: count=%d err=%v", countA, err)
+	}
+	countB, err := countVehiclePositions(serverB, storeB)
+	if err != nil || countB == 0 {
+		t.Fatalf("server B: count=%d err=%v", countB, err)
+	}
+	if countA != countB {
+		t.Fatalf("fixture feeds should contain the same vehicle count, got %d vs %d", countA, countB)
 	}
 
-	data, err := os.ReadFile(absPath)
+	metricA, err := getMetricValue(RealtimeVehiclePositions, map[string]string{
+		"agency_id":   serverA.AgencyID,
+		"agency_name": serverA.AgencyName,
+		"server_name": serverA.ServerName,
+		"server_url":  "https://a.example.com",
+	})
 	if err != nil {
-		fmt.Printf("Failed to read GTFS-RT fixture: %v\n", err)
-		os.Exit(1)
+		t.Fatalf("failed to read series for %s: %v", serverA.ObaBaseURL, err)
+	}
+	metricB, err := getMetricValue(RealtimeVehiclePositions, map[string]string{
+		"agency_id":   serverB.AgencyID,
+		"agency_name": serverB.AgencyName,
+		"server_name": serverB.ServerName,
+		"server_url":  "https://b.example.com",
+	})
+	if err != nil {
+		t.Fatalf("failed to read series for %s: %v", serverB.ObaBaseURL, err)
 	}
 
-	gtfsRT, err := remoteGtfs.ParseRealtime(data, &remoteGtfs.ParseRealtimeOptions{})
-	if err != nil {
-		fmt.Printf("Failed to parse GTFS-RT data: %v\n", err)
-		os.Exit(1)
+	if metricA != float64(countA) {
+		t.Fatalf("expected %s series to be %d, got %v", serverA.ObaBaseURL, countA, metricA)
 	}
-	realtimeData := models.NewRealtimeData(gtfsRT)
-	realtimeStore.Set(realtimeData)
-
-	exitCode := m.Run()
-	os.Exit(exitCode)
+	if metricB != float64(countB) {
+		t.Fatalf("expected %s series to be %d, got %v", serverB.ObaBaseURL, countB, metricB)
+	}
 }
 
-func TestCountVehiclePositions(t *testing.T) {
-	t.Run("Valid GTFS-RT response", func(t *testing.T) {
-
-		server := models.ObaServer{
-			ID:                 1,
-			VehiclePositionUrl: "Value of VehiclePositionUrl",
-		}
-		count, err := countVehiclePositions(server, realtimeStore)
-		if err != nil {
-			t.Fatalf("Expected no error, got %v", err)
-		}
-		if count < 0 {
-			t.Fatalf("Expected non-negative count, got %d", count)
-		}
-	})
-
+func TestCountActiveVehiclesForAgency(t *testing.T) {
+	ts := setupObaServer(t, `{"data":{"list":[{"vehicleId":"1"},{"vehicleId":"2"}]}}`, http.StatusOK)
+	defer ts.Close()
+	server := models.ObaServer{AgencyID: "agency-a", ObaBaseURL: ts.URL, ObaApiKey: "key"}
+	client := onebusaway.NewClient(
+		option.WithAPIKey(server.ObaApiKey),
+		option.WithBaseURL(server.ObaBaseURL),
+	)
+	count, err := countActiveVehiclesForAgency(client, server)
+	if err != nil || count != 2 {
+		t.Fatalf("count=%d err=%v", count, err)
+	}
 }
 
-func TestVehiclesForAgencyAPI(t *testing.T) {
-	t.Run("NilResponse", func(t *testing.T) {
-		ts := setupObaServer(t, `{"data": {"list": []}}`, http.StatusOK)
-		defer ts.Close()
-
-		server := models.ObaServer{
-			Name:       "Test Server",
-			ID:         999,
-			ObaBaseURL: ts.URL,
-			ObaApiKey:  "test-key",
-			AgencyID:   "test-agency",
-		}
-
-		count, err := vehiclesForAgencyAPI(server)
-		if err != nil {
-			t.Fatalf("Expected no error, got %v", err)
-		}
-
-		if count != 0 {
-			t.Fatalf("Expected count to be 0, got %d", count)
-		}
-	})
-
-	t.Run("SuccessfulResponse", func(t *testing.T) {
-		ts := setupObaServer(t, `{"data": {"list": [{"vehicleId": "1"}, {"vehicleId": "2"}]}}`, http.StatusOK)
-		defer ts.Close()
-
-		server := models.ObaServer{
-			Name:       "Test Server",
-			ID:         999,
-			ObaBaseURL: ts.URL,
-			ObaApiKey:  "test-key",
-			AgencyID:   "test-agency",
-		}
-
-		count, err := vehiclesForAgencyAPI(server)
-		if err != nil {
-			t.Fatalf("Expected no error, got %v", err)
-		}
-
-		if count != 2 {
-			t.Fatalf("Expected count to be 2, got %d", count)
-		}
-	})
-
-	t.Run("ErrorResponse", func(t *testing.T) {
-		ts := setupObaServer(t, `{"error": "Internal Server Error"}`, http.StatusInternalServerError)
-		defer ts.Close()
-
-		server := models.ObaServer{
-			Name:       "Test Server",
-			ID:         999,
-			ObaBaseURL: ts.URL,
-			ObaApiKey:  "test-key",
-			AgencyID:   "test-agency",
-		}
-
-		_, err := vehiclesForAgencyAPI(server)
-		if err == nil {
-			t.Fatal("Expected an error but got nil")
-		}
-	})
+func TestTrackInvalidVehiclesUsesAgencyBounds(t *testing.T) {
+	server := models.ObaServer{AgencyID: "agency-a", ObaBaseURL: "https://a.example.com", AgencyName: "Agency A"}
+	missing := models.ObaServer{AgencyID: "missing", ObaBaseURL: "https://missing.example.com", AgencyName: "Missing"}
+	store := testRealtimeStore(t, server)
+	bounds := geo.NewBoundingBoxStore()
+	bounds.Set(server.ServerKey(), geo.BoundingBox{MinLat: -90, MaxLat: 90, MinLon: -180, MaxLon: 180})
+	if err := trackInvalidVehiclesAndStoppedOutOfBounds(server, bounds, store); err != nil {
+		t.Fatal(err)
+	}
+	if err := trackInvalidVehiclesAndStoppedOutOfBounds(missing, bounds, store); err == nil {
+		t.Fatal("expected missing feed error")
+	}
 }
 
-func TestCheckVehicleCountMatch(t *testing.T) {
-	t.Run("Success", func(t *testing.T) {
+func TestTrackVehicleTelemetrySeparatesSameIDAcrossFeeds(t *testing.T) {
+	server := models.ObaServer{AgencyID: "agency-a", ObaBaseURL: "https://a.example.com", AgencyName: "Agency A"}
 
-		obaServer := setupObaServer(t, `{"code":200,"currentTime":1234567890000,"text":"OK","version":2,"data":{"list":[{"agencyId":"1"}]}}`, http.StatusOK)
-		defer obaServer.Close()
+	now := time.Now().UTC()
+	vehicleA := remoteGtfs.Vehicle{
+		ID:        &remoteGtfs.VehicleID{ID: "101"},
+		Position:  &remoteGtfs.Position{Latitude: float32Ptr(47.60), Longitude: float32Ptr(-122.30)},
+		Timestamp: &now,
+	}
+	vehicleB := remoteGtfs.Vehicle{
+		ID:        &remoteGtfs.VehicleID{ID: "101"},
+		Position:  &remoteGtfs.Position{Latitude: float32Ptr(47.65), Longitude: float32Ptr(-122.35)},
+		Timestamp: &now,
+	}
 
-		testServer := createTestServer(obaServer.URL, "Test Server", 999, "test-key", "GTFS-Rt Server URL 1", "test-api-value", "test-api-key", "1")
+	data := &models.RealtimeData{Vehicles: []models.RealtimeVehicle{
+		{Vehicle: vehicleA, FeedID: "0"},
+		{Vehicle: vehicleB, FeedID: "1"},
+	}}
+	store := gtfs.NewRealtimeStore()
+	store.Set(server.ServerKey(), data)
 
-		err := checkVehicleCountMatch(testServer, realtimeStore)
-		if err != nil {
-			t.Fatalf("CheckVehicleCountMatch failed: %v", err)
-		}
+	lastSeen := NewVehicleLastSeen()
+	if err := trackVehicleTelemetry(server, lastSeen, store, gtfs.NewRouteAgencyIndex()); err != nil {
+		t.Fatalf("track: %v", err)
+	}
 
-		realtimeData := realtimeStore.Get()
-		if realtimeData == nil {
-			t.Fatalf("Failed to parse GTFS-RT fixture data: %v", err)
-		}
-
-		t.Log("Number of vehicles in GTFS-RT feed:", len(realtimeData.Vehicles))
-	})
-	t.Run("OBA API Error", func(t *testing.T) {
-		obaServer := setupObaServer(t, `{}`, http.StatusInternalServerError)
-		defer obaServer.Close()
-
-		testServer := createTestServer(obaServer.URL, "Test Server", 999, "test-key", "GTFS-Rt Server URL 1", "test-api-value", "test-api-key", "1")
-
-		err := checkVehicleCountMatch(testServer, realtimeStore)
-		if err == nil {
-			t.Fatal("Expected an error but got nil")
-		}
-		t.Log("Received expected error:", err)
-	})
+	// Same vehicle ID from different feeds must not share a last-seen slot:
+	// they are two distinct physical vehicles.
+	lastSeen0, ok0 := lastSeen.Get(server.ServerKey(), "0", "101")
+	lastSeen1, ok1 := lastSeen.Get(server.ServerKey(), "1", "101")
+	if !ok0 || !ok1 {
+		t.Fatalf("expected both feeds' vehicle 101 to be tracked, got feed0=%v feed1=%v", ok0, ok1)
+	}
+	if got := lastSeen.Count(server.ServerKey()); got != 2 {
+		t.Fatalf("expected 2 tracked vehicles (same ID, distinct feeds), got %d", got)
+	}
+	if lastSeen0.Lat == lastSeen1.Lat {
+		t.Fatalf("expected separate last-seen slots per feed, got %+v and %+v", lastSeen0, lastSeen1)
+	}
 }
 
-func TestTrackInvalidVehiclesAndStoppedOutOfBounds(t *testing.T) {
-	boundingBoxStore := geo.NewBoundingBoxStore()
-	boundingBoxStore.Set(1, geo.BoundingBox{
-		MinLat: -90, MaxLat: 90,
-		MinLon: -180, MaxLon: 180,
-	})
-
-	t.Run("Success with valid vehicle positions", func(t *testing.T) {
-		server := models.ObaServer{
-			ID:                 1,
-			VehiclePositionUrl: "Value of VehiclePositionUrl",
-			GtfsRtApiKey:       "Authorization",
-			GtfsRtApiValue:     "test-key",
-		}
-
-		err := trackInvalidVehiclesAndStoppedOutOfBounds(server, boundingBoxStore, realtimeStore)
-		if err != nil {
-			t.Errorf("Expected no error, got: %v", err)
-		}
-	})
-
-	t.Run("Failure due to missing bounding box", func(t *testing.T) {
-
-		server := models.ObaServer{
-			ID:                 99, // no bounding box for this ID
-			VehiclePositionUrl: "Value of VehiclePositionUrl",
-			GtfsRtApiKey:       "Authorization",
-			GtfsRtApiValue:     "test-key",
-		}
-
-		err := trackInvalidVehiclesAndStoppedOutOfBounds(server, boundingBoxStore, realtimeStore)
-		if err == nil {
-			t.Error("Expected error due to missing bounding box, got nil")
-		}
-	})
+func float32Ptr(v float32) *float32 {
+	return &v
 }

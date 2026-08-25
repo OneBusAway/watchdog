@@ -1,7 +1,10 @@
 package config
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,17 +19,43 @@ import (
 // validServer returns a fully-populated server that should pass validation.
 func validServer() models.ObaServer {
 	return models.ObaServer{
-		Name:               "Test Server",
-		ID:                 1,
-		ObaBaseURL:         "https://test.example.com",
-		ObaApiKey:          "test-key",
-		GtfsUrl:            "https://gtfs.example.com",
-		TripUpdateUrl:      "https://trip.example.com",
-		VehiclePositionUrl: "https://vehicle.example.com",
-		GtfsRtApiKey:       "",
-		GtfsRtApiValue:     "",
-		AgencyID:           "agency-1",
+		ServerName:      "Test Server",
+		AgencyName:      "Test Agency",
+		ObaBaseURL:      "https://test.example.com",
+		ObaApiKey:       "test-key",
+		AgencyID:        "agency-1",
+		GtfsStaticFeeds: []string{"https://gtfs.example.com"},
+		GtfsRTFeeds: []models.GtfsRTFeed{{
+			TripUpdateURL:      "https://trip.example.com",
+			VehiclePositionURL: "https://vehicle.example.com",
+		}},
 	}
+}
+
+func TestValidateServerServerScope(t *testing.T) {
+	// A server entry with no agency_id is valid: it's a server-scoped entry.
+	t.Run("server-scoped entry without agency_id is valid", func(t *testing.T) {
+		s := validServer()
+		s.AgencyID = ""
+		s.AgencyName = ""
+		if err := ValidateServer(s); err != nil {
+			t.Fatalf("expected server-scoped entry to validate, got: %v", err)
+		}
+	})
+
+	// Agency_id paired with empty agency_name is rejected (operators must
+	// provide both or neither — agency_name without agency_id is meaningless).
+	t.Run("agency_id requires agency_name", func(t *testing.T) {
+		s := validServer()
+		s.AgencyName = ""
+		err := ValidateServer(s)
+		if err == nil {
+			t.Fatal("expected error when agency_id is set but agency_name is empty")
+		}
+		if !strings.Contains(err.Error(), "agency_name") {
+			t.Fatalf("expected error to mention agency_name, got: %v", err)
+		}
+	})
 }
 
 func TestValidateServer(t *testing.T) {
@@ -36,11 +65,11 @@ func TestValidateServer(t *testing.T) {
 		}
 	})
 
-	t.Run("empty optional GTFS-RT auth fields are allowed", func(t *testing.T) {
+	t.Run("empty optional GTFS-RT fields are allowed", func(t *testing.T) {
 		s := validServer()
-		s.GtfsRtApiKey = ""
-		s.GtfsRtApiValue = ""
-		s.TripUpdateUrl = ""
+		s.GtfsRTFeeds[0].TripUpdateURL = ""
+		s.GtfsRTFeeds[0].GtfsRTAPIKey = ""
+		s.GtfsRTFeeds[0].GtfsRTAPIValue = ""
 		if err := ValidateServer(s); err != nil {
 			t.Fatalf("expected no error for empty optional fields, got: %v", err)
 		}
@@ -51,15 +80,15 @@ func TestValidateServer(t *testing.T) {
 		mutate    func(*models.ObaServer)
 		wantField string
 	}{
-		{"missing gtfs_url", func(s *models.ObaServer) { s.GtfsUrl = "" }, "gtfs_url"},
-		{"missing vehicle_position_url", func(s *models.ObaServer) { s.VehiclePositionUrl = "" }, "vehicle_position_url"},
+		{"missing gtfs_static_feeds", func(s *models.ObaServer) { s.GtfsStaticFeeds = nil }, "gtfs_static_feeds"},
+		{"missing gtfs_rt_feeds", func(s *models.ObaServer) { s.GtfsRTFeeds = nil }, "gtfs_rt_feeds"},
+		{"missing vehicle position URL", func(s *models.ObaServer) { s.GtfsRTFeeds[0].VehiclePositionURL = "" }, "gtfs_rt_feeds[0].vehicle_position_url"},
 		{"missing oba_base_url", func(s *models.ObaServer) { s.ObaBaseURL = "" }, "oba_base_url"},
 		{"missing oba_api_key", func(s *models.ObaServer) { s.ObaApiKey = "" }, "oba_api_key"},
-		{"missing agency_id", func(s *models.ObaServer) { s.AgencyID = "" }, "agency_id"},
-		{"missing name", func(s *models.ObaServer) { s.Name = "" }, "name"},
-		{"missing id", func(s *models.ObaServer) { s.ID = 0 }, "id"},
-		{"whitespace-only agency_id", func(s *models.ObaServer) { s.AgencyID = "   " }, "agency_id"},
-		{"whitespace-only gtfs_url", func(s *models.ObaServer) { s.GtfsUrl = "  \t " }, "gtfs_url"},
+		{"missing server_name", func(s *models.ObaServer) { s.ServerName = "" }, "server_name"},
+		{"whitespace-only server_name", func(s *models.ObaServer) { s.ServerName = "  " }, "server_name"},
+		{"agency_id with empty agency_name", func(s *models.ObaServer) { s.AgencyName = "" }, "agency_name"},
+		{"whitespace-only gtfs URL", func(s *models.ObaServer) { s.GtfsStaticFeeds[0] = "  \t " }, "gtfs_static_feeds[0]"},
 	}
 
 	for _, tc := range requiredFieldCases {
@@ -77,10 +106,9 @@ func TestValidateServer(t *testing.T) {
 	}
 
 	t.Run("reports all missing fields at once", func(t *testing.T) {
-		// Mirrors the production config where every feed field was null.
+		// Mirrors a production config where every feed field is null.
 		s := models.ObaServer{
-			Name:       "Intercity Transit",
-			ID:         33,
+			AgencyName: "Intercity Transit",
 			ObaBaseURL: "https://intercity-transit-oba-server.onrender.com",
 			ObaApiKey:  "org.onebusaway.iphone",
 		}
@@ -88,7 +116,7 @@ func TestValidateServer(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
-		for _, field := range []string{"gtfs_url", "vehicle_position_url", "agency_id"} {
+		for _, field := range []string{"gtfs_static_feeds", "gtfs_rt_feeds", "server_name"} {
 			if !strings.Contains(err.Error(), field) {
 				t.Fatalf("expected error to mention %q, got: %v", field, err)
 			}
@@ -102,19 +130,19 @@ func TestValidateServer(t *testing.T) {
 func TestLoadConfigFromFileFiltersInvalidServers(t *testing.T) {
 	content := `[
 		{
-			"name": "Valid Server", "id": 1,
+			"server_name": "Test Server", "agency_name": "Valid Server",
 			"oba_base_url": "https://valid.example.com",
 			"oba_api_key": "valid-key",
-			"gtfs_url": "https://gtfs.example.com",
-			"vehicle_position_url": "https://vehicle.example.com",
+			"gtfs_static_feeds": ["https://gtfs.example.com"],
+			"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle.example.com"}],
 			"agency_id": "agency-1"
 		},
 		{
-			"name": "Broken Server", "id": 2,
+			"server_name": "Test Server", "agency_name": "Broken Server",
 			"oba_base_url": "https://broken.example.com",
 			"oba_api_key": "broken-key",
-			"gtfs_url": null,
-			"vehicle_position_url": null,
+			"gtfs_static_feeds": null,
+			"gtfs_rt_feeds": null,
 			"agency_id": null
 		}
 	]`
@@ -125,7 +153,7 @@ func TestLoadConfigFromFileFiltersInvalidServers(t *testing.T) {
 		t.Fatalf("write config.json: %v", err)
 	}
 
-	servers, err := loadConfigFromFile(fp)
+	servers, err := loadConfigFromFile(fp, testLogger())
 	if err != nil {
 		t.Fatalf("loadConfigFromFile failed: %v", err)
 	}
@@ -133,8 +161,8 @@ func TestLoadConfigFromFileFiltersInvalidServers(t *testing.T) {
 	if len(servers) != 1 {
 		t.Fatalf("expected 1 valid server, got %d: %+v", len(servers), servers)
 	}
-	if servers[0].ID != 1 {
-		t.Fatalf("expected the valid server (id 1) to be kept, got id %d", servers[0].ID)
+	if servers[0].AgencyID != "agency-1" {
+		t.Fatalf("expected the valid server (agency-1) to be kept, got %q", servers[0].AgencyID)
 	}
 }
 
@@ -144,19 +172,19 @@ func TestLoadConfigFromFileFiltersInvalidServers(t *testing.T) {
 func TestLoadConfigFromURLFiltersInvalidServers(t *testing.T) {
 	body := `[
 		{
-			"name": "Valid Server", "id": 1,
+			"server_name": "Test Server", "agency_name": "Valid Server",
 			"oba_base_url": "https://valid.example.com",
 			"oba_api_key": "valid-key",
-			"gtfs_url": "https://gtfs.example.com",
-			"vehicle_position_url": "https://vehicle.example.com",
+			"gtfs_static_feeds": ["https://gtfs.example.com"],
+			"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle.example.com"}],
 			"agency_id": "agency-1"
 		},
 		{
-			"name": "Broken Server", "id": 2,
+			"server_name": "Test Server", "agency_name": "Broken Server",
 			"oba_base_url": "https://broken.example.com",
 			"oba_api_key": "broken-key",
-			"gtfs_url": null,
-			"vehicle_position_url": null,
+			"gtfs_static_feeds": null,
+			"gtfs_rt_feeds": null,
 			"agency_id": null
 		}
 	]`
@@ -169,51 +197,143 @@ func TestLoadConfigFromURLFiltersInvalidServers(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	servers, err := loadConfigFromURL(context.Background(), &http.Client{Timeout: 10 * time.Second}, ts.URL, "", "", 1)
+	servers, err := loadConfigFromURL(context.Background(), &http.Client{Timeout: 10 * time.Second}, ts.URL, "", "", 1, testLogger())
 	if err != nil {
 		t.Fatalf("loadConfigFromURL failed: %v", err)
 	}
 
-	if len(servers) != 1 || servers[0].ID != 1 {
-		t.Fatalf("expected only the valid server (id 1), got %+v", servers)
+	if len(servers) != 1 || servers[0].AgencyID != "agency-1" {
+		t.Fatalf("expected only the valid server (agency-1), got %+v", servers)
 	}
 }
 
-func TestFilterValidServers(t *testing.T) {
+func TestDecodeServers(t *testing.T) {
 	t.Run("drops every invalid server and preserves the order of valid ones", func(t *testing.T) {
-		valid1 := validServer()
-		valid1.ID = 1
-		valid2 := validServer()
-		valid2.ID = 2
-		invalidA := validServer()
-		invalidA.ID = 10
-		invalidA.GtfsUrl = ""
-		invalidB := validServer()
-		invalidB.ID = 11
-		invalidB.AgencyID = ""
+		rawEntries := []json.RawMessage{
+			json.RawMessage(`{
+				"server_name": "Test Server", "agency_name": "Valid Server",
+				"oba_base_url": "https://valid.example.com",
+				"oba_api_key": "valid-key",
+				"gtfs_static_feeds": ["https://gtfs.example.com"],
+				"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle.example.com"}],
+				"agency_id": "agency-1"
+			}`),
+			json.RawMessage(`{
+				"server_name": "Invalid Server", "agency_name": "Invalid Server",
+				"oba_base_url": "https://invalid.example.com",
+				"oba_api_key": "invalid-key",
+				"gtfs_static_feeds": null,
+				"gtfs_rt_feeds": null,
+				"agency_id": "agency-10"
+			}`),
+			json.RawMessage(`{
+				"server_name": "Test Server 2", "agency_name": "Valid Server 2",
+				"oba_base_url": "https://valid2.example.com",
+				"oba_api_key": "valid-key-2",
+				"gtfs_static_feeds": ["https://gtfs2.example.com"],
+				"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle2.example.com"}],
+				"agency_id": "agency-2"
+			}`),
+			json.RawMessage(`{
+				"server_name": "Test Server",
+				"oba_base_url": "https://noagency.example.com",
+				"oba_api_key": "key",
+				"gtfs_static_feeds": null,
+				"gtfs_rt_feeds": null
+			}`),
+		}
 
 		// Interleave valid and invalid: valid, invalid, valid, invalid.
-		got := filterValidServers([]models.ObaServer{valid1, invalidA, valid2, invalidB})
+		got := decodeServers(rawEntries, testLogger())
 
 		if len(got) != 2 {
 			t.Fatalf("expected 2 valid servers, got %d: %+v", len(got), got)
 		}
-		if got[0].ID != 1 || got[1].ID != 2 {
-			t.Fatalf("expected valid servers kept in order (1, 2), got (%d, %d)", got[0].ID, got[1].ID)
+		if got[0].AgencyID != "agency-1" || got[1].AgencyID != "agency-2" {
+			t.Fatalf("expected valid servers kept in order (agency-1, agency-2), got (%s, %s)", got[0].AgencyID, got[1].AgencyID)
+		}
+	})
+
+	t.Run("drops duplicate servers with identical oba_base_url and agency_id", func(t *testing.T) {
+		var logBuf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+
+		rawEntries := []json.RawMessage{
+			json.RawMessage(`{
+				"server_name": "Test Server 1", "agency_name": "First",
+				"oba_base_url": "https://first.example.com",
+				"oba_api_key": "key",
+				"gtfs_static_feeds": ["https://gtfs.example.com"],
+				"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle.example.com"}],
+				"agency_id": "agency-1"
+			}`),
+			json.RawMessage(`{
+				"server_name": "Test Server 2", "agency_name": "Second",
+				"oba_base_url": "https://first.example.com",
+				"oba_api_key": "key",
+				"gtfs_static_feeds": ["https://gtfs.example.com"],
+				"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle.example.com"}],
+				"agency_id": "agency-1"
+			}`),
+		}
+
+		got := decodeServers(rawEntries, logger)
+		if len(got) != 1 {
+			t.Fatalf("expected 1 server after dedup, got %d", len(got))
+		}
+		if got[0].AgencyName != "First" {
+			t.Fatalf("expected the first entry to be kept, got %q", got[0].AgencyName)
+		}
+		if !strings.Contains(logBuf.String(), "Dropping server with duplicate oba_base_url and agency_id") {
+			t.Errorf("expected the duplicate drop to be logged, got logs:\n%s", logBuf.String())
+		}
+	})
+
+	t.Run("keeps servers that share an agency_id across different base URLs", func(t *testing.T) {
+		rawEntries := []json.RawMessage{
+			json.RawMessage(`{
+				"server_name": "Test Server 1", "agency_name": "First",
+				"oba_base_url": "https://first.example.com",
+				"oba_api_key": "key",
+				"gtfs_static_feeds": ["https://gtfs.example.com"],
+				"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle.example.com"}],
+				"agency_id": "agency-1"
+			}`),
+			json.RawMessage(`{
+				"server_name": "Test Server 2", "agency_name": "Second",
+				"oba_base_url": "https://second.example.com",
+				"oba_api_key": "key",
+				"gtfs_static_feeds": ["https://gtfs.example.com"],
+				"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle.example.com"}],
+				"agency_id": "agency-1"
+			}`),
+		}
+
+		got := decodeServers(rawEntries, testLogger())
+		if len(got) != 2 {
+			t.Fatalf("expected both servers kept (distinct base URLs, shared agency_id), got %d: %+v", len(got), got)
 		}
 	})
 
 	t.Run("all servers invalid yields an empty slice", func(t *testing.T) {
-		bad := validServer()
-		bad.GtfsUrl = ""
-		got := filterValidServers([]models.ObaServer{bad})
+		rawEntries := []json.RawMessage{
+			json.RawMessage(`{
+				"server_name": "Test Server", "agency_name": "Bad",
+				"oba_base_url": "https://bad.example.com",
+				"oba_api_key": "key",
+				"gtfs_static_feeds": null,
+				"gtfs_rt_feeds": null,
+				"agency_id": "agency-bad"
+			}`),
+		}
+		got := decodeServers(rawEntries, testLogger())
 		if len(got) != 0 {
 			t.Fatalf("expected 0 valid servers, got %d", len(got))
 		}
 	})
 
 	t.Run("empty input yields an empty slice", func(t *testing.T) {
-		got := filterValidServers(nil)
+		got := decodeServers(nil, testLogger())
 		if len(got) != 0 {
 			t.Fatalf("expected 0 servers, got %d", len(got))
 		}

@@ -7,10 +7,11 @@ import (
 	remoteGtfs "github.com/OneBusAway/go-gtfs"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/utils"
 )
 
 func TestCheckBundleExpiration(t *testing.T) {
-	testServer := createTestServer("www.example.com", "Test Server", 999, "", "www.example.com", "test-api-value", "test-api-key", "1")
+	testServer := models.ObaServer{ServerName: "Test Server", AgencyID: "1", AgencyName: "Test Agency", ObaBaseURL: "https://test.example.com"}
 
 	data := readFixture(t, "gtfs.zip")
 	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
@@ -19,7 +20,7 @@ func TestCheckBundleExpiration(t *testing.T) {
 	}
 	staticData := models.NewStaticData(staticBundle)
 	staticStore := gtfs.NewStaticStore()
-	staticStore.Set(testServer.ID, staticData)
+	staticStore.Set(testServer.ServerKey(), staticData)
 	fixedTime := time.Date(2025, 1, 12, 20, 16, 38, 0, time.UTC)
 
 	earliest, latest, err := checkBundleExpiration(staticStore, fixedTime, testServer)
@@ -38,7 +39,12 @@ func TestCheckBundleExpiration(t *testing.T) {
 		t.Errorf("Expected latest expiration days to be %d, got %d", expectedLatest, latest)
 	}
 
-	earliestMetric, err := getMetricValue(BundleEarliestExpirationGauge, map[string]string{"server_id": "999"})
+	earliestMetric, err := getMetricValue(BundleEarliestExpirationGauge, map[string]string{
+		"agency_id":   testServer.AgencyID,
+		"agency_name": testServer.AgencyName,
+		"server_name": testServer.ServerName,
+		"server_url":  utils.SanitizeServerURL(testServer.ObaBaseURL),
+	})
 	if err != nil {
 		t.Errorf("Failed to get earliest expiration metric value: %v", err)
 	}
@@ -46,7 +52,12 @@ func TestCheckBundleExpiration(t *testing.T) {
 		t.Errorf("Expected earliest expiration metric to be %v, got %v", expectedEarliest, earliestMetric)
 	}
 
-	latestMetric, err := getMetricValue(BundleLatestExpirationGauge, map[string]string{"server_id": "999"})
+	latestMetric, err := getMetricValue(BundleLatestExpirationGauge, map[string]string{
+		"agency_id":   testServer.AgencyID,
+		"agency_name": testServer.AgencyName,
+		"server_name": testServer.ServerName,
+		"server_url":  utils.SanitizeServerURL(testServer.ObaBaseURL),
+	})
 	if err != nil {
 		t.Errorf("Failed to get latest expiration metric value: %v", err)
 	}
