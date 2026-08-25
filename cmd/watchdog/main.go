@@ -27,6 +27,24 @@ func main() {
 	flag.StringVar(&cfg.Env, "env", "development", "Environment (development|staging|production)")
 	flag.IntVar(&cfg.FetchInterval, "fetch-interval", 30, "Interval (in seconds) at which the application fetches data from realtime APIs and updates Prometheus metrics")
 
+	// Server-scope design (deliberate decision, see README "Server vs. agency
+	// scoping" and config.json.template):
+	//
+	// Every entry in config.json is server-scoped at the top level: server_name
+	// is required, server_url is derived from oba_base_url, and the operator
+	// lists the static feeds each server exposes. agency_id is optional.
+	//   - With agency_id set, the entry is narrowed to one agency: today's
+	//     per-agency pipeline runs once per tick for that agency.
+	//   - Without agency_id, the entry is server-scoped: Watchdog probes
+	//     /api/where/metrics.json each tick, cross-references the live agency
+	//     IDs against the static feeds' agency.txt declarations, and runs the
+	//     per-agency pipeline for every agency that has BOTH a static bundle
+	//     AND is reported as currently served.
+	//
+	// Multi-agency static feeds are accepted (one bundle pointer-shared across
+	// serverKeys); ambiguous feeds (zero or multiple agency_id rows in
+	// agency.txt) are Sentry-warned and skipped at download time.
+
 	var (
 		showVersion = flag.Bool("version", false, "display version and exit")
 		configFile  = flag.String("config-file", "", "Path to a local JSON configuration file")
