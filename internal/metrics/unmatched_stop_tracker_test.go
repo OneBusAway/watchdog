@@ -12,9 +12,9 @@ import (
 
 func TestUnmatchedStopTrackerTracksByAgency(t *testing.T) {
 	tracker := NewUnmatchedStopTracker()
-	tracker.RecordLastSeen("agency-a", "agency-a", "Agency A", "https://agency-a.example.com", "stop-1", "Stop One", "1.100000", "2.200000")
-	tracker.RecordClusterSeen("agency-a", "agency-a", "Agency A", "https://agency-a.example.com", "station-1", "s2_111", "1.100000", "2.200000")
-	tracker.RecordLastSeen("agency-b", "agency-b", "Agency B", "https://agency-b.example.com", "stop-1", "Stop One", "1.100000", "2.200000")
+	tracker.RecordLastSeen("agency-a", "agency-a", "Agency A", "test-server", "https://agency-a.example.com", "stop-1", "Stop One", "1.100000", "2.200000")
+	tracker.RecordClusterSeen("agency-a", "agency-a", "Agency A", "test-server", "https://agency-a.example.com", "station-1", "s2_111", "1.100000", "2.200000")
+	tracker.RecordLastSeen("agency-b", "agency-b", "Agency B", "test-server", "https://agency-b.example.com", "stop-1", "Stop One", "1.100000", "2.200000")
 
 	if len(tracker.Entries) != 2 || len(tracker.Entries["agency-a"]) != 1 {
 		t.Fatalf("tracker did not isolate agencies: %+v", tracker.Entries)
@@ -85,11 +85,11 @@ func TestRecordLastSeenUpdatesLabelsOnRename(t *testing.T) {
 	)
 	tracker := NewUnmatchedStopTracker()
 
-	ObaUnmatchedStopInfo.WithLabelValues(agencyID, "Rename Agency", "https://rename.example.com", stopID, "Old Name", "1.100000", "2.200000").Set(1)
-	tracker.RecordLastSeen(agencyID, agencyID, "Rename Agency", "https://rename.example.com", stopID, "Old Name", "1.100000", "2.200000")
+	ObaUnmatchedStopInfo.WithLabelValues(agencyID, "Rename Agency", "test-server", "https://rename.example.com", stopID, "Old Name", "1.100000", "2.200000").Set(1)
+	tracker.RecordLastSeen(agencyID, agencyID, "Rename Agency", "test-server", "https://rename.example.com", stopID, "Old Name", "1.100000", "2.200000")
 
-	ObaUnmatchedStopInfo.WithLabelValues(agencyID, "Rename Agency", "https://rename.example.com", stopID, "New Name", "3.300000", "4.400000").Set(1)
-	tracker.RecordLastSeen(agencyID, agencyID, "Rename Agency", "https://rename.example.com", stopID, "New Name", "3.300000", "4.400000")
+	ObaUnmatchedStopInfo.WithLabelValues(agencyID, "Rename Agency", "test-server", "https://rename.example.com", stopID, "New Name", "3.300000", "4.400000").Set(1)
+	tracker.RecordLastSeen(agencyID, agencyID, "Rename Agency", "test-server", "https://rename.example.com", stopID, "New Name", "3.300000", "4.400000")
 
 	entry := tracker.Entries[agencyID][stopID]
 	if entry.StopName != "New Name" || entry.Lat != "3.300000" || entry.Lon != "4.400000" {
@@ -112,11 +112,11 @@ func TestClearStopsPrunesRenamedStopOnStale(t *testing.T) {
 	)
 	tracker := NewUnmatchedStopTracker()
 
-	ObaUnmatchedStopInfo.WithLabelValues(agencyID, "Rename Clear Agency", "https://clear.example.com", stopID, "Very Old Name", "1.100000", "2.200000").Set(1)
-	tracker.RecordLastSeen(agencyID, agencyID, "Rename Clear Agency", "https://clear.example.com", stopID, "Very Old Name", "1.100000", "2.200000")
+	ObaUnmatchedStopInfo.WithLabelValues(agencyID, "Rename Clear Agency", "test-server", "https://clear.example.com", stopID, "Very Old Name", "1.100000", "2.200000").Set(1)
+	tracker.RecordLastSeen(agencyID, agencyID, "Rename Clear Agency", "test-server", "https://clear.example.com", stopID, "Very Old Name", "1.100000", "2.200000")
 
-	ObaUnmatchedStopInfo.WithLabelValues(agencyID, "Rename Clear Agency", "https://clear.example.com", stopID, "Latest Name", "9.900000", "8.800000").Set(1)
-	tracker.RecordLastSeen(agencyID, agencyID, "Rename Clear Agency", "https://clear.example.com", stopID, "Latest Name", "9.900000", "8.800000")
+	ObaUnmatchedStopInfo.WithLabelValues(agencyID, "Rename Clear Agency", "test-server", "https://clear.example.com", stopID, "Latest Name", "9.900000", "8.800000").Set(1)
+	tracker.RecordLastSeen(agencyID, agencyID, "Rename Clear Agency", "test-server", "https://clear.example.com", stopID, "Latest Name", "9.900000", "8.800000")
 
 	entry := tracker.Entries[agencyID][stopID]
 	entry.LastSeen = time.Now().UTC().Add(-48 * time.Hour)

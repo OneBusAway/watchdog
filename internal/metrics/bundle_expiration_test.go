@@ -11,7 +11,7 @@ import (
 )
 
 func TestCheckBundleExpiration(t *testing.T) {
-	testServer := models.ObaServer{AgencyID: "1", AgencyName: "Test Agency", ObaBaseURL: "https://test.example.com"}
+	testServer := models.ObaServer{ServerName: "Test Server", AgencyID: "1", AgencyName: "Test Agency", ObaBaseURL: "https://test.example.com"}
 
 	data := readFixture(t, "gtfs.zip")
 	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
@@ -42,6 +42,7 @@ func TestCheckBundleExpiration(t *testing.T) {
 	earliestMetric, err := getMetricValue(BundleEarliestExpirationGauge, map[string]string{
 		"agency_id":   testServer.AgencyID,
 		"agency_name": testServer.AgencyName,
+		"server_name": testServer.ServerName,
 		"server_url":  utils.SanitizeServerURL(testServer.ObaBaseURL),
 	})
 	if err != nil {
@@ -54,6 +55,7 @@ func TestCheckBundleExpiration(t *testing.T) {
 	latestMetric, err := getMetricValue(BundleLatestExpirationGauge, map[string]string{
 		"agency_id":   testServer.AgencyID,
 		"agency_name": testServer.AgencyName,
+		"server_name": testServer.ServerName,
 		"server_url":  utils.SanitizeServerURL(testServer.ObaBaseURL),
 	})
 	if err != nil {

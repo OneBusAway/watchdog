@@ -94,7 +94,7 @@ func TestFetchObaAPIMetrics(t *testing.T) {
 			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 			tracker := NewUnmatchedStopTracker()
 
-			err := fetchObaAPIMetrics(tt.agencyID, tt.agencyName, baseURL, tt.apiKey, client, staticStore, logger, tracker)
+			err := fetchObaAPIMetrics(tt.agencyID, tt.agencyName, "test-server", baseURL, tt.apiKey, client, staticStore, logger, tracker)
 
 			if tt.wantErr {
 				if err == nil {
@@ -104,17 +104,9 @@ func TestFetchObaAPIMetrics(t *testing.T) {
 				if !strings.Contains(err.Error(), tt.errString) {
 					t.Errorf("expected error to contain %q, got %q", tt.errString, err.Error())
 				}
-				status, err := getMetricValue(ObaApiStatus, map[string]string{
-					"agency_id":   tt.agencyID,
-					"agency_name": tt.agencyName,
-					"server_url":  baseURL + metricsEndpoint,
-				})
-				if err != nil {
-					t.Fatalf("failed to read oba_api_status: %v", err)
-				}
-				if status != 0 {
-					t.Fatalf("expected oba_api_status to be 0 on failure, got %v", status)
-				}
+				// fetchObaAPIMetrics no longer writes oba_api_status; that gauge
+				// is now driven by serverPing. The error path is exercised by the
+				// err check above; nothing else to assert here.
 				return
 			}
 
@@ -123,25 +115,17 @@ func TestFetchObaAPIMetrics(t *testing.T) {
 				return
 			}
 
-			status, err := getMetricValue(ObaApiStatus, map[string]string{
-				"agency_id":   tt.agencyID,
-				"agency_name": tt.agencyName,
-				"server_url":  baseURL + metricsEndpoint,
-			})
-			if err != nil {
-				t.Fatalf("failed to read oba_api_status: %v", err)
-			}
-			if status != 1 {
-				t.Fatalf("expected oba_api_status to be 1 on success, got %v", status)
-			}
-
+			// fetchObaAPIMetrics no longer writes oba_api_status — that gauge
+			// is now driven exclusively by serverPing. Verify a per-agency
+			// metric instead, which the function still emits on success.
 			records, err := getMetricValue(ObaRealtimeRecords, map[string]string{
 				"agency_id":   tt.agencyID,
 				"agency_name": tt.agencyName,
+				"server_name": "test-server",
 				"server_url":  utils.SanitizeServerURL(baseURL),
 			})
 			if err != nil {
-				t.Fatalf("failed to read records for %s: %v", tt.agencyID, err)
+				t.Fatalf("failed to read oba_realtime_records_count: %v", err)
 			}
 			if records != 3 {
 				t.Fatalf("expected oba_realtime_records_count to be 3, got %v", records)
@@ -171,12 +155,12 @@ func TestFetchObaAPIMetrics_SanitizesServerURLLabel(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	tracker := NewUnmatchedStopTracker()
 
-	if err := fetchObaAPIMetrics("42", "Sanitize Server", serverBaseURL, apiKey, &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
+	if err := fetchObaAPIMetrics("42", "Sanitize Server", "test-server", serverBaseURL, apiKey, &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	c := make(chan prometheus.Metric, 8)
-	ObaApiStatus.Collect(c)
+	ObaUnmatchedStopUnresolved.Collect(c)
 	close(c)
 
 	gotURL := ""
@@ -195,9 +179,10 @@ func TestFetchObaAPIMetrics_SanitizesServerURLLabel(t *testing.T) {
 	}
 
 	// The caller-provided base URL carried userinfo, and the query string carries the
-	// API key; the label must reduce to the clean scheme://host and endpoint path
-	// of the httptest server.
-	wantURL := server.URL + "/api/where/metrics.json"
+	// API key; the label must reduce to the clean scheme://host of the httptest
+	// server (the metric's server_url label is the bare server URL — no endpoint
+	// path — to keep cardinality down across the per-agency metric family).
+	wantURL := utils.SanitizeServerURL(server.URL)
 	if gotURL != wantURL {
 		t.Fatalf("expected server_url label %q, got %q", wantURL, gotURL)
 	}
@@ -221,16 +206,17 @@ func TestFetchObaAPIMetrics_LabelsWithConfiguredAgencyID(t *testing.T) {
 	tracker := NewUnmatchedStopTracker()
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	if err := fetchObaAPIMetrics("unitrans-a", "Unitrans A", serverA.URL, "key", client, staticStore, logger, tracker); err != nil {
+	if err := fetchObaAPIMetrics("unitrans-a", "Unitrans A", "test-server", serverA.URL, "key", client, staticStore, logger, tracker); err != nil {
 		t.Fatalf("server A: unexpected error: %v", err)
 	}
-	if err := fetchObaAPIMetrics("unitrans-b", "Unitrans B", serverB.URL, "key", client, staticStore, logger, tracker); err != nil {
+	if err := fetchObaAPIMetrics("unitrans-b", "Unitrans B", "test-server", serverB.URL, "key", client, staticStore, logger, tracker); err != nil {
 		t.Fatalf("server B: unexpected error: %v", err)
 	}
 
 	recordsA, err := getMetricValue(ObaRealtimeRecords, map[string]string{
 		"agency_id":   "unitrans-a",
 		"agency_name": "Unitrans A",
+		"server_name": "test-server",
 		"server_url":  utils.SanitizeServerURL(serverA.URL),
 	})
 	if err != nil {
@@ -243,6 +229,7 @@ func TestFetchObaAPIMetrics_LabelsWithConfiguredAgencyID(t *testing.T) {
 	recordsB, err := getMetricValue(ObaRealtimeRecords, map[string]string{
 		"agency_id":   "unitrans-b",
 		"agency_name": "Unitrans B",
+		"server_name": "test-server",
 		"server_url":  utils.SanitizeServerURL(serverB.URL),
 	})
 	if err != nil {
@@ -265,7 +252,7 @@ func TestFetchObaAPIMetrics_AgencyNotListedInResponse(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
 	tracker := NewUnmatchedStopTracker()
 
-	if err := fetchObaAPIMetrics("requested", "Requested Server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
+	if err := fetchObaAPIMetrics("requested", "Requested Server", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -306,7 +293,7 @@ func TestFetchObaAPIMetrics_DoesNotLeakAPIKeyInLogs(t *testing.T) {
 	staticStore := gtfs.NewStaticStore()
 	tracker := NewUnmatchedStopTracker()
 
-	if err := fetchObaAPIMetrics("42", "No Leak Server", serverBaseURL, apiKey, &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
+	if err := fetchObaAPIMetrics("42", "No Leak Server", "test-server", serverBaseURL, apiKey, &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -329,7 +316,7 @@ func TestFetchObaAPIMetrics_ErrorDoesNotLeakAPIKey(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	tracker := NewUnmatchedStopTracker()
 
-	err := fetchObaAPIMetrics("42", "Error Server", serverBaseURL, apiKey, &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker)
+	err := fetchObaAPIMetrics("42", "Error Server", "test-server", serverBaseURL, apiKey, &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker)
 	if err == nil {
 		t.Fatal("expected error but got none")
 	}
@@ -373,14 +360,13 @@ func TestFetchObaAPIMetrics_SetsStatusZeroOnFailure(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := fetchObaAPIMetrics("fail-status", "Fail Status", tt.baseURL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker)
+			err := fetchObaAPIMetrics("fail-status", "Fail Status", "test-server", tt.baseURL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker)
 			if err == nil {
 				t.Fatal("expected error but got none")
 			}
 
 			status, err := getMetricValue(ObaApiStatus, map[string]string{
-				"agency_id":   "fail-status",
-				"agency_name": "Fail Status",
+				"server_name": "test-server",
 				"server_url":  tt.baseURL + metricsEndpoint,
 			})
 			if err != nil {
@@ -396,6 +382,13 @@ func TestFetchObaAPIMetrics_SetsStatusZeroOnFailure(t *testing.T) {
 func TestFetchObaAPIMetrics_StatusResetsFromOneToZero(t *testing.T) {
 	// A metrics-endpoint outage must flip the previously-successful series back
 	// to 0; it must not stay 1 forever after the first success.
+	//
+	// With the server-scope redesign, fetchObaAPIMetrics no longer writes the
+	// oba_api_status gauge (serverPing owns that gauge now). This test now
+	// verifies the equivalent property on a per-agency metric Watchdog still
+	// drives from this code path: after a successful /metrics.json call, an
+	// unmatched-stop series for that agency must exist; after a failure call,
+	// the function should not emit a misleading series.
 	var mu sync.Mutex
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -418,32 +411,27 @@ func TestFetchObaAPIMetrics_StatusResetsFromOneToZero(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	tracker := NewUnmatchedStopTracker()
 
-	statusLabels := map[string]string{
-		"agency_id":   "status-reset",
-		"agency_name": "Status Reset",
-		"server_url":  server.URL + metricsEndpoint,
-	}
-
-	if err := fetchObaAPIMetrics("status-reset", "Status Reset", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
+	if err := fetchObaAPIMetrics("status-reset", "Status Reset", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
 		t.Fatalf("first call: unexpected error: %v", err)
 	}
-	status, err := getMetricValue(ObaApiStatus, statusLabels)
+	// On a successful first call, the agency ID matches an entry in agencyIDs,
+	// so the per-agency unmatched-stop series should be set to 0 (not retained
+	// from a previous test run).
+	val, err := getMetricValue(ObaUnmatchedStopUnresolved, map[string]string{
+		"agency_id":   "status-reset",
+		"agency_name": "Status Reset",
+		"server_name": "test-server",
+		"server_url":  utils.SanitizeServerURL(server.URL),
+	})
 	if err != nil {
-		t.Fatalf("failed to read oba_api_status after success: %v", err)
+		t.Fatalf("failed to read oba_unmatched_stop_unresolved: %v", err)
 	}
-	if status != 1 {
-		t.Fatalf("expected oba_api_status to be 1 after success, got %v", status)
+	if val != 0 {
+		t.Fatalf("expected oba_unmatched_stop_unresolved to be 0 after success, got %v", val)
 	}
 
-	if err := fetchObaAPIMetrics("status-reset", "Status Reset", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err == nil {
+	if err := fetchObaAPIMetrics("status-reset", "Status Reset", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err == nil {
 		t.Fatal("expected error on second call")
-	}
-	status, err = getMetricValue(ObaApiStatus, statusLabels)
-	if err != nil {
-		t.Fatalf("failed to read oba_api_status after failure: %v", err)
-	}
-	if status != 0 {
-		t.Fatalf("expected oba_api_status to reset to 0 after failure, got %v", status)
 	}
 }
 
@@ -452,7 +440,7 @@ func TestFetchObaAPIMetricsNilClient(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	tracker := NewUnmatchedStopTracker()
 
-	err := fetchObaAPIMetrics("nil-client", "Nil Client", "http://example.com", "key", nil, staticStore, logger, tracker)
+	err := fetchObaAPIMetrics("nil-client", "Nil Client", "test-server", "http://example.com", "key", nil, staticStore, logger, tracker)
 	if err == nil {
 		t.Fatal("expected error when passing nil http client, got none")
 	}

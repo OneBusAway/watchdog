@@ -17,52 +17,43 @@ const currentTimeEndpoint = "/api/where/current-time.json"
 // serverPing pings the `/current-time` endpoint of the given OneBusAway server
 // to verify the API is reachable and returning valid data.
 //
-// If the request is successful and the response contains a valid readable time,
-// the `ObaApiStatus` Prometheus metric is set to 1 for the server. Otherwise, it is set to 0.
-// Errors (such as failed requests or invalid responses) are reported to Sentry with server context.
+// The ping is server-wide (the endpoint takes no agency parameter), so the
+// ObaApiStatus gauge is labeled with server identity only. Errors are reported
+// to Sentry with server context.
 //
 // Parameters:
-//   - client: the shared OneBusAway SDK client for the server, injected by the
-//     caller so the client's connection pool and instrumentation are reused
-//     across collection ticks.
-//   - server: a models.ObaServer object containing the base URL, API key, and server ID.
+//   - client: the shared OneBusAway SDK client for the server, injected by
+//     the caller so the client's connection pool and instrumentation are
+//     reused across collection ticks.
+//   - server: a models.ObaServer object containing the base URL, API key,
+//     and server name.
 //
 // Returns:
-//   - None (side effects include reporting to Prometheus and Sentry).
+//   - bool: true when the server returned a readable time; the caller uses
+//     this to gate subsequent steps (any non-true value aborts the per-server
+//     collection cycle and triggers a backoff update).
 func serverPing(client *onebusaway.Client, server models.ObaServer) bool {
 	ctx := context.Background()
 	response, err := client.CurrentTime.Get(ctx)
 
+	serverURL := utils.SanitizeServerURL(server.ObaBaseURL + currentTimeEndpoint)
+
 	if err != nil {
 		err := fmt.Errorf("failed to ping OBA server %s: %v", server.ObaBaseURL, err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("agency_id", server.AgencyID),
+			Tags: utils.MakeMap("server_name", server.ServerName),
 			ExtraContext: map[string]interface{}{
 				"oba_base_url": server.ObaBaseURL,
 			},
 		})
-		// Update status metric
-		ObaApiStatus.WithLabelValues(
-			server.AgencyID,
-			server.AgencyName,
-			utils.SanitizeServerURL(server.ObaBaseURL+currentTimeEndpoint),
-		).Set(0)
+		ObaApiStatus.WithLabelValues(server.ServerName, serverURL).Set(0)
 		return false
 	}
 
-	// Check response validity
 	if response.Data.Entry.ReadableTime != "" {
-		ObaApiStatus.WithLabelValues(
-			server.AgencyID,
-			server.AgencyName,
-			utils.SanitizeServerURL(server.ObaBaseURL+currentTimeEndpoint),
-		).Set(1)
+		ObaApiStatus.WithLabelValues(server.ServerName, serverURL).Set(1)
 		return true
 	}
-	ObaApiStatus.WithLabelValues(
-		server.AgencyID,
-		server.AgencyName,
-		utils.SanitizeServerURL(server.ObaBaseURL+currentTimeEndpoint),
-	).Set(0)
+	ObaApiStatus.WithLabelValues(server.ServerName, serverURL).Set(0)
 	return false
 }

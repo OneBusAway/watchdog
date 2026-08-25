@@ -40,6 +40,7 @@ func reportTrackedAgencies(servers []models.ObaServer) {
 		AgenciesTrackedInfo.WithLabelValues(
 			server.AgencyID,
 			server.AgencyName,
+			server.ServerName,
 			utils.SanitizeServerURL(server.ObaBaseURL),
 		).Set(1)
 	}

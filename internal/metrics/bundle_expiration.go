@@ -59,8 +59,8 @@ func checkBundleExpiration(staticStore *gtfs.StaticStore, currentTime time.Time,
 	daysUntilEarliestExpiration := int(earliestEndDate.Sub(currentTime).Hours() / 24)
 	daysUntilLatestExpiration := int(latestEndDate.Sub(currentTime).Hours() / 24)
 
-	BundleEarliestExpirationGauge.WithLabelValues(server.AgencyID, server.AgencyName, utils.SanitizeServerURL(server.ObaBaseURL)).Set(float64(daysUntilEarliestExpiration))
-	BundleLatestExpirationGauge.WithLabelValues(server.AgencyID, server.AgencyName, utils.SanitizeServerURL(server.ObaBaseURL)).Set(float64(daysUntilLatestExpiration))
+	BundleEarliestExpirationGauge.WithLabelValues(server.AgencyID, server.AgencyName, server.ServerName, utils.SanitizeServerURL(server.ObaBaseURL)).Set(float64(daysUntilEarliestExpiration))
+	BundleLatestExpirationGauge.WithLabelValues(server.AgencyID, server.AgencyName, server.ServerName, utils.SanitizeServerURL(server.ObaBaseURL)).Set(float64(daysUntilLatestExpiration))
 
 	return daysUntilEarliestExpiration, daysUntilLatestExpiration, nil
 }
