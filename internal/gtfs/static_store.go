@@ -73,6 +73,23 @@ func (s *StaticStore) Get(serverKey string) (*models.StaticData, bool) {
 	return data, exists
 }
 
+// Range invokes fn for every (serverKey, *StaticData) pair in the store.
+// Iteration stops early if fn returns false. Used by the server-scope
+// resolver to enumerate agencies whose static bundles are stored for a
+// particular oba_base_url.
+//
+// The store is read-locked for the duration of iteration; callers must not
+// call Set / SetFetchTime from inside fn or they will deadlock.
+func (s *StaticStore) Range(fn func(serverKey string, data *models.StaticData) bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for k, v := range s.data {
+		if !fn(k, v) {
+			return
+		}
+	}
+}
+
 // SetFetchTime records when the GTFS static bundle was last downloaded for the
 // specified server key. If the internal map is not initialized, it creates it.
 // This method is thread-safe and uses a write lock.
