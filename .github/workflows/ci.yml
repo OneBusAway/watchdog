@@ -25,10 +25,15 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          # go.mod names an exact patch (go mod tidy normalizes it), so CI runs
-          # that exact toolchain. Reproducible, but it does mean picking up Go
-          # patch releases is a deliberate go.mod edit rather than automatic.
-          go-version-file: go.mod
+          # Deliberately the minor, not go-version-file. go mod tidy normalizes
+          # the directive to an exact patch (go 1.25.0), and setup-go installs
+          # exactly what it is given -- which pins CI to a stdlib that goes
+          # stale the moment Go ships a patch. That is not theoretical: it made
+          # the vulnerability scan report 27 stdlib CVEs all fixed in 1.25.2 and
+          # 1.25.3. Floating the patch tracks golang:1.25-bookworm, so CI and
+          # the shipped image build on the same stdlib. go.mod remains the
+          # source of truth for the language version.
+          go-version: "1.25"
           # setup-go's cache key contains the Go version and go.sum hash but no
           # job identity, so the two jobs that build Go code would compute the
           # same key and only the first to finish would ever save it. Cache
@@ -70,7 +75,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: "1.25" # see the verify job for why this is not go-version-file
           cache: false
 
       - uses: actions/cache@v4
@@ -103,12 +108,13 @@ jobs:
       # Deliberately not golang/govulncheck-action: it always passes its own
       # go-version (default "stable") alongside go-version-file, and setup-go
       # resolves that in favor of go-version -- so the scan would silently run
-      # on a different toolchain than the one we ship. Stdlib findings are
-      # judged against the running toolchain, so that difference matters.
+      # on a different toolchain than the one under test. govulncheck judges
+      # stdlib findings against the toolchain it runs on, so that matters here
+      # more than anywhere else in this workflow.
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: "1.25" # see the verify job for why this is not go-version-file
 
       # Watchdog parses remote config and third-party GTFS feeds, so a reachable
       # parser vulnerability in a dependency is a live exposure. Note this gates
