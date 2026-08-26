@@ -1,33 +1,152 @@
-name: Run Tests
+name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+# Cancel superseded PR runs; pushes to main keep theirs so every commit gets its
+# own status and coverage upload.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  verify:
+    name: Format, Vet & Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # go.mod names an exact patch (go mod tidy normalizes it), so CI runs
+          # that exact toolchain. Reproducible, but it does mean picking up Go
+          # patch releases is a deliberate go.mod edit rather than automatic.
+          go-version-file: go.mod
+          # setup-go's cache key contains the Go version and go.sum hash but no
+          # job identity, so the two jobs that build Go code would compute the
+          # same key and only the first to finish would ever save it. Cache
+          # explicitly instead, keyed per job.
+          cache: false
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ github.job }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: ${{ runner.os }}-go-${{ github.job }}-
+
+      - name: Check formatting
+        run: make fmt-check
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Check go.mod is tidy
+        run: go mod tidy -diff
+
+      # make vet runs go vet with -tags=integration; see the Makefile for why
+      # that tag matters and what would invalidate it.
+      - name: Vet
+        run: make vet
+
+      - name: Build
+        run: CGO_ENABLED=0 go build -v ./...
+
   test:
     name: Run Tests
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 15
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.23'
-        cache: true
-    
-    - name: Download dependencies
-      run: go mod download
-      
-    - name: Verify dependencies
-      run: go mod verify
-      
-    - name: Run tests
-      run: go test -v -coverprofile=profile.cov ./...
-      
-    - uses: shogo82148/actions-goveralls@v1
-      with:
-        path-to-profile: profile.cov
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ github.job }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: ${{ runner.os }}-go-${{ github.job }}-
+
+      # Watchdog is one collection goroutine per tick over mutex-guarded stores
+      # shared by every service, so -race is the only automated check that
+      # exercises that invariant. Coverage instrumentation is cheap relative to
+      # -race and reports the same statement percentage either way, so this is
+      # one job rather than two.
+      - name: Run tests with the race detector
+        run: go test -race -coverprofile=profile.cov ./...
+
+      - uses: shogo82148/actions-goveralls@v1
+        with:
+          path-to-profile: profile.cov
+
+  vuln:
+    name: Vulnerability Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # Deliberately not golang/govulncheck-action: it always passes its own
+      # go-version (default "stable") alongside go-version-file, and setup-go
+      # resolves that in favor of go-version -- so the scan would silently run
+      # on a different toolchain than the one we ship. Stdlib findings are
+      # judged against the running toolchain, so that difference matters.
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Watchdog parses remote config and third-party GTFS feeds, so a reachable
+      # parser vulnerability in a dependency is a live exposure. Note this gates
+      # only what a PR introduces; a CVE published against already-merged code
+      # has no diff to trigger on, which is what a scheduled run would catch.
+      # govulncheck exits non-zero on any vulnerability reachable from our code.
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        run: govulncheck ./...
+
+  docker:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # docker.yml only builds on pushes to main and on releases, so a Dockerfile
+    # break is otherwise not caught until after the merge that caused it.
+    # Matched on "not a push" rather than "is a pull_request" so that adding a
+    # merge queue later does not silently skip this job while still reporting
+    # green to branch protection.
+    if: github.event_name != 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Native amd64 only, while docker.yml builds amd64/arm64/arm/v7 under
+      # QEMU. This catches Dockerfile and Go build breakage without paying for
+      # emulated cross-builds on every PR; an arch-specific failure (an apt
+      # package with no armhf build, say) still only surfaces on main.
+      #
+      # VERSION is passed because the Dockerfile's ARG feeds -ldflags, and that
+      # path is otherwise exercised only by docker.yml's release job.
+      - name: Build image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          build-args: VERSION=${{ github.sha }}

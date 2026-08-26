@@ -22,22 +22,36 @@ Please note that this project is released with a [Code of Conduct](./CODE_OF_CON
 
 - Run Watchdog using one of the methods described [here](./README.md#running) and ensure there are no build or runtime errors.
 
+Use the `make` targets rather than the bare `go` commands — CI runs the same
+targets, so a green local run and a green CI run mean the same thing.
+
 - **Formatting**: Run the Go formatter before committing.
 
 ```bash
-  go fmt ./...
+  make fmt        # rewrites files
+  make fmt-check  # reports what needs rewriting; this is what CI runs
 ```
 
 - **Linting**: Run `go vet` to catch common mistakes.
 
 ```bash
-  go vet ./...
+  make vet
 ```
+
+  This vets with `-tags=integration` so the integration tests are type-checked
+  too. A bare `go vet ./...` skips them entirely, and they will rot unnoticed.
 
 - **Testing**:
   - Write unit tests for new functionality.
   - Ensure the full test suite passes with:
 
 ```bash
-  go test ./...
+  make test
+```
+
+  CI runs the suite under the race detector, which is worth doing locally
+  before pushing anything that touches shared state:
+
+```bash
+  go test -race ./...
 ```

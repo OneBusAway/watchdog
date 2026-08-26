@@ -31,6 +31,11 @@ func NewConfigService(logger *slog.Logger, client *http.Client, config *Config, 
 	}
 }
 
+// RefreshConfig polls url in a loop, sleeping interval between attempts, and
+// applies each successfully loaded, non-empty configuration -- an empty one is
+// ignored rather than applied, see refreshConfig for why. onUpdated is invoked
+// with the newly validated servers, inline on the polling loop, and must be
+// safe for concurrent access with the collection goroutines.
 func (cs *ConfigService) RefreshConfig(ctx context.Context, url, authUser, authPass string, interval time.Duration, maxRetries int, onUpdated func([]models.ObaServer)) {
 	refreshConfig(ctx, cs.Client, url, authUser, authPass, cs.Config, cs.Logger, interval, maxRetries, onUpdated)
 }

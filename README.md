@@ -13,7 +13,7 @@ It exposes a comprehensive set of **Prometheus metrics** for monitoring:
 
 ## Requirements
 
-- **Go 1.23+**
+- **Go 1.25+**
 
 ## Setup
 
