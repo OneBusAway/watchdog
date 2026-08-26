@@ -8,7 +8,7 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
 
 **Identity — the Server Key:** The unique identity of a monitored deployment is the composite of its `oba_base_url` plus `agency_id`. GTFS `agency_id` values are only unique *within* a single OBA server, so two distinct deployments can legitimately reuse the same `agency_id` (e.g. both use `"1"` or `"MTA"`). All Watchdog stores (GTFS static/real-time bundles, bounding boxes, backoff state, vehicle last-seen, unmatched-stop tracking) and config validation are keyed on this composite, so both deployments are monitored independently. Config validation only rejects *exact* duplicates — the same `oba_base_url` **and** `agency_id` — since those are genuine mistakes.
 
-**Shared `agency_id` across deployments:** The metric series labeled with `agency_id`/`agency_name` also carry `server_url` (the sanitized base URL), so the `(agency_id, server_url)` pair is a unique deployment identity mirroring the composite `ServerKey`. Observations from two deployments that share an `agency_id` no longer collide — each keeps its own series. The only exceptions are metrics whose `server_url` label is already endpoint-scoped (`oba_api_status`, which reports one series per probed endpoint including the path suffix) and the scalar `oba_tracked_agencies_count`, which has no per-deployment series.
+**Shared `agency_id` across deployments:** The metric series labeled with `agency_id`/`agency_name` also carry `server_url` (the sanitized base URL), so the `(agency_id, server_url)` pair is a unique deployment identity mirroring the composite `ServerKey`. Observations from two deployments that share an `agency_id` no longer collide — each keeps its own series. The only exception is the scalar `oba_tracked_agencies_count`, which has no per-deployment series.
 
 ---
 
@@ -24,8 +24,8 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
 - **Possible causes:** Server downtime, network issues, wrong URL.  
 - **Example alert:**  
 ```promql
-  # one series per endpoint; aggregate to alert once per agency
-  min by (agency_id) (oba_api_status) == 0
+  # one series per server; oba_api_status carries no agency_id
+  oba_api_status == 0
 ```
 
 ---

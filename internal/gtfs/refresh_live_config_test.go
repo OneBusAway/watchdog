@@ -38,8 +38,9 @@ func TestRefreshGTFSBundlesReadsLiveConfig(t *testing.T) {
 		case "/added.zip":
 			addedOnce.Do(func() { close(sawAdded) })
 		}
-		// #nosec G104
-		w.Write(bundle)
+		if _, err := w.Write(bundle); err != nil {
+			t.Errorf("write GTFS fixture: %v", err)
+		}
 	}))
 	defer ts.Close()
 	defer http.DefaultClient.CloseIdleConnections()
