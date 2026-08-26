@@ -77,22 +77,6 @@ export CONFIG_AUTH_USER="username"
 export CONFIG_AUTH_PASS="password"
 ```
 
-### Backward Compatibility (v1 → v2)
-
-Watchdog used to accept a flat, single-server config schema. Legacy (v1) configs are still supported: they're **silently converted** to the current array-based schema (v2) at load time, so upgrading doesn't require changing your config or interrupt monitoring.
-
-When a v1 entry is loaded, Watchdog maps it like this:
-
-- `name` → `agency_name`
-- `gtfs_url` → a single-entry `gtfs_static_feeds`
-- `vehicle_position_url` / `trip_update_url` → the matching `gtfs_rt_feeds` entries
-- `gtfs_rt_api_key` / `gtfs_rt_api_value` → the per-feed auth fields
-- `id` → ignored
-
-One caveat: v1 and v2 fields can't be mixed in the same entry. If an entry contains both schemas (e.g. a legacy `gtfs_url` alongside `gtfs_static_feeds`), it's rejected and reported to Sentry. Each entry must use one schema or the other.
-
-Migrating to v2 is recommended whenever convenient — it's the only way to configure multiple static or RT feeds per agency. v1 supports just one of each.
-
 ### Two observation modes: agency vs. server
 
 There are two ways Watchdog can observe an OBA deployment. The choice is made **per entry in `config.json`** by whether you set `agency_id` — every other field (`server_name`, `oba_base_url`, `oba_api_key`, `gtfs_static_feeds`, `gtfs_rt_feeds`) is identical in both modes, so `agency_id` is the only switch:
@@ -165,6 +149,22 @@ In agency-mode every RT vehicle is labeled with the configured `agency_id`. In s
 #### Backward compatibility
 
 This is a **deliberate breaking change** to the existing v2 format. Existing v2 entries without `server_name` become invalid — operators must add the field. The legacy v1 array-of-flat-objects format continues to work: `id` (int) is still ignored, `name` is repurposed as `server_name`, and a v1 entry with `agency_id` populates `agency_name` from `name` so the entry remains agency-scoped.
+
+### Backward Compatibility (v1 → v2)
+
+Watchdog used to accept a flat, single-server config schema. Legacy (v1) configs are still supported: they're **silently converted** to the current array-based schema (v2) at load time, so upgrading doesn't require changing your config or interrupt monitoring.
+
+When a v1 entry is loaded, Watchdog maps it like this:
+
+- `name` → `agency_name`
+- `gtfs_url` → a single-entry `gtfs_static_feeds`
+- `vehicle_position_url` / `trip_update_url` → the matching `gtfs_rt_feeds` entries
+- `gtfs_rt_api_key` / `gtfs_rt_api_value` → the per-feed auth fields
+- `id` → ignored
+
+One caveat: v1 and v2 fields can't be mixed in the same entry. If an entry contains both schemas (e.g. a legacy `gtfs_url` alongside `gtfs_static_feeds`), it's rejected and reported to Sentry. Each entry must use one schema or the other.
+
+Migrating to v2 is recommended whenever convenient — it's the only way to configure multiple static or RT feeds per agency. v1 supports just one of each.
 
 ### Application Options
 
