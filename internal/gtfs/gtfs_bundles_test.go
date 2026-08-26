@@ -42,7 +42,7 @@ func TestRefreshGTFSBundles(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	client := &http.Client{Timeout: 10 * time.Second}
-	go refreshGTFSBundles(ctx, client, servers, logger, 10*time.Millisecond, boundingBoxStore, staticStore, NewRouteAgencyIndex(), nil, 1)
+	go refreshGTFSBundles(ctx, client, func() []models.ObaServer { return servers }, logger, 10*time.Millisecond, boundingBoxStore, staticStore, NewRouteAgencyIndex(), nil, 1)
 
 	time.Sleep(15 * time.Millisecond)
 
@@ -622,7 +622,11 @@ func (c *countingRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 	}, nil
 }
 
-func TestFetchAndStoreGTFSRTFeedOnceSingleFetch(t *testing.T) {
+func TestFetchAndStoreGTFSRTFeedSingleFetchUnderServerKey(t *testing.T) {
+	// Server-mode: the entry names no agency, so the merged feed is stored
+	// under the server-scoped key and fetched exactly once per tick. The
+	// vehicle pass reads that one key and attributes vehicles itself, so
+	// there is nothing to register per agency.
 	body := marshalVehicleFeed(t, "shared-vehicle", 1, 2)
 	rt := &countingRoundTripper{body: body}
 	client := &http.Client{Transport: rt}
@@ -638,65 +642,29 @@ func TestFetchAndStoreGTFSRTFeedOnceSingleFetch(t *testing.T) {
 	}
 
 	store := NewRealtimeStore()
-	keys := []string{
-		models.ServerKey(server.ObaBaseURL, "agency-A"),
-		models.ServerKey(server.ObaBaseURL, "agency-B"),
-		models.ServerKey(server.ObaBaseURL, "agency-C"),
-	}
-
-	if err := fetchAndStoreGTFSRTFeedOnce(server, keys, store, client); err != nil {
+	if err := fetchAndStoreGTFSRTFeed(server, store, client); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Exactly one HTTP fetch must have been issued, regardless of how many
-	// keys we registered the result under.
 	if rt.calls != 1 {
-		t.Fatalf("expected 1 RT fetch (server-mode share), got %d", rt.calls)
+		t.Fatalf("expected 1 RT fetch per tick, got %d", rt.calls)
 	}
 
-	// All three serverKeys must yield the same *RealtimeData pointer and the
-	// same single vehicle.
-	first := store.Get(keys[0])
-	second := store.Get(keys[1])
-	third := store.Get(keys[2])
-	if first == nil || second == nil || third == nil {
-		t.Fatal("expected all three keys to be populated")
+	stored := store.Get(server.ServerKey())
+	if stored == nil {
+		t.Fatalf("expected the merged feed under the server-scoped key %q", server.ServerKey())
 	}
-	if first != second || second != third {
-		t.Fatalf("expected pointer-sharing across serverKeys; got %p, %p, %p", first, second, third)
-	}
-	if got := len(first.Vehicles); got != 1 {
+	if got := len(stored.Vehicles); got != 1 {
 		t.Fatalf("expected 1 vehicle, got %d", got)
 	}
-}
-
-func TestFetchAndStoreGTFSRTFeedOnceEmptyKeysIsNoop(t *testing.T) {
-	// With no storeKeys the function should not issue any HTTP request — the
-	// RT fetch is the expensive step and we want callers to skip it cleanly.
-	rt := &countingRoundTripper{body: []byte{}}
-	client := &http.Client{Transport: rt}
-
-	server := models.ObaServer{
-		ServerName: "noop",
-		ObaBaseURL: "https://example.com",
-		ObaApiKey:  "key",
-		GtfsRTFeeds: []models.GtfsRTFeed{{
-			VehiclePositionURL: "https://rt.example.com/vehicles.pb",
-		}},
-	}
-	store := NewRealtimeStore()
-
-	if err := fetchAndStoreGTFSRTFeedOnce(server, nil, store, client); err != nil {
-		t.Fatalf("expected nil error for empty storeKeys, got: %v", err)
-	}
-	if rt.calls != 0 {
-		t.Fatalf("expected 0 fetches when no storeKeys, got %d", rt.calls)
+	// Nothing should be registered under an agency's key: agencies are
+	// resolved by the vehicle pass, not by the fetch.
+	if store.Get(models.ServerKey(server.ObaBaseURL, "agency-A")) != nil {
+		t.Fatal("expected no per-agency realtime entries in server-mode")
 	}
 }
 
-func TestFetchAndStoreGTFSRTFeedShimMatchesOnce(t *testing.T) {
-	// The single-key shim must produce the same observable behavior as
-	// fetchAndStoreGTFSRTFeedOnce with one key.
+func TestFetchAndStoreGTFSRTFeedAgencyModeUsesAgencyKey(t *testing.T) {
 	body := marshalVehicleFeed(t, "shim-vehicle", 1, 2)
 	rt := &countingRoundTripper{body: body}
 	client := &http.Client{Transport: rt}
@@ -718,14 +686,14 @@ func TestFetchAndStoreGTFSRTFeedShimMatchesOnce(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if rt.calls != 1 {
-		t.Fatalf("expected 1 fetch via shim, got %d", rt.calls)
+		t.Fatalf("expected 1 fetch, got %d", rt.calls)
 	}
 	got := store.Get(server.ServerKey())
 	if got == nil {
-		t.Fatal("expected the shim to populate server.ServerKey()")
+		t.Fatal("expected the feed to populate server.ServerKey()")
 	}
 	if len(got.Vehicles) != 1 {
-		t.Fatalf("expected 1 vehicle from shim, got %d", len(got.Vehicles))
+		t.Fatalf("expected 1 vehicle, got %d", len(got.Vehicles))
 	}
 }
 
@@ -859,5 +827,68 @@ func TestMergeStaticAgenciesURLCollisionKeptFirst(t *testing.T) {
 	_, declared := mergeStaticAndDiscoverAgencies([]*remoteGtfs.Static{bundleA, bundleB})
 	if got := len(declared); got != 1 {
 		t.Fatalf("expected 1 declared agency, got %d", got)
+	}
+}
+
+// TestStoreStaticForServerStoresServerScopedBoundingBox pins the key the
+// once-per-server vehicle pass reads. In server-mode the pass looks up the
+// bounding box under the server-scoped key (empty agency_id), so the static
+// download has to publish it there as well as under each agency's key.
+func TestStoreStaticForServerStoresServerScopedBoundingBox(t *testing.T) {
+	bundle := makeSyntheticBundle(t, "agency-A", "Agency A", "https://a.example", []remoteGtfs.Stop{
+		{Id: "S1", Latitude: floatPtr(47.60), Longitude: floatPtr(-122.30)},
+		{Id: "S2", Latitude: floatPtr(47.70), Longitude: floatPtr(-122.20)},
+	})
+
+	// No AgencyID: a server-scoped entry.
+	server := models.ObaServer{
+		ServerName:      "multi",
+		ObaBaseURL:      "https://example.com",
+		GtfsStaticFeeds: []string{"https://example.com/gtfs.zip"},
+	}
+
+	boundingBoxStore := geo.NewBoundingBoxStore()
+	err := storeStaticForServer(server, []*remoteGtfs.Static{bundle}, NewStaticStore(), boundingBoxStore, NewRouteAgencyIndex(), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("storeStaticForServer: %v", err)
+	}
+
+	serverScoped, ok := boundingBoxStore.Get(server.ServerKey())
+	if !ok {
+		t.Fatalf("expected a bounding box under the server-scoped key %q", server.ServerKey())
+	}
+	perAgency, ok := boundingBoxStore.Get(models.ServerKey(server.ObaBaseURL, "agency-A"))
+	if !ok {
+		t.Fatal("expected a bounding box under the agency key")
+	}
+	if serverScoped != perAgency {
+		t.Fatalf("expected the server-scoped box to match the agency box, got %+v vs %+v", serverScoped, perAgency)
+	}
+}
+
+// TestStoreStaticForServerSkipsServerScopedBoxInAgencyMode keeps agency-mode
+// from accumulating a key nothing reads: an entry that names its agency stores
+// only that agency's box.
+func TestStoreStaticForServerSkipsServerScopedBoxInAgencyMode(t *testing.T) {
+	bundle := makeSyntheticBundle(t, "agency-A", "Agency A", "https://a.example", []remoteGtfs.Stop{
+		{Id: "S1", Latitude: floatPtr(47.60), Longitude: floatPtr(-122.30)},
+	})
+
+	server := models.ObaServer{
+		ServerName:      "solo",
+		AgencyID:        "agency-A",
+		AgencyName:      "Agency A",
+		ObaBaseURL:      "https://example.com",
+		GtfsStaticFeeds: []string{"https://example.com/gtfs.zip"},
+	}
+
+	boundingBoxStore := geo.NewBoundingBoxStore()
+	err := storeStaticForServer(server, []*remoteGtfs.Static{bundle}, NewStaticStore(), boundingBoxStore, NewRouteAgencyIndex(), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("storeStaticForServer: %v", err)
+	}
+
+	if _, ok := boundingBoxStore.Get(models.ServerKey(server.ObaBaseURL, "")); ok {
+		t.Fatal("agency-mode should not publish a server-scoped bounding box")
 	}
 }

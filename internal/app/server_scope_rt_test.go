@@ -14,10 +14,10 @@ import (
 	"watchdog.onebusaway.org/internal/models"
 )
 
-// TestServerScopeRTFeedFetchedOncePerTick verifies the once-fetch refactor:
+// TestServerScopeRTFeedFetchedOncePerTick verifies the once-fetch design:
 // with 3 live agencies in server-mode, the RT endpoint is hit exactly once
-// per tick (not three times), and the realtime store has the merged data
-// under each agency's serverKey with pointer sharing.
+// per tick (not three times), and the merged data lands under the
+// server-scoped key — the single key the once-per-server vehicle pass reads.
 func TestServerScopeRTFeedFetchedOncePerTick(t *testing.T) {
 	rtBody := buildVehicleFeedProtobuf(t, "shared-vehicle")
 	var (
@@ -102,22 +102,21 @@ func TestServerScopeRTFeedFetchedOncePerTick(t *testing.T) {
 		t.Fatalf("expected exactly 1 RT fetch for 3 agencies in server-mode, got %d (total %d)", gotRT, gotAll)
 	}
 
-	keys := []string{
-		models.ServerKey(baseURL, "agency-A"),
-		models.ServerKey(baseURL, "agency-B"),
-		models.ServerKey(baseURL, "agency-C"),
+	stored := app.GtfsService.RealtimeStore.Get(server.ServerKey())
+	if stored == nil {
+		t.Fatalf("expected the merged feed under the server-scoped key %q", server.ServerKey())
 	}
-	rtA := app.GtfsService.RealtimeStore.Get(keys[0])
-	rtB := app.GtfsService.RealtimeStore.Get(keys[1])
-	rtC := app.GtfsService.RealtimeStore.Get(keys[2])
-	if rtA == nil || rtB == nil || rtC == nil {
-		t.Fatal("expected all three agency keys to be populated in the realtime store")
+	if len(stored.Vehicles) != 1 {
+		t.Fatalf("expected 1 vehicle in merged RT data, got %d", len(stored.Vehicles))
 	}
-	if rtA != rtB || rtB != rtC {
-		t.Fatalf("expected pointer-shared *RealtimeData across agencies; got %p, %p, %p", rtA, rtB, rtC)
-	}
-	if len(rtA.Vehicles) != 1 {
-		t.Fatalf("expected 1 vehicle in merged RT data, got %d", len(rtA.Vehicles))
+
+	// Per-agency realtime entries are deliberately absent: attribution is the
+	// vehicle pass's job, and a copy per agency is what used to invite a
+	// per-agency pass that double-counted every vehicle.
+	for _, agencyID := range []string{"agency-A", "agency-B", "agency-C"} {
+		if app.GtfsService.RealtimeStore.Get(models.ServerKey(baseURL, agencyID)) != nil {
+			t.Fatalf("expected no realtime entry under %s", agencyID)
+		}
 	}
 }
 

@@ -17,11 +17,11 @@ func TestCountVehiclePositionsUsesAgencyStore(t *testing.T) {
 	serverA := models.ObaServer{AgencyID: "agency-a", ObaBaseURL: "https://a.example.com", AgencyName: "Agency A"}
 	serverB := models.ObaServer{AgencyID: "agency-b", ObaBaseURL: "https://b.example.com", AgencyName: "Agency B"}
 	store := testRealtimeStore(t, serverA)
-	count, err := countVehiclePositions(serverA, store)
+	count, err := countVehiclePositions(serverA, nil, store, nil)
 	if err != nil || count == 0 {
 		t.Fatalf("count=%d err=%v", count, err)
 	}
-	if _, err := countVehiclePositions(serverB, store); err == nil {
+	if _, err := countVehiclePositions(serverB, nil, store, nil); err == nil {
 		t.Fatal("expected missing agency feed error")
 	}
 }
@@ -36,11 +36,11 @@ func TestCountVehiclePositionsKeepsDistinctServersWithSameAgencyIDDisjoint(t *te
 	storeA := testRealtimeStore(t, serverA)
 	storeB := testRealtimeStore(t, serverB)
 
-	countA, err := countVehiclePositions(serverA, storeA)
+	countA, err := countVehiclePositions(serverA, nil, storeA, nil)
 	if err != nil || countA == 0 {
 		t.Fatalf("server A: count=%d err=%v", countA, err)
 	}
-	countB, err := countVehiclePositions(serverB, storeB)
+	countB, err := countVehiclePositions(serverB, nil, storeB, nil)
 	if err != nil || countB == 0 {
 		t.Fatalf("server B: count=%d err=%v", countB, err)
 	}
@@ -95,10 +95,10 @@ func TestTrackInvalidVehiclesUsesAgencyBounds(t *testing.T) {
 	store := testRealtimeStore(t, server)
 	bounds := geo.NewBoundingBoxStore()
 	bounds.Set(server.ServerKey(), geo.BoundingBox{MinLat: -90, MaxLat: 90, MinLon: -180, MaxLon: 180})
-	if err := trackInvalidVehiclesAndStoppedOutOfBounds(server, bounds, store); err != nil {
+	if err := trackInvalidVehiclesAndStoppedOutOfBounds(server, nil, bounds, store, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := trackInvalidVehiclesAndStoppedOutOfBounds(missing, bounds, store); err == nil {
+	if err := trackInvalidVehiclesAndStoppedOutOfBounds(missing, nil, bounds, store, nil); err == nil {
 		t.Fatal("expected missing feed error")
 	}
 }
@@ -126,7 +126,7 @@ func TestTrackVehicleTelemetrySeparatesSameIDAcrossFeeds(t *testing.T) {
 	store.Set(server.ServerKey(), data)
 
 	lastSeen := NewVehicleLastSeen()
-	if err := trackVehicleTelemetry(server, lastSeen, store, gtfs.NewRouteAgencyIndex()); err != nil {
+	if err := trackVehicleTelemetry(server, nil, lastSeen, store, gtfs.NewRouteAgencyIndex()); err != nil {
 		t.Fatalf("track: %v", err)
 	}
 

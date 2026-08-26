@@ -54,3 +54,20 @@ func (s *RealtimeStore) Get(serverKey string) *models.RealtimeData {
 	defer s.mu.RUnlock()
 	return s.data[serverKey]
 }
+
+// Prune removes every stored feed whose server key the keep predicate
+// rejects and returns the removed keys. See StaticStore.Prune for why this
+// exists.
+func (s *RealtimeStore) Prune(keep func(serverKey string) bool) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var removed []string
+	for serverKey := range s.data {
+		if !keep(serverKey) {
+			removed = append(removed, serverKey)
+			delete(s.data, serverKey)
+		}
+	}
+	return removed
+}

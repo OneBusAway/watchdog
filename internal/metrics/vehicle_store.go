@@ -140,3 +140,24 @@ func (vehicleLastSeen *VehicleLastSeen) clear(threshold time.Duration) {
 
 	}
 }
+
+// Prune removes every server key the keep predicate rejects and returns the
+// removed keys.
+//
+// This complements ClearRoutine, which expires individual vehicles by age.
+// A server that leaves the configuration stops reporting entirely, so its
+// vehicles would linger until the staleness threshold elapsed — and its key
+// would linger forever.
+func (vehicleLastSeen *VehicleLastSeen) Prune(keep func(serverKey string) bool) []string {
+	vehicleLastSeen.Mu.Lock()
+	defer vehicleLastSeen.Mu.Unlock()
+
+	var removed []string
+	for serverKey := range vehicleLastSeen.Store {
+		if !keep(serverKey) {
+			removed = append(removed, serverKey)
+			delete(vehicleLastSeen.Store, serverKey)
+		}
+	}
+	return removed
+}

@@ -38,8 +38,11 @@ func NewMetricsService(static *gtfs.StaticStore, realtime *gtfs.RealtimeStore, b
 	}
 }
 
-func (ms *MetricsService) CountVehiclePositions(server models.ObaServer) error {
-	_, err := countVehiclePositions(server, ms.RealtimeStore)
+// CountVehiclePositions reports the GTFS-RT vehicle-position count. Pass nil
+// agencies for an agency-scoped entry; pass the live agency entries for a
+// server-scoped one so the gauge is attributed per agency.
+func (ms *MetricsService) CountVehiclePositions(server models.ObaServer, agencies []models.ObaServer) error {
+	_, err := countVehiclePositions(server, agencies, ms.RealtimeStore, ms.RouteAgencyIndex)
 	return err
 }
 
@@ -64,12 +67,18 @@ func (ms *MetricsService) FetchObaAPIMetrics(agencyID, agencyName, serverName, s
 	return fetchObaAPIMetrics(agencyID, agencyName, serverName, serverBaseURL, apiKey, ms.Client, ms.StaticStore, ms.Logger, ms.UnmatchedStopTracker)
 }
 
-func (ms *MetricsService) TrackVehicleTelemetry(server models.ObaServer) error {
-	return trackVehicleTelemetry(server, ms.VehicleLastSeen, ms.RealtimeStore, ms.RouteAgencyIndex)
+// TrackVehicleTelemetry runs the per-vehicle telemetry pass exactly once per
+// server per tick. Pass nil agencies for an agency-scoped entry; pass the live
+// agency entries for a server-scoped one.
+func (ms *MetricsService) TrackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer) error {
+	return trackVehicleTelemetry(server, agencies, ms.VehicleLastSeen, ms.RealtimeStore, ms.RouteAgencyIndex)
 }
 
-func (ms *MetricsService) TrackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer) error {
-	return trackInvalidVehiclesAndStoppedOutOfBounds(server, ms.BoundingBoxStore, ms.RealtimeStore)
+// TrackInvalidVehiclesAndStoppedOutOfBounds reports coordinate validity and
+// out-of-bounds counts. Pass nil agencies for an agency-scoped entry; pass the
+// live agency entries for a server-scoped one.
+func (ms *MetricsService) TrackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, agencies []models.ObaServer) error {
+	return trackInvalidVehiclesAndStoppedOutOfBounds(server, agencies, ms.BoundingBoxStore, ms.RealtimeStore, ms.RouteAgencyIndex)
 }
 
 // StaticBundleObserver returns a callback suitable for GtfsService.SetBundleObserver.

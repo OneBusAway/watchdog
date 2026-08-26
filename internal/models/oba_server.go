@@ -1,8 +1,16 @@
 package models
 
 import (
+	"strings"
+
 	"watchdog.onebusaway.org/internal/utils"
 )
+
+// serverKeySeparator divides the sanitized base URL from the agency ID in a
+// server key. It lives here because this file owns both directions of the
+// format: ServerKey composes, ParseServerKey and ServerKeyPrefix decompose.
+// Nothing outside this file should spell the separator.
+const serverKeySeparator = "|"
 
 // ServerKey returns the unique identity of an OBA deployment: the sanitized
 // base URL plus the agency ID. Agency IDs alone are only unique within a single
@@ -13,7 +21,24 @@ import (
 // is a required field), so the degenerate "" branch of SanitizeServerURL is not
 // handled specially.
 func ServerKey(baseURL, agencyID string) string {
-	return utils.SanitizeServerURL(baseURL) + "|" + agencyID
+	return ServerKeyPrefix(baseURL) + agencyID
+}
+
+// ServerKeyPrefix returns the portion of a server key shared by every agency on
+// a deployment: the sanitized base URL plus the separator. Callers scanning a
+// store for "everything belonging to this server" should match on this rather
+// than reassembling the separator themselves.
+func ServerKeyPrefix(baseURL string) string {
+	return utils.SanitizeServerURL(baseURL) + serverKeySeparator
+}
+
+// ParseServerKey splits a server key back into its sanitized base URL and
+// agency ID. ok is false for a string that is not a server key at all (no
+// separator), which callers should treat as a corrupt entry rather than as an
+// agency-less key — a genuine server-scoped key ends in the separator and
+// parses with an empty agencyID and ok true.
+func ParseServerKey(key string) (baseURL, agencyID string, ok bool) {
+	return strings.Cut(key, serverKeySeparator)
 }
 
 // ObaServer represents a OneBusAway server configuration.
@@ -56,4 +81,26 @@ func NewObaServer(serverName, agencyName, agencyID, baseURL, apiKey string, gtfs
 // never diverge.
 func (s ObaServer) ServerKey() string {
 	return ServerKey(s.ObaBaseURL, s.AgencyID)
+}
+
+// IsServerScoped reports whether this entry monitors a whole OBA deployment
+// rather than one named agency. It is the single most load-bearing distinction
+// in the scoping design — a server-scoped entry discovers its agencies from
+// agency.txt and owns every server key under its base URL, while an
+// agency-scoped entry owns exactly one — so it is named here rather than
+// re-spelled as an AgencyID emptiness check at each site.
+func (s ObaServer) IsServerScoped() bool {
+	return strings.TrimSpace(s.AgencyID) == ""
+}
+
+// OwnsServerKey reports whether the given store key belongs to this entry.
+// This is the ownership rule the stores are pruned by: a server-scoped entry
+// claims every key under its base URL, including agencies discovered from
+// agency.txt that the configuration never names; an agency-scoped entry claims
+// only its own key. Both kinds may share an oba_base_url.
+func (s ObaServer) OwnsServerKey(key string) bool {
+	if s.IsServerScoped() {
+		return strings.HasPrefix(key, ServerKeyPrefix(s.ObaBaseURL))
+	}
+	return key == s.ServerKey()
 }

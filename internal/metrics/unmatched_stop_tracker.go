@@ -206,3 +206,37 @@ func (t *UnmatchedStopTracker) clearClusters(now time.Time, threshold time.Durat
 		}
 	}
 }
+
+// Prune removes every tracked stop and cluster whose server key the keep
+// predicate rejects and returns the removed keys. See gtfs.StaticStore.Prune
+// for why this exists.
+//
+// This complements ClearRoutine, which expires entries by age. A server that
+// leaves the configuration stops reporting entirely, so its entries would
+// otherwise sit out the full staleness threshold before going away. It does
+// not delete the gauge series the entries describe: PruneStaleServers already
+// retires those wholesale via DeleteSeriesForServer / DeleteSeriesForAgency,
+// which covers the labels this tracker never saw as well.
+func (t *UnmatchedStopTracker) Prune(keep func(serverKey string) bool) []string {
+	t.Mu.Lock()
+	defer t.Mu.Unlock()
+
+	var removed []string
+	for serverKey := range t.Entries {
+		if !keep(serverKey) {
+			removed = append(removed, serverKey)
+			delete(t.Entries, serverKey)
+			delete(t.Clusters, serverKey)
+		}
+	}
+	// A server can be present in Clusters and absent from Entries — clearStops
+	// drops a stop map once it empties, while the clusters stay until their own
+	// TTL — so sweep that map independently.
+	for serverKey := range t.Clusters {
+		if !keep(serverKey) {
+			removed = append(removed, serverKey)
+			delete(t.Clusters, serverKey)
+		}
+	}
+	return removed
+}

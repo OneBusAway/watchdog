@@ -151,7 +151,9 @@ func main() {
 	app.StartMetricsCollection(ctx)
 
 	// Cron job to download GTFS bundles for all servers every 24 hours
-	go app.GtfsService.RefreshGTFSBundles(ctx, servers, 24*time.Hour, 5)
+	// Read the server list on every tick rather than capturing it here: with
+	// --config-url the set of servers changes while we run.
+	go app.GtfsService.RefreshGTFSBundles(ctx, app.ConfigService.Config.GetServers, 24*time.Hour, 5)
 
 	// Cron job to delete the data of vehicles that has not sent updates for 1 hour
 	go app.MetricsService.VehicleLastSeen.ClearRoutine(ctx, 15*time.Minute, time.Hour)
@@ -162,7 +164,7 @@ func main() {
 	// If a remote URL is specified, refresh the configuration every minute
 	if *configURL != "" {
 		go app.ConfigService.RefreshConfig(ctx, *configURL, configAuthUser, configAuthPass, time.Minute, 20, func(updated []models.ObaServer) {
-			app.MetricsService.ReportTrackedAgencies(updated)
+			app.OnConfigUpdated(ctx, updated)
 		})
 	}
 

@@ -149,3 +149,20 @@ func haversineDistance(lat1, lon1, lat2, lon2 float64) float64 {
 	p2 := s2.LatLngFromDegrees(lat2, lon2)
 	return p1.Distance(p2).Radians() * earthRadiusInMeters
 }
+
+// Prune removes every bounding box whose server key the keep predicate
+// rejects and returns the removed keys. See gtfs.StaticStore.Prune for why
+// this exists.
+func (s *BoundingBoxStore) Prune(keep func(serverKey string) bool) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var removed []string
+	for serverKey := range s.store {
+		if !keep(serverKey) {
+			removed = append(removed, serverKey)
+			delete(s.store, serverKey)
+		}
+	}
+	return removed
+}

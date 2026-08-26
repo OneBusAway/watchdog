@@ -112,7 +112,7 @@ The two metrics below are the operator's view into server-mode health:
 
 #### Vehicle attribution in server-mode
 
-In agency-mode every RT vehicle is labeled with the configured `agency_id`. In server-mode one RT feed may carry vehicles from multiple agencies, so Watchdog attributes each vehicle by looking up its `TripDescriptor`'s `route_id` in a per-server `route_id → agency_id` index built from `routes.txt` at static-download time. Vehicles whose `route_id` is empty or unknown are skipped and counted in `gtfs_rt_unattributed_vehicles_count{server_name, server_url}` so operators can detect static feeds that don't cover every RT route.
+In agency-mode every RT vehicle is labeled with the configured `agency_id`. In server-mode one RT feed may carry vehicles from multiple agencies, so Watchdog attributes each vehicle by looking up its `TripDescriptor`'s `route_id` in a per-server `route_id → agency_id` index built from `routes.txt` at static-download time. Vehicles whose `route_id` is empty or unknown (and vehicles carrying no vehicle ID at all) are left out of the per-vehicle series and counted in `gtfs_rt_unattributed_vehicles_count{server_name, server_url}` so operators can detect static feeds that don't cover every RT route. The data-quality gauges `gtfs_rt_invalid_vehicle_coordinates` and `gtfs_rt_stopped_out_of_bounds_vehicles` instead file those vehicles under the server-scoped series (empty `agency_id`), so their per-agency series always sum to the server-wide count. See `docs/METRICS.md` for details.
 
 #### Backward compatibility
 

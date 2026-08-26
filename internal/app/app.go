@@ -19,8 +19,12 @@ type Application struct {
 	ConfigService  *config.ConfigService
 	GtfsService    *gtfs.GtfsService
 	MetricsService *metrics.MetricsService
-	Logger         *slog.Logger
-	Version        string
+	// KnownServers holds the identities of the servers in the most recently
+	// seen configuration, so a --config-url refresh can tell newcomers (which
+	// need an immediate bundle download) from servers it has already seen.
+	KnownServers *KnownServerSet
+	Logger       *slog.Logger
+	Version      string
 }
 
 // New creates and wires all dependencies for the Application.
@@ -54,7 +58,12 @@ func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version s
 		ConfigService:  configService,
 		GtfsService:    gtfsService,
 		MetricsService: metricsService,
-		Logger:         logger,
-		Version:        version,
+		// Seeded here rather than in main.go: cfg already carries the
+		// boot-time server list by the time New is called, so seeding in the
+		// constructor makes it impossible to forget and keeps the first
+		// refresh after start-up from re-downloading every bundle.
+		KnownServers: NewKnownServerSet(cfg.GetServers()),
+		Logger:       logger,
+		Version:      version,
 	}
 }

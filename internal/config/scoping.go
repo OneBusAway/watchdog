@@ -91,7 +91,7 @@ func MetaFrom(server models.ObaServer) ServerMeta {
 func ResolveScope(server models.ObaServer, staticStore *gtfs.StaticStore, routeAgencyIndex *gtfs.RouteAgencyIndex) Scope {
 	meta := MetaFrom(server)
 
-	if strings.TrimSpace(server.AgencyID) != "" {
+	if !server.IsServerScoped() {
 		return AgencyScope{
 			ServerMeta: meta,
 			AgencyID:   server.AgencyID,
@@ -130,8 +130,14 @@ func ResolveScope(server models.ObaServer, staticStore *gtfs.StaticStore, routeA
 // every declared agency. This is deliberate (memory stays O(bundles) via
 // pointer sharing), but it loses the many-to-many relationship between
 // agencies and configured feeds: we don't know which feeds declared which
-// agency, so per-agency bbox, stop resolution, and route attribution can't
-// be scoped to the agency's actual coverage.
+// agency, so per-agency bbox and stop resolution can't be scoped to the
+// agency's actual coverage.
+//
+// Vehicle attribution is NOT part of this any more: the RT vehicle pass
+// resolves route_id -> agency_id through gtfs.RouteAgencyIndex, which is
+// built per route rather than per feed, so per-agency vehicle metrics are
+// already correct. What remains is geometry — see the bbox NOTE in
+// storeStaticForServer.
 //
 // The fix: change the storage shape so each agency is scoped to the merged
 // feed(s) associated with it, rather than every agency pointing to the same
@@ -145,7 +151,7 @@ func ResolveScope(server models.ObaServer, staticStore *gtfs.StaticStore, routeA
 // See also the bbox NOTE + TODO in storeStaticForServer — both touch the
 // same underlying storage-shape question.
 func discoverAgenciesForServer(obaBaseURL string, staticStore *gtfs.StaticStore, routeAgencyIndex *gtfs.RouteAgencyIndex) []AgencyIdentity {
-	prefix := utils.SanitizeServerURL(obaBaseURL) + "|"
+	prefix := models.ServerKeyPrefix(obaBaseURL)
 	// agenciesByID indexes the agencies discovered under this server's
 	// oba_base_url prefix by their agency_id. We use *AgencyIdentity values
 	// (not values) so the two-pass fill below can update AgencyName in

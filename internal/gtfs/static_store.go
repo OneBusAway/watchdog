@@ -111,3 +111,33 @@ func (s *StaticStore) GetFetchTime(serverKey string) (time.Time, bool) {
 	fetchTime, exists := s.lastFetched[serverKey]
 	return fetchTime, exists
 }
+
+// Prune removes every entry whose server key the keep predicate rejects,
+// including its recorded fetch time, and returns the removed keys.
+//
+// Watchdog's server list can change at runtime (--config-url), and without
+// this a departed server's parsed bundle stays resident for the life of the
+// process. Callers pass a predicate rather than a key set because a
+// server-scoped entry legitimately owns every key under its oba_base_url.
+func (s *StaticStore) Prune(keep func(serverKey string) bool) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var removed []string
+	for serverKey := range s.data {
+		if !keep(serverKey) {
+			removed = append(removed, serverKey)
+			delete(s.data, serverKey)
+			delete(s.lastFetched, serverKey)
+		}
+	}
+	// A fetch time can outlive its bundle if a download failed after the
+	// timestamp was recorded, so sweep that map independently.
+	for serverKey := range s.lastFetched {
+		if !keep(serverKey) {
+			removed = append(removed, serverKey)
+			delete(s.lastFetched, serverKey)
+		}
+	}
+	return removed
+}

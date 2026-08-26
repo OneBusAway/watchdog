@@ -71,6 +71,24 @@ func refreshConfig(ctx context.Context, client *http.Client, configURL, configAu
 					Level: sentry.LevelError,
 				})
 				logger.Error("Failed to refresh remote config", "error", err)
+			} else if len(newServers) == 0 {
+				// Do not apply an empty configuration. decodeServers drops
+				// entries that fail validation rather than failing the whole
+				// document, so a schema change that blanks a required field on
+				// every entry — or an endpoint briefly serving "[]" during a
+				// deploy — arrives here as an empty slice indistinguishable
+				// from "the operator removed every server". Applying it stops
+				// collection for the whole fleet, and downstream of that the
+				// refresh callback would prune every store and retire every
+				// series. Startup refuses to run with zero servers for the
+				// same reason; a refresh must not do what startup rejects.
+				err := fmt.Errorf("refreshed configuration from %s contained no valid servers; keeping the previous configuration", configURL)
+				logger.Warn("Ignoring empty refreshed configuration",
+					"config_url", configURL, "currently_configured", len(cfg.GetServers()))
+				report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+					Tags:  utils.MakeMap("config_url", configURL),
+					Level: sentry.LevelWarning,
+				})
 			} else {
 				cfg.UpdateConfig(newServers)
 				logger.Info("Successfully refreshed server configuration")
