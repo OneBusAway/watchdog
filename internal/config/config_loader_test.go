@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -295,12 +294,13 @@ func TestRefreshConfig(t *testing.T) {
 
 	testLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	var serverHitCount atomic.Int32
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		serverHitCount.Add(1)
-
+		// Reject missing credentials too, not just wrong ones: this is the
+		// only test in the repo that exercises Basic auth, and gating on
+		// hasAuth would let a regression that stopped sending the header
+		// entirely pass unnoticed.
 		user, pass, hasAuth := r.BasicAuth()
-		if hasAuth && (user != "testuser" || pass != "testpass") {
+		if !hasAuth || user != "testuser" || pass != "testpass" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -326,19 +326,33 @@ func TestRefreshConfig(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	var callbackServers []models.ObaServer
+	// onUpdated runs on refreshConfig's goroutine, so hand the payload back over
+	// a channel rather than sharing a slice with the test body. Waiting on the
+	// callback also makes the assertions below deterministic: refreshConfig
+	// calls cfg.UpdateConfig before onUpdated, so once this fires the new
+	// configuration is already applied.
+	callbackServers := make(chan []models.ObaServer, 1)
 	go refreshConfig(ctx, client, mockServer.URL, "testuser", "testpass", cfg, testLogger, 100*time.Millisecond, 1, func(servers []models.ObaServer) {
-		callbackServers = servers
+		select {
+		case callbackServers <- servers:
+		default: // later refreshes tell us nothing new
+		}
 	})
 
-	time.Sleep(200 * time.Millisecond)
-
-	if serverHitCount.Load() == 0 {
-		t.Fatal("Mock server was never called")
+	var refreshed []models.ObaServer
+	select {
+	case refreshed = <-callbackServers:
+	case <-time.After(10 * time.Second):
+		t.Fatal("onUpdated callback was never invoked with refreshed servers")
 	}
 
-	if len(callbackServers) == 0 {
-		t.Fatal("onUpdated callback was never invoked with refreshed servers")
+	// Assert the payload itself, not just that something arrived: app.OnConfigUpdated
+	// prunes every store from exactly this slice, so a callback firing with the
+	// wrong servers is a real bug class. (A callback carrying no servers cannot
+	// happen -- refreshConfig skips onUpdated for an empty config -- so length
+	// alone would assert nothing.)
+	if len(refreshed) != 1 || refreshed[0].AgencyID != "agency-999" {
+		t.Fatalf("onUpdated received %d servers, want 1 with agency_id agency-999: %+v", len(refreshed), refreshed)
 	}
 
 	updatedServers := cfg.GetServers()
@@ -367,10 +381,19 @@ func TestRefreshConfig(t *testing.T) {
 // applying it would stop collection for every server, and the refresh callback
 // downstream would prune every store and retire every metric series.
 func TestRefreshConfigKeepsPreviousConfigWhenResponseIsEmpty(t *testing.T) {
+	// Signal each request so the assertions below run only after the endpoint
+	// has actually been polled. Sleeping a fixed interval instead would let the
+	// test pass vacuously on a loaded runner: if no refresh completed in time,
+	// both assertions hold trivially and the guard is never exercised.
+	served := make(chan struct{}, 1)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		// #nosec G104
 		w.Write([]byte(`[]`))
+		select {
+		case served <- struct{}{}:
+		default:
+		}
 	}))
 	defer ts.Close()
 
@@ -390,7 +413,11 @@ func TestRefreshConfigKeepsPreviousConfigWhenResponseIsEmpty(t *testing.T) {
 			}
 		})
 
-	time.Sleep(60 * time.Millisecond)
+	select {
+	case <-served:
+	case <-time.After(10 * time.Second):
+		t.Fatal("config endpoint was never polled")
+	}
 	cancel()
 
 	if got := len(cfg.GetServers()); got != 1 {

@@ -32,8 +32,9 @@ func ValidateConfigFlags(configFile, configURL *string) error {
 	return nil
 }
 
-// refreshConfig starts a background goroutine that periodically fetches
-// configuration from a remote URL and updates the application's list of OBA servers.
+// refreshConfig periodically fetches configuration from a remote URL and updates
+// the application's list of OBA servers. It blocks until ctx is canceled --
+// callers run it with `go` (see cmd/watchdog/main.go); it spawns nothing itself.
 //
 // The fetch process is resilient:
 //   - It uses `loadConfigFromURL`, which applies exponential backoff retries
@@ -56,7 +57,10 @@ func ValidateConfigFlags(configFile, configURL *string) error {
 //   - interval: Time duration between consecutive refresh attempts.
 //   - maxRetries: Maximum number of exponential backoff retries per fetch attempt.
 //   - onUpdated: Callback invoked with the newly validated servers after a
-//     successful config refresh. May be nil.
+//     successful config refresh. May be nil. It runs inline on refreshConfig's
+//     own loop, blocking the next refresh for as long as it takes, so anything
+//     it reads or writes must be safe for concurrent access with the collection
+//     goroutines. app.OnConfigUpdated is the reference implementation.
 func refreshConfig(ctx context.Context, client *http.Client, configURL, configAuthUser, configAuthPass string, cfg *Config, logger *slog.Logger, interval time.Duration, maxRetries int, onUpdated func([]models.ObaServer)) {
 	for {
 		select {
