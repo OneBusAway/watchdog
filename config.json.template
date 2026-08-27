@@ -1,6 +1,6 @@
 [
   {
-    "server_name": "Test Server 1",
+    "server_name": "Agency Example",
     "agency_name": "Test Agency 1",
     "agency_id": "agency-1",
     "oba_base_url": "https://test1.example.com",
@@ -15,9 +15,7 @@
     }]
   },
   {
-    "server_name": "Test Server 2",
-    "agency_name": "Test Agency 2",
-    "agency_id": "agency-2",
+    "server_name": "Server Example",
     "oba_base_url": "https://test2.example.com",
     "oba_api_key": "test-key-2",
     "gtfs_static_feeds": ["https://gtfs2.example.com"],
@@ -26,7 +24,7 @@
       "vehicle_position_url": "https://vehicle2.example.com",
       "gtfs_rt_api_key": "api-key-2",
       "gtfs_rt_api_value": "api-value-2",
-      "agency_ids": ["agency-2"]
+      "agency_ids": []
     }]
   }
 ]

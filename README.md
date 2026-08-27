@@ -27,8 +27,6 @@ Watchdog requires a configuration file (`config.json`) before running. Even plac
 [
   {
     "server_name": "Test Server 1",
-    "agency_name": "Test Agency 1",
-    "agency_id": "agency-1",
     "oba_base_url": "https://test1.example.com",
     "oba_api_key": "test-key-1",
     "gtfs_static_feeds": ["https://gtfs1.example.com"],
@@ -37,11 +35,13 @@ Watchdog requires a configuration file (`config.json`) before running. Even plac
       "vehicle_position_url": "https://vehicle1.example.com",
       "gtfs_rt_api_key": "api-key-1",
       "gtfs_rt_api_value": "api-value-1",
-      "agency_ids": ["agency-1"]
+      "agency_ids": []
     }]
   }
 ]
 ```
+
+The top-level `agency_id` decides what each entry observes: set it to track only that agency (data for any other agency is ignored); leave it out to track the server and every agency it serves. `agency_ids` on a feed is optional and unused by Watchdog today. See [Two observation modes](#two-observation-modes-agency-vs-server) below for both config shapes.
 
 #### Ways to Provide the Config File
 
@@ -77,29 +77,61 @@ export CONFIG_AUTH_USER="username"
 export CONFIG_AUTH_PASS="password"
 ```
 
-### Backward Compatibility (v1 → v2)
+### Two observation modes: agency vs. server
 
-Watchdog used to accept a flat, single-server config schema. Legacy (v1) configs are still supported: they're **silently converted** to the current array-based schema (v2) at load time, so upgrading doesn't require changing your config or interrupt monitoring.
+There are two ways Watchdog can observe an OBA deployment. The choice is made **per entry in `config.json`** by whether you set `agency_id` — every other field (`server_name`, `oba_base_url`, `oba_api_key`, `gtfs_static_feeds`, `gtfs_rt_feeds`) is identical in both modes, so `agency_id` is the only switch:
 
-When a v1 entry is loaded, Watchdog maps it like this:
+- **Agency mode** — `agency_id` is set. Watchdog monitors only that one agency.
+- **Server mode (recommended)** — `agency_id` is unset. Watchdog monitors the whole server and every agency it currently serves.
 
-- `name` → `agency_name`
-- `gtfs_url` → a single-entry `gtfs_static_feeds`
-- `vehicle_position_url` / `trip_update_url` → the matching `gtfs_rt_feeds` entries
-- `gtfs_rt_api_key` / `gtfs_rt_api_value` → the per-feed auth fields
-- `id` → ignored
+**Observe a single agency** — set `agency_id` (with its `agency_name`) on the entry. Watchdog tracks only that agency; any data not related to it is ignored:
 
-One caveat: v1 and v2 fields can't be mixed in the same entry. If an entry contains both schemas (e.g. a legacy `gtfs_url` alongside `gtfs_static_feeds`), it's rejected and reported to Sentry. Each entry must use one schema or the other.
+```json
+{
+  "server_name": "Agency Example",
+  "agency_name": "Test Agency",
+  "agency_id": "agency-1",
+  "oba_base_url": "https://test1.example.com",
+  "oba_api_key": "test-key-1",
+  "gtfs_static_feeds": ["https://gtfs1.example.com"],
+  "gtfs_rt_feeds": [{
+    "trip_update_url": "https://trip1.example.com",
+    "vehicle_position_url": "https://vehicle1.example.com",
+    "gtfs_rt_api_key": "api-key-1",
+    "gtfs_rt_api_value": "api-value-1",
+    "agency_ids": ["agency-1"]
+  }]
+}
+```
 
-Migrating to v2 is recommended whenever convenient — it's the only way to configure multiple static or RT feeds per agency. v1 supports just one of each.
+**Observe the whole server** — omit `agency_id` from the entry. Watchdog tracks the server and every agency it currently serves:
 
-### Server vs. agency scoping
+```json
+{
+  "server_name": "Server Example",
+  "oba_base_url": "https://test2.example.com",
+  "oba_api_key": "test-key-2",
+  "gtfs_static_feeds": ["https://gtfs2.example.com"],
+  "gtfs_rt_feeds": [{
+    "trip_update_url": "https://trip2.example.com",
+    "vehicle_position_url": "https://vehicle2.example.com",
+    "gtfs_rt_api_key": "api-key-2",
+    "gtfs_rt_api_value": "api-value-2",
+    "agency_ids": []
+  }]
+}
+```
 
-Every entry in `config.json` is server-scoped at the top level: `server_name` is required and identifies the OBA deployment; the operator lists the static feeds each server exposes. `agency_id` is optional and controls the *scope* of the entry:
+| | Agency mode | Server mode |
+|---|---|---|
+| `agency_id` | set (paired with required `agency_name`) | unset |
+| Scope | one agency | whole OBA deployment |
+| Agency set comes from | the config entry | `/api/where/metrics.json` cross-referenced with each static feed's `agency.txt` |
+| Typical source | hand-written config | OBACloud service discovery (one entry per OBA API server) |
 
-- **Agency-mode entry** — `agency_id` is set. Watchdog monitors only that one agency. Today's per-agency pipeline runs once per tick for that agency. `agency_name` is required (paired with `agency_id`).
+**Agency mode** — `agency_id` is set. Watchdog monitors only that one agency; today's per-agency pipeline runs once per tick for that agency. `agency_name` is required (paired with `agency_id`).
 
-- **Server-mode entry** — `agency_id` is absent. Watchdog probes `/api/where/metrics.json` every tick to learn which agencies OBA is currently serving, cross-references the live agency IDs against the static feeds' `agency.txt` declarations, and runs the per-agency pipeline for every agency that has BOTH a static bundle AND is reported as currently live.
+**Server mode** — `agency_id` is absent. Watchdog probes `/api/where/metrics.json` every tick to learn which agencies OBA is currently serving, cross-references the live agency IDs against the static feeds' `agency.txt` declarations, and runs the per-agency pipeline for every agency that has BOTH a static bundle AND is reported as currently live.
 
 Multi-agency static feeds are accepted: a single bundle pointer-shared across the serverKeys of every agency declared in its `agency.txt`. Static feeds whose `agency.txt` is empty, declares multiple agencies ambiguously, or whose declared agency isn't currently reported by OBA are reported to Sentry (`gtfs_static_feed_attribution_status` flips to 0) and the per-agency pipeline is skipped — but the bundle is still downloaded and parsed so the introspection metrics (`gtfs_static_stops_count`, `gtfs_static_routes_count`) keep reporting.
 
@@ -117,6 +149,22 @@ In agency-mode every RT vehicle is labeled with the configured `agency_id`. In s
 #### Backward compatibility
 
 This is a **deliberate breaking change** to the existing v2 format. Existing v2 entries without `server_name` become invalid — operators must add the field. The legacy v1 array-of-flat-objects format continues to work: `id` (int) is still ignored, `name` is repurposed as `server_name`, and a v1 entry with `agency_id` populates `agency_name` from `name` so the entry remains agency-scoped.
+
+### Backward Compatibility (v1 → v2)
+
+Watchdog used to accept a flat, single-server config schema. Legacy (v1) configs are still supported: they're **silently converted** to the current array-based schema (v2) at load time, so upgrading doesn't require changing your config or interrupt monitoring.
+
+When a v1 entry is loaded, Watchdog maps it like this:
+
+- `name` → `agency_name`
+- `gtfs_url` → a single-entry `gtfs_static_feeds`
+- `vehicle_position_url` / `trip_update_url` → the matching `gtfs_rt_feeds` entries
+- `gtfs_rt_api_key` / `gtfs_rt_api_value` → the per-feed auth fields
+- `id` → ignored
+
+One caveat: v1 and v2 fields can't be mixed in the same entry. If an entry contains both schemas (e.g. a legacy `gtfs_url` alongside `gtfs_static_feeds`), it's rejected and reported to Sentry. Each entry must use one schema or the other.
+
+Migrating to v2 is recommended whenever convenient — it's the only way to configure multiple static or RT feeds per agency. v1 supports just one of each.
 
 ### Application Options
 
