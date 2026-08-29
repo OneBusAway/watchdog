@@ -474,6 +474,52 @@ func TestTrackStoppedOutOfBoundsCountsUnattributableVehiclesInServerMode(t *test
 	}
 }
 
+func TestTrackStoppedOutOfBoundsUsesAttributedAgencyBoundingBox(t *testing.T) {
+	const baseURL = "https://agencybounds.example.com"
+	server, agencies, store, index := serverModeFixture(t, baseURL)
+
+	stopped := remoteGtfs.CurrentStatus(VehicleStatusStoppedAtStop)
+	data := store.Get(server.ServerKey())
+	data.Vehicles[0].Vehicle.CurrentStatus = &stopped // agency-a
+	store.Set(server.ServerKey(), data)
+
+	bounds := geo.NewBoundingBoxStore()
+	// Agency A's vehicle is outside this box, but inside the server-wide box.
+	bounds.Set(models.ServerKey(baseURL, "agency-a"), geo.BoundingBox{MinLat: 0, MaxLat: 1, MinLon: 0, MaxLon: 1})
+	bounds.Set(models.ServerKey(baseURL, "agency-b"), geo.BoundingBox{MinLat: -90, MaxLat: 90, MinLon: -180, MaxLon: 180})
+	bounds.Set(server.ServerKey(), geo.BoundingBox{MinLat: -90, MaxLat: 90, MinLon: -180, MaxLon: 180})
+
+	if err := trackInvalidVehiclesAndStoppedOutOfBounds(server, agencies, bounds, store, index); err != nil {
+		t.Fatalf("track: %v", err)
+	}
+
+	got, err := getMetricValue(StoppedOutOfBoundsVehiclesGauge, map[string]string{
+		"agency_id":   "agency-a",
+		"agency_name": "Agency A",
+		"server_name": "multi",
+		"server_url":  baseURL,
+	})
+	if err != nil {
+		t.Fatalf("read agency-a gauge: %v", err)
+	}
+	if got != 1 {
+		t.Fatalf("expected agency-a vehicle to be checked against its own bounding box, got %v", got)
+	}
+
+	serverGot, err := getMetricValue(StoppedOutOfBoundsVehiclesGauge, map[string]string{
+		"agency_id":   "",
+		"agency_name": "",
+		"server_name": "multi",
+		"server_url":  baseURL,
+	})
+	if err != nil {
+		t.Fatalf("read server-scoped gauge: %v", err)
+	}
+	if serverGot != 0 {
+		t.Fatalf("expected attributed vehicle not to be counted by server-scoped fallback, got %v", serverGot)
+	}
+}
+
 // TestTrackInvalidVehiclesAgencyModeEmitsSingleSeries pins that agency-mode
 // is untouched: every vehicle belongs to the configured entry, so a malformed
 // one is counted there and no server-scoped series appears alongside it.

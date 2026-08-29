@@ -866,6 +866,89 @@ func TestStoreStaticForServerStoresServerScopedBoundingBox(t *testing.T) {
 	}
 }
 
+func TestStoreStaticForServerComputesBoundingBoxPerAgency(t *testing.T) {
+	bundleA := makeSyntheticBundle(t, "agency-A", "Agency A", "https://a.example", []remoteGtfs.Stop{
+		{Id: "A1", Latitude: floatPtr(47.60), Longitude: floatPtr(-122.30)},
+		{Id: "A2", Latitude: floatPtr(47.70), Longitude: floatPtr(-122.20)},
+	})
+	bundleB := makeSyntheticBundle(t, "agency-B", "Agency B", "https://b.example", []remoteGtfs.Stop{
+		{Id: "B1", Latitude: floatPtr(40.60), Longitude: floatPtr(-73.30)},
+		{Id: "B2", Latitude: floatPtr(40.70), Longitude: floatPtr(-73.20)},
+	})
+
+	server := models.ObaServer{
+		ServerName:      "multi",
+		ObaBaseURL:      "https://example.com",
+		GtfsStaticFeeds: []string{"https://example.com/a.zip", "https://example.com/b.zip"},
+	}
+	staticStore := NewStaticStore()
+	boundingBoxStore := geo.NewBoundingBoxStore()
+	if err := storeStaticForServer(server, []*remoteGtfs.Static{bundleA, bundleB}, staticStore, boundingBoxStore, NewRouteAgencyIndex(), nil, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
+		t.Fatalf("storeStaticForServer: %v", err)
+	}
+
+	agencyA, ok := boundingBoxStore.Get(models.ServerKey(server.ObaBaseURL, "agency-A"))
+	if !ok {
+		t.Fatal("expected agency-A bounding box")
+	}
+	agencyB, ok := boundingBoxStore.Get(models.ServerKey(server.ObaBaseURL, "agency-B"))
+	if !ok {
+		t.Fatal("expected agency-B bounding box")
+	}
+	if agencyA != (geo.BoundingBox{MinLat: 47.60, MaxLat: 47.70, MinLon: -122.30, MaxLon: -122.20}) {
+		t.Fatalf("unexpected agency-A bounding box: %+v", agencyA)
+	}
+	if agencyB != (geo.BoundingBox{MinLat: 40.60, MaxLat: 40.70, MinLon: -73.30, MaxLon: -73.20}) {
+		t.Fatalf("unexpected agency-B bounding box: %+v", agencyB)
+	}
+
+	serverBox, ok := boundingBoxStore.Get(server.ServerKey())
+	if !ok {
+		t.Fatal("expected server-scoped bounding box")
+	}
+	if serverBox != (geo.BoundingBox{MinLat: 40.60, MaxLat: 47.70, MinLon: -122.30, MaxLon: -73.20}) {
+		t.Fatalf("unexpected server-scoped bounding box: %+v", serverBox)
+	}
+
+	first, ok := staticStore.Get(models.ServerKey(server.ObaBaseURL, "agency-A"))
+	if !ok {
+		t.Fatal("expected shared static bundle for agency-A")
+	}
+	second, ok := staticStore.Get(models.ServerKey(server.ObaBaseURL, "agency-B"))
+	if !ok {
+		t.Fatal("expected shared static bundle for agency-B")
+	}
+	if first != second {
+		t.Fatal("expected agencies to share the same merged static bundle pointer")
+	}
+}
+
+func TestStoreStaticForServerFallsBackToUnionBoundingBox(t *testing.T) {
+	bundle := makeSyntheticBundle(t, "agency-A", "Agency A", "https://a.example", []remoteGtfs.Stop{
+		{Id: "S1", Latitude: floatPtr(47.60), Longitude: floatPtr(-122.30)},
+		{Id: "S2", Latitude: floatPtr(47.70), Longitude: floatPtr(-122.20)},
+	})
+	bundle.Agencies = append(bundle.Agencies, remoteGtfs.Agency{Id: "agency-B", Name: "Agency B", Url: "https://b.example"})
+
+	server := models.ObaServer{ServerName: "multi", ObaBaseURL: "https://fallback.example"}
+	boundingBoxStore := geo.NewBoundingBoxStore()
+	if err := storeStaticForServer(server, []*remoteGtfs.Static{bundle}, NewStaticStore(), boundingBoxStore, NewRouteAgencyIndex(), nil, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
+		t.Fatalf("storeStaticForServer: %v", err)
+	}
+
+	agencyA, ok := boundingBoxStore.Get(models.ServerKey(server.ObaBaseURL, "agency-A"))
+	if !ok {
+		t.Fatal("expected agency-A bounding box")
+	}
+	agencyB, ok := boundingBoxStore.Get(models.ServerKey(server.ObaBaseURL, "agency-B"))
+	if !ok {
+		t.Fatal("expected agency-B fallback bounding box")
+	}
+	if agencyA != agencyB {
+		t.Fatalf("expected agency-B to fall back to the union box, got %+v vs %+v", agencyB, agencyA)
+	}
+}
+
 // TestStoreStaticForServerSkipsServerScopedBoxInAgencyMode keeps agency-mode
 // from accumulating a key nothing reads: an entry that names its agency stores
 // only that agency's box.
