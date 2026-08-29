@@ -1,0 +1,24 @@
+groups:
+  - name: watchdog-operational
+    rules:
+      - alert: ObaAPIDown
+        expr: oba_api_status == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "OneBusAway API unavailable for {{ $labels.server_name }}"
+          description: >-
+            The OneBusAway API at {{ $labels.server_url }} has reported
+            unavailable for 2m+ (oba_api_status={{ $value }}).
+
+      - alert: GTFSBundleExpiringSoon
+        expr: gtfs_bundle_days_until_earliest_expiration < 3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GTFS bundle expiring soon for {{ $labels.agency_name }} ({{ $labels.agency_id }})"
+          description: >-
+            The earliest GTFS bundle for {{ $labels.agency_name }} ({{ $labels.agency_id }})
+            at {{ $labels.server_url }} expires in {{ $value }} days, below the 3-day threshold.
