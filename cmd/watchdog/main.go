@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/getsentry/sentry-go"
@@ -82,8 +85,8 @@ func main() {
 	// This context will be used to manage the application's lifecycle and cancel operations when needed.
 	// It allows us to gracefully shut down the application and clean up resources.
 	// we will use it to cancel and clean up routines when the application is shutting down.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	// Create a new HTTP client with a connection pool
 	// This client will be reused across the application to avoid creating new connections for each request.
@@ -186,9 +189,28 @@ func main() {
 	}
 
 	logger.Info("starting server", "addr", srv.Addr, "env", cfg.Env)
-	err = srv.ListenAndServe()
-	report.ReportError(err, sentry.LevelFatal)
-	report.FlushSentry()
-	logger.Error(err.Error())
-	os.Exit(1)
+
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- srv.ListenAndServe()
+	}()
+
+	select {
+	case <-ctx.Done():
+		logger.Info("Shutting down HTTP server")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			report.ReportError(err, sentry.LevelError)
+			logger.Error("HTTP server shutdown failed", "error", err)
+		}
+	case err := <-serverErr:
+		if err == nil || errors.Is(err, http.ErrServerClosed) {
+			return
+		}
+		report.ReportError(err, sentry.LevelFatal)
+		report.FlushSentry()
+		logger.Error(err.Error())
+		os.Exit(1)
+	}
 }

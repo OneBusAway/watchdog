@@ -100,7 +100,13 @@ func refreshConfig(ctx context.Context, client *http.Client, configURL, configAu
 					onUpdated(newServers)
 				}
 			}
-			time.Sleep(interval)
+			timer := time.NewTimer(interval)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
 		}
 	}
 }
@@ -155,7 +161,7 @@ func loadConfigFromFile(filePath string, logger *slog.Logger) ([]models.ObaServe
 //
 // Errors are logged and reported to Sentry for observability.
 func loadConfigFromURL(ctx context.Context, client *http.Client, url, authUser, authPass string, maxRetries int, logger *slog.Logger) ([]models.ObaServer, error) {
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags:  utils.MakeMap("config_url", url),
