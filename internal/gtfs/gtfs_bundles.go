@@ -395,7 +395,7 @@ func refreshGTFSBundles(ctx context.Context, client *http.Client, servers func()
 // (e.g., timeouts, connection failures).
 func downloadGTFSBundle(ctx context.Context, client *http.Client, url, agencyID string, maxRetries int) (*remoteGtfs.Static, error) {
 	sanitizedURL := utils.SanitizeServerURL(url)
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		err = fmt.Errorf("failed to create request for %s: %w", url, err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
