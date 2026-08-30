@@ -395,7 +395,7 @@ func refreshGTFSBundles(ctx context.Context, client *http.Client, servers func()
 // (e.g., timeouts, connection failures).
 func downloadGTFSBundle(ctx context.Context, client *http.Client, url, agencyID string, maxRetries int) (*remoteGtfs.Static, error) {
 	sanitizedURL := utils.SanitizeServerURL(url)
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		err = fmt.Errorf("failed to create request for %s: %w", url, err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -528,8 +528,8 @@ func getEarliestAndLatestServiceDates(staticData *models.StaticData) (earliestEn
 // Every retained vehicle is tagged with the zero-based index of the feed it
 // came from (see models.RealtimeVehicle.FeedID) so consumers can key
 // per-vehicle identity on the (feed, vehicle_id) pair.
-func fetchAndStoreGTFSRTFeed(server models.ObaServer, realtimeStore *RealtimeStore, client *http.Client) error {
-	merged, err := parseGTFSRTFeeds(server, client)
+func fetchAndStoreGTFSRTFeed(ctx context.Context, server models.ObaServer, realtimeStore *RealtimeStore, client *http.Client) error {
+	merged, err := parseGTFSRTFeeds(ctx, server, client)
 	if err != nil {
 		return err
 	}
@@ -554,12 +554,12 @@ func fetchAndStoreGTFSRTFeed(server models.ObaServer, realtimeStore *RealtimeSto
 // Every retained vehicle is tagged with the zero-based index of the feed it
 // came from (see models.RealtimeVehicle.FeedID) so consumers can key
 // per-vehicle identity on the (feed, vehicle_id) pair.
-func parseGTFSRTFeeds(server models.ObaServer, client *http.Client) (*models.RealtimeData, error) {
+func parseGTFSRTFeeds(ctx context.Context, server models.ObaServer, client *http.Client) (*models.RealtimeData, error) {
 	merged := &models.RealtimeData{}
 	for feedIdx, feed := range server.GtfsRTFeeds {
 		feedID := fmt.Sprintf("%d", feedIdx)
 		sanitizedURL := utils.SanitizeServerURL(feed.VehiclePositionURL)
-		req, err := http.NewRequest(http.MethodGet, feed.VehiclePositionURL, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, feed.VehiclePositionURL, nil)
 		if err != nil {
 			err = fmt.Errorf("create GTFS-RT request: %w", err)
 			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{

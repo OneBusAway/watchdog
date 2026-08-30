@@ -54,8 +54,8 @@ func (gs *GtfsService) RefreshGTFSBundles(ctx context.Context, servers func() []
 	refreshGTFSBundles(ctx, gs.Client, servers, gs.Logger, interval, gs.BoundingBoxStore, gs.StaticStore, gs.RouteAgencyIndex, gs.Observer, maxRetries)
 }
 
-func (gs *GtfsService) FetchAndStoreGTFSRTFeed(server models.ObaServer) error {
-	return fetchAndStoreGTFSRTFeed(server, gs.RealtimeStore, gs.Client)
+func (gs *GtfsService) FetchAndStoreGTFSRTFeed(ctx context.Context, server models.ObaServer) error {
+	return fetchAndStoreGTFSRTFeed(ctx, server, gs.RealtimeStore, gs.Client)
 }
 
 // exported helper functions

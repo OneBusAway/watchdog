@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"net/http"
 	"testing"
 	"time"
@@ -22,7 +23,7 @@ func TestCheckServer(t *testing.T) {
 			option.WithAPIKey(testServer.ObaApiKey),
 			option.WithBaseURL(testServer.ObaBaseURL),
 		)
-		serverPing(client, testServer)
+		serverPing(context.Background(), client, testServer)
 		time.Sleep(100 * time.Millisecond)
 
 		metricValue, err := getMetricValue(ObaApiStatus, map[string]string{
@@ -49,7 +50,7 @@ func TestCheckServer(t *testing.T) {
 			option.WithAPIKey(testServer.ObaApiKey),
 			option.WithBaseURL(testServer.ObaBaseURL),
 		)
-		serverPing(client, testServer)
+		serverPing(context.Background(), client, testServer)
 		time.Sleep(100 * time.Millisecond)
 
 		metricValue, err := getMetricValue(ObaApiStatus, map[string]string{
@@ -73,7 +74,7 @@ func TestCheckServer(t *testing.T) {
 			option.WithAPIKey(testServer.ObaApiKey),
 			option.WithBaseURL(testServer.ObaBaseURL),
 		)
-		serverPing(client, testServer)
+		serverPing(context.Background(), client, testServer)
 		time.Sleep(100 * time.Millisecond)
 
 		metricValue, err := getMetricValue(ObaApiStatus, map[string]string{
