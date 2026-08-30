@@ -31,9 +31,10 @@ import (
 //     agency would multiply the VehicleReportCount counter by the agency count
 //     and file every vehicle under every agency's last-seen slot.
 //
-// In server-mode the realtime feed and the bounding box are both read from the
-// server-scoped key (models.ServerKey(oba_base_url, "")), which is where
-// collectForServerScope registers the once-per-tick fetch.
+// In server-mode the realtime feed is read from the server-scoped key
+// (models.ServerKey(oba_base_url, "")), while an attributed vehicle uses its
+// agency-scoped bounding box. The server-scoped box remains the fallback for
+// unattributed vehicles.
 
 // agencyIndex keys the live agency entries by agency_id so attribution is an
 // O(1) lookup. Returns nil for agency-mode, which every pass treats as "trust
@@ -366,13 +367,6 @@ const VehicleStatusStoppedAtStop = 1
 // would break the invariant that
 // `sum by (server_url) (gtfs_rt_invalid_vehicle_coordinates)` equals the
 // server-wide count.
-//
-// The bounding box itself is still server-wide: it is computed over the union
-// of every static feed's stops, so a vehicle stopped in agency A's territory is
-// validated against a rectangle covering every agency on the server. Scoping
-// the box per agency needs the storage-shape change described in
-// TODO(scoped-store) in config/scoping.go; until then, treat
-// gtfs_rt_stopped_out_of_bounds_vehicles as a loose bound.
 func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, agencies []models.ObaServer, boundingBoxStore *geo.BoundingBoxStore, realtimeStore *gtfs.RealtimeStore, routeAgencyIndex *gtfs.RouteAgencyIndex) error {
 	realtimeData := realtimeStore.Get(server.ServerKey())
 	if realtimeData == nil {
@@ -383,13 +377,19 @@ func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, agencies
 		return err
 	}
 
-	boundingBox, ok := boundingBoxStore.Get(server.ServerKey())
+	serverBox, ok := boundingBoxStore.Get(server.ServerKey())
 	if !ok {
 		return fmt.Errorf("no bounding box found for server key %s", server.ServerKey())
 	}
 
 	serverURL := utils.SanitizeServerURL(server.ObaBaseURL)
 	agencyByID := agencyIndex(agencies)
+	agencyBoxes := make(map[string]geo.BoundingBox, len(agencies))
+	for _, agency := range agencies {
+		if bbox, ok := boundingBoxStore.Get(models.ServerKey(server.ObaBaseURL, agency.AgencyID)); ok {
+			agencyBoxes[agency.AgencyID] = bbox
+		}
+	}
 
 	invalid := make(map[string]int, len(agencies)+1)
 	outOfBounds := make(map[string]int, len(agencies)+1)
@@ -408,8 +408,12 @@ func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, agencies
 		// server-scoped entry, whose agency labels are empty in server-mode.
 		// That keeps sum by (server_url) equal to the server-wide count.
 		bucket := server.AgencyID
+		boundingBox := serverBox
 		if agency, attributed := attributeVehicle(server, agencyByID, routeAgencyIndex, v); attributed {
 			bucket = agency.AgencyID
+			if agencyBox, ok := agencyBoxes[agency.AgencyID]; ok {
+				boundingBox = agencyBox
+			}
 		}
 
 		if !coordsValid {

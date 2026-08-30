@@ -13,6 +13,8 @@ import (
 //
 // Clustering logic:
 //   - Each valid stop is assigned to the S2 cell containing its own lat/lon.
+//   - Every location for a colliding stop ID is processed, so the cluster
+//     metrics do not hide a physical stop preserved by the GTFS collision index.
 //   - Stops that are part of a station hierarchy (or are themselves stations) are
 //     additionally tagged with the root station ID; otherwise the station_id label
 //     is geo.NoStationID. Grouping is by the (station_id, cluster_id) pair so two
@@ -29,9 +31,9 @@ import (
 //   - agencyName: the human-readable agency name, used as a metric label
 //   - serverName: the human-readable server name, used as a metric label
 //   - serverURL: the sanitized base URL of the deployment, used as a metric label
-//   - unmatchedStops: a map of stop IDs to GTFS stop objects not matched to gtfs static data
+//   - unmatchedStops: a map of stop IDs to all matching GTFS stop locations
 //   - tracker: used to record cluster observations so stale cluster series can be cleaned up later.
-func reportUnmatchedStopClusters(serverKey, agencyID, agencyName, serverName, serverURL string, unmatchedStops map[string]remoteGtfs.Stop, tracker *UnmatchedStopTracker) {
+func reportUnmatchedStopClusters(serverKey, agencyID, agencyName, serverName, serverURL string, unmatchedStops map[string][]remoteGtfs.Stop, tracker *UnmatchedStopTracker) {
 	type clusterKey struct {
 		stationID string
 		clusterID string
@@ -39,16 +41,18 @@ func reportUnmatchedStopClusters(serverKey, agencyID, agencyName, serverName, se
 	clusterCount := make(map[clusterKey]int)
 	clusterLocation := make(map[clusterKey][2]string) // [lat, lon]
 
-	for _, stop := range unmatchedStops {
-		cluster, ok := geo.GetClusterID(stop)
-		if !ok {
-			continue
-		}
-		key := clusterKey{stationID: cluster.StationID, clusterID: cluster.ID}
-		clusterCount[key]++
-		clusterLocation[key] = [2]string{
-			fmt.Sprintf("%.6f", cluster.Latitude),
-			fmt.Sprintf("%.6f", cluster.Longitude),
+	for _, stops := range unmatchedStops {
+		for _, stop := range stops {
+			cluster, ok := geo.GetClusterID(stop)
+			if !ok {
+				continue
+			}
+			key := clusterKey{stationID: cluster.StationID, clusterID: cluster.ID}
+			clusterCount[key]++
+			clusterLocation[key] = [2]string{
+				fmt.Sprintf("%.6f", cluster.Latitude),
+				fmt.Sprintf("%.6f", cluster.Longitude),
+			}
 		}
 	}
 

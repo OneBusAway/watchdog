@@ -46,6 +46,11 @@ type OBAMetrics struct {
 // populates per-agency Prometheus metrics (real-time and scheduled trip
 // counts, stop match ratios, time-since-update, etc.).
 //
+// Unmatched stop IDs are resolved against the agency-scoped GTFS index. A
+// single ID may resolve to multiple physical locations after a feed collision,
+// so one info series is emitted for each location while the unresolved gauge
+// still counts IDs rather than locations.
+//
 // Server availability is *not* set here — that's the responsibility of the
 // server-ping routine, which labels ObaApiStatus with (server_name, server_url)
 // only. This function only emits per-agency metrics.
@@ -215,7 +220,7 @@ func fetchObaAPIMetrics(agencyID, agencyName, serverName, serverBaseUrl, apiKey 
 		return nil
 	}
 
-	stopInfoMap, err := gtfs.GetStopLocationsByIDs(serverKey, unmatchedStopIDs, staticStore)
+	stopInfoMap, err := gtfs.GetStopLocationsByIDs(serverKey, agencyID, unmatchedStopIDs, staticStore)
 	if err != nil {
 		ObaUnmatchedStopUnresolved.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(float64(len(unmatchedStopIDs)))
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -225,25 +230,33 @@ func fetchObaAPIMetrics(agencyID, agencyName, serverName, serverBaseUrl, apiKey 
 		return nil
 	}
 
+	// Count IDs, not locations: one colliding ID can produce multiple metric
+	// series, but it is still one resolved ID in the OBA match total.
 	resolved := 0
-	for stopID, stop := range stopInfoMap {
-		if stop.Latitude == nil || stop.Longitude == nil {
-			continue
+	for stopID, stops := range stopInfoMap {
+		resolvedID := false
+		for _, stop := range stops {
+			if stop.Latitude == nil || stop.Longitude == nil {
+				continue
+			}
+			resolvedID = true
+			latStr := fmt.Sprintf("%.6f", *stop.Latitude)
+			lonStr := fmt.Sprintf("%.6f", *stop.Longitude)
+			ObaUnmatchedStopInfo.WithLabelValues(
+				agencyID,
+				agencyName,
+				serverName,
+				serverURL,
+				stopID,
+				stop.Name,
+				latStr,
+				lonStr,
+			).Set(1)
+			unmatchedStopTracker.RecordLocationLastSeen(serverKey, agencyID, agencyName, serverName, serverURL, stopID, stop.Name, latStr, lonStr)
 		}
-		latStr := fmt.Sprintf("%.6f", *stop.Latitude)
-		lonStr := fmt.Sprintf("%.6f", *stop.Longitude)
-		ObaUnmatchedStopInfo.WithLabelValues(
-			agencyID,
-			agencyName,
-			serverName,
-			serverURL,
-			stopID,
-			stop.Name,
-			latStr,
-			lonStr,
-		).Set(1)
-		resolved++
-		unmatchedStopTracker.RecordLastSeen(serverKey, agencyID, agencyName, serverName, serverURL, stopID, stop.Name, latStr, lonStr)
+		if resolvedID {
+			resolved++
+		}
 	}
 
 	unresolved := len(unmatchedStopIDs) - resolved
