@@ -158,7 +158,7 @@
       },
       "id": 102,
       "options": {
-        "calculate": true,
+        "calculate": false,
         "cellGap": 1,
         "color": {
           "exponent": 0.5,
