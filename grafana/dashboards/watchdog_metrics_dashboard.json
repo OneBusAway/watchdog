@@ -134,7 +134,22 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: http_outgoing_request_duration_seconds\nQuestion answered: \"Are external dependencies becoming slow?\"",
+      "description": "Metrics: http_outgoing_request_duration_seconds\nQuestion answered: \"Are external dependencies becoming slow?\"\n\nVisualization: Heatmap\nRationale: Latency is a distribution, not a single average. A heatmap visualizes the distribution of request durations over time, making it easy to instantly spot bimodal patterns and long-tail outliers (like degraded downstream servers) that a simple line chart would compress or hide.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -142,9 +157,47 @@
         "y": 1
       },
       "id": 102,
+      "options": {
+        "calculate": false,
+        "cellGap": 1,
+        "color": {
+          "exponent": 0.5,
+          "fill": "dark-orange",
+          "mode": "scheme",
+          "reverse": false,
+          "scale": "exponential",
+          "scheme": "Oranges",
+          "steps": 64
+        },
+        "exemplars": {
+          "color": "rgba(255,0,255,0.7)"
+        },
+        "filterValues": {
+          "le": 1e-9
+        },
+        "legend": {
+          "show": true
+        },
+        "rowsFrame": {
+          "layout": "auto"
+        },
+        "tooltip": {
+          "mode": "single",
+          "showColorScale": false,
+          "yHistogram": true
+        },
+        "yAxis": {
+          "axisPlacement": "left",
+          "reverse": false,
+          "unit": "s"
+        }
+      },
+      "pluginVersion": "13.0.2",
       "targets": [
         {
-          "expr": "http_outgoing_request_duration_seconds_sum",
+          "expr": "sum(rate(http_outgoing_request_duration_seconds_bucket{server_id=~\"$server_id\"}[5m])) by (le)",
+          "format": "heatmap",
+          "legendFormat": "{{le}}",
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
@@ -152,7 +205,7 @@
         }
       ],
       "title": "1.2 Dependency Latency",
-      "type": "timeseries"
+      "type": "heatmap"
     },
     {
       "collapsed": false,
