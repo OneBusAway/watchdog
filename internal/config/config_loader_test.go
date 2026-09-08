@@ -37,7 +37,7 @@ func TestLoadConfigFromFile(t *testing.T) {
 			t.Fatalf("write config.json: %v", err)
 		}
 
-		servers, err := loadConfigFromFile(fp, testLogger())
+		servers, err := loadConfigFromFile(fp, testLogger(), NewDroppedServersStore())
 		if err != nil {
 			t.Fatalf("loadConfigFromFile failed: %v", err)
 		}
@@ -72,7 +72,7 @@ func TestLoadConfigFromFile(t *testing.T) {
 			t.Fatalf("write invalid config.json: %v", err)
 		}
 
-		if _, err := loadConfigFromFile(fp, testLogger()); err == nil {
+		if _, err := loadConfigFromFile(fp, testLogger(), NewDroppedServersStore()); err == nil {
 			t.Errorf("expected error with invalid JSON, got none")
 		}
 	})
@@ -81,7 +81,7 @@ func TestLoadConfigFromFile(t *testing.T) {
 		dir := t.TempDir()
 		fp := filepath.Join(dir, "config.json")
 
-		if _, err := loadConfigFromFile(fp, testLogger()); err == nil {
+		if _, err := loadConfigFromFile(fp, testLogger(), NewDroppedServersStore()); err == nil {
 			t.Errorf("expected error for non-existent file, got none")
 		}
 	})
@@ -106,7 +106,7 @@ func TestLoadConfigFromURL(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		servers, err := loadConfigFromURL(ctx, client, ts.URL, "user", "pass", 1, testLogger())
+		servers, err := loadConfigFromURL(ctx, client, ts.URL, "user", "pass", 1, testLogger(), NewDroppedServersStore())
 		if err != nil {
 			t.Fatalf("loadConfigFromURL failed: %v", err)
 		}
@@ -139,7 +139,7 @@ func TestLoadConfigFromURL(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		_, err := loadConfigFromURL(ctx, client, ts.URL, "", "", 1, testLogger())
+		_, err := loadConfigFromURL(ctx, client, ts.URL, "", "", 1, testLogger(), NewDroppedServersStore())
 		if err == nil {
 			t.Errorf("Expected error with 500 response, got none")
 		}
@@ -152,13 +152,13 @@ func TestLoadConfigFromURL(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		_, err := loadConfigFromURL(ctx, client, ts.URL, "", "", 1, testLogger())
+		_, err := loadConfigFromURL(ctx, client, ts.URL, "", "", 1, testLogger(), NewDroppedServersStore())
 		if err == nil {
 			t.Errorf("Expected error for invalid JSON response, got none")
 		}
 	})
 	t.Run("InvalidURL", func(t *testing.T) {
-		_, err := loadConfigFromURL(ctx, client, "://invalid-url", "", "", 1, testLogger())
+		_, err := loadConfigFromURL(ctx, client, "://invalid-url", "", "", 1, testLogger(), NewDroppedServersStore())
 		if err == nil || !strings.Contains(err.Error(), "failed to create request") {
 			t.Errorf("Expected request creation error, got: %v", err)
 		}
@@ -338,7 +338,7 @@ func TestRefreshConfig(t *testing.T) {
 	callbackServers := make(chan []models.ObaServer, 1)
 	go func() {
 		defer close(done)
-		refreshConfig(ctx, client, mockServer.URL, "testuser", "testpass", cfg, testLogger, 100*time.Millisecond, 1, func(servers []models.ObaServer) {
+		refreshConfig(ctx, client, mockServer.URL, "testuser", "testpass", cfg, NewDroppedServersStore(), testLogger, 100*time.Millisecond, 1, func(servers []models.ObaServer) {
 			select {
 			case callbackServers <- servers:
 			default: // later refreshes tell us nothing new
@@ -417,7 +417,7 @@ func TestRefreshConfigKeepsPreviousConfigWhenResponseIsEmpty(t *testing.T) {
 	callbackFired := make(chan struct{}, 1)
 	go func() {
 		defer close(done)
-		refreshConfig(ctx, ts.Client(), ts.URL, "", "", cfg,
+		refreshConfig(ctx, ts.Client(), ts.URL, "", "", cfg, NewDroppedServersStore(),
 			slog.New(slog.NewTextHandler(io.Discard, nil)), 10*time.Millisecond, 1,
 			func(updated []models.ObaServer) {
 				select {
