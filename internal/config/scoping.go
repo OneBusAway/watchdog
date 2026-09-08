@@ -123,33 +123,17 @@ func ResolveScope(server models.ObaServer, staticStore *gtfs.StaticStore, routeA
 // the static store doesn't carry it directly (the bundle does, but going via
 // the index keeps the look-up cheap). It may be nil during early startup.
 //
-// TODO(scoped-store): Today every agency on a server is resolved by reading
-// staticStore under (oba_base_url, agency_id), and that key resolves to the
-// SAME merged *StaticData held in staticStore — see storeStaticForServer in
-// gtfs_bundles.go, which does `staticStore.Set(serverKey, mergedbundle)` for
-// every declared agency. This is deliberate (memory stays O(bundles) via
-// pointer sharing), but it loses the many-to-many relationship between
-// agencies and configured feeds: we don't know which feeds declared which
-// agency, so stop resolution and other feed-specific behavior can't be scoped
-// to the agency's actual coverage. Per-agency bounding boxes now use feed
-// declarations during the static refresh without changing this shared storage
-// shape.
+// Every agency on a server resolves to the SAME merged *StaticData pointer in
+// staticStore. Runtime stop lookup deliberately scans that one flattened bundle,
+// where duplicate stop IDs are first-occurrence-wins. Per-agency stop slices are
+// not retained: while the source feeds are still separate, the GTFS refresh uses
+// each feed's agency declarations to compute only min/max latitude and longitude
+// for its agencies, then stores those small bounding boxes separately.
 //
 // Vehicle attribution is NOT part of this any more: the RT vehicle pass
 // resolves route_id -> agency_id through gtfs.RouteAgencyIndex, which is
 // built per route rather than per feed, so per-agency vehicle metrics are
-// already correct. What remains is feed-specific static-data behavior.
-//
-// A future storage-shape change may still scope each agency to the merged
-// feed(s) associated with it rather than having every agency point to the same
-// union. That would require stopping the merge step before per-agency storage
-// (or keeping per-feed data alongside the merged bundle), and reintroducing a
-// FeedURLs-equivalent field on AgencyIdentity so the resolver can hand the
-// agency its feed list. We removed FeedURLs earlier because it was unwritten
-// and unread.
-//
-// The bbox computation in storeStaticForServer keeps the shared bundle and
-// stores a separate per-agency box, so this TODO no longer blocks bbox checks.
+// already correct.
 func discoverAgenciesForServer(obaBaseURL string, staticStore *gtfs.StaticStore, routeAgencyIndex *gtfs.RouteAgencyIndex) []AgencyIdentity {
 	prefix := models.ServerKeyPrefix(obaBaseURL)
 	// agenciesByID indexes the agencies discovered under this server's
