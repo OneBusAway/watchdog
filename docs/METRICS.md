@@ -112,7 +112,7 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
   gtfs_rt_invalid_vehicle_coordinates{agency_id=""}
   ```
   In agency-mode (an entry with an `agency_id`) every vehicle belongs to the configured agency by definition, so no empty-`agency_id` series is emitted and `gtfs_rt_unattributed_vehicles_count` is not published at all.
-- **The bounding box is still server-wide:** `gtfs_rt_stopped_out_of_bounds_vehicles` is attributed per agency, but the box it tests against is computed over the union of *every* configured static feed's stops. On a multi-agency server a vehicle stopped in one agency's territory is validated against a rectangle covering all of them, so treat this metric as a loose bound rather than a precise one.
+- **Bounding box accuracy depends on attribution:** `gtfs_rt_stopped_out_of_bounds_vehicles` is attributed per agency. Attributed vehicles are validated against their own agency's bounding box. Unattributed vehicles and agency-mode entries fall back to the server-wide union box — on a multi-agency server that rectangle covers all agencies' stops, so the empty-`agency_id` series is a looser bound than the per-agency ones.
 - **Report intervals:** If significantly longer than agency update policy, data is stale.
 - **Speed discrepancy ratio:** Persistent high ratios may mean faulty onboard GPS.
 - **Invalid coordinates:** If >0, indicates bad GPS or malformed feed data.
