@@ -11,13 +11,9 @@ import (
 // Routes are kept so the route → agency index can be populated when the bundle
 // is parsed: every route carries an agency_id in routes.txt, which is how we
 // attribute GTFS-RT vehicles to agencies in server-mode.
-// StopsByAgency preserves every distinct physical location for each
-// (agency_id, stop_id). This is separate from Stops because multiple static
-// feeds can legally collide on stop_id while describing different locations.
-// Its first map key is the agency_id from agency.txt, and its second map key is
-// the stop_id. The slice is intentional: the same agency can occur in multiple
-// feeds with the same stop_id at different coordinates, so storing one Stop
-// would discard a physical location.
+// StopsByAgency is keyed agencyID → stopID → []Stop (distinct physical
+// locations). This is separate from Stops because multiple static feeds can
+// legally collide on stop_id while describing different locations.
 //
 // IMPORTANT:
 // In the future, we may need to extend this structure
