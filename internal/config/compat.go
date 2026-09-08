@@ -132,32 +132,6 @@ func decodeServerEntry(raw json.RawMessage) (models.ObaServer, error) {
 	return server, nil
 }
 
-// serverTagsFromRaw extracts the agency name and ID from a raw entry for
-// error tagging. Unmarshal failures are ignored since the entry is already
-// invalid.
-func serverTagsFromRaw(raw json.RawMessage) map[string]string {
-	var tags struct {
-		LegacyName string `json:"name"`
-		AgencyName string `json:"agency_name"`
-		AgencyID   string `json:"agency_id"`
-	}
-	if err := json.Unmarshal(raw, &tags); err != nil {
-		return nil
-	}
-	m := make(map[string]string, 2)
-	agencyName := tags.AgencyName
-	if agencyName == "" {
-		agencyName = tags.LegacyName
-	}
-	if agencyName != "" {
-		m["agency_name"] = agencyName
-	}
-	if tags.AgencyID != "" {
-		m["agency_id"] = tags.AgencyID
-	}
-	return m
-}
-
 // decodeServers decodes, validates, and deduplicates one configuration cycle.
 func decodeServers(rawEntries []json.RawMessage, logger *slog.Logger, droppedStore *DroppedServersStore) []models.ObaServer {
 	return droppedStore.Reconcile(rawEntries, logger)
