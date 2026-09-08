@@ -67,9 +67,7 @@ func GetEarliestAndLatestServiceDates(staticData *models.StaticData) (earliest, 
 	return earliestTime, latestTime, nil
 }
 
-// GetStopLocationsByIDs resolves stop IDs using the agency-specific collision
-// index, returning every distinct location for each ID. It falls back to the
-// flattened bundle for configured agencies that are not declared by agency.txt.
-func GetStopLocationsByIDs(serverKey, agencyID string, stopIDs []string, staticStore *StaticStore) (map[string][]remoteGtfs.Stop, error) {
-	return getStopLocationsByIDs(serverKey, agencyID, stopIDs, staticStore)
+// GetStopLocationsByIDs resolves stop IDs from the merged static bundle.
+func GetStopLocationsByIDs(serverKey string, stopIDs []string, staticStore *StaticStore) (map[string]remoteGtfs.Stop, error) {
+	return getStopLocationsByIDs(serverKey, stopIDs, staticStore)
 }
