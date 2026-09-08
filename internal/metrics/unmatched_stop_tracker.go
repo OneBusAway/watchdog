@@ -43,6 +43,13 @@ type trackedCluster struct {
 	LastSeen   time.Time
 }
 
+type stopKey struct {
+	StopID   string
+	StopName string
+	Lat      string
+	Lon      string
+}
+
 // UnmatchedStopTracker stores the most recent observation of each unmatched
 // stop and unmatched-stop cluster per server. Stop series and cluster series
 // are tracked independently: a cluster series is deleted once the cluster
@@ -50,36 +57,65 @@ type trackedCluster struct {
 // its members.
 //
 // The outer map key is the composite server key (oba_base_url + agency_id) and
-// the innermost map key is the stop ID (Entries) or the cluster key (Clusters).
+// the innermost map key is the stop identity including location (Entries) or
+// the cluster key (Clusters).
 type UnmatchedStopTracker struct {
 	Mu       sync.RWMutex
-	Entries  map[string]map[string]trackedStop
+	Entries  map[string]map[stopKey]trackedStop
 	Clusters map[string]map[clusterKey]trackedCluster
 }
 
+// NewUnmatchedStopTracker creates an empty tracker. Stop entries include their
+// location in the key so colliding stop IDs can be retained independently.
 func NewUnmatchedStopTracker() *UnmatchedStopTracker {
 	return &UnmatchedStopTracker{
-		Entries:  make(map[string]map[string]trackedStop),
+		Entries:  make(map[string]map[stopKey]trackedStop),
 		Clusters: make(map[string]map[clusterKey]trackedCluster),
 	}
 }
 
 // RecordLastSeen updates (or creates) the tracked entry for a stop that was just
-// reported as unmatched. serverKey is the outer map key; the agencyID,
-// agencyName, serverName, and serverURL are the label values of the emitted
-// metric series.
+// reported as unmatched. It preserves the historical rename behavior by
+// retiring another location with the same stop ID. Use RecordLocationLastSeen
+// when several locations for one ID are valid at the same time.
+// serverKey is the outer map key; the agencyID, agencyName, serverName, and
+// serverURL are the label values of the emitted metric series.
 func (t *UnmatchedStopTracker) RecordLastSeen(serverKey, agencyID, agencyName, serverName, serverURL, stopID, stopName, lat, lon string) {
+	t.recordLastSeen(serverKey, agencyID, agencyName, serverName, serverURL, stopID, stopName, lat, lon, false)
+}
+
+// RecordLocationLastSeen records a location without retiring another location
+// for the same stop ID. This is used when a collision produces multiple valid
+// physical locations for one agency and stop ID; each location has its own
+// Prometheus label set and therefore needs independent retention.
+func (t *UnmatchedStopTracker) RecordLocationLastSeen(serverKey, agencyID, agencyName, serverName, serverURL, stopID, stopName, lat, lon string) {
+	t.recordLastSeen(serverKey, agencyID, agencyName, serverName, serverURL, stopID, stopName, lat, lon, true)
+}
+
+// recordLastSeen contains the shared synchronized implementation for the two
+// public recording modes. preserveLocations distinguishes a normal renamed
+// stop from a collision where multiple physical locations must coexist.
+func (t *UnmatchedStopTracker) recordLastSeen(serverKey, agencyID, agencyName, serverName, serverURL, stopID, stopName, lat, lon string, preserveLocations bool) {
 	t.Mu.Lock()
 	defer t.Mu.Unlock()
 
 	stops, ok := t.Entries[serverKey]
 	if !ok {
-		stops = make(map[string]trackedStop)
+		stops = make(map[stopKey]trackedStop)
 		t.Entries[serverKey] = stops
 	}
 
-	entry, exists := stops[stopID]
-	if exists && (entry.AgencyName != agencyName || entry.ServerName != serverName || entry.StopName != stopName || entry.Lat != lat || entry.Lon != lon) {
+	key := stopKey{StopID: stopID, StopName: stopName, Lat: lat, Lon: lon}
+	if !preserveLocations {
+		for oldKey, oldEntry := range stops {
+			if oldKey.StopID == stopID && oldKey != key {
+				ObaUnmatchedStopInfo.DeleteLabelValues(oldEntry.AgencyID, oldEntry.AgencyName, oldEntry.ServerName, oldEntry.ServerURL, oldKey.StopID, oldEntry.StopName, oldEntry.Lat, oldEntry.Lon)
+				delete(stops, oldKey)
+			}
+		}
+	}
+	entry, exists := stops[key]
+	if exists && (entry.AgencyName != agencyName || entry.ServerName != serverName || entry.ServerURL != serverURL || entry.AgencyID != agencyID) {
 		// The stop changed its agency name, server, name, or location, so the
 		// series labeled with its previous values is now stale. Delete it so
 		// both it and the new series are pruned correctly, instead of freezing
@@ -87,7 +123,7 @@ func (t *UnmatchedStopTracker) RecordLastSeen(serverKey, agencyID, agencyName, s
 		ObaUnmatchedStopInfo.DeleteLabelValues(entry.AgencyID, entry.AgencyName, entry.ServerName, entry.ServerURL, stopID, entry.StopName, entry.Lat, entry.Lon)
 	}
 
-	stops[stopID] = trackedStop{
+	stops[key] = trackedStop{
 		AgencyID:   agencyID,
 		AgencyName: agencyName,
 		ServerName: serverName,
@@ -166,18 +202,20 @@ func (t *UnmatchedStopTracker) clear(threshold time.Duration) {
 }
 
 func (t *UnmatchedStopTracker) clearStops(now time.Time, threshold time.Duration) {
+	// Entries are keyed by stop ID plus labels/location, so each colliding
+	// physical location must be expired and deleted independently.
 	if len(t.Entries) == 0 {
 		return
 	}
 
 	for serverKey, stops := range t.Entries {
-		for stopID, entry := range stops {
+		for key, entry := range stops {
 			if now.Sub(entry.LastSeen) <= threshold {
 				continue
 			}
 
-			ObaUnmatchedStopInfo.DeleteLabelValues(entry.AgencyID, entry.AgencyName, entry.ServerName, entry.ServerURL, stopID, entry.StopName, entry.Lat, entry.Lon)
-			delete(stops, stopID)
+			ObaUnmatchedStopInfo.DeleteLabelValues(entry.AgencyID, entry.AgencyName, entry.ServerName, entry.ServerURL, key.StopID, entry.StopName, entry.Lat, entry.Lon)
+			delete(stops, key)
 		}
 
 		if len(stops) == 0 {

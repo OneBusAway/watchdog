@@ -11,24 +11,37 @@ import (
 // Routes are kept so the route → agency index can be populated when the bundle
 // is parsed: every route carries an agency_id in routes.txt, which is how we
 // attribute GTFS-RT vehicles to agencies in server-mode.
+// StopsByAgency preserves every distinct physical location for each
+// (agency_id, stop_id). This is separate from Stops because multiple static
+// feeds can legally collide on stop_id while describing different locations.
+// Its first map key is the agency_id from agency.txt, and its second map key is
+// the stop_id. The slice is intentional: the same agency can occur in multiple
+// feeds with the same stop_id at different coordinates, so storing one Stop
+// would discard a physical location.
 //
 // IMPORTANT:
 // In the future, we may need to extend this structure
 // to include more fields from the GTFS Static bundle.
 // Don't forget to include them here
 type StaticData struct {
-	Stops    []remoteGtfs.Stop
-	Agencies []remoteGtfs.Agency
-	Services []remoteGtfs.Service
-	Routes   []remoteGtfs.Route
+	Stops         []remoteGtfs.Stop
+	StopsByAgency map[string]map[string][]remoteGtfs.Stop
+	Agencies      []remoteGtfs.Agency
+	Services      []remoteGtfs.Service
+	Routes        []remoteGtfs.Route
 }
 
+// NewStaticData copies the portions of a parsed GTFS bundle used by Watchdog.
+// StopsByAgency starts empty because a single parsed bundle does not establish
+// the merged feed-to-agency relationships; mergeStaticAndDiscoverAgencies
+// populates that index when multiple feeds are combined.
 func NewStaticData(GtfsStaticBundle *remoteGtfs.Static) *StaticData {
 	return &StaticData{
-		Stops:    append([]remoteGtfs.Stop(nil), GtfsStaticBundle.Stops...),
-		Agencies: append([]remoteGtfs.Agency(nil), GtfsStaticBundle.Agencies...),
-		Services: append([]remoteGtfs.Service(nil), GtfsStaticBundle.Services...),
-		Routes:   append([]remoteGtfs.Route(nil), GtfsStaticBundle.Routes...),
+		Stops:         append([]remoteGtfs.Stop(nil), GtfsStaticBundle.Stops...),
+		StopsByAgency: make(map[string]map[string][]remoteGtfs.Stop),
+		Agencies:      append([]remoteGtfs.Agency(nil), GtfsStaticBundle.Agencies...),
+		Services:      append([]remoteGtfs.Service(nil), GtfsStaticBundle.Services...),
+		Routes:        append([]remoteGtfs.Route(nil), GtfsStaticBundle.Routes...),
 	}
 }
 
