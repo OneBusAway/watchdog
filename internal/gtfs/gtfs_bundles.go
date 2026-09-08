@@ -224,10 +224,10 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 // another agency's bbox.
 func computeAgencyBoundingBoxes(staticData *models.StaticData) map[string]geo.BoundingBox {
 	boxes := make(map[string]geo.BoundingBox, len(staticData.StopsByAgency))
-	for agencyID, stopsByID := range staticData.StopsByAgency {
+	for agencyID, recordedLocationsByID := range staticData.StopsByAgency {
 		var stops []remoteGtfs.Stop
-		for _, locations := range stopsByID {
-			stops = append(stops, locations...)
+		for _, recordedLocations := range recordedLocationsByID {
+			stops = append(stops, recordedLocations...)
 		}
 		if bbox, err := geo.ComputeBoundingBox(stops); err == nil {
 			boxes[agencyID] = bbox
@@ -244,9 +244,9 @@ func computeAgencyBoundingBoxes(staticData *models.StaticData) map[string]geo.Bo
 func allStops(staticData *models.StaticData) []remoteGtfs.Stop {
 	var stops []remoteGtfs.Stop
 	seen := make(map[string]struct{})
-	for _, stopsByID := range staticData.StopsByAgency {
-		for _, locations := range stopsByID {
-			for _, stop := range locations {
+	for _, recordedLocationsByID := range staticData.StopsByAgency {
+		for _, recordedLocations := range recordedLocationsByID {
+			for _, stop := range recordedLocations {
 				key := stop.Id + "\x00" + formatLatLon(stop.Latitude) + "\x00" + formatLatLon(stop.Longitude)
 				if _, exists := seen[key]; exists {
 					continue
@@ -287,7 +287,7 @@ func mergeStaticAndDiscoverAgencies(bundles []*remoteGtfs.Static) (*models.Stati
 		return &models.StaticData{}, nil
 	}
 	staticData := &models.StaticData{StopsByAgency: make(map[string]map[string][]remoteGtfs.Stop)}
-	stopsByID := make(map[string]stopLocation)
+	keptLocationByID := make(map[string]stopLocation)
 	agenciesByID := make(map[string]agencyIdentity)
 	for _, staticBundle := range bundles {
 		if staticBundle == nil {
@@ -302,30 +302,30 @@ func mergeStaticAndDiscoverAgencies(bundles []*remoteGtfs.Static) (*models.Stati
 		}
 		for _, stop := range data.Stops {
 			for _, agencyID := range agencyIDs {
-				stopsByID := staticData.StopsByAgency[agencyID]
-				if stopsByID == nil {
-					stopsByID = make(map[string][]remoteGtfs.Stop)
-					staticData.StopsByAgency[agencyID] = stopsByID
+				recordedLocationsByID := staticData.StopsByAgency[agencyID]
+				if recordedLocationsByID == nil {
+					recordedLocationsByID = make(map[string][]remoteGtfs.Stop)
+					staticData.StopsByAgency[agencyID] = recordedLocationsByID
 				}
-				locations := stopsByID[stop.Id]
-				duplicate := false
-				for _, location := range locations {
-					if sameStopLocation(location.Latitude, location.Longitude, stop.Latitude, stop.Longitude) {
-						duplicate = true
+				recordedLocations := recordedLocationsByID[stop.Id]
+				locationSeen := false
+				for _, recorded := range recordedLocations {
+					if sameStopLocation(recorded.Latitude, recorded.Longitude, stop.Latitude, stop.Longitude) {
+						locationSeen = true
 						break
 					}
 				}
-				if !duplicate {
-					stopsByID[stop.Id] = append(locations, stop)
+				if !locationSeen {
+					recordedLocationsByID[stop.Id] = append(recordedLocations, stop)
 				}
 			}
-			existing, exists := stopsByID[stop.Id]
-			if !exists {
+			kept, keptExists := keptLocationByID[stop.Id]
+			if !keptExists {
 				staticData.Stops = append(staticData.Stops, stop)
-				stopsByID[stop.Id] = stopLocation{lat: stop.Latitude, lon: stop.Longitude}
+				keptLocationByID[stop.Id] = stopLocation{lat: stop.Latitude, lon: stop.Longitude}
 				continue
 			}
-			if sameStopLocation(existing.lat, existing.lon, stop.Latitude, stop.Longitude) {
+			if sameStopLocation(kept.lat, kept.lon, stop.Latitude, stop.Longitude) {
 				// Exact duplicate (same id, same location). Silent skip.
 				continue
 			}
@@ -334,13 +334,13 @@ func mergeStaticAndDiscoverAgencies(bundles []*remoteGtfs.Static) (*models.Stati
 			report.ReportErrorWithSentryOptions(
 				fmt.Errorf("static bundle has a duplicate stop_id %q at a different location; existing=(lat=%s, lon=%s), duplicate=(lat=%s, lon=%s); keeping first occurrence",
 					stop.Id,
-					formatLatLon(existing.lat), formatLatLon(existing.lon),
+					formatLatLon(kept.lat), formatLatLon(kept.lon),
 					formatLatLon(stop.Latitude), formatLatLon(stop.Longitude)),
 				report.SentryReportOptions{
 					Tags: map[string]string{"stop_id": stop.Id},
 					ExtraContext: map[string]interface{}{
-						"existing_lat":  existing.lat,
-						"existing_lon":  existing.lon,
+						"existing_lat":  kept.lat,
+						"existing_lon":  kept.lon,
 						"duplicate_lat": stop.Latitude,
 						"duplicate_lon": stop.Longitude,
 					},
@@ -352,25 +352,25 @@ func mergeStaticAndDiscoverAgencies(bundles []*remoteGtfs.Static) (*models.Stati
 			if agency.Id == "" {
 				continue
 			}
-			existing, exists := agenciesByID[agency.Id]
+			knownAgency, exists := agenciesByID[agency.Id]
 			if !exists {
 				agenciesByID[agency.Id] = agencyIdentity{Name: agency.Name, Url: agency.Url}
 				staticData.Agencies = append(staticData.Agencies, agency)
 				continue
 			}
-			if existing.Name == agency.Name && existing.Url == agency.Url {
+			if knownAgency.Name == agency.Name && knownAgency.Url == agency.Url {
 				// Exact duplicate (same id, name, url). Silent skip.
 				continue
 			}
 			// agency_id collision with mismatching identity — warn.
 			report.ReportErrorWithSentryOptions(
 				fmt.Errorf("static bundle has a duplicate agency_id %q with mismatching identity; existing=(name=%q, url=%q), duplicate=(name=%q, url=%q); keeping first occurrence",
-					agency.Id, existing.Name, existing.Url, agency.Name, agency.Url),
+					agency.Id, knownAgency.Name, knownAgency.Url, agency.Name, agency.Url),
 				report.SentryReportOptions{
 					Tags: map[string]string{"agency_id": agency.Id},
 					ExtraContext: map[string]interface{}{
-						"existing_name":  existing.Name,
-						"existing_url":   existing.Url,
+						"existing_name":  knownAgency.Name,
+						"existing_url":   knownAgency.Url,
 						"duplicate_name": agency.Name,
 						"duplicate_url":  agency.Url,
 					},
@@ -524,15 +524,15 @@ func getStopLocationsByIDs(serverKey string, agencyID string, stopIDs []string, 
 	}
 
 	result := make(map[string][]remoteGtfs.Stop)
-	stopsByAgency, agencyIndexed := staticData.StopsByAgency[agencyID]
-	if agencyIndexed {
+	recordedLocationsByID, indexed := staticData.StopsByAgency[agencyID]
+	if indexed {
 		for stopID := range stopIDSet {
-			if stops := stopsByAgency[stopID]; len(stops) > 0 {
-				result[stopID] = append([]remoteGtfs.Stop(nil), stops...)
+			if recordedLocations := recordedLocationsByID[stopID]; len(recordedLocations) > 0 {
+				result[stopID] = append([]remoteGtfs.Stop(nil), recordedLocations...)
 			}
 		}
 	}
-	if !agencyIndexed {
+	if !indexed {
 		for _, stop := range staticData.Stops {
 			if _, requested := stopIDSet[stop.Id]; requested {
 				if _, alreadyResolved := result[stop.Id]; !alreadyResolved {
