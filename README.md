@@ -41,7 +41,7 @@ Watchdog requires a configuration file (`config.json`) before running. Even plac
 ]
 ```
 
-The top-level `agency_id` decides what each entry observes: set it to track only that agency (data for any other agency is ignored); leave it out to track the server and every agency it serves. `agency_ids` on a feed is optional and unused by Watchdog today. See [Two observation modes](#two-observation-modes-agency-vs-server) below for both config shapes.
+The top-level `agency_id` decides what each entry observes: set it to track that agency. OBA API probes query only that agency, though static and realtime feed data is not filtered by agency; leave it out to track the server and every agency it serves. `agency_ids` on a feed is optional and unused by Watchdog today. See [Two observation modes](#two-observation-modes-agency-vs-server) below for both config shapes.
 
 #### Ways to Provide the Config File
 
@@ -79,12 +79,12 @@ export CONFIG_AUTH_PASS="password"
 
 ### Two observation modes: agency vs. server
 
-There are two ways Watchdog can observe an OBA deployment. The choice is made **per entry in `config.json`** by whether you set `agency_id` — every other field (`server_name`, `oba_base_url`, `oba_api_key`, `gtfs_static_feeds`, `gtfs_rt_feeds`) is identical in both modes, so `agency_id` is the only switch:
+There are two ways Watchdog can observe an OBA deployment. The choice is made **per entry in `config.json`** by whether you set `agency_id` — every other field (`server_name`, `oba_base_url`, `oba_api_key`, `gtfs_static_feeds`, `gtfs_rt_feeds`) is identical in both modes. Setting `agency_id` selects agency observation mode; `agency_name` must also be provided.
 
 - **Agency mode** — `agency_id` is set. Watchdog monitors only that one agency.
 - **Server mode (recommended)** — `agency_id` is unset. Watchdog monitors the whole server and every agency it currently serves.
 
-**Observe a single agency** — set `agency_id` (with its `agency_name`) on the entry. Watchdog tracks only that agency; any data not related to it is ignored:
+**Observe a single agency** — set `agency_id` (with its `agency_name`) on the entry. Watchdog uses that agency for agency-specific OBA API probes, but static and realtime feed data is not filtered by agency:
 
 ```json
 {
@@ -146,11 +146,9 @@ The two metrics below are the operator's view into server-mode health:
 
 In agency-mode every RT vehicle is labeled with the configured `agency_id`. In server-mode one RT feed may carry vehicles from multiple agencies, so Watchdog attributes each vehicle by looking up its `TripDescriptor`'s `route_id` in a per-server `route_id → agency_id` index built from `routes.txt` at static-download time. Vehicles whose `route_id` is empty or unknown (and vehicles carrying no vehicle ID at all) are left out of the per-vehicle series and counted in `gtfs_rt_unattributed_vehicles_count{server_name, server_url}` so operators can detect static feeds that don't cover every RT route. The data-quality gauges `gtfs_rt_invalid_vehicle_coordinates` and `gtfs_rt_stopped_out_of_bounds_vehicles` instead file those vehicles under the server-scoped series (empty `agency_id`), so their per-agency series always sum to the server-wide count. See `docs/METRICS.md` for details.
 
-#### Backward compatibility
+### Backward Compatibility (v1 → v2)
 
 This is a **deliberate breaking change** to the existing v2 format. Existing v2 entries without `server_name` become invalid — operators must add the field. The legacy v1 array-of-flat-objects format continues to work: `id` (int) is still ignored, `name` is repurposed as `server_name`, and a v1 entry with `agency_id` populates `agency_name` from `name` so the entry remains agency-scoped.
-
-### Backward Compatibility (v1 → v2)
 
 Watchdog used to accept a flat, single-server config schema. Legacy (v1) configs are still supported: they're **silently converted** to the current array-based schema (v2) at load time, so upgrading doesn't require changing your config or interrupt monitoring.
 
