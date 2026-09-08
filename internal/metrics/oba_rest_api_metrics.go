@@ -257,7 +257,19 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 				latStr,
 				lonStr,
 			).Set(1)
-			unmatchedStopTracker.RecordLocationLastSeen(serverKey, agencyID, agencyName, serverName, serverURL, stopID, stop.Name, latStr, lonStr)
+			// stopID uniqueness is guaranteed only within a single feed, not across
+			// past, current, or upcoming feeds. A duplicate stopID with a different
+			// location is therefore normal — it came from different scrapes (we
+			// fetch static data daily). Multiple current locations coexist; keep
+			// every label set.
+			if len(stops) > 1 {
+				unmatchedStopTracker.RecordLocationLastSeen(serverKey, agencyID, agencyName, serverName, serverURL, stopID, stop.Name, latStr, lonStr)
+			} else {
+				// Single current location. A changed name at the same location is
+				// a rename — the old label set is stale, so retire it and expose
+				// only the one with the current name.
+				unmatchedStopTracker.RecordLastSeen(serverKey, agencyID, agencyName, serverName, serverURL, stopID, stop.Name, latStr, lonStr)
+			}
 		}
 		if resolvedID {
 			resolved++
