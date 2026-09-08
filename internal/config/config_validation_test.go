@@ -403,6 +403,37 @@ func TestReconcileReportsRecoveryOnce(t *testing.T) {
 	}
 }
 
+// Recovery events must carry the same identifying tags (including server_name)
+// as invalid/duplicate reports so error and recovery events can be correlated.
+func TestReconcileRecoveryReportIncludesServerName(t *testing.T) {
+	rec := report.CaptureSentry(t)
+	store := NewDroppedServersStore()
+
+	invalid := validServer()
+	invalid.GtfsStaticFeeds = nil
+
+	if got := store.Reconcile([]json.RawMessage{mustRawServer(t, invalid)}, testLogger()); len(got) != 0 {
+		t.Fatal("expected invalid server dropped")
+	}
+
+	recovered := invalid
+	recovered.GtfsStaticFeeds = []string{"https://gtfs.example.com"}
+	if got := store.Reconcile([]json.RawMessage{mustRawServer(t, recovered)}, testLogger()); len(got) != 1 {
+		t.Fatal("expected recovered server kept")
+	}
+
+	events := rec.Events()
+	if len(events) != 2 {
+		t.Fatalf("expected 1 error + 1 recovery report, got %d", len(events))
+	}
+	recovery := events[1]
+	for _, want := range []string{"server_name", "agency_id", "agency_name"} {
+		if _, ok := recovery.Tags[want]; !ok {
+			t.Errorf("recovery event missing tag %q, got %v", want, recovery.Tags)
+		}
+	}
+}
+
 // A reported server that disappears from the config is pruned; if it later
 // reappears invalid, it is a fresh state and gets reported again.
 func TestReconcileReportsPrunedServerAgain(t *testing.T) {
@@ -460,8 +491,64 @@ func TestReconcileRejectsDuplicatesBeforeValidation(t *testing.T) {
 	if len(got) != 0 {
 		t.Fatalf("expected both invalid duplicate entries to be dropped, got %d", len(got))
 	}
-	if events := rec.Events(); len(events) != 2 {
-		t.Fatalf("expected one validation report and one duplicate report, got %d", len(events))
+	// Malformed entries no longer claim the identity in `seen`, so the
+	// duplicate check never fires for them — both are caught by validation,
+	// and only one validation error is reported (the second shares the
+	// identity and is suppressed).
+	events := rec.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 validation report (malformed entries don't trigger duplicate reports), got %d", len(events))
+	}
+	if events[0].Level != sentry.LevelError {
+		t.Errorf("expected error level, got %s", events[0].Level)
+	}
+}
+
+// When the first entry sharing an identity is malformed and the second is valid,
+// the malformed entry must not reserve the identity so the valid entry is
+// retained rather than incorrectly dropped as a duplicate.
+func TestReconcileMalformedFirstValidSecondSameIdentity(t *testing.T) {
+	rec := report.CaptureSentry(t)
+	store := NewDroppedServersStore()
+
+	malformed := validServer()
+	malformed.GtfsStaticFeeds = nil // invalid: missing gtfs_static_feeds
+
+	valid := validServer()
+
+	rawEntries := []json.RawMessage{
+		mustRawServer(t, malformed),
+		mustRawServer(t, valid),
+	}
+
+	got := store.Reconcile(rawEntries, testLogger())
+
+	if len(got) != 1 {
+		t.Fatalf("expected 1 valid server retained, got %d: %+v", len(got), got)
+	}
+	if got[0].AgencyID != valid.AgencyID {
+		t.Fatalf("expected the valid entry to be kept, got agency_id=%q", got[0].AgencyID)
+	}
+
+	events := rec.Events()
+	// The malformed entry produces 1 error report; the valid entry with
+	// the same identity produces 1 recovery report (recovering the
+	// previously-reported identity). No duplicate report is emitted
+	// because malformed entries no longer claim the identity.
+	if len(events) != 2 {
+		t.Fatalf("expected 2 Sentry reports (1 error + 1 recovery), got %d", len(events))
+	}
+	if events[0].Level != sentry.LevelError {
+		t.Errorf("expected first event at error level, got %s", events[0].Level)
+	}
+	if events[1].Level != sentry.LevelInfo {
+		t.Errorf("expected recovery event at info level, got %s", events[1].Level)
+	}
+	// The error report must carry identifying tags including server_name.
+	for _, want := range []string{"server_name", "agency_id"} {
+		if _, ok := events[0].Tags[want]; !ok {
+			t.Errorf("expected tag %q to be present on error event, got %v", want, events[0].Tags)
+		}
 	}
 }
 

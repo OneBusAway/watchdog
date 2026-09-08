@@ -39,6 +39,14 @@ func NewDroppedServersStore() *DroppedServersStore {
 //   - invalid server already reported -> silent
 //   - previously invalid server becomes valid -> info-level recovery report
 //   - reported server disappears from the config -> pruned silently
+//
+// reportedDuplicates tracks which identities are currently duplicated. A
+// duplicate identity is reported to Sentry once when the second (or later) copy
+// is dropped. The reportedDuplicates entry persists as long as the identity
+// remains duplicated (multiple entries with the same key); when all but one
+// copy are removed or become invalid, the entry is pruned. Local logging
+// happens on every reconciliation cycle for each actively dropped duplicate,
+// but Sentry reporting is transition-based (once per duplication episode).
 func (s *DroppedServersStore) Reconcile(rawEntries []json.RawMessage, logger *slog.Logger) []models.ObaServer {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -58,17 +66,33 @@ func (s *DroppedServersStore) Reconcile(rawEntries []json.RawMessage, logger *sl
 	for _, raw := range rawEntries {
 		identity, tags, extra, duplicateEligible := serverIdentityFromRaw(raw)
 		present[identity] = struct{}{}
+
+		// Decode first so that a malformed entry never claims the identity
+		// in `seen` and blocks a valid later entry with the same key.
+		server, err := decodeServerEntry(raw)
+		if err != nil {
+			if _, alreadyReported := s.reported[identity]; !alreadyReported {
+				s.reported[identity] = struct{}{}
+				report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+					Tags:         tags,
+					ExtraContext: extra,
+					Level:        sentry.LevelError,
+				})
+			}
+			continue
+		}
+
 		if duplicateEligible && counts[identity] > 1 {
 			duplicated[identity] = struct{}{}
 			if _, exists := seen[identity]; exists {
+				logger.Error("Dropping server with duplicate oba_base_url and agency_id",
+					"agency_id", tags["agency_id"],
+					"agency_name", tags["agency_name"],
+					"oba_base_url", extra["oba_base_url"],
+					"server_key", identity,
+				)
 				if _, alreadyReported := s.reportedDuplicates[identity]; !alreadyReported {
 					s.reportedDuplicates[identity] = struct{}{}
-					logger.Error("Dropping server with duplicate oba_base_url and agency_id",
-						"agency_id", tags["agency_id"],
-						"agency_name", tags["agency_name"],
-						"oba_base_url", extra["oba_base_url"],
-						"server_key", identity,
-					)
 					report.ReportErrorWithSentryOptions(fmt.Errorf("duplicate server key %q", identity), report.SentryReportOptions{
 						Tags: tags,
 						ExtraContext: map[string]interface{}{
@@ -83,28 +107,12 @@ func (s *DroppedServersStore) Reconcile(rawEntries []json.RawMessage, logger *sl
 			seen[identity] = struct{}{}
 		}
 
-		server, err := decodeServerEntry(raw)
-		if err != nil {
-			if _, alreadyReported := s.reported[identity]; !alreadyReported {
-				s.reported[identity] = struct{}{}
-				report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-					Tags:         tags,
-					ExtraContext: extra,
-					Level:        sentry.LevelError,
-				})
-			}
-			continue
-		}
-
 		if _, wasReported := s.reported[identity]; wasReported {
 			delete(s.reported, identity)
 			report.ReportErrorWithSentryOptions(
 				newErrRecovered(server),
 				report.SentryReportOptions{
-					Tags: map[string]string{
-						"agency_id":   server.AgencyID,
-						"agency_name": server.AgencyName,
-					},
+					Tags:         tags,
 					ExtraContext: map[string]interface{}{"oba_base_url": server.ObaBaseURL},
 					Level:        sentry.LevelInfo,
 				},
