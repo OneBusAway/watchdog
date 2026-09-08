@@ -91,7 +91,7 @@ func TestRecordLastSeenUpdatesLabelsOnRename(t *testing.T) {
 	ObaUnmatchedStopInfo.WithLabelValues(agencyID, "Rename Agency", "test-server", "https://rename.example.com", stopID, "New Name", "3.300000", "4.400000").Set(1)
 	tracker.RecordLastSeen(agencyID, agencyID, "Rename Agency", "test-server", "https://rename.example.com", stopID, "New Name", "3.300000", "4.400000")
 
-	entry := tracker.Entries[agencyID][stopID]
+	entry := tracker.Entries[agencyID][stopKey{StopID: stopID, StopName: "New Name", Lat: "3.300000", Lon: "4.400000"}]
 	if entry.StopName != "New Name" || entry.Lat != "3.300000" || entry.Lon != "4.400000" {
 		t.Fatalf("tracker froze first-seen labels, got %+v", entry)
 	}
@@ -118,9 +118,10 @@ func TestClearStopsPrunesRenamedStopOnStale(t *testing.T) {
 	ObaUnmatchedStopInfo.WithLabelValues(agencyID, "Rename Clear Agency", "test-server", "https://clear.example.com", stopID, "Latest Name", "9.900000", "8.800000").Set(1)
 	tracker.RecordLastSeen(agencyID, agencyID, "Rename Clear Agency", "test-server", "https://clear.example.com", stopID, "Latest Name", "9.900000", "8.800000")
 
-	entry := tracker.Entries[agencyID][stopID]
+	key := stopKey{StopID: stopID, StopName: "Latest Name", Lat: "9.900000", Lon: "8.800000"}
+	entry := tracker.Entries[agencyID][key]
 	entry.LastSeen = time.Now().UTC().Add(-48 * time.Hour)
-	tracker.Entries[agencyID][stopID] = entry
+	tracker.Entries[agencyID][key] = entry
 
 	tracker.clear(24 * time.Hour)
 
@@ -130,5 +131,15 @@ func TestClearStopsPrunesRenamedStopOnStale(t *testing.T) {
 	}
 	if findStopSeries(series, agencyID, stopID, "Latest Name", "9.900000", "8.800000") != nil {
 		t.Fatalf("latest name series survived after stale clear: %+v", series)
+	}
+}
+
+func TestUnmatchedStopTrackerRetainsSameIDAtMultipleLocations(t *testing.T) {
+	tracker := NewUnmatchedStopTracker()
+	tracker.RecordLocationLastSeen("agency-a", "agency-a", "Agency A", "test-server", "https://agency-a.example.com", "stop-1", "Stop One", "1.000000", "2.000000")
+	tracker.RecordLocationLastSeen("agency-a", "agency-a", "Agency A", "test-server", "https://agency-a.example.com", "stop-1", "Stop One", "3.000000", "4.000000")
+
+	if got := len(tracker.Entries["agency-a"]); got != 2 {
+		t.Fatalf("expected two tracked locations for one stop ID, got %d", got)
 	}
 }
