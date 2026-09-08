@@ -130,26 +130,26 @@ func ResolveScope(server models.ObaServer, staticStore *gtfs.StaticStore, routeA
 // every declared agency. This is deliberate (memory stays O(bundles) via
 // pointer sharing), but it loses the many-to-many relationship between
 // agencies and configured feeds: we don't know which feeds declared which
-// agency, so per-agency bbox and stop resolution can't be scoped to the
-// agency's actual coverage.
+// agency, so stop resolution and other feed-specific behavior can't be scoped
+// to the agency's actual coverage. Per-agency bounding boxes now use feed
+// declarations during the static refresh without changing this shared storage
+// shape.
 //
 // Vehicle attribution is NOT part of this any more: the RT vehicle pass
 // resolves route_id -> agency_id through gtfs.RouteAgencyIndex, which is
 // built per route rather than per feed, so per-agency vehicle metrics are
-// already correct. What remains is geometry — see the bbox NOTE in
-// storeStaticForServer.
+// already correct. What remains is feed-specific static-data behavior.
 //
-// The fix: change the storage shape so each agency is scoped to the merged
-// feed(s) associated with it, rather than every agency pointing to the same
-// union. This will require stopping the merge step before per-agency
-// storage (or keeping per-feed data alongside the merged bundle), and
-// reintroducing a FeedURLs-equivalent field on AgencyIdentity so the
-// resolver can hand the agency its feed list. We removed FeedURLs earlier
-// because it was unwritten and unread; this TODO is the reason it will
-// come back.
+// A future storage-shape change may still scope each agency to the merged
+// feed(s) associated with it rather than having every agency point to the same
+// union. That would require stopping the merge step before per-agency storage
+// (or keeping per-feed data alongside the merged bundle), and reintroducing a
+// FeedURLs-equivalent field on AgencyIdentity so the resolver can hand the
+// agency its feed list. We removed FeedURLs earlier because it was unwritten
+// and unread.
 //
-// See also the bbox NOTE + TODO in storeStaticForServer — both touch the
-// same underlying storage-shape question.
+// The bbox computation in storeStaticForServer keeps the shared bundle and
+// stores a separate per-agency box, so this TODO no longer blocks bbox checks.
 func discoverAgenciesForServer(obaBaseURL string, staticStore *gtfs.StaticStore, routeAgencyIndex *gtfs.RouteAgencyIndex) []AgencyIdentity {
 	prefix := models.ServerKeyPrefix(obaBaseURL)
 	// agenciesByID indexes the agencies discovered under this server's
