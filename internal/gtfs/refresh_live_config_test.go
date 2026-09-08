@@ -30,14 +30,10 @@ func TestRefreshGTFSBundlesReadsLiveConfig(t *testing.T) {
 		shuttingDown  atomic.Bool
 		firstTickOnce sync.Once
 		addedOnce     sync.Once
-		requests      sync.WaitGroup
 		firstTick     = make(chan struct{})
 		sawAdded      = make(chan struct{})
 	)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests.Add(1)
-		defer requests.Done()
-
 		var signal chan struct{}
 		switch r.URL.Path {
 		case "/initial.zip":
@@ -80,16 +76,20 @@ func TestRefreshGTFSBundlesReadsLiveConfig(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
 	defer func() {
 		shuttingDown.Store(true)
 		cancel()
-		requests.Wait()
+		<-done
 		ts.Close()
 		http.DefaultClient.CloseIdleConnections()
 	}()
 
-	go refreshGTFSBundles(ctx, ts.Client(), servers, slog.New(slog.NewTextHandler(io.Discard, nil)),
-		10*time.Millisecond, geo.NewBoundingBoxStore(), NewStaticStore(), NewRouteAgencyIndex(), nil, 1)
+	go func() {
+		defer close(done)
+		refreshGTFSBundles(ctx, ts.Client(), servers, slog.New(slog.NewTextHandler(io.Discard, nil)),
+			10*time.Millisecond, geo.NewBoundingBoxStore(), NewStaticStore(), NewRouteAgencyIndex(), nil, 1)
+	}()
 
 	// Wait for a tick that used the original list before changing it, so a
 	// routine that snapshots the config at start-up has definitely taken its
