@@ -112,8 +112,6 @@ func main() {
 	// The dropped-servers store is shared between the initial load and the
 	// periodic refresh so an invalid server is reported to Sentry only once.
 	droppedStore := config.NewDroppedServersStore()
-	// Share transition state between startup and remote refreshes.
-	droppedStore := config.NewDroppedServersStore()
 	var servers []models.ObaServer
 	if *configFile != "" {
 		servers, err = config.LoadConfigFromFile(*configFile, logger, droppedStore)

@@ -47,10 +47,41 @@ func (s *DroppedServersStore) Reconcile(rawEntries []json.RawMessage, logger *sl
 	present := make(map[string]struct{}, len(rawEntries))
 	seen := make(map[string]struct{}, len(rawEntries))
 	duplicated := make(map[string]struct{})
+	counts := make(map[string]int, len(rawEntries))
+	for _, raw := range rawEntries {
+		identity, _, _, duplicateEligible := serverIdentityFromRaw(raw)
+		if duplicateEligible {
+			counts[identity]++
+		}
+	}
 
 	for _, raw := range rawEntries {
-		identity, tags, extra := serverIdentityFromRaw(raw)
+		identity, tags, extra, duplicateEligible := serverIdentityFromRaw(raw)
 		present[identity] = struct{}{}
+		if duplicateEligible && counts[identity] > 1 {
+			duplicated[identity] = struct{}{}
+			if _, exists := seen[identity]; exists {
+				if _, alreadyReported := s.reportedDuplicates[identity]; !alreadyReported {
+					s.reportedDuplicates[identity] = struct{}{}
+					logger.Error("Dropping server with duplicate oba_base_url and agency_id",
+						"agency_id", tags["agency_id"],
+						"agency_name", tags["agency_name"],
+						"oba_base_url", extra["oba_base_url"],
+						"server_key", identity,
+					)
+					report.ReportErrorWithSentryOptions(fmt.Errorf("duplicate server key %q", identity), report.SentryReportOptions{
+						Tags: tags,
+						ExtraContext: map[string]interface{}{
+							"oba_base_url": extra["oba_base_url"],
+							"server_key":   identity,
+						},
+						Level: sentry.LevelError,
+					})
+				}
+				continue
+			}
+			seen[identity] = struct{}{}
+		}
 
 		server, err := decodeServerEntry(raw)
 		if err != nil {
@@ -64,34 +95,6 @@ func (s *DroppedServersStore) Reconcile(rawEntries []json.RawMessage, logger *sl
 			}
 			continue
 		}
-
-		identity = server.ServerKey()
-		present[identity] = struct{}{}
-		if _, exists := seen[identity]; exists {
-			duplicated[identity] = struct{}{}
-			if _, alreadyReported := s.reportedDuplicates[identity]; !alreadyReported {
-				s.reportedDuplicates[identity] = struct{}{}
-				logger.Error("Dropping server with duplicate oba_base_url and agency_id",
-					"agency_id", server.AgencyID,
-					"agency_name", server.AgencyName,
-					"oba_base_url", server.ObaBaseURL,
-					"server_key", identity,
-				)
-				report.ReportErrorWithSentryOptions(fmt.Errorf("duplicate server key %q", identity), report.SentryReportOptions{
-					Tags: map[string]string{
-						"agency_id":   server.AgencyID,
-						"agency_name": server.AgencyName,
-					},
-					ExtraContext: map[string]interface{}{
-						"oba_base_url": server.ObaBaseURL,
-						"server_key":   identity,
-					},
-					Level: sentry.LevelError,
-				})
-			}
-			continue
-		}
-		seen[identity] = struct{}{}
 
 		if _, wasReported := s.reported[identity]; wasReported {
 			delete(s.reported, identity)
@@ -127,7 +130,7 @@ func (s *DroppedServersStore) Reconcile(rawEntries []json.RawMessage, logger *sl
 // serverIdentityFromRaw extracts a stable identity before validation. Entries
 // missing oba_base_url cannot share the normal composite key, so their raw JSON
 // is used to keep unrelated malformed entries from suppressing each other.
-func serverIdentityFromRaw(raw json.RawMessage) (string, map[string]string, map[string]interface{}) {
+func serverIdentityFromRaw(raw json.RawMessage) (identity string, tags map[string]string, extra map[string]interface{}, duplicateEligible bool) {
 	var fields struct {
 		ServerName string `json:"server_name"`
 		LegacyName string `json:"name"`
@@ -136,12 +139,12 @@ func serverIdentityFromRaw(raw json.RawMessage) (string, map[string]string, map[
 		ObaBaseURL string `json:"oba_base_url"`
 	}
 	if err := json.Unmarshal(raw, &fields); err != nil {
-		return "raw:" + string(raw), nil, nil
+		return "raw:" + string(raw), nil, nil, false
 	}
 	if fields.AgencyName == "" {
 		fields.AgencyName = fields.LegacyName
 	}
-	tags := make(map[string]string, 3)
+	tags = make(map[string]string, 3)
 	if fields.ServerName != "" {
 		tags["server_name"] = fields.ServerName
 	}
@@ -151,9 +154,9 @@ func serverIdentityFromRaw(raw json.RawMessage) (string, map[string]string, map[
 	if fields.AgencyID != "" {
 		tags["agency_id"] = fields.AgencyID
 	}
-	extra := map[string]interface{}{"oba_base_url": fields.ObaBaseURL}
+	extra = map[string]interface{}{"oba_base_url": fields.ObaBaseURL}
 	if fields.ObaBaseURL == "" {
-		return "raw:" + string(raw), tags, extra
+		return "raw:" + string(raw), tags, extra, false
 	}
-	return models.ServerKey(fields.ObaBaseURL, fields.AgencyID), tags, extra
+	return models.ServerKey(fields.ObaBaseURL, fields.AgencyID), tags, extra, true
 }
