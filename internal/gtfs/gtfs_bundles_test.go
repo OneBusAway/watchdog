@@ -970,28 +970,63 @@ func TestStoreStaticForServerComputesBoundingBoxPerAgency(t *testing.T) {
 }
 
 func TestStoreStaticForServerFallsBackToUnionBoundingBox(t *testing.T) {
-	bundle := makeSyntheticBundle(t, "agency-A", "Agency A", "https://a.example", []remoteGtfs.Stop{
+	bundleA := makeSyntheticBundle(t, "agency-A", "Agency A", "https://a.example", []remoteGtfs.Stop{
 		{Id: "S1", Latitude: floatPtr(47.60), Longitude: floatPtr(-122.30)},
 		{Id: "S2", Latitude: floatPtr(47.70), Longitude: floatPtr(-122.20)},
 	})
-	bundle.Agencies = append(bundle.Agencies, remoteGtfs.Agency{Id: "agency-B", Name: "Agency B", Url: "https://b.example"})
+	bundleB := makeSyntheticBundle(t, "agency-B", "Agency B", "https://b.example", nil)
+	bundleC := makeSyntheticBundle(t, "agency-C", "Agency C", "https://c.example", []remoteGtfs.Stop{
+		{Id: "S3", Latitude: floatPtr(40.60), Longitude: floatPtr(-73.30)},
+		{Id: "S4", Latitude: floatPtr(40.70), Longitude: floatPtr(-73.20)},
+	})
 
 	server := models.ObaServer{ServerName: "multi", ObaBaseURL: "https://fallback.example"}
 	boundingBoxStore := geo.NewBoundingBoxStore()
-	if err := storeStaticForServer(server, []*remoteGtfs.Static{bundle}, NewStaticStore(), boundingBoxStore, NewRouteAgencyIndex(), nil, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
+	if err := storeStaticForServer(server, []*remoteGtfs.Static{bundleA, bundleB, bundleC}, NewStaticStore(), boundingBoxStore, NewRouteAgencyIndex(), nil, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
 		t.Fatalf("storeStaticForServer: %v", err)
 	}
 
-	agencyA, ok := boundingBoxStore.Get(models.ServerKey(server.ObaBaseURL, "agency-A"))
-	if !ok {
-		t.Fatal("expected agency-A bounding box")
-	}
 	agencyB, ok := boundingBoxStore.Get(models.ServerKey(server.ObaBaseURL, "agency-B"))
 	if !ok {
 		t.Fatal("expected agency-B fallback bounding box")
 	}
-	if agencyA != agencyB {
-		t.Fatalf("expected agency-B to fall back to the union box, got %+v vs %+v", agencyB, agencyA)
+	want := geo.BoundingBox{MinLat: 40.60, MaxLat: 47.70, MinLon: -122.30, MaxLon: -73.20}
+	if agencyB != want {
+		t.Fatalf("expected agency-B to fall back to union box %+v, got %+v", want, agencyB)
+	}
+}
+
+func TestStoreStaticForServerObservesBundleWithoutUsableCoordinates(t *testing.T) {
+	bundle := makeSyntheticBundle(t, "declared-agency", "Declared Agency", "https://a.example", []remoteGtfs.Stop{{Id: "S1"}})
+	server := models.ObaServer{ServerName: "invalid", ObaBaseURL: "https://invalid.example", AgencyID: "configured-agency"}
+	observed := 0
+	var logBuffer bytes.Buffer
+	observer := func(models.ObaServer, string, string, *models.StaticData) {
+		observed++
+	}
+
+	logger := slog.New(slog.NewTextHandler(&logBuffer, nil))
+	if err := storeStaticForServer(server, []*remoteGtfs.Static{bundle}, NewStaticStore(), geo.NewBoundingBoxStore(), NewRouteAgencyIndex(), observer, logger); err != nil {
+		t.Fatalf("storeStaticForServer: %v", err)
+	}
+	if observed != 1 {
+		t.Fatalf("expected observer once despite bounding-box failure, got %d calls", observed)
+	}
+	if !bytes.Contains(logBuffer.Bytes(), []byte("Could not compute agency bounding box")) {
+		t.Fatalf("expected agency bounding-box error to be logged, got %q", logBuffer.String())
+	}
+}
+
+func TestComputeAgencyBoundingBoxesReportsCoordinateErrors(t *testing.T) {
+	bundle := makeSyntheticBundle(t, "agency-A", "Agency A", "https://a.example", []remoteGtfs.Stop{{Id: "S1"}})
+	merged, _ := mergeStaticAndDiscoverAgencies([]*remoteGtfs.Static{bundle})
+
+	boxes, errorsByAgency := computeAgencyBoundingBoxes(merged)
+	if _, ok := boxes["agency-A"]; ok {
+		t.Fatal("expected no bounding box for stops without coordinates")
+	}
+	if errorsByAgency["agency-A"] == nil {
+		t.Fatal("expected agency coordinate error to be reported")
 	}
 }
 

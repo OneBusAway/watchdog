@@ -151,7 +151,15 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 	// fallback when an agency has no usable stops. Both union and agency boxes
 	// use the collision-aware index built during merge, before storage.
 	unionBox, unionBoxErr := geo.ComputeBoundingBox(allStops(mergedbundle))
-	agencyBoxes := computeAgencyBoundingBoxes(mergedbundle)
+	agencyBoxes, agencyBoxErrors := computeAgencyBoundingBoxes(mergedbundle)
+	if !server.IsServerScoped() {
+		for agencyID, err := range agencyBoxErrors {
+			if agencyID != server.AgencyID {
+				logger.Error("Could not compute agency bounding box",
+					"server_key", models.ServerKey(server.ObaBaseURL, agencyID), "agency_id", agencyID, "error", err)
+			}
+		}
+	}
 
 	// Per-agency storage. The merged StaticData is pointer-shared across all
 	// serverKeys — one allocation regardless of how many agencies the server
@@ -163,15 +171,27 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 
 		bbox, ok := agencyBoxes[declaredAgency.AgencyID]
 		if !ok {
+			agencyBoxErr, agencyBoxFailed := agencyBoxErrors[declaredAgency.AgencyID]
 			if unionBoxErr != nil {
-				logger.Error("Could not compute bounding box", "server_key", serverKey, "error", unionBoxErr)
-				continue
+				if agencyBoxFailed {
+					logger.Error("Could not compute agency bounding box",
+						"server_key", serverKey, "agency_id", declaredAgency.AgencyID, "error", agencyBoxErr)
+				}
+				logger.Error("Could not compute server-wide bounding box", "server_key", serverKey, "error", unionBoxErr)
+			} else {
+				if agencyBoxFailed {
+					logger.Warn("Could not compute agency bounding box; using server-wide bounding box",
+						"server_key", serverKey, "agency_id", declaredAgency.AgencyID, "error", agencyBoxErr)
+				} else {
+					logger.Warn("No stops associated with agency; using server-wide bounding box",
+						"server_key", serverKey, "agency_id", declaredAgency.AgencyID)
+				}
+				bbox = unionBox
+				boundingBoxStore.Set(serverKey, bbox)
 			}
-			logger.Warn("No stops associated with agency; using server-wide bounding box",
-				"server_key", serverKey, "agency_id", declaredAgency.AgencyID)
-			bbox = unionBox
+		} else {
+			boundingBoxStore.Set(serverKey, bbox)
 		}
-		boundingBoxStore.Set(serverKey, bbox)
 		// The server-scoped key intentionally remains the union box because
 		// the vehicle pass uses it for unattributed vehicles.
 		if server.IsServerScoped() && unionBoxErr == nil {
@@ -216,14 +236,16 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 
 // computeAgencyBoundingBoxes computes one bounding box per agency from the
 // collision-aware stop index. Every distinct location for an agency contributes
-// to its box, including locations sharing a stop ID.
+// to its box, including locations sharing a stop ID. Errors are returned by
+// agency so callers can distinguish invalid coordinates from no associated stops.
 //
 // The returned boxes are transient; the static store continues to hold one
 // merged StaticData pointer shared by every agency. Using the index rather than
 // the flattened Stops slice prevents a collision in one feed from shrinking
 // another agency's bbox.
-func computeAgencyBoundingBoxes(staticData *models.StaticData) map[string]geo.BoundingBox {
+func computeAgencyBoundingBoxes(staticData *models.StaticData) (map[string]geo.BoundingBox, map[string]error) {
 	boxes := make(map[string]geo.BoundingBox, len(staticData.StopsByAgency))
+	errorsByAgency := make(map[string]error)
 	for agencyID, recordedLocationsByID := range staticData.StopsByAgency {
 		if agencyID == "" {
 			continue // sentinel bucket: only feeds the server-wide union, not a real agency
@@ -232,11 +254,14 @@ func computeAgencyBoundingBoxes(staticData *models.StaticData) map[string]geo.Bo
 		for _, recordedLocations := range recordedLocationsByID {
 			stops = append(stops, recordedLocations...)
 		}
-		if bbox, err := geo.ComputeBoundingBox(stops); err == nil {
-			boxes[agencyID] = bbox
+		bbox, err := geo.ComputeBoundingBox(stops)
+		if err != nil {
+			errorsByAgency[agencyID] = err
+			continue
 		}
+		boxes[agencyID] = bbox
 	}
-	return boxes
+	return boxes, errorsByAgency
 }
 
 // allStops returns the unique physical locations represented by the agency
