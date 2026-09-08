@@ -349,11 +349,11 @@ func TestReconcileReportsInvalidServerOnce(t *testing.T) {
 	store := NewDroppedServersStore()
 
 	invalid := validServer()
-	invalid.ID = 7
-	invalid.GtfsUrl = ""
+	invalid.GtfsStaticFeeds = nil
+	raw := mustRawServer(t, invalid)
 
 	for i := 0; i < 3; i++ {
-		if got := store.Reconcile([]models.ObaServer{invalid}); len(got) != 0 {
+		if got := store.Reconcile([]json.RawMessage{raw}, testLogger()); len(got) != 0 {
 			t.Fatalf("iteration %d: expected invalid server dropped, got %d valid", i, len(got))
 		}
 	}
@@ -365,7 +365,7 @@ func TestReconcileReportsInvalidServerOnce(t *testing.T) {
 	if events[0].Level != sentry.LevelError {
 		t.Errorf("expected error level, got %s", events[0].Level)
 	}
-	if events[0].Tags["server_id"] != "7" || events[0].Tags["server_name"] != invalid.Name {
+	if events[0].Tags["agency_id"] != invalid.AgencyID || events[0].Tags["server_name"] != invalid.ServerName {
 		t.Errorf("unexpected tags: %v", events[0].Tags)
 	}
 }
@@ -377,17 +377,16 @@ func TestReconcileReportsRecoveryOnce(t *testing.T) {
 	store := NewDroppedServersStore()
 
 	invalid := validServer()
-	invalid.ID = 7
-	invalid.GtfsUrl = ""
+	invalid.GtfsStaticFeeds = nil
 
-	if got := store.Reconcile([]models.ObaServer{invalid}); len(got) != 0 {
+	if got := store.Reconcile([]json.RawMessage{mustRawServer(t, invalid)}, testLogger()); len(got) != 0 {
 		t.Fatal("expected invalid server dropped")
 	}
 
 	recovered := invalid
-	recovered.GtfsUrl = "https://gtfs.example.com"
+	recovered.GtfsStaticFeeds = []string{"https://gtfs.example.com"}
 	for i := 0; i < 2; i++ {
-		if got := store.Reconcile([]models.ObaServer{recovered}); len(got) != 1 {
+		if got := store.Reconcile([]json.RawMessage{mustRawServer(t, recovered)}, testLogger()); len(got) != 1 {
 			t.Fatalf("iteration %d: expected recovered server kept, got %d valid", i, len(got))
 		}
 	}
@@ -411,18 +410,18 @@ func TestReconcileReportsPrunedServerAgain(t *testing.T) {
 	store := NewDroppedServersStore()
 
 	invalid := validServer()
-	invalid.ID = 7
-	invalid.GtfsUrl = ""
+	invalid.GtfsStaticFeeds = nil
+	raw := mustRawServer(t, invalid)
 
-	if got := store.Reconcile([]models.ObaServer{invalid}); len(got) != 0 {
+	if got := store.Reconcile([]json.RawMessage{raw}, testLogger()); len(got) != 0 {
 		t.Fatal("expected invalid server dropped")
 	}
 
-	if got := store.Reconcile(nil); len(got) != 0 {
+	if got := store.Reconcile(nil, testLogger()); len(got) != 0 {
 		t.Fatal("expected no servers")
 	}
 
-	if got := store.Reconcile([]models.ObaServer{invalid}); len(got) != 0 {
+	if got := store.Reconcile([]json.RawMessage{raw}, testLogger()); len(got) != 0 {
 		t.Fatal("expected invalid server dropped")
 	}
 
@@ -438,13 +437,12 @@ func TestReconcileReportsNoCredentials(t *testing.T) {
 	store := NewDroppedServersStore()
 
 	invalid := validServer()
-	invalid.ID = 7
 	invalid.ObaApiKey = "super-secret-key"
-	invalid.GtfsRtApiKey = "gtfs-secret"
-	invalid.GtfsRtApiValue = "gtfs-value"
-	invalid.GtfsUrl = ""
+	invalid.GtfsRTFeeds[0].GtfsRTAPIKey = "gtfs-secret"
+	invalid.GtfsRTFeeds[0].GtfsRTAPIValue = "gtfs-value"
+	invalid.GtfsStaticFeeds = nil
 
-	store.Reconcile([]models.ObaServer{invalid})
+	store.Reconcile([]json.RawMessage{mustRawServer(t, invalid)}, testLogger())
 
 	events := rec.Events()
 	if len(events) != 1 {
@@ -466,11 +464,20 @@ func TestReconcileReportsNoCredentials(t *testing.T) {
 		}
 	}
 
-	for _, want := range []string{"server_id", "server_name"} {
+	for _, want := range []string{"agency_id", "server_name"} {
 		if _, ok := event.Tags[want]; !ok {
 			t.Errorf("expected tag %q to be present, got %v", want, event.Tags)
 		}
 	}
+}
+
+func mustRawServer(t *testing.T, server models.ObaServer) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(server)
+	if err != nil {
+		t.Fatalf("marshal server: %v", err)
+	}
+	return raw
 }
 
 // recordingTransport captures Sentry events in memory instead of sending them.
