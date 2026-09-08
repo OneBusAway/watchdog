@@ -430,6 +430,41 @@ func TestReconcileReportsPrunedServerAgain(t *testing.T) {
 	}
 }
 
+func TestReconcileReportsDuplicateAgainAfterItIsFixed(t *testing.T) {
+	rec := report.CaptureSentry(t)
+	store := NewDroppedServersStore()
+	first := validServer()
+	duplicate := first
+	duplicate.AgencyName = "Duplicate Agency"
+	one := []json.RawMessage{mustRawServer(t, first)}
+	two := []json.RawMessage{mustRawServer(t, first), mustRawServer(t, duplicate)}
+
+	store.Reconcile(two, testLogger())
+	store.Reconcile(one, testLogger())
+	store.Reconcile(two, testLogger())
+
+	if events := rec.Events(); len(events) != 2 {
+		t.Fatalf("expected duplicate to report before and after the fixed cycle, got %d events", len(events))
+	}
+}
+
+func TestReconcileRejectsDuplicatesBeforeValidation(t *testing.T) {
+	rec := report.CaptureSentry(t)
+	store := NewDroppedServersStore()
+	first := validServer()
+	first.GtfsStaticFeeds = nil
+	duplicate := first
+	duplicate.AgencyName = "Duplicate Agency"
+
+	got := store.Reconcile([]json.RawMessage{mustRawServer(t, first), mustRawServer(t, duplicate)}, testLogger())
+	if len(got) != 0 {
+		t.Fatalf("expected both invalid duplicate entries to be dropped, got %d", len(got))
+	}
+	if events := rec.Events(); len(events) != 2 {
+		t.Fatalf("expected one validation report and one duplicate report, got %d", len(events))
+	}
+}
+
 // Sentry reports for dropped servers must carry only identifying tags, never
 // credentials such as API keys.
 func TestReconcileReportsNoCredentials(t *testing.T) {
