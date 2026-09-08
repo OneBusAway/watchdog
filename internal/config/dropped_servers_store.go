@@ -141,7 +141,10 @@ func serverIdentityFromRaw(raw json.RawMessage) (string, map[string]string, map[
 	if fields.AgencyName == "" {
 		fields.AgencyName = fields.LegacyName
 	}
-	tags := make(map[string]string, 2)
+	tags := make(map[string]string, 3)
+	if fields.ServerName != "" {
+		tags["server_name"] = fields.ServerName
+	}
 	if fields.AgencyName != "" {
 		tags["agency_name"] = fields.AgencyName
 	}
