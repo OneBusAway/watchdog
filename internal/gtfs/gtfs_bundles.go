@@ -243,6 +243,7 @@ func computeAgencyBoundingBoxes(staticData *models.StaticData) map[string]geo.Bo
 // physical stops.
 func allStops(staticData *models.StaticData) []remoteGtfs.Stop {
 	var stops []remoteGtfs.Stop
+	// "<stopID>\x00<lat>\x00<lon>" → struct{} (dedup)
 	seen := make(map[string]struct{})
 	for _, recordedLocationsByID := range staticData.StopsByAgency {
 		for _, recordedLocations := range recordedLocationsByID {
@@ -287,7 +288,9 @@ func mergeStaticAndDiscoverAgencies(bundles []*remoteGtfs.Static) (*models.Stati
 		return &models.StaticData{}, nil
 	}
 	staticData := &models.StaticData{StopsByAgency: make(map[string]map[string][]remoteGtfs.Stop)}
+	// stopID → stopLocation (first occurrence kept in flattened Stops)
 	keptLocationByID := make(map[string]stopLocation)
+	// agencyID → agencyIdentity (first occurrence kept)
 	agenciesByID := make(map[string]agencyIdentity)
 	for _, staticBundle := range bundles {
 		if staticBundle == nil {
@@ -302,6 +305,8 @@ func mergeStaticAndDiscoverAgencies(bundles []*remoteGtfs.Static) (*models.Stati
 		}
 		for _, stop := range data.Stops {
 			for _, agencyID := range agencyIDs {
+				// stopID → []Stop (all distinct locations for this agency);
+				// references the shared bucket in StopsByAgency, so writes persist (maps are reference types)
 				recordedLocationsByID := staticData.StopsByAgency[agencyID]
 				if recordedLocationsByID == nil {
 					recordedLocationsByID = make(map[string][]remoteGtfs.Stop)
@@ -518,11 +523,13 @@ func getStopLocationsByIDs(serverKey string, agencyID string, stopIDs []string, 
 		return nil, err
 	}
 
+	// stopID → struct{} (requested set)
 	stopIDSet := make(map[string]struct{}, len(stopIDs))
 	for _, id := range stopIDs {
 		stopIDSet[id] = struct{}{}
 	}
 
+	// stopID → []Stop (resolved locations)
 	result := make(map[string][]remoteGtfs.Stop)
 	recordedLocationsByID, indexed := staticData.StopsByAgency[agencyID]
 	if indexed {
