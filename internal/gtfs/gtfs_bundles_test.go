@@ -1017,6 +1017,40 @@ func TestStoreStaticForServerBoundingBoxesIncludeStopCollisions(t *testing.T) {
 	}
 }
 
+func TestStoreStaticForServerUnionBoxIncludesBlankAgencyFeed(t *testing.T) {
+	// One normal feed (declares agency-A) plus a second feed whose agency.txt
+	// ships a blank agency_id. The blank feed's stops must still contribute to
+	// the server-wide union box so unattributed vehicles from that feed are
+	// validated against a box that actually covers them.
+	bundleA := makeSyntheticBundle(t, "agency-A", "Agency A", "https://a.example", []remoteGtfs.Stop{
+		{Id: "S1", Latitude: floatPtr(1), Longitude: floatPtr(2)},
+		{Id: "S2", Latitude: floatPtr(2), Longitude: floatPtr(3)},
+	})
+	bundleBlank := makeSyntheticBundle(t, "", "", "", []remoteGtfs.Stop{
+		{Id: "B1", Latitude: floatPtr(5), Longitude: floatPtr(6)},
+		{Id: "B2", Latitude: floatPtr(6), Longitude: floatPtr(7)},
+	})
+
+	server := models.ObaServer{ServerName: "mixed", ObaBaseURL: "https://blank.example"}
+	bounds := geo.NewBoundingBoxStore()
+	if err := storeStaticForServer(server, []*remoteGtfs.Static{bundleA, bundleBlank}, NewStaticStore(), bounds, NewRouteAgencyIndex(), nil, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
+		t.Fatalf("storeStaticForServer: %v", err)
+	}
+
+	want := geo.BoundingBox{MinLat: 1, MaxLat: 6, MinLon: 2, MaxLon: 7}
+	if got, ok := bounds.Get(server.ServerKey()); !ok || got != want {
+		t.Fatalf("expected union bbox covering blank feed %+v, got %+v (present=%t)", want, got, ok)
+	}
+	// agency-A's own box must not have absorbed the blank feed's coverage.
+	agencyA, ok := bounds.Get(models.ServerKey(server.ObaBaseURL, "agency-A"))
+	if !ok {
+		t.Fatal("expected agency-A bounding box")
+	}
+	if agencyA == want {
+		t.Fatalf("agency-A box should not include blank feed coverage, got %+v", agencyA)
+	}
+}
+
 // TestStoreStaticForServerSkipsServerScopedBoxInAgencyMode keeps agency-mode
 // from accumulating a key nothing reads: an entry that names its agency stores
 // only that agency's box.
