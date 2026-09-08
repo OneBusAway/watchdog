@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"net/http"
 	"testing"
 	"time"
@@ -83,7 +84,7 @@ func TestCountActiveVehiclesForAgency(t *testing.T) {
 		option.WithAPIKey(server.ObaApiKey),
 		option.WithBaseURL(server.ObaBaseURL),
 	)
-	count, err := countActiveVehiclesForAgency(client, server)
+	count, err := countActiveVehiclesForAgency(context.Background(), client, server)
 	if err != nil || count != 2 {
 		t.Fatalf("count=%d err=%v", count, err)
 	}

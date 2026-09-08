@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -71,7 +72,7 @@ type OBAMetrics struct {
 // Returns:
 //   - error: any error encountered during request or decoding.
 
-func fetchObaAPIMetrics(agencyID, agencyName, serverName, serverBaseUrl, apiKey string, client *http.Client, staticStore *gtfs.StaticStore, logger *slog.Logger, unmatchedStopTracker *UnmatchedStopTracker) error {
+func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, serverBaseUrl, apiKey string, client *http.Client, staticStore *gtfs.StaticStore, logger *slog.Logger, unmatchedStopTracker *UnmatchedStopTracker) error {
 	if client == nil {
 		err := fmt.Errorf("nil http client passed to fetchObaAPIMetrics for agency %s", agencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -91,7 +92,11 @@ func fetchObaAPIMetrics(agencyID, agencyName, serverName, serverBaseUrl, apiKey 
 
 	logger.Info("Fetching metrics from OBA server", "agency_id", agencyID, "server_name", serverName, "url", sanitizedURL)
 
-	resp, err := client.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create metrics request: %w", err)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		err = fmt.Errorf("failed to fetch metrics from %s: %v", sanitizedURL, err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{

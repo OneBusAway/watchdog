@@ -324,7 +324,11 @@ func TestRefreshConfig(t *testing.T) {
 	copy(originalConfig, cfg.Servers)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	done := make(chan struct{})
+	defer func() {
+		cancel()
+		<-done
+	}()
 
 	// onUpdated runs on refreshConfig's goroutine, so hand the payload back over
 	// a channel rather than sharing a slice with the test body. Waiting on the
@@ -332,12 +336,15 @@ func TestRefreshConfig(t *testing.T) {
 	// calls cfg.UpdateConfig before onUpdated, so once this fires the new
 	// configuration is already applied.
 	callbackServers := make(chan []models.ObaServer, 1)
-	go refreshConfig(ctx, client, mockServer.URL, "testuser", "testpass", cfg, testLogger, 100*time.Millisecond, 1, func(servers []models.ObaServer) {
-		select {
-		case callbackServers <- servers:
-		default: // later refreshes tell us nothing new
-		}
-	})
+	go func() {
+		defer close(done)
+		refreshConfig(ctx, client, mockServer.URL, "testuser", "testpass", cfg, testLogger, 100*time.Millisecond, 1, func(servers []models.ObaServer) {
+			select {
+			case callbackServers <- servers:
+			default: // later refreshes tell us nothing new
+			}
+		})
+	}()
 
 	var refreshed []models.ObaServer
 	select {
@@ -401,17 +408,24 @@ func TestRefreshConfigKeepsPreviousConfigWhenResponseIsEmpty(t *testing.T) {
 	cfg := NewConfig(4000, "testing", []models.ObaServer{existing})
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	done := make(chan struct{})
+	defer func() {
+		cancel()
+		<-done
+	}()
 
 	callbackFired := make(chan struct{}, 1)
-	go refreshConfig(ctx, ts.Client(), ts.URL, "", "", cfg,
-		slog.New(slog.NewTextHandler(io.Discard, nil)), 10*time.Millisecond, 1,
-		func(updated []models.ObaServer) {
-			select {
-			case callbackFired <- struct{}{}:
-			default:
-			}
-		})
+	go func() {
+		defer close(done)
+		refreshConfig(ctx, ts.Client(), ts.URL, "", "", cfg,
+			slog.New(slog.NewTextHandler(io.Discard, nil)), 10*time.Millisecond, 1,
+			func(updated []models.ObaServer) {
+				select {
+				case callbackFired <- struct{}{}:
+				default:
+				}
+			})
+	}()
 
 	select {
 	case <-served:

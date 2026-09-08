@@ -139,9 +139,7 @@ func emitAgencyPositions(server models.ObaServer, agencies []models.ObaServer, p
 // retrieves the list of vehicles, and reports the count to the AgencyActiveVehiclesGauge Prometheus metric.
 //
 // This function fetches live vehicle data from the OBA API using the agency ID.
-func countActiveVehiclesForAgency(client *onebusaway.Client, server models.ObaServer) (int, error) {
-	ctx := context.Background()
-
+func countActiveVehiclesForAgency(ctx context.Context, client *onebusaway.Client, server models.ObaServer) (int, error) {
 	response, err := client.VehiclesForAgency.List(ctx, server.AgencyID, onebusaway.VehiclesForAgencyListParams{})
 
 	if err != nil {

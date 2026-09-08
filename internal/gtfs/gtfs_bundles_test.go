@@ -40,9 +40,16 @@ func TestRefreshGTFSBundles(t *testing.T) {
 	boundingBoxStore := geo.NewBoundingBoxStore()
 	staticStore := NewStaticStore()
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	done := make(chan struct{})
+	defer func() {
+		cancel()
+		<-done
+	}()
 	client := &http.Client{Timeout: 10 * time.Second}
-	go refreshGTFSBundles(ctx, client, func() []models.ObaServer { return servers }, logger, 10*time.Millisecond, boundingBoxStore, staticStore, NewRouteAgencyIndex(), nil, 1)
+	go func() {
+		defer close(done)
+		refreshGTFSBundles(ctx, client, func() []models.ObaServer { return servers }, logger, 10*time.Millisecond, boundingBoxStore, staticStore, NewRouteAgencyIndex(), nil, 1)
+	}()
 
 	time.Sleep(15 * time.Millisecond)
 
@@ -365,7 +372,7 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 			Timeout: 5 * time.Second,
 		}
 		realtimeStore := NewRealtimeStore()
-		err := fetchAndStoreGTFSRTFeed(server, realtimeStore, client)
+		err := fetchAndStoreGTFSRTFeed(context.Background(), server, realtimeStore, client)
 		if err != nil {
 			t.Fatalf("Expected no error, got: %v", err)
 		}
@@ -441,7 +448,7 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 		}
 		realtimeStore := NewRealtimeStore()
 
-		err := fetchAndStoreGTFSRTFeed(server, realtimeStore, client)
+		err := fetchAndStoreGTFSRTFeed(context.Background(), server, realtimeStore, client)
 		if err == nil {
 			t.Error("Expected error due to invalid URL, got nil")
 		}
@@ -459,7 +466,7 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 			Timeout: 5 * time.Second,
 		}
 		realtimeStore := NewRealtimeStore()
-		err := fetchAndStoreGTFSRTFeed(server, realtimeStore, client)
+		err := fetchAndStoreGTFSRTFeed(context.Background(), server, realtimeStore, client)
 		if err == nil {
 			t.Error("Expected error when accessing closed server, got nil")
 		}
@@ -475,11 +482,11 @@ func TestFetchAndStoreGTFSRTFeedKeepsAgenciesIsolated(t *testing.T) {
 	first := models.ObaServer{AgencyID: "agency-1", ObaBaseURL: "https://first.example.com", GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: mockServer.URL}}}
 	second := models.ObaServer{AgencyID: "agency-2", ObaBaseURL: "https://second.example.com", GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: mockServer.URL}}}
 
-	if err := fetchAndStoreGTFSRTFeed(first, store, client); err != nil {
+	if err := fetchAndStoreGTFSRTFeed(context.Background(), first, store, client); err != nil {
 		t.Fatalf("fetch first agency feed: %v", err)
 	}
 	firstData := store.Get(first.ServerKey())
-	if err := fetchAndStoreGTFSRTFeed(second, store, client); err != nil {
+	if err := fetchAndStoreGTFSRTFeed(context.Background(), second, store, client); err != nil {
 		t.Fatalf("fetch second agency feed: %v", err)
 	}
 	if firstData == nil || store.Get(second.ServerKey()) == nil {
@@ -503,11 +510,11 @@ func TestFetchAndStoreGTFSRTFeedKeepsDistinctServersWithSameAgencyIDIsolated(t *
 		t.Fatalf("distinct deployments must not share a server key, got %q for both", first.ServerKey())
 	}
 
-	if err := fetchAndStoreGTFSRTFeed(first, store, client); err != nil {
+	if err := fetchAndStoreGTFSRTFeed(context.Background(), first, store, client); err != nil {
 		t.Fatalf("fetch first deployment feed: %v", err)
 	}
 	firstData := store.Get(first.ServerKey())
-	if err := fetchAndStoreGTFSRTFeed(second, store, client); err != nil {
+	if err := fetchAndStoreGTFSRTFeed(context.Background(), second, store, client); err != nil {
 		t.Fatalf("fetch second deployment feed: %v", err)
 	}
 	if firstData == nil || store.Get(second.ServerKey()) == nil {
@@ -538,7 +545,7 @@ func TestFetchAndStoreGTFSRTFeedKeepsSameIDAcrossFeeds(t *testing.T) {
 	}
 	client := &http.Client{Timeout: 5 * time.Second}
 	store := NewRealtimeStore()
-	if err := fetchAndStoreGTFSRTFeed(server, store, client); err != nil {
+	if err := fetchAndStoreGTFSRTFeed(context.Background(), server, store, client); err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
 
@@ -642,7 +649,7 @@ func TestFetchAndStoreGTFSRTFeedSingleFetchUnderServerKey(t *testing.T) {
 	}
 
 	store := NewRealtimeStore()
-	if err := fetchAndStoreGTFSRTFeed(server, store, client); err != nil {
+	if err := fetchAndStoreGTFSRTFeed(context.Background(), server, store, client); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -682,7 +689,7 @@ func TestFetchAndStoreGTFSRTFeedAgencyModeUsesAgencyKey(t *testing.T) {
 	}
 	store := NewRealtimeStore()
 
-	if err := fetchAndStoreGTFSRTFeed(server, store, client); err != nil {
+	if err := fetchAndStoreGTFSRTFeed(context.Background(), server, store, client); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if rt.calls != 1 {

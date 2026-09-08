@@ -28,22 +28,30 @@ func TestRefreshGTFSBundlesReadsLiveConfig(t *testing.T) {
 	var (
 		firstTickOnce sync.Once
 		addedOnce     sync.Once
+		requests      sync.WaitGroup
 		firstTick     = make(chan struct{})
 		sawAdded      = make(chan struct{})
 	)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		defer requests.Done()
+
+		var signal chan struct{}
 		switch r.URL.Path {
 		case "/initial.zip":
-			firstTickOnce.Do(func() { close(firstTick) })
+			signal = firstTick
 		case "/added.zip":
-			addedOnce.Do(func() { close(sawAdded) })
+			signal = sawAdded
 		}
 		if _, err := w.Write(bundle); err != nil {
 			t.Errorf("write GTFS fixture: %v", err)
 		}
+		if signal == firstTick {
+			firstTickOnce.Do(func() { close(firstTick) })
+		} else if signal == sawAdded {
+			addedOnce.Do(func() { close(sawAdded) })
+		}
 	}))
-	defer ts.Close()
-	defer http.DefaultClient.CloseIdleConnections()
 
 	// The supplier starts out with one server and gains a second one, exactly
 	// as a config refresh would.
@@ -70,7 +78,12 @@ func TestRefreshGTFSBundlesReadsLiveConfig(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	defer func() {
+		cancel()
+		requests.Wait()
+		ts.Close()
+		http.DefaultClient.CloseIdleConnections()
+	}()
 
 	go refreshGTFSBundles(ctx, ts.Client(), servers, slog.New(slog.NewTextHandler(io.Discard, nil)),
 		10*time.Millisecond, geo.NewBoundingBoxStore(), NewStaticStore(), NewRouteAgencyIndex(), nil, 1)

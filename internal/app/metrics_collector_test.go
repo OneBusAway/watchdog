@@ -53,7 +53,7 @@ func TestCollectMetricsForServer(t *testing.T) {
 
 	testServer := app.ConfigService.Config.Servers[0]
 
-	app.CollectMetricsForServer(testServer)
+	app.CollectMetricsForServer(context.Background(), testServer)
 
 	getMetricsForTesting(t, metrics.ObaApiStatus)
 }
