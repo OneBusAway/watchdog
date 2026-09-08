@@ -10,12 +10,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/getsentry/sentry-go"
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/report"
 )
 
 // validServer returns a fully-populated server that should pass validation.
@@ -345,7 +345,7 @@ func TestDecodeServers(t *testing.T) {
 // A server that stays invalid across refresh cycles must be reported to Sentry
 // exactly once, not once per cycle.
 func TestReconcileReportsInvalidServerOnce(t *testing.T) {
-	rec := captureSentry(t)
+	rec := report.CaptureSentry(t)
 	store := NewDroppedServersStore()
 
 	invalid := validServer()
@@ -373,7 +373,7 @@ func TestReconcileReportsInvalidServerOnce(t *testing.T) {
 // When a previously dropped server becomes valid, exactly one info-level
 // recovery report is emitted and no further invalid reports follow.
 func TestReconcileReportsRecoveryOnce(t *testing.T) {
-	rec := captureSentry(t)
+	rec := report.CaptureSentry(t)
 	store := NewDroppedServersStore()
 
 	invalid := validServer()
@@ -406,7 +406,7 @@ func TestReconcileReportsRecoveryOnce(t *testing.T) {
 // A reported server that disappears from the config is pruned; if it later
 // reappears invalid, it is a fresh state and gets reported again.
 func TestReconcileReportsPrunedServerAgain(t *testing.T) {
-	rec := captureSentry(t)
+	rec := report.CaptureSentry(t)
 	store := NewDroppedServersStore()
 
 	invalid := validServer()
@@ -433,7 +433,7 @@ func TestReconcileReportsPrunedServerAgain(t *testing.T) {
 // Sentry reports for dropped servers must carry only identifying tags, never
 // credentials such as API keys.
 func TestReconcileReportsNoCredentials(t *testing.T) {
-	rec := captureSentry(t)
+	rec := report.CaptureSentry(t)
 	store := NewDroppedServersStore()
 
 	invalid := validServer()
@@ -478,46 +478,4 @@ func mustRawServer(t *testing.T, server models.ObaServer) json.RawMessage {
 		t.Fatalf("marshal server: %v", err)
 	}
 	return raw
-}
-
-// recordingTransport captures Sentry events in memory instead of sending them.
-type recordingTransport struct {
-	mu     sync.Mutex
-	events []*sentry.Event
-}
-
-func (t *recordingTransport) Configure(_ sentry.ClientOptions) {}
-func (t *recordingTransport) Close()                           {}
-
-func (t *recordingTransport) SendEvent(event *sentry.Event) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.events = append(t.events, event)
-}
-
-func (t *recordingTransport) Flush(_ time.Duration) bool { return true }
-
-func (t *recordingTransport) Events() []*sentry.Event {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return append([]*sentry.Event(nil), t.events...)
-}
-
-// captureSentry binds a recording transport to the current hub for the duration
-// of the test so Reconcile's Sentry reports can be asserted.
-func captureSentry(t *testing.T) *recordingTransport {
-	t.Helper()
-	rec := &recordingTransport{}
-	client, err := sentry.NewClient(sentry.ClientOptions{
-		Dsn:       "https://public@sentry.example.com/1",
-		Transport: rec,
-	})
-	if err != nil {
-		t.Fatalf("sentry.NewClient: %v", err)
-	}
-	hub := sentry.CurrentHub()
-	prev := hub.Client()
-	hub.BindClient(client)
-	t.Cleanup(func() { hub.BindClient(prev) })
-	return rec
 }
