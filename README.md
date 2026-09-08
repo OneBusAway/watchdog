@@ -156,7 +156,7 @@ Watchdog used to accept a flat, single-server config schema. Legacy (v1) configs
 
 When a v1 entry is loaded, Watchdog maps it like this:
 
-- `name` → `agency_name`
+- `name` → `server_name`; when `agency_id` is present, it also populates `agency_name`
 - `gtfs_url` → a single-entry `gtfs_static_feeds`
 - `vehicle_position_url` / `trip_update_url` → the matching `gtfs_rt_feeds` entries
 - `gtfs_rt_api_key` / `gtfs_rt_api_value` → the per-feed auth fields
