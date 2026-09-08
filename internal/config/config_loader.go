@@ -61,14 +61,14 @@ func ValidateConfigFlags(configFile, configURL *string) error {
 //     own loop, blocking the next refresh for as long as it takes, so anything
 //     it reads or writes must be safe for concurrent access with the collection
 //     goroutines. app.OnConfigUpdated is the reference implementation.
-func refreshConfig(ctx context.Context, client *http.Client, configURL, configAuthUser, configAuthPass string, cfg *Config, logger *slog.Logger, interval time.Duration, maxRetries int, onUpdated func([]models.ObaServer)) {
+func refreshConfig(ctx context.Context, client *http.Client, configURL, configAuthUser, configAuthPass string, cfg *Config, droppedStore *DroppedServersStore, logger *slog.Logger, interval time.Duration, maxRetries int, onUpdated func([]models.ObaServer)) {
 	for {
 		select {
 		case <-ctx.Done():
 			logger.Info("Stopping config refresh routine")
 			return
 		default:
-			newServers, err := loadConfigFromURL(ctx, client, configURL, configAuthUser, configAuthPass, maxRetries, logger)
+			newServers, err := loadConfigFromURL(ctx, client, configURL, configAuthUser, configAuthPass, maxRetries, logger, droppedStore)
 			if err != nil {
 				report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 					Tags:  utils.MakeMap("config_url", configURL),
@@ -122,7 +122,7 @@ func refreshConfig(ctx context.Context, client *http.Client, configURL, configAu
 //
 // This function is used when the application is configured to load its server list
 // from a static file using the --config-file flag.
-func loadConfigFromFile(filePath string, logger *slog.Logger) ([]models.ObaServer, error) {
+func loadConfigFromFile(filePath string, logger *slog.Logger, droppedStore *DroppedServersStore) ([]models.ObaServer, error) {
 	if filepath.Base(filePath) != "config.json" {
 		return nil, fmt.Errorf("invalid config file name: %s (only config.json is allowed)", filePath)
 	}
@@ -146,7 +146,7 @@ func loadConfigFromFile(filePath string, logger *slog.Logger) ([]models.ObaServe
 		return nil, fmt.Errorf("failed to unmarshal JSON: %v", err)
 	}
 
-	return decodeServers(rawEntries, logger), nil
+	return decodeServers(rawEntries, logger, droppedStore), nil
 }
 
 // loadConfigFromURL fetches a JSON configuration from a remote HTTP(S) endpoint,
@@ -160,7 +160,7 @@ func loadConfigFromFile(filePath string, logger *slog.Logger) ([]models.ObaServe
 // with increasing delays, up to `maxRetries` attempts.
 //
 // Errors are logged and reported to Sentry for observability.
-func loadConfigFromURL(ctx context.Context, client *http.Client, url, authUser, authPass string, maxRetries int, logger *slog.Logger) ([]models.ObaServer, error) {
+func loadConfigFromURL(ctx context.Context, client *http.Client, url, authUser, authPass string, maxRetries int, logger *slog.Logger, droppedStore *DroppedServersStore) ([]models.ObaServer, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -212,5 +212,5 @@ func loadConfigFromURL(ctx context.Context, client *http.Client, url, authUser, 
 		return nil, fmt.Errorf("failed to unmarshal JSON: %v", err)
 	}
 
-	return decodeServers(rawEntries, logger), nil
+	return decodeServers(rawEntries, logger, droppedStore), nil
 }

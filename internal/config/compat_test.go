@@ -225,7 +225,7 @@ func TestLoadConfigFromFileLegacy(t *testing.T) {
 		t.Fatalf("write config.json: %v", err)
 	}
 
-	servers, err := loadConfigFromFile(fp, testLogger())
+	servers, err := loadConfigFromFile(fp, testLogger(), NewDroppedServersStore())
 	if err != nil {
 		t.Fatalf("loadConfigFromFile failed: %v", err)
 	}
@@ -283,7 +283,7 @@ func TestLoadConfigFromFileMixedEntries(t *testing.T) {
 		t.Fatalf("write config.json: %v", err)
 	}
 
-	servers, err := loadConfigFromFile(fp, testLogger())
+	servers, err := loadConfigFromFile(fp, testLogger(), NewDroppedServersStore())
 	if err != nil {
 		t.Fatalf("loadConfigFromFile failed: %v", err)
 	}
@@ -317,7 +317,7 @@ func TestLoadConfigFromURLLegacy(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	servers, err := loadConfigFromURL(context.Background(), &http.Client{Timeout: 10 * time.Second}, ts.URL, "", "", 1, testLogger())
+	servers, err := loadConfigFromURL(context.Background(), &http.Client{Timeout: 10 * time.Second}, ts.URL, "", "", 1, testLogger(), NewDroppedServersStore())
 	if err != nil {
 		t.Fatalf("loadConfigFromURL failed: %v", err)
 	}

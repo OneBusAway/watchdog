@@ -153,7 +153,7 @@ func TestLoadConfigFromFileFiltersInvalidServers(t *testing.T) {
 		t.Fatalf("write config.json: %v", err)
 	}
 
-	servers, err := loadConfigFromFile(fp, testLogger())
+	servers, err := loadConfigFromFile(fp, testLogger(), NewDroppedServersStore())
 	if err != nil {
 		t.Fatalf("loadConfigFromFile failed: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestLoadConfigFromURLFiltersInvalidServers(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	servers, err := loadConfigFromURL(context.Background(), &http.Client{Timeout: 10 * time.Second}, ts.URL, "", "", 1, testLogger())
+	servers, err := loadConfigFromURL(context.Background(), &http.Client{Timeout: 10 * time.Second}, ts.URL, "", "", 1, testLogger(), NewDroppedServersStore())
 	if err != nil {
 		t.Fatalf("loadConfigFromURL failed: %v", err)
 	}
@@ -244,7 +244,7 @@ func TestDecodeServers(t *testing.T) {
 		}
 
 		// Interleave valid and invalid: valid, invalid, valid, invalid.
-		got := decodeServers(rawEntries, testLogger())
+		got := decodeServers(rawEntries, testLogger(), NewDroppedServersStore())
 
 		if len(got) != 2 {
 			t.Fatalf("expected 2 valid servers, got %d: %+v", len(got), got)
@@ -277,7 +277,7 @@ func TestDecodeServers(t *testing.T) {
 			}`),
 		}
 
-		got := decodeServers(rawEntries, logger)
+		got := decodeServers(rawEntries, logger, NewDroppedServersStore())
 		if len(got) != 1 {
 			t.Fatalf("expected 1 server after dedup, got %d", len(got))
 		}
@@ -309,7 +309,7 @@ func TestDecodeServers(t *testing.T) {
 			}`),
 		}
 
-		got := decodeServers(rawEntries, testLogger())
+		got := decodeServers(rawEntries, testLogger(), NewDroppedServersStore())
 		if len(got) != 2 {
 			t.Fatalf("expected both servers kept (distinct base URLs, shared agency_id), got %d: %+v", len(got), got)
 		}
@@ -326,14 +326,14 @@ func TestDecodeServers(t *testing.T) {
 				"agency_id": "agency-bad"
 			}`),
 		}
-		got := decodeServers(rawEntries, testLogger())
+		got := decodeServers(rawEntries, testLogger(), NewDroppedServersStore())
 		if len(got) != 0 {
 			t.Fatalf("expected 0 valid servers, got %d", len(got))
 		}
 	})
 
 	t.Run("empty input yields an empty slice", func(t *testing.T) {
-		got := decodeServers(nil, testLogger())
+		got := decodeServers(nil, testLogger(), NewDroppedServersStore())
 		if len(got) != 0 {
 			t.Fatalf("expected 0 servers, got %d", len(got))
 		}
