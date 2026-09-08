@@ -147,6 +147,13 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 		return nil
 	}
 
+	// Keep the server-wide box for the server-scoped vehicle pass and as a
+	// fallback when an agency has no usable stops. Agency boxes are computed
+	// from the raw feeds before merge deduplicates stops, while the merged
+	// StaticData remains the single shared pointer stored below.
+	unionBox, unionBoxErr := geo.ComputeBoundingBox(mergedbundle.Stops)
+	agencyBoxes := computeAgencyBoundingBoxes(bundles)
+
 	// Per-agency storage. The merged StaticData is pointer-shared across all
 	// serverKeys — one allocation regardless of how many agencies the server
 	// serves. Memory cost stays O(bundles) not O(bundles × agencies).
@@ -155,38 +162,21 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 		staticStore.Set(serverKey, mergedbundle)
 		staticStore.SetFetchTime(serverKey, time.Now().UTC())
 
-		// NOTE: ComputeBoundingBox is called over the union of all stops from
-		// all configured static feeds, and the resulting bbox is attached to
-		// every declared agency's serverKey. In server-mode (one OBA server
-		// serving multiple agencies) this makes the bbox check loose: a vehicle
-		// in agency A's service area is validated against a rectangle that
-		// covers every agency's service area combined, not just A's.
-		//
-		// The correct per-agency approach is to compute each agency's bbox
-		// from only the stops of the bundles that agency is associated with.
-		// That's not straightforward because of the many-to-many relationship
-		// between agencies and static feeds — one agency may span multiple
-		// bundles, and one bundle may cover multiple agencies.
-		//
-		// TODO: Compute bounding box per agency from the bundles that agency
-		// is associated with. Will require either (a) building a
-		// per-(agency, feed) subset of the merged bundle's stops, or (b)
-		// stopping the merge step before per-agency attribution so each agency
-		// gets its own stop slice. Either approach adds memory and complexity,
-		// so we accept the loose bbox for now.
-		bbox, bboxErr := geo.ComputeBoundingBox(mergedbundle.Stops)
-		if bboxErr != nil {
-			logger.Error("Could not compute bounding box", "server_key", serverKey, "error", bboxErr)
-		} else {
-			boundingBoxStore.Set(serverKey, bbox)
-			// Server-mode also publishes the box under the server-scoped key
-			// (empty agency_id), because the GTFS-RT vehicle pass runs once
-			// for the whole server and reads that key. The box is the union
-			// over every configured feed either way, so this is the same
-			// value, not a second computation.
-			if server.IsServerScoped() {
-				boundingBoxStore.Set(models.ServerKey(server.ObaBaseURL, ""), bbox)
+		bbox, ok := agencyBoxes[declaredAgency.AgencyID]
+		if !ok {
+			if unionBoxErr != nil {
+				logger.Error("Could not compute bounding box", "server_key", serverKey, "error", unionBoxErr)
+				continue
 			}
+			logger.Warn("No stops associated with agency; using server-wide bounding box",
+				"server_key", serverKey, "agency_id", declaredAgency.AgencyID)
+			bbox = unionBox
+		}
+		boundingBoxStore.Set(serverKey, bbox)
+		// The server-scoped key intentionally remains the union box because
+		// the vehicle pass uses it for unattributed vehicles.
+		if server.IsServerScoped() && unionBoxErr == nil {
+			boundingBoxStore.Set(models.ServerKey(server.ObaBaseURL, ""), unionBox)
 		}
 
 		if observer != nil {
@@ -223,6 +213,50 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 	}
 
 	return nil
+}
+
+// computeAgencyBoundingBoxes computes one bounding box per agency from the
+// static feeds that declare that agency. All stops in such a feed contribute to
+// the agency's box, including feeds that declare multiple agencies. The raw
+// feed stops are used rather than merged stops so a stop-id collision in
+// another feed does not remove that feed's location from this calculation.
+//
+// The returned boxes are transient; the static store continues to hold one
+// merged StaticData pointer shared by every agency.
+func computeAgencyBoundingBoxes(bundles []*remoteGtfs.Static) map[string]geo.BoundingBox {
+	stopsByAgency := make(map[string]map[string]remoteGtfs.Stop)
+	for _, bundle := range bundles {
+		if bundle == nil {
+			continue
+		}
+		for _, agency := range bundle.Agencies {
+			if agency.Id == "" {
+				continue
+			}
+			stops, ok := stopsByAgency[agency.Id]
+			if !ok {
+				stops = make(map[string]remoteGtfs.Stop)
+				stopsByAgency[agency.Id] = stops
+			}
+			for _, stop := range bundle.Stops {
+				if _, exists := stops[stop.Id]; !exists {
+					stops[stop.Id] = stop
+				}
+			}
+		}
+	}
+
+	boxes := make(map[string]geo.BoundingBox, len(stopsByAgency))
+	for agencyID, stopsByID := range stopsByAgency {
+		stops := make([]remoteGtfs.Stop, 0, len(stopsByID))
+		for _, stop := range stopsByID {
+			stops = append(stops, stop)
+		}
+		if bbox, err := geo.ComputeBoundingBox(stops); err == nil {
+			boxes[agencyID] = bbox
+		}
+	}
+	return boxes
 }
 
 // declaredAgency is the agency identity recovered from agency.txt during merge.
