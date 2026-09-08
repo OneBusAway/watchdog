@@ -225,6 +225,9 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 func computeAgencyBoundingBoxes(staticData *models.StaticData) map[string]geo.BoundingBox {
 	boxes := make(map[string]geo.BoundingBox, len(staticData.StopsByAgency))
 	for agencyID, recordedLocationsByID := range staticData.StopsByAgency {
+		if agencyID == "" {
+			continue // sentinel bucket: only feeds the server-wide union, not a real agency
+		}
 		var stops []remoteGtfs.Stop
 		for _, recordedLocations := range recordedLocationsByID {
 			stops = append(stops, recordedLocations...)
@@ -302,6 +305,12 @@ func mergeStaticAndDiscoverAgencies(bundles []*remoteGtfs.Static) (*models.Stati
 			if agency.Id != "" {
 				agencyIDs = append(agencyIDs, agency.Id)
 			}
+		}
+		// A single-agency feed may legally have a blank agency_id. Keep its
+		// stops under "" so they contribute to the server-wide union box. "" is
+		// a sentinel for server-wide aggregation only, not a real agency.
+		if len(agencyIDs) == 0 {
+			agencyIDs = []string{""}
 		}
 		for _, stop := range data.Stops {
 			for _, agencyID := range agencyIDs {
