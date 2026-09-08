@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"sync"
 	"time"
@@ -110,11 +111,17 @@ func downloadGTFSBundles(ctx context.Context, client *http.Client, servers []mod
 // route_id encountered is mapped to its owning agency_id, and the agency_name
 // is recorded for human-readable labels later.
 //
+// Bounding boxes are computed from the original source bundles before their
+// stops are merged and duplicate IDs are removed. This lets every physical
+// coordinate contribute to the appropriate agency and server-wide bounds
+// without retaining a per-agency copy of the stop set.
+//
 // observer, if non-nil, is invoked once per (server, agency) tuple after the
 // store call so the metrics layer can emit introspection gauges without the
 // gtfs package needing to import it.
 func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static, staticStore *StaticStore, boundingBoxStore *geo.BoundingBoxStore, routeAgencyIndex *RouteAgencyIndex, observer StaticBundleObserver, logger *slog.Logger) error {
 	mergedbundle, declaredAgencies := mergeStaticAndDiscoverAgencies(bundles)
+	computedBoxes := computeBoundingBoxes(bundles)
 
 	// Agency-mode: the operator named the agency, so the bundle is stored
 	// exactly once under server.ServerKey() — the same key every agency-mode
@@ -148,10 +155,12 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 	}
 
 	// Keep the server-wide box for the server-scoped vehicle pass and as a
-	// fallback when an agency has no usable stops. Both union and agency boxes
-	// use the collision-aware index built during merge, before storage.
-	unionBox, unionBoxErr := geo.ComputeBoundingBox(allStops(mergedbundle))
-	agencyBoxes, agencyBoxErrors := computeAgencyBoundingBoxes(mergedbundle)
+	// fallback when an agency has no usable stops. Bounds are computed directly
+	// from the source feeds, before duplicate stop IDs are removed from the
+	// merged bundle, so every physical location contributes without being stored
+	// in a persistent per-agency stop index.
+	unionBox, unionBoxErr := computedBoxes.union, computedBoxes.unionErr
+	agencyBoxes, agencyBoxErrors := computedBoxes.byAgency, computedBoxes.errorsByAgency
 	if !server.IsServerScoped() {
 		for agencyID, err := range agencyBoxErrors {
 			if agencyID != server.AgencyID {
@@ -162,8 +171,8 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 	}
 
 	// Per-agency storage. The merged StaticData is pointer-shared across all
-	// serverKeys — one allocation regardless of how many agencies the server
-	// serves. Memory cost stays O(bundles) not O(bundles × agencies).
+	// serverKeys. Only the four transient bounding-box extrema above are kept per
+	// agency, so stop storage does not grow with the number of declared agencies.
 	for _, declaredAgency := range storageAgencies {
 		serverKey := models.ServerKey(server.ObaBaseURL, declaredAgency.AgencyID)
 		staticStore.Set(serverKey, mergedbundle)
@@ -258,61 +267,141 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 	return nil
 }
 
-// computeAgencyBoundingBoxes computes one bounding box per agency from the
-// collision-aware stop index. Every distinct location for an agency contributes
-// to its box, including locations sharing a stop ID. Errors are returned by
-// agency so callers can distinguish invalid coordinates from no associated stops.
-//
-// The returned boxes are transient; the static store continues to hold one
-// merged StaticData pointer shared by every agency. Using the index rather than
-// the flattened Stops slice prevents a collision in one feed from shrinking
-// another agency's bbox.
-func computeAgencyBoundingBoxes(staticData *models.StaticData) (map[string]geo.BoundingBox, map[string]error) {
-	boxes := make(map[string]geo.BoundingBox, len(staticData.StopsByAgency))
-	errorsByAgency := make(map[string]error)
-	for agencyID, recordedLocationsByID := range staticData.StopsByAgency {
-		if agencyID == "" {
-			continue // sentinel bucket: only feeds the server-wide union, not a real agency
-		}
-		var stops []remoteGtfs.Stop
-		for _, recordedLocations := range recordedLocationsByID {
-			stops = append(stops, recordedLocations...)
-		}
-		bbox, err := geo.ComputeBoundingBox(stops)
-		if err != nil {
-			errorsByAgency[agencyID] = err
-			continue
-		}
-		boxes[agencyID] = bbox
-	}
-	return boxes, errorsByAgency
+// boundingBoxAccumulator incrementally computes geographic bounds without
+// retaining the stops that produced them. computeBoundingBoxes creates one for
+// the server-wide union and one for each agency declared by the source feeds.
+// Its memory use remains constant as stops are added: box holds the four
+// extrema, stopCount distinguishes an empty feed from one whose coordinates are
+// all invalid, and initialized records whether a valid coordinate was seen.
+type boundingBoxAccumulator struct {
+	box         geo.BoundingBox
+	stopCount   int
+	initialized bool
 }
 
-// allStops returns the unique physical locations represented by the agency
-// index for the server-wide union box. Locations are deduplicated across
-// agencies because the same feed may declare more than one agency, but entries
-// with different coordinates are retained because they represent different
-// physical stops.
-func allStops(staticData *models.StaticData) []remoteGtfs.Stop {
-	var stops []remoteGtfs.Stop
-	// "<stopID>\x00<lat>\x00<lon>" → struct{} (dedup)
-	seen := make(map[string]struct{})
-	for _, recordedLocationsByID := range staticData.StopsByAgency {
-		for _, recordedLocations := range recordedLocationsByID {
-			for _, stop := range recordedLocations {
-				key := stop.Id + "\x00" + formatLatLon(stop.Latitude) + "\x00" + formatLatLon(stop.Longitude)
-				if _, exists := seen[key]; exists {
-					continue
-				}
-				seen[key] = struct{}{}
-				stops = append(stops, stop)
+// add incorporates one stop into the running bounds. All stops increment
+// stopCount, but stops with missing or NaN coordinates cannot affect the box.
+// The first valid coordinate initializes all four extrema; every later valid
+// coordinate updates only the minima or maxima it exceeds.
+func (a *boundingBoxAccumulator) add(stop remoteGtfs.Stop) {
+	a.stopCount++
+	if stop.Latitude == nil || stop.Longitude == nil {
+		return
+	}
+	lat, lon := *stop.Latitude, *stop.Longitude
+	if math.IsNaN(lat) || math.IsNaN(lon) {
+		return
+	}
+	if !a.initialized {
+		a.box = geo.BoundingBox{MinLat: lat, MaxLat: lat, MinLon: lon, MaxLon: lon}
+		a.initialized = true
+		return
+	}
+	if lat < a.box.MinLat {
+		a.box.MinLat = lat
+	}
+	if lat > a.box.MaxLat {
+		a.box.MaxLat = lat
+	}
+	if lon < a.box.MinLon {
+		a.box.MinLon = lon
+	}
+	if lon > a.box.MaxLon {
+		a.box.MaxLon = lon
+	}
+}
+
+// result finalizes an accumulator after its source stops have been processed.
+// It distinguishes an accumulator that received no stops from one that received
+// stops but never saw a valid latitude/longitude pair, allowing the caller to
+// log the appropriate failure or fall back to the server-wide union box.
+func (a *boundingBoxAccumulator) result() (geo.BoundingBox, error) {
+	if a.stopCount == 0 {
+		return geo.BoundingBox{}, fmt.Errorf("no stops to compute bounding box")
+	}
+	if !a.initialized {
+		return geo.BoundingBox{}, fmt.Errorf("no valid latitude/longitude found in stops")
+	}
+	return a.box, nil
+}
+
+// computedBoundingBoxes contains the complete transient result of the source-
+// feed walk. union covers every stop from every feed and is used by the
+// server-scoped vehicle pass and as the agency fallback. byAgency contains each
+// successfully computed agency box, while errorsByAgency records agencies that
+// had stops but no usable coordinates. unionErr reports the corresponding
+// server-wide failure.
+//
+// When one pre-merged feed declares several agencies, each agency correctly
+// receives the same box as union because every agency shares that feed's stop
+// pool. Only the resulting four extrema are retained per agency.
+type computedBoundingBoxes struct {
+	union          geo.BoundingBox
+	unionErr       error
+	byAgency       map[string]geo.BoundingBox
+	errorsByAgency map[string]error
+}
+
+// computeBoundingBoxes calculates all agency and server-wide bounds while the
+// source feeds are still separate. For each feed it first collects the agency
+// IDs declared by that feed. It then adds every stop once to the union
+// accumulator and once to each of those agency accumulators. A feed with no
+// non-empty agency_id contributes only to the union.
+//
+// This feed provenance provides the desired scoping without a persistent
+// stop-to-agency index. Separate single-agency feeds naturally produce distinct
+// boxes; one pre-merged multi-agency feed gives all of its agencies identical
+// boxes. Duplicate stop IDs at different coordinates still contribute to the
+// bounds because this pass runs over the source feeds before
+// mergeStaticAndDiscoverAgencies applies first-occurrence-wins deduplication.
+//
+// Once the walk finishes, each accumulator is finalized into either a
+// geo.BoundingBox or an error. storeStaticForServer stores successful agency
+// boxes and uses union as the fallback for agencies without usable bounds.
+func computeBoundingBoxes(bundles []*remoteGtfs.Static) computedBoundingBoxes {
+	union := &boundingBoxAccumulator{}
+	byAgency := make(map[string]*boundingBoxAccumulator)
+	for _, bundle := range bundles {
+		if bundle == nil {
+			continue
+		}
+
+		agencyIDs := make(map[string]struct{}, len(bundle.Agencies))
+		for _, agency := range bundle.Agencies {
+			if agency.Id == "" {
+				continue
+			}
+			agencyIDs[agency.Id] = struct{}{}
+			if byAgency[agency.Id] == nil {
+				byAgency[agency.Id] = &boundingBoxAccumulator{}
+			}
+		}
+
+		for _, stop := range bundle.Stops {
+			union.add(stop)
+			for agencyID := range agencyIDs {
+				byAgency[agencyID].add(stop)
 			}
 		}
 	}
-	if len(stops) == 0 {
-		return staticData.Stops
+
+	result := computedBoundingBoxes{
+		byAgency:       make(map[string]geo.BoundingBox, len(byAgency)),
+		errorsByAgency: make(map[string]error),
 	}
-	return stops
+	result.union, result.unionErr = union.result()
+	for agencyID, accumulator := range byAgency {
+		box, err := accumulator.result()
+		if accumulator.stopCount == 0 {
+			continue
+		}
+		if err != nil {
+			result.errorsByAgency[agencyID] = err
+			continue
+		}
+		result.byAgency[agencyID] = box
+	}
+	return result
 }
 
 // declaredAgency is the agency identity recovered from agency.txt during merge.
@@ -333,13 +422,13 @@ type declaredAgency struct {
 // first occurrence.
 //
 // Stop-id collisions (same stop_id at different lat/lon) are reported to
-// Sentry and retained in StopsByAgency. The flattened Stops slice remains
-// first-occurrence-wins for consumers requiring unique IDs.
+// Sentry. The flattened Stops slice remains first-occurrence-wins; bounding
+// boxes are computed from the source feeds before this deduplication.
 func mergeStaticAndDiscoverAgencies(bundles []*remoteGtfs.Static) (*models.StaticData, []declaredAgency) {
 	if len(bundles) == 0 {
 		return &models.StaticData{}, nil
 	}
-	staticData := &models.StaticData{StopsByAgency: make(map[string]map[string][]remoteGtfs.Stop)}
+	staticData := &models.StaticData{}
 	// stopID → stopLocation (first occurrence kept in flattened Stops)
 	keptLocationByID := make(map[string]stopLocation)
 	// agencyID → agencyIdentity (first occurrence kept)
@@ -349,39 +438,7 @@ func mergeStaticAndDiscoverAgencies(bundles []*remoteGtfs.Static) (*models.Stati
 			continue
 		}
 		data := models.NewStaticData(staticBundle)
-		var agencyIDs []string
-		for _, agency := range data.Agencies {
-			if agency.Id != "" {
-				agencyIDs = append(agencyIDs, agency.Id)
-			}
-		}
-		// A single-agency feed may legally have a blank agency_id. Keep its
-		// stops under "" so they contribute to the server-wide union box. "" is
-		// a sentinel for server-wide aggregation only, not a real agency.
-		if len(agencyIDs) == 0 {
-			agencyIDs = []string{""}
-		}
 		for _, stop := range data.Stops {
-			for _, agencyID := range agencyIDs {
-				// stopID → []Stop (all distinct locations for this agency);
-				// references the shared bucket in StopsByAgency, so writes persist (maps are reference types)
-				recordedLocationsByID := staticData.StopsByAgency[agencyID]
-				if recordedLocationsByID == nil {
-					recordedLocationsByID = make(map[string][]remoteGtfs.Stop)
-					staticData.StopsByAgency[agencyID] = recordedLocationsByID
-				}
-				recordedLocations := recordedLocationsByID[stop.Id]
-				locationSeen := false
-				for _, recorded := range recordedLocations {
-					if sameStopLocation(recorded.Latitude, recorded.Longitude, stop.Latitude, stop.Longitude) {
-						locationSeen = true
-						break
-					}
-				}
-				if !locationSeen {
-					recordedLocationsByID[stop.Id] = append(recordedLocations, stop)
-				}
-			}
 			kept, keptExists := keptLocationByID[stop.Id]
 			if !keptExists {
 				staticData.Stops = append(staticData.Stops, stop)
@@ -392,8 +449,8 @@ func mergeStaticAndDiscoverAgencies(bundles []*remoteGtfs.Static) (*models.Stati
 				// Exact duplicate (same id, same location). Silent skip.
 				continue
 			}
-			// stop_id collision with different location — warn; the location was
-			// retained in StopsByAgency above.
+			// stop_id collision with different location: warn and keep the first
+			// occurrence in the merged bundle.
 			report.ReportErrorWithSentryOptions(
 				fmt.Errorf("static bundle has a duplicate stop_id %q at a different location; existing=(lat=%s, lon=%s), duplicate=(lat=%s, lon=%s); keeping first occurrence",
 					stop.Id,
@@ -566,12 +623,10 @@ func downloadGTFSBundle(ctx context.Context, client *http.Client, url, agencyID 
 	return staticBundle, nil
 }
 
-// getStopLocationsByIDs retrieves stop locations by their IDs from the GTFS
-// cache. Agency-scoped entries may contain multiple physical locations for one
-// stop ID when feeds collide. The flattened lookup is used only when no
-// agency-specific index exists, which supports configured agency IDs that are
-// absent from agency.txt.
-func getStopLocationsByIDs(serverKey string, agencyID string, stopIDs []string, staticStore *StaticStore) (map[string][]remoteGtfs.Stop, error) {
+// getStopLocationsByIDs retrieves stops by ID from the shared merged GTFS
+// bundle. The merge keeps the first occurrence of a duplicate stop ID, so each
+// requested ID resolves to at most one stop.
+func getStopLocationsByIDs(serverKey string, stopIDs []string, staticStore *StaticStore) (map[string]remoteGtfs.Stop, error) {
 	staticData, ok := staticStore.Get(serverKey)
 	if !ok || staticData == nil {
 		err := fmt.Errorf("no GTFS static data found for server key %s", serverKey)
@@ -587,22 +642,11 @@ func getStopLocationsByIDs(serverKey string, agencyID string, stopIDs []string, 
 		stopIDSet[id] = struct{}{}
 	}
 
-	// stopID → []Stop (resolved locations)
-	result := make(map[string][]remoteGtfs.Stop)
-	recordedLocationsByID, indexed := staticData.StopsByAgency[agencyID]
-	if indexed {
-		for stopID := range stopIDSet {
-			if recordedLocations := recordedLocationsByID[stopID]; len(recordedLocations) > 0 {
-				result[stopID] = append([]remoteGtfs.Stop(nil), recordedLocations...)
-			}
-		}
-	}
-	if !indexed {
-		for _, stop := range staticData.Stops {
-			if _, requested := stopIDSet[stop.Id]; requested {
-				if _, alreadyResolved := result[stop.Id]; !alreadyResolved {
-					result[stop.Id] = []remoteGtfs.Stop{stop}
-				}
+	result := make(map[string]remoteGtfs.Stop)
+	for _, stop := range staticData.Stops {
+		if _, requested := stopIDSet[stop.Id]; requested {
+			if _, alreadyResolved := result[stop.Id]; !alreadyResolved {
+				result[stop.Id] = stop
 			}
 		}
 	}
