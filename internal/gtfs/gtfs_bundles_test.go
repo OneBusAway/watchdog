@@ -196,7 +196,7 @@ func TestStopsParsing(t *testing.T) {
 		"1108":  {stopName: "Westlake", lat: 47.611450, long: -122.337532},
 	}
 
-	stops, err := getStopLocationsByIDs(server.ServerKey(), server.AgencyID, stopIDs, staticStore)
+	stops, err := getStopLocationsByIDs(server.ServerKey(), stopIDs, staticStore)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -204,11 +204,7 @@ func TestStopsParsing(t *testing.T) {
 		t.Fatalf("expected some matched stops, got 0")
 	}
 
-	for stopID, locations := range stops {
-		if len(locations) != 1 {
-			t.Fatalf("expected one location for %s, got %d", stopID, len(locations))
-		}
-		stop := locations[0]
+	for _, stop := range stops {
 		expected, ok := stopsData[stop.Id]
 		if !ok {
 			t.Fatalf("unexpected stop ID returned: %s", stop.Id)
@@ -338,7 +334,7 @@ func TestGetStopLocationsByIDs(t *testing.T) {
 
 	t.Run("Valid stops IDs", func(t *testing.T) {
 		stopIDs := []string{"11060", "1108"} // Make sure these exist in your test GTFS
-		stops, err := getStopLocationsByIDs(server.ServerKey(), server.AgencyID, stopIDs, staticStore)
+		stops, err := getStopLocationsByIDs(server.ServerKey(), stopIDs, staticStore)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -349,7 +345,7 @@ func TestGetStopLocationsByIDs(t *testing.T) {
 
 	t.Run("Invalid stop IDs", func(t *testing.T) {
 		stopIDs := []string{"nonexistent1", "nonexistent2"}
-		stops, err := getStopLocationsByIDs(server.ServerKey(), server.AgencyID, stopIDs, staticStore)
+		stops, err := getStopLocationsByIDs(server.ServerKey(), stopIDs, staticStore)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -745,7 +741,7 @@ func TestMergeStaticStopsExactDuplicateSilentlyKept(t *testing.T) {
 	}
 }
 
-func TestMergeStaticStopsLocationCollisionPreservedByAgency(t *testing.T) {
+func TestMergeStaticStopsLocationCollisionKeepsFirstOccurrence(t *testing.T) {
 	firstLat, firstLon := 1.0, 2.0
 	dupLat, dupLon := 3.0, 4.0
 	bundleA := makeSyntheticBundle(t, "agency-A", "Agency A", "https://a.example", []remoteGtfs.Stop{
@@ -766,27 +762,28 @@ func TestMergeStaticStopsLocationCollisionPreservedByAgency(t *testing.T) {
 	if got.Longitude == nil || *got.Longitude != firstLon {
 		t.Fatalf("expected first occurrence's lon to win; got %v", got.Longitude)
 	}
-	locations := merged.StopsByAgency["agency-A"]["A"]
-	if len(locations) != 2 {
-		t.Fatalf("expected both colliding locations to be preserved, got %d", len(locations))
-	}
 }
 
-func TestMergeStaticStopsMultiAgencyFeedIndexesEveryAgency(t *testing.T) {
+func TestComputeBoundingBoxesForMultiAgencyFeedUsesSharedStops(t *testing.T) {
 	bundle := makeSyntheticBundle(t, "agency-A", "Agency A", "https://a.example", []remoteGtfs.Stop{
 		{Id: "A", Latitude: floatPtr(1), Longitude: floatPtr(2)},
+		{Id: "B", Latitude: floatPtr(3), Longitude: floatPtr(4)},
 	})
 	bundle.Agencies = append(bundle.Agencies, remoteGtfs.Agency{Id: "agency-B", Name: "Agency B", Url: "https://b.example"})
 
-	merged, _ := mergeStaticAndDiscoverAgencies([]*remoteGtfs.Static{bundle})
+	computed := computeBoundingBoxes([]*remoteGtfs.Static{bundle})
+	want := geo.BoundingBox{MinLat: 1, MaxLat: 3, MinLon: 2, MaxLon: 4}
 	for _, agencyID := range []string{"agency-A", "agency-B"} {
-		if got := len(merged.StopsByAgency[agencyID]["A"]); got != 1 {
-			t.Fatalf("expected stop indexed for %s, got %d locations", agencyID, got)
+		if got := computed.byAgency[agencyID]; got != want {
+			t.Fatalf("expected shared bounds for %s to be %+v, got %+v", agencyID, want, got)
 		}
+	}
+	if computed.unionErr != nil || computed.union != want {
+		t.Fatalf("expected union bounds %+v, got %+v (error=%v)", want, computed.union, computed.unionErr)
 	}
 }
 
-func TestGetStopLocationsByIDsUsesAgencyCollisionIndex(t *testing.T) {
+func TestGetStopLocationsByIDsUsesMergedFirstOccurrence(t *testing.T) {
 	bundleA := makeSyntheticBundle(t, "agency-A", "Agency A", "https://a.example", []remoteGtfs.Stop{
 		{Id: "A", Latitude: floatPtr(1), Longitude: floatPtr(2)},
 	})
@@ -798,12 +795,12 @@ func TestGetStopLocationsByIDsUsesAgencyCollisionIndex(t *testing.T) {
 	key := models.ServerKey("https://example.com", "agency-B")
 	store.Set(key, merged)
 
-	locations, err := getStopLocationsByIDs(key, "agency-B", []string{"A"}, store)
+	locations, err := getStopLocationsByIDs(key, []string{"A"}, store)
 	if err != nil {
 		t.Fatalf("lookup failed: %v", err)
 	}
-	if len(locations["A"]) != 1 || *locations["A"][0].Latitude != 3 {
-		t.Fatalf("expected agency-B location, got %+v", locations["A"])
+	if stop, ok := locations["A"]; !ok || stop.Latitude == nil || *stop.Latitude != 1 {
+		t.Fatalf("expected first merged location, got %+v", stop)
 	}
 }
 
@@ -1019,13 +1016,11 @@ func TestStoreStaticForServerObservesBundleWithoutUsableCoordinates(t *testing.T
 
 func TestComputeAgencyBoundingBoxesReportsCoordinateErrors(t *testing.T) {
 	bundle := makeSyntheticBundle(t, "agency-A", "Agency A", "https://a.example", []remoteGtfs.Stop{{Id: "S1"}})
-	merged, _ := mergeStaticAndDiscoverAgencies([]*remoteGtfs.Static{bundle})
-
-	boxes, errorsByAgency := computeAgencyBoundingBoxes(merged)
-	if _, ok := boxes["agency-A"]; ok {
+	computed := computeBoundingBoxes([]*remoteGtfs.Static{bundle})
+	if _, ok := computed.byAgency["agency-A"]; ok {
 		t.Fatal("expected no bounding box for stops without coordinates")
 	}
-	if errorsByAgency["agency-A"] == nil {
+	if computed.errorsByAgency["agency-A"] == nil {
 		t.Fatal("expected agency coordinate error to be reported")
 	}
 }

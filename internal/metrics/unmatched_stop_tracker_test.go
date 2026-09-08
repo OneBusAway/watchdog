@@ -88,11 +88,11 @@ func TestRecordLastSeenUpdatesLabelsOnRename(t *testing.T) {
 	ObaUnmatchedStopInfo.WithLabelValues(agencyID, "Rename Agency", "test-server", "https://rename.example.com", stopID, "Old Name", "1.100000", "2.200000").Set(1)
 	tracker.RecordLastSeen(agencyID, agencyID, "Rename Agency", "test-server", "https://rename.example.com", stopID, "Old Name", "1.100000", "2.200000")
 
-	ObaUnmatchedStopInfo.WithLabelValues(agencyID, "Rename Agency", "test-server", "https://rename.example.com", stopID, "New Name", "3.300000", "4.400000").Set(1)
-	tracker.RecordLastSeen(agencyID, agencyID, "Rename Agency", "test-server", "https://rename.example.com", stopID, "New Name", "3.300000", "4.400000")
+	ObaUnmatchedStopInfo.WithLabelValues(agencyID, "Rename Agency", "test-server", "https://rename.example.com", stopID, "New Name", "1.100000", "2.200000").Set(1)
+	tracker.RecordLastSeen(agencyID, agencyID, "Rename Agency", "test-server", "https://rename.example.com", stopID, "New Name", "1.100000", "2.200000")
 
-	entry := tracker.Entries[agencyID][stopKey{StopID: stopID, StopName: "New Name", Lat: "3.300000", Lon: "4.400000"}]
-	if entry.StopName != "New Name" || entry.Lat != "3.300000" || entry.Lon != "4.400000" {
+	entry := tracker.Entries[agencyID][stopKey{StopID: stopID, StopName: "New Name", Lat: "1.100000", Lon: "2.200000"}]
+	if entry.StopName != "New Name" || entry.Lat != "1.100000" || entry.Lon != "2.200000" {
 		t.Fatalf("tracker froze first-seen labels, got %+v", entry)
 	}
 
@@ -100,7 +100,7 @@ func TestRecordLastSeenUpdatesLabelsOnRename(t *testing.T) {
 	if findStopSeries(series, agencyID, stopID, "Old Name", "1.100000", "2.200000") != nil {
 		t.Fatalf("old name series was not pruned on rename: %+v", series)
 	}
-	if findStopSeries(series, agencyID, stopID, "New Name", "3.300000", "4.400000") == nil {
+	if findStopSeries(series, agencyID, stopID, "New Name", "1.100000", "2.200000") == nil {
 		t.Fatalf("new name series not present after rename: %+v", series)
 	}
 }
@@ -131,15 +131,5 @@ func TestClearStopsPrunesRenamedStopOnStale(t *testing.T) {
 	}
 	if findStopSeries(series, agencyID, stopID, "Latest Name", "9.900000", "8.800000") != nil {
 		t.Fatalf("latest name series survived after stale clear: %+v", series)
-	}
-}
-
-func TestUnmatchedStopTrackerRetainsSameIDAtMultipleLocations(t *testing.T) {
-	tracker := NewUnmatchedStopTracker()
-	tracker.RecordLocationLastSeen("agency-a", "agency-a", "Agency A", "test-server", "https://agency-a.example.com", "stop-1", "Stop One", "1.000000", "2.000000")
-	tracker.RecordLocationLastSeen("agency-a", "agency-a", "Agency A", "test-server", "https://agency-a.example.com", "stop-1", "Stop One", "3.000000", "4.000000")
-
-	if got := len(tracker.Entries["agency-a"]); got != 2 {
-		t.Fatalf("expected two tracked locations for one stop ID, got %d", got)
 	}
 }

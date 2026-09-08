@@ -135,60 +135,51 @@ func TestFetchObaAPIMetrics(t *testing.T) {
 	}
 }
 
-func TestFetchObaAPIMetricsRetiresRenamedStopSeries(t *testing.T) {
-	const response = `{"code":200,"text":"OK","version":2,"currentTime":123,"data":{"entry":{"agenciesWithCoverageCount":1,"agencyIDs":["rename-agency"],"stopIDsUnmatched":{"rename-agency":["stop-1"]}}}}`
+func TestFetchObaAPIMetricsRetiresRelocatedStopSeries(t *testing.T) {
+	const response = `{"code":200,"text":"OK","version":2,"currentTime":123,"data":{"entry":{"agenciesWithCoverageCount":1,"agencyIDs":["relocation-agency"],"stopIDsUnmatched":{"relocation-agency":["stop-1"]}}}}`
 	server := setupObaServer(t, response, http.StatusOK)
 	defer server.Close()
 
 	staticStore := gtfs.NewStaticStore()
-	serverKey := models.ServerKey(server.URL, "rename-agency")
+	serverKey := models.ServerKey(server.URL, "relocation-agency")
 	oldLat, oldLon := 1.0, 2.0
 	newLat, newLon := 3.0, 4.0
 	staticStore.Set(serverKey, &models.StaticData{Stops: []remoteGtfs.Stop{{
-		Id: "stop-1", Name: "Old Name", Latitude: &oldLat, Longitude: &oldLon,
+		Id: "stop-1", Name: "Stop One", Latitude: &oldLat, Longitude: &oldLon,
 	}}})
 	tracker := NewUnmatchedStopTracker()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	if err := fetchObaAPIMetrics("rename-agency", "Rename Agency", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
+	if err := fetchObaAPIMetrics("relocation-agency", "Relocation Agency", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
 		t.Fatalf("first fetch: %v", err)
 	}
 
 	staticStore.Set(serverKey, &models.StaticData{Stops: []remoteGtfs.Stop{{
-		Id: "stop-1", Name: "New Name", Latitude: &newLat, Longitude: &newLon,
+		Id: "stop-1", Name: "Stop One", Latitude: &newLat, Longitude: &newLon,
 	}}})
-	if err := fetchObaAPIMetrics("rename-agency", "Rename Agency", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
+	if err := fetchObaAPIMetrics("relocation-agency", "Relocation Agency", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
 		t.Fatalf("second fetch: %v", err)
 	}
 
 	series := collectStopSeries(t)
-	if findStopSeries(series, "rename-agency", "stop-1", "Old Name", "1.000000", "2.000000") != nil {
-		t.Fatalf("old stop series survived rename: %+v", series)
+	if findStopSeries(series, "relocation-agency", "stop-1", "Stop One", "1.000000", "2.000000") != nil {
+		t.Fatalf("old stop series survived relocation: %+v", series)
 	}
-	if findStopSeries(series, "rename-agency", "stop-1", "New Name", "3.000000", "4.000000") == nil {
-		t.Fatalf("new stop series was not emitted: %+v", series)
+	if findStopSeries(series, "relocation-agency", "stop-1", "Stop One", "3.000000", "4.000000") == nil {
+		t.Fatalf("relocated stop series was not emitted: %+v", series)
 	}
 }
 
-func TestFetchObaAPIMetricsRetainsCurrentCollisionLocations(t *testing.T) {
+func TestFetchObaAPIMetricsUsesMergedStop(t *testing.T) {
 	const response = `{"code":200,"text":"OK","version":2,"currentTime":123,"data":{"entry":{"agenciesWithCoverageCount":1,"agencyIDs":["collision-agency"],"stopIDsUnmatched":{"collision-agency":["stop-1"]}}}}`
 	server := setupObaServer(t, response, http.StatusOK)
 	defer server.Close()
 
 	latA, lonA := 1.0, 2.0
-	latB, lonB := 3.0, 4.0
 	staticStore := gtfs.NewStaticStore()
 	serverKey := models.ServerKey(server.URL, "collision-agency")
 	staticStore.Set(serverKey, &models.StaticData{
 		Stops: []remoteGtfs.Stop{{Id: "stop-1", Name: "Stop One", Latitude: &latA, Longitude: &lonA}},
-		StopsByAgency: map[string]map[string][]remoteGtfs.Stop{
-			"collision-agency": {
-				"stop-1": {
-					{Id: "stop-1", Name: "Stop One A", Latitude: &latA, Longitude: &lonA},
-					{Id: "stop-1", Name: "Stop One B", Latitude: &latB, Longitude: &lonB},
-				},
-			},
-		},
 	})
 	tracker := NewUnmatchedStopTracker()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -198,9 +189,8 @@ func TestFetchObaAPIMetricsRetainsCurrentCollisionLocations(t *testing.T) {
 	}
 
 	series := collectStopSeries(t)
-	if findStopSeries(series, "collision-agency", "stop-1", "Stop One A", "1.000000", "2.000000") == nil ||
-		findStopSeries(series, "collision-agency", "stop-1", "Stop One B", "3.000000", "4.000000") == nil {
-		t.Fatalf("expected both collision locations: %+v", series)
+	if findStopSeries(series, "collision-agency", "stop-1", "Stop One", "1.000000", "2.000000") == nil {
+		t.Fatalf("expected merged stop location: %+v", series)
 	}
 	unresolved, err := getMetricValue(ObaUnmatchedStopUnresolved, map[string]string{
 		"agency_id":   "collision-agency",
@@ -212,7 +202,7 @@ func TestFetchObaAPIMetricsRetainsCurrentCollisionLocations(t *testing.T) {
 		t.Fatalf("failed to read unresolved count: %v", err)
 	}
 	if unresolved != 0 {
-		t.Fatalf("expected one resolved stop ID despite two locations, got unresolved=%v", unresolved)
+		t.Fatalf("expected merged stop ID to resolve, got unresolved=%v", unresolved)
 	}
 }
 
