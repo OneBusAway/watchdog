@@ -133,9 +133,9 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
 | `oba_realtime_trip_match_ratio`      | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url`                               | ratio   | Ratio of matched realtime trips to total trips.    |
 | `oba_stop_match_ratio`               | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url`                               | ratio   | Ratio of matched stops to total stops.             |
 | `oba_time_since_last_update_seconds` | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url`                               | seconds | Time since last realtime update.                   |
-| `oba_unmatched_stop_info`            | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url`, `stop_id`, `stop_name`, `lat`, `lon` | N/A     | Presence marker (always 1) for unmatched stops from static GTFS, with location as labels. |
+| `oba_unmatched_stop_info`            | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url`, `stop_id`, `stop_name`, `lat`, `lon` | N/A     | Presence marker (always 1) for unmatched physical stop locations from static GTFS. One stop ID can produce multiple series. |
 | `oba_unmatched_stop_unresolved`      | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url`                               | count   | Number of stop IDs OBA reported as unmatched that Watchdog could not resolve against its local GTFS bundle. |
-| `oba_unmatched_stop_cluster_count`   | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url`, `station_id`, `cluster_id`, `cluster_lat`, `cluster_lon` | count   | Number of unmatched stops grouped by station and S2 spatial cluster.      |
+| `oba_unmatched_stop_cluster_count`   | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url`, `station_id`, `cluster_id`, `cluster_lat`, `cluster_lon` | count   | Number of unmatched physical stop locations grouped by station and S2 spatial cluster. |
 
 **Interpretation Guide:**
 - **Unmatched stop clusters:** Identify systemic coverage gaps. Each series is one `(station_id, cluster_id)` pair:
@@ -143,13 +143,13 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
     - `cluster_lat` / `cluster_lon` are the center of that S2 cell, so clusters can be plotted on a map or joined by coordinates without decoding the ID.
     - `station_id` is the root parent station ID when the stops belong to a station hierarchy, or `no_station` when they do not. A large station can span several S2 cells, yielding one series per `(station_id, cluster_id)` pair; group by `cluster_id` for spatial aggregation and by `station_id` for per-station totals.
 - **Time since update:** If unusually high, real-time feed is stale.
-- **`oba_unmatched_stop_info` retention:** Each series is emitted at every scrape and pruned 24 hours after the stop last appeared unmatched. A `1` means the stop was unmatched at some point in the last 24 hours; history is preserved by Prometheus itself — use range queries to separate days:
+- **`oba_unmatched_stop_info` retention:** Each unique label set represents one physical stop location; one `(agency_id, stop_id)` can produce multiple series distinguished by `stop_name`, `lat`, and `lon`. Each series is emitted at every scrape and pruned 24 hours after that location last appeared unmatched. A `1` means the location was unmatched at some point in the last 24 hours; history is preserved by Prometheus itself — use range queries to separate days:
 ```promql
   # unmatched at some point during the last day
   max_over_time(oba_unmatched_stop_info{agency_id="unitrans"}[1d])
   # flapping signal (value changes during the day)
   changes(oba_unmatched_stop_info{agency_id="unitrans"}[1d])
-  # daily recording rule to bucket unmatched stops per calendar day
+  # daily recording rule to bucket unmatched physical locations per stop ID
   sum by (agency_id, stop_id) (max_over_time(oba_unmatched_stop_info[1d]))
 ```
 - **Stop identity across feeds:** A current merged GTFS snapshot may contain
@@ -157,7 +157,7 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
   as separate series. A location change across snapshots cannot be identified
   as a true relocation from GTFS data alone, so confirmed relocation identity
   must come from an external source.
-- **`oba_unmatched_stop_cluster_count` retention:** Cluster series follow the same 24h TTL as `oba_unmatched_stop_info` — a cluster's last reported count is retained until the cluster has not appeared for 24 hours, then the series is pruned. Use range queries to reconstruct historical cluster membership.
+- **`oba_unmatched_stop_cluster_count` retention:** The value counts physical stop locations, not distinct stop IDs. Cluster series follow the same 24h TTL as `oba_unmatched_stop_info` — a cluster's last reported count is retained until the cluster has not appeared for 24 hours, then the series is pruned. Use range queries to reconstruct historical cluster membership.
 - **`oba_unmatched_stop_unresolved`:** `> 0` signals the OBA server is matching against a static bundle that differs from the one Watchdog downloaded (e.g., bundle refresh timing), so lookups silently dropped. Correlate with `gtfs_bundle_last_fetched_timestamp_seconds` to see how stale Watchdog's snapshot is.
 - **Example alert:**
 ```promql
