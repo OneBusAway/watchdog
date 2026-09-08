@@ -176,12 +176,36 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 				if agencyBoxFailed {
 					logger.Error("Could not compute agency bounding box",
 						"server_key", serverKey, "agency_id", declaredAgency.AgencyID, "error", agencyBoxErr)
+					report.ReportErrorWithSentryOptions(
+						fmt.Errorf("server %q (%s): could not compute agency bounding box for %s: %w",
+							server.ServerName, server.ObaBaseURL, declaredAgency.AgencyID, agencyBoxErr),
+						report.SentryReportOptions{
+							Tags:  map[string]string{"server_name": server.ServerName, "agency_id": declaredAgency.AgencyID},
+							Level: sentry.LevelError,
+						},
+					)
 				}
 				logger.Error("Could not compute server-wide bounding box", "server_key", serverKey, "error", unionBoxErr)
+				report.ReportErrorWithSentryOptions(
+					fmt.Errorf("server %q (%s): could not compute server-wide bounding box: %w",
+						server.ServerName, server.ObaBaseURL, unionBoxErr),
+					report.SentryReportOptions{
+						Tags:  utils.MakeMap("server_name", server.ServerName),
+						Level: sentry.LevelError,
+					},
+				)
 			} else {
 				if agencyBoxFailed {
 					logger.Warn("Could not compute agency bounding box; using server-wide bounding box",
 						"server_key", serverKey, "agency_id", declaredAgency.AgencyID, "error", agencyBoxErr)
+					report.ReportErrorWithSentryOptions(
+						fmt.Errorf("server %q (%s): could not compute agency bounding box for %s, falling back to union box: %w",
+							server.ServerName, server.ObaBaseURL, declaredAgency.AgencyID, agencyBoxErr),
+						report.SentryReportOptions{
+							Tags:  map[string]string{"server_name": server.ServerName, "agency_id": declaredAgency.AgencyID},
+							Level: sentry.LevelWarning,
+						},
+					)
 				} else {
 					logger.Warn("No stops associated with agency; using server-wide bounding box",
 						"server_key", serverKey, "agency_id", declaredAgency.AgencyID)
