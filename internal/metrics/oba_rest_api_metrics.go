@@ -47,10 +47,9 @@ type OBAMetrics struct {
 // populates per-agency Prometheus metrics (real-time and scheduled trip
 // counts, stop match ratios, time-since-update, etc.).
 //
-// Unmatched stop IDs are resolved against the agency-scoped GTFS index. A
-// single ID may resolve to multiple physical locations after a feed collision,
-// so one info series is emitted for each location while the unresolved gauge
-// still counts IDs rather than locations.
+// Unmatched stop IDs are resolved against the shared merged GTFS bundle. Each
+// ID resolves to at most one stop because the merge keeps the first occurrence
+// of duplicate stop IDs.
 //
 // Server availability is *not* set here — that's the responsibility of the
 // server-ping routine, which labels ObaApiStatus with (server_name, server_url)
@@ -225,7 +224,7 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 		return nil
 	}
 
-	stopInfoMap, err := gtfs.GetStopLocationsByIDs(serverKey, agencyID, unmatchedStopIDs, staticStore)
+	stopInfoMap, err := gtfs.GetStopLocationsByIDs(serverKey, unmatchedStopIDs, staticStore)
 	if err != nil {
 		ObaUnmatchedStopUnresolved.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(float64(len(unmatchedStopIDs)))
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -235,45 +234,27 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 		return nil
 	}
 
-	// Count IDs, not locations: one colliding ID can produce multiple metric
-	// series, but it is still one resolved ID in the OBA match total.
 	resolved := 0
-	for stopID, stops := range stopInfoMap {
-		resolvedID := false
-		for _, stop := range stops {
-			if stop.Latitude == nil || stop.Longitude == nil {
-				continue
-			}
-			resolvedID = true
-			latStr := fmt.Sprintf("%.6f", *stop.Latitude)
-			lonStr := fmt.Sprintf("%.6f", *stop.Longitude)
-			ObaUnmatchedStopInfo.WithLabelValues(
-				agencyID,
-				agencyName,
-				serverName,
-				serverURL,
-				stopID,
-				stop.Name,
-				latStr,
-				lonStr,
-			).Set(1)
-			// stopID uniqueness is guaranteed only within a single feed, not across
-			// past, current, or upcoming feeds. A duplicate stopID with a different
-			// location is therefore normal — it came from different scrapes (we
-			// fetch static data daily). Multiple current locations coexist; keep
-			// every label set.
-			if len(stops) > 1 {
-				unmatchedStopTracker.RecordLocationLastSeen(serverKey, agencyID, agencyName, serverName, serverURL, stopID, stop.Name, latStr, lonStr)
-			} else {
-				// Single current location. A changed name at the same location is
-				// a rename — the old label set is stale, so retire it and expose
-				// only the one with the current name.
-				unmatchedStopTracker.RecordLastSeen(serverKey, agencyID, agencyName, serverName, serverURL, stopID, stop.Name, latStr, lonStr)
-			}
+	for stopID, stop := range stopInfoMap {
+		if stop.Latitude == nil || stop.Longitude == nil {
+			continue
 		}
-		if resolvedID {
-			resolved++
-		}
+		resolved++
+		latStr := fmt.Sprintf("%.6f", *stop.Latitude)
+		lonStr := fmt.Sprintf("%.6f", *stop.Longitude)
+		ObaUnmatchedStopInfo.WithLabelValues(
+			agencyID,
+			agencyName,
+			serverName,
+			serverURL,
+			stopID,
+			stop.Name,
+			latStr,
+			lonStr,
+		).Set(1)
+		// A changed name or location replaces the previous label set for this
+		// stop ID; expose only the merged bundle's current stop.
+		unmatchedStopTracker.RecordLastSeen(serverKey, agencyID, agencyName, serverName, serverURL, stopID, stop.Name, latStr, lonStr)
 	}
 
 	unresolved := len(unmatchedStopIDs) - resolved
