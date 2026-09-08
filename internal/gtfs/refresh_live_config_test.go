@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ func TestRefreshGTFSBundlesReadsLiveConfig(t *testing.T) {
 	}
 
 	var (
+		shuttingDown  atomic.Bool
 		firstTickOnce sync.Once
 		addedOnce     sync.Once
 		requests      sync.WaitGroup
@@ -43,7 +45,7 @@ func TestRefreshGTFSBundlesReadsLiveConfig(t *testing.T) {
 		case "/added.zip":
 			signal = sawAdded
 		}
-		if _, err := w.Write(bundle); err != nil {
+		if _, err := w.Write(bundle); err != nil && !shuttingDown.Load() {
 			t.Errorf("write GTFS fixture: %v", err)
 		}
 		if signal == firstTick {
@@ -79,6 +81,7 @@ func TestRefreshGTFSBundlesReadsLiveConfig(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer func() {
+		shuttingDown.Store(true)
 		cancel()
 		requests.Wait()
 		ts.Close()
