@@ -150,14 +150,14 @@ func TestFetchObaAPIMetricsRetiresRelocatedStopSeries(t *testing.T) {
 	tracker := NewUnmatchedStopTracker()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	if err := fetchObaAPIMetrics("relocation-agency", "Relocation Agency", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
+	if err := fetchObaAPIMetrics(context.Background(), "relocation-agency", "Relocation Agency", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
 		t.Fatalf("first fetch: %v", err)
 	}
 
 	staticStore.Set(serverKey, &models.StaticData{Stops: []remoteGtfs.Stop{{
 		Id: "stop-1", Name: "Stop One", Latitude: &newLat, Longitude: &newLon,
 	}}})
-	if err := fetchObaAPIMetrics("relocation-agency", "Relocation Agency", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
+	if err := fetchObaAPIMetrics(context.Background(), "relocation-agency", "Relocation Agency", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
 		t.Fatalf("second fetch: %v", err)
 	}
 
@@ -184,7 +184,7 @@ func TestFetchObaAPIMetricsUsesMergedStop(t *testing.T) {
 	tracker := NewUnmatchedStopTracker()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	if err := fetchObaAPIMetrics("collision-agency", "Collision Agency", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
+	if err := fetchObaAPIMetrics(context.Background(), "collision-agency", "Collision Agency", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker); err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
 
