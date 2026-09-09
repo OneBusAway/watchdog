@@ -27,8 +27,8 @@ func main() {
 	flag.StringVar(&cfg.Env, "env", "development", "Environment (development|staging|production)")
 	flag.IntVar(&cfg.FetchInterval, "fetch-interval", 30, "Interval (in seconds) at which the application fetches data from realtime APIs and updates Prometheus metrics")
 
-	// Server-scope design (deliberate decision, see README "Server vs. agency
-	// scoping" and config.json.template):
+	// Server-scope design (deliberate decision, see README "Two observation
+	// modes: agency vs. server" and config.json.template):
 	//
 	// Every entry in config.json is server-scoped at the top level: server_name
 	// is required, server_url is derived from oba_base_url, and the operator
