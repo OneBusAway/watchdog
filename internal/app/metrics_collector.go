@@ -74,7 +74,7 @@ func (app *Application) StartMetricsCollection(ctx context.Context) {
 func (app *Application) collectForScope(ctx context.Context, server models.ObaServer, scope config.Scope) {
 	switch s := scope.(type) {
 	case config.AgencyScope:
-		app.CollectMetricsForServer(server)
+		app.CollectMetricsForServer(ctx, server)
 	case config.ServerScope:
 		app.collectForServerScope(ctx, server, s)
 	default:
@@ -112,7 +112,7 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 	// Server-ping once per server (the /current-time.json endpoint takes no
 	// agency parameter; per the metrics relabeling in this redesign, the
 	// ObaApiStatus gauge is server-scoped, not agency-scoped).
-	ok := app.MetricsService.ServerPing(server)
+	ok := app.MetricsService.ServerPing(ctx, server)
 	if !ok {
 		app.ConfigService.BackoffStore.UpdateBackoff(server.ServerKey())
 		app.Logger.Info("Skipping server-scope collection due to ping failure",
@@ -204,7 +204,7 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 	// agency on the server, so we surface it and keep going rather than drop
 	// the whole server's vehicle pass, accepting that the pass may recompute
 	// from a feed one or more ticks old.
-	if err := app.GtfsService.FetchAndStoreGTFSRTFeed(server); err != nil {
+	if err := app.GtfsService.FetchAndStoreGTFSRTFeed(ctx, server); err != nil {
 		app.Logger.Error("Failed to fetch and store GTFS-RT feed",
 			"server_name", server.ServerName, "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -245,7 +245,7 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 	// have to change). fetchObaAPIMetrics carries a one-line pointer to
 	// this TODO at its definition site.
 	for _, agencyServer := range liveAgencyEntries {
-		app.collectAgencyChecks(agencyServer)
+		app.collectAgencyChecks(ctx, agencyServer)
 	}
 
 	// One GTFS-RT vehicle pass for the whole server. Running it inside the
@@ -266,12 +266,12 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 //   - The GTFS-RT feed must be in the realtime store before the vehicle pass
 //     runs, so a failed fetch is a hard gate: we return rather than emit
 //     metrics derived from a stale (or absent) feed.
-func (app *Application) CollectMetricsForServer(server models.ObaServer) {
-	if !app.collectAgencyChecks(server) {
+func (app *Application) CollectMetricsForServer(ctx context.Context, server models.ObaServer) {
+	if !app.collectAgencyChecks(ctx, server) {
 		return
 	}
 
-	if err := app.GtfsService.FetchAndStoreGTFSRTFeed(server); err != nil {
+	if err := app.GtfsService.FetchAndStoreGTFSRTFeed(ctx, server); err != nil {
 		app.Logger.Error("Failed to fetch and store GTFS-RT feed", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
@@ -302,7 +302,7 @@ func (app *Application) CollectMetricsForServer(server models.ObaServer) {
 // Server-mode calls this once per live agency; agency-mode calls it once for
 // the configured entry. The GTFS-RT vehicle pass is deliberately NOT part of
 // it — that pass runs once per server, in the caller.
-func (app *Application) collectAgencyChecks(server models.ObaServer) bool {
+func (app *Application) collectAgencyChecks(ctx context.Context, server models.ObaServer) bool {
 	// Check if server has an active backoff period
 	nextRetryAt, exists := app.ConfigService.BackoffStore.NextRetryAt(server.ServerKey())
 	if exists && time.Now().UTC().Before(nextRetryAt) {
@@ -322,7 +322,7 @@ func (app *Application) collectAgencyChecks(server models.ObaServer) bool {
 		return false
 	}
 
-	ok := app.MetricsService.ServerPing(server)
+	ok := app.MetricsService.ServerPing(ctx, server)
 	if !ok {
 		app.Logger.Error("Server ping failed",
 			"agency_id", server.AgencyID, "agency_name", server.AgencyName, "server_name", server.ServerName)
@@ -359,7 +359,7 @@ func (app *Application) collectAgencyChecks(server models.ObaServer) bool {
 		})
 	}
 
-	err = app.MetricsService.FetchObaAPIMetrics(server.AgencyID, server.AgencyName, server.ServerName, server.ObaBaseURL, server.ObaApiKey)
+	err = app.MetricsService.FetchObaAPIMetrics(ctx, server.AgencyID, server.AgencyName, server.ServerName, server.ObaBaseURL, server.ObaApiKey)
 	if err != nil {
 		app.Logger.Error("Failed to fetch OBA API metrics", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -375,7 +375,7 @@ func (app *Application) collectAgencyChecks(server models.ObaServer) bool {
 		})
 	}
 
-	err = app.MetricsService.CountActiveVehiclesForAgency(server)
+	err = app.MetricsService.CountActiveVehiclesForAgency(ctx, server)
 	if err != nil {
 		app.Logger.Error("Failed to count vehicles from VehiclesForAgency API", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{

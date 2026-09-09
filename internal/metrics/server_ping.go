@@ -28,8 +28,7 @@ import (
 //   - bool: true when the server returned a readable time; the caller uses
 //     this to gate subsequent steps (any non-true value aborts the per-server
 //     collection cycle and triggers a backoff update).
-func serverPing(client *onebusaway.Client, server models.ObaServer) bool {
-	ctx := context.Background()
+func serverPing(ctx context.Context, client *onebusaway.Client, server models.ObaServer) bool {
 	response, err := client.CurrentTime.Get(ctx)
 
 	// Label with the bare sanitized base URL — the same value every per-agency

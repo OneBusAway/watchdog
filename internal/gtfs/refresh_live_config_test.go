@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,24 +27,29 @@ func TestRefreshGTFSBundlesReadsLiveConfig(t *testing.T) {
 	}
 
 	var (
+		shuttingDown  atomic.Bool
 		firstTickOnce sync.Once
 		addedOnce     sync.Once
 		firstTick     = make(chan struct{})
 		sawAdded      = make(chan struct{})
 	)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var signal chan struct{}
 		switch r.URL.Path {
 		case "/initial.zip":
-			firstTickOnce.Do(func() { close(firstTick) })
+			signal = firstTick
 		case "/added.zip":
-			addedOnce.Do(func() { close(sawAdded) })
+			signal = sawAdded
 		}
-		if _, err := w.Write(bundle); err != nil {
+		if _, err := w.Write(bundle); err != nil && !shuttingDown.Load() {
 			t.Errorf("write GTFS fixture: %v", err)
 		}
+		if signal == firstTick {
+			firstTickOnce.Do(func() { close(firstTick) })
+		} else if signal == sawAdded {
+			addedOnce.Do(func() { close(sawAdded) })
+		}
 	}))
-	defer ts.Close()
-	defer http.DefaultClient.CloseIdleConnections()
 
 	// The supplier starts out with one server and gains a second one, exactly
 	// as a config refresh would.
@@ -70,10 +76,20 @@ func TestRefreshGTFSBundlesReadsLiveConfig(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	done := make(chan struct{})
+	defer func() {
+		shuttingDown.Store(true)
+		cancel()
+		<-done
+		ts.Close()
+		http.DefaultClient.CloseIdleConnections()
+	}()
 
-	go refreshGTFSBundles(ctx, ts.Client(), servers, slog.New(slog.NewTextHandler(io.Discard, nil)),
-		10*time.Millisecond, geo.NewBoundingBoxStore(), NewStaticStore(), NewRouteAgencyIndex(), nil, 1)
+	go func() {
+		defer close(done)
+		refreshGTFSBundles(ctx, ts.Client(), servers, slog.New(slog.NewTextHandler(io.Discard, nil)),
+			10*time.Millisecond, geo.NewBoundingBoxStore(), NewStaticStore(), NewRouteAgencyIndex(), nil, 1)
+	}()
 
 	// Wait for a tick that used the original list before changing it, so a
 	// routine that snapshots the config at start-up has definitely taken its

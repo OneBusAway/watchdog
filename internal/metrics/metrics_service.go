@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"time"
@@ -46,8 +47,8 @@ func (ms *MetricsService) CountVehiclePositions(server models.ObaServer, agencie
 	return err
 }
 
-func (ms *MetricsService) CountActiveVehiclesForAgency(server models.ObaServer) error {
-	_, err := countActiveVehiclesForAgency(ms.NewObaClient(server), server)
+func (ms *MetricsService) CountActiveVehiclesForAgency(ctx context.Context, server models.ObaServer) error {
+	_, err := countActiveVehiclesForAgency(ctx, ms.NewObaClient(server), server)
 	return err
 }
 
@@ -59,12 +60,12 @@ func (ms *MetricsService) CheckBundleExpiration(currentTime time.Time, server mo
 	return checkBundleExpiration(ms.StaticStore, currentTime, server)
 }
 
-func (ms *MetricsService) ServerPing(server models.ObaServer) bool {
-	return serverPing(ms.NewObaClient(server), server)
+func (ms *MetricsService) ServerPing(ctx context.Context, server models.ObaServer) bool {
+	return serverPing(ctx, ms.NewObaClient(server), server)
 }
 
-func (ms *MetricsService) FetchObaAPIMetrics(agencyID, agencyName, serverName, serverBaseURL, apiKey string) error {
-	return fetchObaAPIMetrics(agencyID, agencyName, serverName, serverBaseURL, apiKey, ms.Client, ms.StaticStore, ms.Logger, ms.UnmatchedStopTracker)
+func (ms *MetricsService) FetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, serverBaseURL, apiKey string) error {
+	return fetchObaAPIMetrics(ctx, agencyID, agencyName, serverName, serverBaseURL, apiKey, ms.Client, ms.StaticStore, ms.Logger, ms.UnmatchedStopTracker)
 }
 
 // TrackVehicleTelemetry runs the per-vehicle telemetry pass exactly once per
