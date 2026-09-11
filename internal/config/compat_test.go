@@ -47,7 +47,6 @@ func TestDecodeServerEntry(t *testing.T) {
 				VehiclePositionURL: "https://vehicle1.example.com",
 				GtfsRTAPIKey:       "api-key-1",
 				GtfsRTAPIValue:     "api-value-1",
-				AgencyIDs:          []string{"agency-1"},
 			}},
 		}
 		if !reflect.DeepEqual(got, expected) {
@@ -225,7 +224,7 @@ func TestLoadConfigFromFileLegacy(t *testing.T) {
 		t.Fatalf("write config.json: %v", err)
 	}
 
-	servers, err := loadConfigFromFile(fp, testLogger())
+	servers, err := loadConfigFromFile(fp, testLogger(), NewDroppedServersStore())
 	if err != nil {
 		t.Fatalf("loadConfigFromFile failed: %v", err)
 	}
@@ -241,9 +240,6 @@ func TestLoadConfigFromFileLegacy(t *testing.T) {
 	}
 	if len(servers[0].GtfsRTFeeds) != 1 || servers[0].GtfsRTFeeds[0].VehiclePositionURL != "https://vehicle.example.com" {
 		t.Errorf("expected converted feed, got %+v", servers[0].GtfsRTFeeds)
-	}
-	if !reflect.DeepEqual(servers[0].GtfsRTFeeds[0].AgencyIDs, []string{"agency-legacy"}) {
-		t.Errorf("expected feed agency_ids to match agency_id, got %+v", servers[0].GtfsRTFeeds[0].AgencyIDs)
 	}
 }
 
@@ -283,7 +279,7 @@ func TestLoadConfigFromFileMixedEntries(t *testing.T) {
 		t.Fatalf("write config.json: %v", err)
 	}
 
-	servers, err := loadConfigFromFile(fp, testLogger())
+	servers, err := loadConfigFromFile(fp, testLogger(), NewDroppedServersStore())
 	if err != nil {
 		t.Fatalf("loadConfigFromFile failed: %v", err)
 	}
@@ -317,7 +313,7 @@ func TestLoadConfigFromURLLegacy(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	servers, err := loadConfigFromURL(context.Background(), &http.Client{Timeout: 10 * time.Second}, ts.URL, "", "", 1, testLogger())
+	servers, err := loadConfigFromURL(context.Background(), &http.Client{Timeout: 10 * time.Second}, ts.URL, "", "", 1, testLogger(), NewDroppedServersStore())
 	if err != nil {
 		t.Fatalf("loadConfigFromURL failed: %v", err)
 	}

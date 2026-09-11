@@ -13,7 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsentry/sentry-go"
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/report"
 )
 
 // validServer returns a fully-populated server that should pass validation.
@@ -153,7 +155,7 @@ func TestLoadConfigFromFileFiltersInvalidServers(t *testing.T) {
 		t.Fatalf("write config.json: %v", err)
 	}
 
-	servers, err := loadConfigFromFile(fp, testLogger())
+	servers, err := loadConfigFromFile(fp, testLogger(), NewDroppedServersStore())
 	if err != nil {
 		t.Fatalf("loadConfigFromFile failed: %v", err)
 	}
@@ -197,7 +199,7 @@ func TestLoadConfigFromURLFiltersInvalidServers(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	servers, err := loadConfigFromURL(context.Background(), &http.Client{Timeout: 10 * time.Second}, ts.URL, "", "", 1, testLogger())
+	servers, err := loadConfigFromURL(context.Background(), &http.Client{Timeout: 10 * time.Second}, ts.URL, "", "", 1, testLogger(), NewDroppedServersStore())
 	if err != nil {
 		t.Fatalf("loadConfigFromURL failed: %v", err)
 	}
@@ -244,7 +246,7 @@ func TestDecodeServers(t *testing.T) {
 		}
 
 		// Interleave valid and invalid: valid, invalid, valid, invalid.
-		got := decodeServers(rawEntries, testLogger())
+		got := decodeServers(rawEntries, testLogger(), NewDroppedServersStore())
 
 		if len(got) != 2 {
 			t.Fatalf("expected 2 valid servers, got %d: %+v", len(got), got)
@@ -277,7 +279,7 @@ func TestDecodeServers(t *testing.T) {
 			}`),
 		}
 
-		got := decodeServers(rawEntries, logger)
+		got := decodeServers(rawEntries, logger, NewDroppedServersStore())
 		if len(got) != 1 {
 			t.Fatalf("expected 1 server after dedup, got %d", len(got))
 		}
@@ -309,7 +311,7 @@ func TestDecodeServers(t *testing.T) {
 			}`),
 		}
 
-		got := decodeServers(rawEntries, testLogger())
+		got := decodeServers(rawEntries, testLogger(), NewDroppedServersStore())
 		if len(got) != 2 {
 			t.Fatalf("expected both servers kept (distinct base URLs, shared agency_id), got %d: %+v", len(got), got)
 		}
@@ -326,16 +328,300 @@ func TestDecodeServers(t *testing.T) {
 				"agency_id": "agency-bad"
 			}`),
 		}
-		got := decodeServers(rawEntries, testLogger())
+		got := decodeServers(rawEntries, testLogger(), NewDroppedServersStore())
 		if len(got) != 0 {
 			t.Fatalf("expected 0 valid servers, got %d", len(got))
 		}
 	})
 
 	t.Run("empty input yields an empty slice", func(t *testing.T) {
-		got := decodeServers(nil, testLogger())
+		got := decodeServers(nil, testLogger(), NewDroppedServersStore())
 		if len(got) != 0 {
 			t.Fatalf("expected 0 servers, got %d", len(got))
 		}
 	})
+}
+
+// A server that stays invalid across refresh cycles must be reported to Sentry
+// exactly once, not once per cycle.
+func TestReconcileReportsInvalidServerOnce(t *testing.T) {
+	rec := report.CaptureSentry(t)
+	store := NewDroppedServersStore()
+
+	invalid := validServer()
+	invalid.GtfsStaticFeeds = nil
+	raw := mustRawServer(t, invalid)
+
+	for i := 0; i < 3; i++ {
+		if got := store.Reconcile([]json.RawMessage{raw}, testLogger()); len(got) != 0 {
+			t.Fatalf("iteration %d: expected invalid server dropped, got %d valid", i, len(got))
+		}
+	}
+
+	events := rec.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected exactly 1 Sentry report for a persistently invalid server, got %d", len(events))
+	}
+	if events[0].Level != sentry.LevelError {
+		t.Errorf("expected error level, got %s", events[0].Level)
+	}
+	if events[0].Tags["agency_id"] != invalid.AgencyID || events[0].Tags["server_name"] != invalid.ServerName {
+		t.Errorf("unexpected tags: %v", events[0].Tags)
+	}
+}
+
+// When a previously dropped server becomes valid, exactly one info-level
+// recovery report is emitted and no further invalid reports follow.
+func TestReconcileReportsRecoveryOnce(t *testing.T) {
+	rec := report.CaptureSentry(t)
+	store := NewDroppedServersStore()
+
+	invalid := validServer()
+	invalid.GtfsStaticFeeds = nil
+
+	if got := store.Reconcile([]json.RawMessage{mustRawServer(t, invalid)}, testLogger()); len(got) != 0 {
+		t.Fatal("expected invalid server dropped")
+	}
+
+	recovered := invalid
+	recovered.GtfsStaticFeeds = []string{"https://gtfs.example.com"}
+	for i := 0; i < 2; i++ {
+		if got := store.Reconcile([]json.RawMessage{mustRawServer(t, recovered)}, testLogger()); len(got) != 1 {
+			t.Fatalf("iteration %d: expected recovered server kept, got %d valid", i, len(got))
+		}
+	}
+
+	events := rec.Events()
+	if len(events) != 2 {
+		t.Fatalf("expected 1 error + 1 recovery report, got %d", len(events))
+	}
+	if events[0].Level != sentry.LevelError {
+		t.Errorf("expected first event at error level, got %s", events[0].Level)
+	}
+	if events[1].Level != sentry.LevelInfo {
+		t.Errorf("expected recovery event at info level, got %s", events[1].Level)
+	}
+}
+
+// Recovery events must carry the same identifying tags (including server_name)
+// as invalid/duplicate reports so error and recovery events can be correlated.
+func TestReconcileRecoveryReportIncludesServerName(t *testing.T) {
+	rec := report.CaptureSentry(t)
+	store := NewDroppedServersStore()
+
+	invalid := validServer()
+	invalid.GtfsStaticFeeds = nil
+
+	if got := store.Reconcile([]json.RawMessage{mustRawServer(t, invalid)}, testLogger()); len(got) != 0 {
+		t.Fatal("expected invalid server dropped")
+	}
+
+	recovered := invalid
+	recovered.GtfsStaticFeeds = []string{"https://gtfs.example.com"}
+	if got := store.Reconcile([]json.RawMessage{mustRawServer(t, recovered)}, testLogger()); len(got) != 1 {
+		t.Fatal("expected recovered server kept")
+	}
+
+	events := rec.Events()
+	if len(events) != 2 {
+		t.Fatalf("expected 1 error + 1 recovery report, got %d", len(events))
+	}
+	recovery := events[1]
+	for _, want := range []string{"server_name", "agency_id", "agency_name"} {
+		if _, ok := recovery.Tags[want]; !ok {
+			t.Errorf("recovery event missing tag %q, got %v", want, recovery.Tags)
+		}
+	}
+}
+
+// A reported server that disappears from the config is pruned; if it later
+// reappears invalid, it is a fresh state and gets reported again.
+func TestReconcileReportsPrunedServerAgain(t *testing.T) {
+	rec := report.CaptureSentry(t)
+	store := NewDroppedServersStore()
+
+	invalid := validServer()
+	invalid.GtfsStaticFeeds = nil
+	raw := mustRawServer(t, invalid)
+
+	if got := store.Reconcile([]json.RawMessage{raw}, testLogger()); len(got) != 0 {
+		t.Fatal("expected invalid server dropped")
+	}
+
+	if got := store.Reconcile(nil, testLogger()); len(got) != 0 {
+		t.Fatal("expected no servers")
+	}
+
+	if got := store.Reconcile([]json.RawMessage{raw}, testLogger()); len(got) != 0 {
+		t.Fatal("expected invalid server dropped")
+	}
+
+	if events := rec.Events(); len(events) != 2 {
+		t.Fatalf("expected 2 Sentry reports, got %d", len(events))
+	}
+}
+
+func TestReconcileReportsDuplicateAgainAfterItIsFixed(t *testing.T) {
+	rec := report.CaptureSentry(t)
+	store := NewDroppedServersStore()
+	first := validServer()
+	duplicate := first
+	duplicate.AgencyName = "Duplicate Agency"
+	one := []json.RawMessage{mustRawServer(t, first)}
+	two := []json.RawMessage{mustRawServer(t, first), mustRawServer(t, duplicate)}
+
+	store.Reconcile(two, testLogger())
+	store.Reconcile(one, testLogger())
+	store.Reconcile(two, testLogger())
+
+	if events := rec.Events(); len(events) != 2 {
+		t.Fatalf("expected duplicate to report before and after the fixed cycle, got %d events", len(events))
+	}
+}
+
+func TestReconcileMalformedDuplicatesDoNotTriggerDuplicateReport(t *testing.T) {
+	rec := report.CaptureSentry(t)
+	store := NewDroppedServersStore()
+	first := validServer()
+	first.GtfsStaticFeeds = nil
+	duplicate := first
+	duplicate.AgencyName = "Duplicate Agency"
+
+	got := store.Reconcile([]json.RawMessage{mustRawServer(t, first), mustRawServer(t, duplicate)}, testLogger())
+	if len(got) != 0 {
+		t.Fatalf("expected both invalid duplicate entries to be dropped, got %d", len(got))
+	}
+	// Malformed entries no longer claim the identity in `seen`, so the
+	// duplicate check never fires for them — both are caught by validation,
+	// and only one validation error is reported (the second shares the
+	// identity and is suppressed).
+	events := rec.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 validation report (malformed entries don't trigger duplicate reports), got %d", len(events))
+	}
+	if events[0].Level != sentry.LevelError {
+		t.Errorf("expected error level, got %s", events[0].Level)
+	}
+}
+
+// When the first entry sharing an identity is malformed and the second is valid,
+// the malformed entry must not reserve the identity so the valid entry is
+// retained rather than incorrectly dropped as a duplicate.
+func TestReconcileMalformedFirstValidSecondSameIdentity(t *testing.T) {
+	rec := report.CaptureSentry(t)
+	store := NewDroppedServersStore()
+
+	malformed := validServer()
+	malformed.GtfsStaticFeeds = nil // invalid: missing gtfs_static_feeds
+
+	valid := validServer()
+
+	rawEntries := []json.RawMessage{
+		mustRawServer(t, malformed),
+		mustRawServer(t, valid),
+	}
+
+	for i := 0; i < 2; i++ {
+		got := store.Reconcile(rawEntries, testLogger())
+		if len(got) != 1 {
+			t.Fatalf("iteration %d: expected 1 valid server retained, got %d: %+v", i, len(got), got)
+		}
+		if got[0].AgencyID != valid.AgencyID {
+			t.Fatalf("iteration %d: expected the valid entry to be kept, got agency_id=%q", i, got[0].AgencyID)
+		}
+	}
+
+	events := rec.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 validation report and no false recoveries, got %d events", len(events))
+	}
+	if events[0].Level != sentry.LevelError {
+		t.Errorf("expected event at error level, got %s", events[0].Level)
+	}
+	// The error report must carry identifying tags including server_name.
+	for _, want := range []string{"server_name", "agency_id"} {
+		if _, ok := events[0].Tags[want]; !ok {
+			t.Errorf("expected tag %q to be present on error event, got %v", want, events[0].Tags)
+		}
+	}
+}
+
+func TestReconcileReportsDuplicateAgainAfterOtherCopyBecomesInvalid(t *testing.T) {
+	rec := report.CaptureSentry(t)
+	store := NewDroppedServersStore()
+	first := validServer()
+	duplicate := first
+	duplicate.AgencyName = "Duplicate Agency"
+
+	store.Reconcile([]json.RawMessage{mustRawServer(t, first), mustRawServer(t, duplicate)}, testLogger())
+
+	malformedDuplicate := duplicate
+	malformedDuplicate.GtfsStaticFeeds = nil
+	store.Reconcile([]json.RawMessage{mustRawServer(t, first), mustRawServer(t, malformedDuplicate)}, testLogger())
+
+	store.Reconcile([]json.RawMessage{mustRawServer(t, first), mustRawServer(t, duplicate)}, testLogger())
+
+	events := rec.Events()
+	if len(events) != 4 {
+		t.Fatalf("expected duplicate, validation, recovery, and reintroduced duplicate reports, got %d events", len(events))
+	}
+	duplicateReports := 0
+	for _, event := range events {
+		if len(event.Exception) > 0 && strings.Contains(event.Exception[0].Value, "duplicate server key") {
+			duplicateReports++
+		}
+	}
+	if duplicateReports != 2 {
+		t.Fatalf("expected duplicate to be reported in both duplicate episodes, got %d reports", duplicateReports)
+	}
+}
+
+// Sentry reports for dropped servers must carry only identifying tags, never
+// credentials such as API keys.
+func TestReconcileReportsNoCredentials(t *testing.T) {
+	rec := report.CaptureSentry(t)
+	store := NewDroppedServersStore()
+
+	invalid := validServer()
+	invalid.ObaApiKey = "super-secret-key"
+	invalid.GtfsRTFeeds[0].GtfsRTAPIKey = "gtfs-secret"
+	invalid.GtfsRTFeeds[0].GtfsRTAPIValue = "gtfs-value"
+	invalid.GtfsStaticFeeds = nil
+
+	store.Reconcile([]json.RawMessage{mustRawServer(t, invalid)}, testLogger())
+
+	events := rec.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 report, got %d", len(events))
+	}
+	event := events[0]
+
+	for _, secret := range []string{"super-secret-key", "gtfs-secret", "gtfs-value"} {
+		if strings.Contains(event.Message, secret) {
+			t.Errorf("report leaked credential %q in message", secret)
+		}
+		if len(event.Exception) > 0 && strings.Contains(event.Exception[0].Value, secret) {
+			t.Errorf("report leaked credential %q in exception value", secret)
+		}
+		for _, tag := range event.Tags {
+			if strings.Contains(tag, secret) {
+				t.Errorf("report leaked credential %q in tag", secret)
+			}
+		}
+	}
+
+	for _, want := range []string{"agency_id", "server_name"} {
+		if _, ok := event.Tags[want]; !ok {
+			t.Errorf("expected tag %q to be present, got %v", want, event.Tags)
+		}
+	}
+}
+
+func mustRawServer(t *testing.T, server models.ObaServer) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(server)
+	if err != nil {
+		t.Fatalf("marshal server: %v", err)
+	}
+	return raw
 }

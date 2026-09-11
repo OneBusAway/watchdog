@@ -64,11 +64,10 @@ type ObaServer struct {
 // GtfsRTFeed is one GTFS-Realtime source. Trip updates are retained for future
 // consumers; current monitoring uses vehicle positions.
 type GtfsRTFeed struct {
-	TripUpdateURL      string   `json:"trip_update_url"`
-	VehiclePositionURL string   `json:"vehicle_position_url"`
-	GtfsRTAPIKey       string   `json:"gtfs_rt_api_key"`
-	GtfsRTAPIValue     string   `json:"gtfs_rt_api_value"`
-	AgencyIDs          []string `json:"agency_ids"`
+	TripUpdateURL      string `json:"trip_update_url"`
+	VehiclePositionURL string `json:"vehicle_position_url"`
+	GtfsRTAPIKey       string `json:"gtfs_rt_api_key"`
+	GtfsRTAPIValue     string `json:"gtfs_rt_api_value"`
 }
 
 // NewObaServer creates a new ObaServer instance with the provided configuration.
