@@ -479,7 +479,7 @@ func TestReconcileReportsDuplicateAgainAfterItIsFixed(t *testing.T) {
 	}
 }
 
-func TestReconcileRejectsDuplicatesBeforeValidation(t *testing.T) {
+func TestReconcileMalformedDuplicatesDoNotTriggerDuplicateReport(t *testing.T) {
 	rec := report.CaptureSentry(t)
 	store := NewDroppedServersStore()
 	first := validServer()
@@ -521,34 +521,58 @@ func TestReconcileMalformedFirstValidSecondSameIdentity(t *testing.T) {
 		mustRawServer(t, valid),
 	}
 
-	got := store.Reconcile(rawEntries, testLogger())
-
-	if len(got) != 1 {
-		t.Fatalf("expected 1 valid server retained, got %d: %+v", len(got), got)
-	}
-	if got[0].AgencyID != valid.AgencyID {
-		t.Fatalf("expected the valid entry to be kept, got agency_id=%q", got[0].AgencyID)
+	for i := 0; i < 2; i++ {
+		got := store.Reconcile(rawEntries, testLogger())
+		if len(got) != 1 {
+			t.Fatalf("iteration %d: expected 1 valid server retained, got %d: %+v", i, len(got), got)
+		}
+		if got[0].AgencyID != valid.AgencyID {
+			t.Fatalf("iteration %d: expected the valid entry to be kept, got agency_id=%q", i, got[0].AgencyID)
+		}
 	}
 
 	events := rec.Events()
-	// The malformed entry produces 1 error report; the valid entry with
-	// the same identity produces 1 recovery report (recovering the
-	// previously-reported identity). No duplicate report is emitted
-	// because malformed entries no longer claim the identity.
-	if len(events) != 2 {
-		t.Fatalf("expected 2 Sentry reports (1 error + 1 recovery), got %d", len(events))
+	if len(events) != 1 {
+		t.Fatalf("expected 1 validation report and no false recoveries, got %d events", len(events))
 	}
 	if events[0].Level != sentry.LevelError {
-		t.Errorf("expected first event at error level, got %s", events[0].Level)
-	}
-	if events[1].Level != sentry.LevelInfo {
-		t.Errorf("expected recovery event at info level, got %s", events[1].Level)
+		t.Errorf("expected event at error level, got %s", events[0].Level)
 	}
 	// The error report must carry identifying tags including server_name.
 	for _, want := range []string{"server_name", "agency_id"} {
 		if _, ok := events[0].Tags[want]; !ok {
 			t.Errorf("expected tag %q to be present on error event, got %v", want, events[0].Tags)
 		}
+	}
+}
+
+func TestReconcileReportsDuplicateAgainAfterOtherCopyBecomesInvalid(t *testing.T) {
+	rec := report.CaptureSentry(t)
+	store := NewDroppedServersStore()
+	first := validServer()
+	duplicate := first
+	duplicate.AgencyName = "Duplicate Agency"
+
+	store.Reconcile([]json.RawMessage{mustRawServer(t, first), mustRawServer(t, duplicate)}, testLogger())
+
+	malformedDuplicate := duplicate
+	malformedDuplicate.GtfsStaticFeeds = nil
+	store.Reconcile([]json.RawMessage{mustRawServer(t, first), mustRawServer(t, malformedDuplicate)}, testLogger())
+
+	store.Reconcile([]json.RawMessage{mustRawServer(t, first), mustRawServer(t, duplicate)}, testLogger())
+
+	events := rec.Events()
+	if len(events) != 4 {
+		t.Fatalf("expected duplicate, validation, recovery, and reintroduced duplicate reports, got %d events", len(events))
+	}
+	duplicateReports := 0
+	for _, event := range events {
+		if len(event.Exception) > 0 && strings.Contains(event.Exception[0].Value, "duplicate server key") {
+			duplicateReports++
+		}
+	}
+	if duplicateReports != 2 {
+		t.Fatalf("expected duplicate to be reported in both duplicate episodes, got %d reports", duplicateReports)
 	}
 }
 

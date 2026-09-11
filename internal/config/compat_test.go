@@ -47,7 +47,6 @@ func TestDecodeServerEntry(t *testing.T) {
 				VehiclePositionURL: "https://vehicle1.example.com",
 				GtfsRTAPIKey:       "api-key-1",
 				GtfsRTAPIValue:     "api-value-1",
-				AgencyIDs:          []string{"agency-1"},
 			}},
 		}
 		if !reflect.DeepEqual(got, expected) {
@@ -241,9 +240,6 @@ func TestLoadConfigFromFileLegacy(t *testing.T) {
 	}
 	if len(servers[0].GtfsRTFeeds) != 1 || servers[0].GtfsRTFeeds[0].VehiclePositionURL != "https://vehicle.example.com" {
 		t.Errorf("expected converted feed, got %+v", servers[0].GtfsRTFeeds)
-	}
-	if !reflect.DeepEqual(servers[0].GtfsRTFeeds[0].AgencyIDs, []string{"agency-legacy"}) {
-		t.Errorf("expected feed agency_ids to match agency_id, got %+v", servers[0].GtfsRTFeeds[0].AgencyIDs)
 	}
 }
 
