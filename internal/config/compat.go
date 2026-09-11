@@ -74,12 +74,6 @@ func legacyToCurrent(l legacyObaServer) models.ObaServer {
 		GtfsRTAPIKey:       l.GtfsRtApiKey,
 		GtfsRTAPIValue:     l.GtfsRtApiValue,
 	}
-	// Only record an agency for the feed when the legacy entry actually named
-	// one; []string{""} would advertise a feed serving an agency with an empty
-	// id, which is exactly what server-mode discovery must not see.
-	if strings.TrimSpace(l.AgencyID) != "" {
-		feed.AgencyIDs = []string{l.AgencyID}
-	}
 
 	out := models.ObaServer{
 		ServerName:      l.Name,

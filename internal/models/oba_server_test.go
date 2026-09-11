@@ -28,7 +28,6 @@ func TestNewObaServer(t *testing.T) {
 		VehiclePositionURL: "https://test.vehicleposition.url",
 		GtfsRTAPIKey:       "test-gtfs-rt-api-key",
 		GtfsRTAPIValue:     "test-gtfs-rt-api-value",
-		AgencyIDs:          []string{agencyID},
 	}}
 
 	server := NewObaServer(
