@@ -6,13 +6,16 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"watchdog.onebusaway.org/internal/config"
+	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/metrics"
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/utils"
 )
 
 func TestMetricsEndpoint(t *testing.T) {
@@ -117,5 +120,90 @@ func TestAgencyScopeFetchesRealtimeFeed(t *testing.T) {
 	}
 	if app.GtfsService.RealtimeStore.Get(server.ServerKey()) == nil {
 		t.Fatalf("expected realtime data to be stored under %s", server.ServerKey())
+	}
+}
+
+// Server mode should fetch /api/where/metrics.json once per tick.
+// The parsed response is reused by each live agency's
+// FetchObaAPIMetrics call.
+func TestServerScopeFetchesMetricsOncePerTick(t *testing.T) {
+	rtData := readTestFixture(t, "../../testdata/gtfs_rt_feed_vehicles.pb")
+	var mu sync.Mutex
+	metricsCalls := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/vehicles.pb":
+			w.Header().Set("Content-Type", "application/octet-stream")
+
+			w.Write(rtData)
+		case "/api/where/metrics.json":
+			mu.Lock()
+			metricsCalls++
+			n := metricsCalls
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			// Only the first response carries real data. If any agency
+			// refetched instead of reading the threaded response, it would see
+			if n > 1 {
+				w.Write([]byte(`{"code":200,"version":2,"data":{"entry":{"agencyIDs":[],"realtimeRecordsTotal":{}}}}`))
+				return
+			}
+			w.Write([]byte(`{"code":200,"version":2,"data":{"entry":{"agencyIDs":["agency-a","agency-b"],"realtimeRecordsTotal":{"agency-a":1,"agency-b":2}}}}`))
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"code":200,"data":{"list":[],"entry":{"readableTime":"now"}}}`))
+		}
+	}))
+	t.Cleanup(ts.Close)
+	t.Cleanup(http.DefaultClient.CloseIdleConnections)
+
+	app := newTestApplication(t)
+	baseURL := ts.URL
+
+	server := models.ObaServer{
+		ServerName:  "multi",
+		ObaBaseURL:  baseURL,
+		ObaApiKey:   "test-key",
+		GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: baseURL + "/vehicles.pb"}},
+	}
+
+	wholeWorld := geo.BoundingBox{MinLat: -90, MaxLat: 90, MinLon: -180, MaxLon: 180}
+	for _, agencyID := range []string{"agency-a", "agency-b"} {
+		key := models.ServerKey(baseURL, agencyID)
+		app.GtfsService.StaticStore.Set(key, &models.StaticData{})
+		app.GtfsService.BoundingBoxStore.Set(key, wholeWorld)
+	}
+	app.GtfsService.BoundingBoxStore.Set(server.ServerKey(), wholeWorld)
+
+	app.GtfsService.RouteAgencyIndex.Set(baseURL, map[string]string{
+		"route-a": "agency-a",
+		"route-b": "agency-b",
+	})
+
+	scope := config.ResolveScope(server, app.GtfsService.StaticStore, app.GtfsService.RouteAgencyIndex)
+	if _, ok := scope.(config.ServerScope); !ok {
+		t.Fatalf("expected a ServerScope for an entry without agency_id, got %T", scope)
+	}
+
+	app.collectForScope(context.Background(), server, scope)
+
+	mu.Lock()
+	got := metricsCalls
+	mu.Unlock()
+	if got != 1 {
+		t.Fatalf("expected exactly 1 request to /api/where/metrics.json per tick, got %d", got)
+	}
+	serverURL := utils.SanitizeServerURL(baseURL)
+	for agencyID, want := range map[string]float64{"agency-a": 1, "agency-b": 2} {
+		value, found := gaugeValueFor(metrics.ObaRealtimeRecords, map[string]string{
+			"agency_id":  agencyID,
+			"server_url": serverURL,
+		})
+		if !found {
+			t.Fatalf("no oba_realtime_records_count series for %s; the threaded response was not used", agencyID)
+		}
+		if value != want {
+			t.Fatalf("%s: expected %v from the threaded response, got %v", agencyID, want, value)
+		}
 	}
 }
