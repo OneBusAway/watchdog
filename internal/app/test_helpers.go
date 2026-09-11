@@ -140,3 +140,37 @@ func readCounter(t *testing.T, vec *prometheus.CounterVec, labels map[string]str
 	}
 	return pb.GetCounter().GetValue()
 }
+
+// gaugeValueFor returns the value of a GaugeVec series, or 0 if the series is not found.
+func gaugeValueFor(vec *prometheus.GaugeVec, want map[string]string) (float64, bool) {
+	ch := make(chan prometheus.Metric)
+	go func() {
+		vec.Collect(ch)
+		close(ch)
+	}()
+
+	var value float64
+	found := false
+	for m := range ch {
+		pb := &dto.Metric{}
+		if err := m.Write(pb); err != nil {
+			continue
+		}
+		labels := make(map[string]string, len(pb.Label))
+		for _, l := range pb.Label {
+			labels[l.GetName()] = l.GetValue()
+		}
+		hit := true
+		for name, v := range want {
+			if labels[name] != v {
+				hit = false
+				break
+			}
+		}
+		if hit && !found {
+			value = pb.GetGauge().GetValue()
+			found = true
+		}
+	}
+	return value, found
+}
