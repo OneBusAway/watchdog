@@ -130,7 +130,7 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 	app.ConfigService.BackoffStore.ResetBackoff(server.ServerKey())
 
 	// Probe /metrics.json for the live agency set.
-	liveAgencies, err := app.probeLiveAgencies(ctx, server)
+	liveAgencies, cacheMetrics, err := app.probeLiveAgencies(ctx, server)
 	if err != nil {
 		// Treat as "no agencies live" for this tick; static bundles stay
 		// stored so their introspection metrics keep emitting.
@@ -222,30 +222,8 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 	// intentionally called once per agency here because the gauge is
 	// server-scoped — the per-agency call is cheap (one HTTP probe) and keeps
 	// the metric series up-to-date even if a single agency's checks bail out.
-	//
-	// TODO(server-mode dedup): In server-mode with N live agencies we
-	// call FetchObaAPIMetrics once per agency, which means N redundant
-	// HTTP fetches of the same /api/where/metrics.json endpoint per tick.
-	// The response was already fetched once by probeLiveAgencies at the
-	// top of this function.
-	//
-	// We accept this for now because the endpoint is small JSON designed
-	// for high-QPS polling and at 30s ticks the cost is at most a few
-	// redundant fetches/min. Threading the parsed body through
-	// FetchObaAPIMetrics / MetricsService.FetchObaAPIMetrics / the
-	// public CollectMetricsForServer path would require parameter
-	// plumbing across three layers and a parsed-body cache for the
-	// duration of one tick.
-	//
-	// Revisit if OBA starts rate-limiting /metrics.json, the fleet fans
-	// out across many agencies, or scrape latency becomes a concern. The
-	// fix is to widen probeLiveAgencies to return the parsed body and
-	// pass it into FetchObaAPIMetrics (probably as an optional parameter
-	// on MetricsService.FetchObaAPIMetrics so agency-mode callers don't
-	// have to change). fetchObaAPIMetrics carries a one-line pointer to
-	// this TODO at its definition site.
 	for _, agencyServer := range liveAgencyEntries {
-		app.collectAgencyChecks(ctx, agencyServer)
+		app.collectAgencyChecks(ctx, agencyServer, cacheMetrics)
 	}
 
 	// One GTFS-RT vehicle pass for the whole server. Running it inside the
@@ -267,7 +245,8 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 //     runs, so a failed fetch is a hard gate: we return rather than emit
 //     metrics derived from a stale (or absent) feed.
 func (app *Application) CollectMetricsForServer(ctx context.Context, server models.ObaServer) {
-	if !app.collectAgencyChecks(ctx, server) {
+	// nil: agency-mode fetches its own response.
+	if !app.collectAgencyChecks(ctx, server, nil) {
 		return
 	}
 
@@ -302,7 +281,7 @@ func (app *Application) CollectMetricsForServer(ctx context.Context, server mode
 // Server-mode calls this once per live agency; agency-mode calls it once for
 // the configured entry. The GTFS-RT vehicle pass is deliberately NOT part of
 // it — that pass runs once per server, in the caller.
-func (app *Application) collectAgencyChecks(ctx context.Context, server models.ObaServer) bool {
+func (app *Application) collectAgencyChecks(ctx context.Context, server models.ObaServer, cacheMetrics *metrics.OBAMetrics) bool {
 	// Check if server has an active backoff period
 	nextRetryAt, exists := app.ConfigService.BackoffStore.NextRetryAt(server.ServerKey())
 	if exists && time.Now().UTC().Before(nextRetryAt) {
@@ -359,7 +338,7 @@ func (app *Application) collectAgencyChecks(ctx context.Context, server models.O
 		})
 	}
 
-	err = app.MetricsService.FetchObaAPIMetrics(ctx, server.AgencyID, server.AgencyName, server.ServerName, server.ObaBaseURL, server.ObaApiKey)
+	err = app.MetricsService.FetchObaAPIMetrics(ctx, server.AgencyID, server.AgencyName, server.ServerName, server.ObaBaseURL, server.ObaApiKey, cacheMetrics)
 	if err != nil {
 		app.Logger.Error("Failed to fetch OBA API metrics", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -458,14 +437,16 @@ func boolToFloat(b bool) float64 {
 }
 
 // probeLiveAgencies fetches /api/where/metrics.json for the given server and
-// returns the set of agency IDs OBA currently reports. Returns an empty map
-// (not an error) if the response is missing or malformed — the caller treats
-// empty as "no agencies live this tick" so static-only metrics keep emitting.
-func (app *Application) probeLiveAgencies(ctx context.Context, server models.ObaServer) (map[string]bool, error) {
+// returns the set of agency IDs OBA currently reports, along with the parsed
+// response so the caller can pass it into the per-agency metrics calls rather
+// than refetching the same body once per agency. Returns an empty map (not an
+// error) if the response is missing or malformed — the caller treats empty as
+// "no agencies live this tick" so static-only metrics keep emitting.
+func (app *Application) probeLiveAgencies(ctx context.Context, server models.ObaServer) (map[string]bool, *metrics.OBAMetrics, error) {
 	endpoint := fmt.Sprintf("%s/api/where/metrics.json?key=%s", server.ObaBaseURL, url.QueryEscape(server.ObaApiKey))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, fmt.Errorf("build /metrics.json request: %w", err)
+		return nil, nil, fmt.Errorf("build /metrics.json request: %w", err)
 	}
 
 	client := app.MetricsService.Client
@@ -474,22 +455,23 @@ func (app *Application) probeLiveAgencies(ctx context.Context, server models.Oba
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("fetch /metrics.json: %w", err)
+		return nil, nil, fmt.Errorf("fetch /metrics.json: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("/metrics.json returned %d", resp.StatusCode)
+		return nil, nil, fmt.Errorf("/metrics.json returned %d", resp.StatusCode)
 	}
 	// Reuse the metrics package's response type so the two decoders of this
-	// endpoint can never drift apart. Only entry.AgencyIDs is read here.
+	// endpoint can never drift apart. Only entry.AgencyIDs is read here; the
+	// rest of the body is returned for fetchObaAPIMetrics to read per agency.
 	var decoded metrics.OBAMetrics
 	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
-		return nil, fmt.Errorf("decode /metrics.json: %w", err)
+		return nil, nil, fmt.Errorf("decode /metrics.json: %w", err)
 	}
 
 	out := make(map[string]bool, len(decoded.Data.Entry.AgencyIDs))
 	for _, id := range decoded.Data.Entry.AgencyIDs {
 		out[id] = true
 	}
-	return out, nil
+	return out, &decoded, nil
 }
