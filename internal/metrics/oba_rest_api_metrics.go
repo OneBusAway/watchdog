@@ -71,7 +71,6 @@ type OBAMetrics struct {
 //     A nil client is treated as a programming error.
 //   - prefetchedMetrics: an already-decoded metrics response to use instead of fetching.
 //     Pass nil to have the function fetch the endpoint itself.
-//
 // Returns:
 //   - error: any error encountered during request or decoding. Nil when
 //     prefetchedMetrics is supplied and the per-agency metrics are recorded.
