@@ -73,7 +73,7 @@ type OBAMetrics struct {
 //     Pass nil to have the function fetch the endpoint itself.
 //
 // Returns:
-//   - error: any error encountered during request or decoding. Nil When
+//   - error: any error encountered during request or decoding. Nil when
 //     prefetchedMetrics is supplied and the per-agency metrics are recorded.
 
 func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, serverBaseUrl, apiKey string, client *http.Client, staticStore *gtfs.StaticStore, logger *slog.Logger, unmatchedStopTracker *UnmatchedStopTracker, prefetchedMetrics *OBAMetrics) error {
