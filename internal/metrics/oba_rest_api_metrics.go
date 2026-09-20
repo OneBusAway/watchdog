@@ -47,6 +47,10 @@ type OBAMetrics struct {
 // populates per-agency Prometheus metrics (real-time and scheduled trip
 // counts, stop match ratios, time-since-update, etc.).
 //
+// Unmatched stop IDs are resolved against the shared merged GTFS bundle. Each
+// ID resolves to at most one stop because the merge keeps the first occurrence
+// of duplicate stop IDs.
+//
 // Server availability is *not* set here — that's the responsibility of the
 // server-ping routine, which labels ObaApiStatus with (server_name, server_url)
 // only. This function only emits per-agency metrics.
@@ -235,6 +239,7 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 		if stop.Latitude == nil || stop.Longitude == nil {
 			continue
 		}
+		resolved++
 		latStr := fmt.Sprintf("%.6f", *stop.Latitude)
 		lonStr := fmt.Sprintf("%.6f", *stop.Longitude)
 		ObaUnmatchedStopInfo.WithLabelValues(
@@ -247,7 +252,8 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 			latStr,
 			lonStr,
 		).Set(1)
-		resolved++
+		// A changed name or location replaces the previous label set for this
+		// stop ID; expose only the merged bundle's current stop.
 		unmatchedStopTracker.RecordLastSeen(serverKey, agencyID, agencyName, serverName, serverURL, stopID, stop.Name, latStr, lonStr)
 	}
 

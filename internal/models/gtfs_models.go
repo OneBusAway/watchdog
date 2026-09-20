@@ -12,6 +12,10 @@ import (
 // is parsed: every route carries an agency_id in routes.txt, which is how we
 // attribute GTFS-RT vehicles to agencies in server-mode.
 //
+// After multiple feeds are merged, Stops is the server-wide flattened stop set
+// with duplicate IDs resolved by first occurrence. Agency-specific stop sets are
+// intentionally not retained; the GTFS refresh computes per-agency geographic
+// extrema directly from the source feeds before storing this shared bundle.
 // IMPORTANT:
 // In the future, we may need to extend this structure
 // to include more fields from the GTFS Static bundle.
@@ -23,6 +27,7 @@ type StaticData struct {
 	Routes   []remoteGtfs.Route
 }
 
+// NewStaticData copies the portions of a parsed GTFS bundle used by Watchdog.
 func NewStaticData(GtfsStaticBundle *remoteGtfs.Static) *StaticData {
 	return &StaticData{
 		Stops:    append([]remoteGtfs.Stop(nil), GtfsStaticBundle.Stops...),

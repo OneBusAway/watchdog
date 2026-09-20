@@ -29,7 +29,7 @@ import (
 //   - agencyName: the human-readable agency name, used as a metric label
 //   - serverName: the human-readable server name, used as a metric label
 //   - serverURL: the sanitized base URL of the deployment, used as a metric label
-//   - unmatchedStops: a map of stop IDs to GTFS stop objects not matched to gtfs static data
+//   - unmatchedStops: a map of stop IDs to stops in the merged GTFS bundle
 //   - tracker: used to record cluster observations so stale cluster series can be cleaned up later.
 func reportUnmatchedStopClusters(serverKey, agencyID, agencyName, serverName, serverURL string, unmatchedStops map[string]remoteGtfs.Stop, tracker *UnmatchedStopTracker) {
 	type clusterKey struct {

@@ -67,6 +67,7 @@ func GetEarliestAndLatestServiceDates(staticData *models.StaticData) (earliest, 
 	return earliestTime, latestTime, nil
 }
 
+// GetStopLocationsByIDs resolves stop IDs from the merged static bundle.
 func GetStopLocationsByIDs(serverKey string, stopIDs []string, staticStore *StaticStore) (map[string]remoteGtfs.Stop, error) {
 	return getStopLocationsByIDs(serverKey, stopIDs, staticStore)
 }

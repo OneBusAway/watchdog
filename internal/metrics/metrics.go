@@ -193,7 +193,7 @@ var (
 	ObaUnmatchedStopInfo = tracked(promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "oba_unmatched_stop_info",
-			Help: "Presence marker (always 1) for unmatched stops from static GTFS with their location as labels",
+			Help: "Presence marker (always 1) for unmatched physical stop locations from static GTFS",
 		},
 		[]string{"agency_id", "agency_name", "server_name", "server_url", "stop_id", "stop_name", "lat", "lon"},
 	))
@@ -217,7 +217,7 @@ var (
 	UnmatchedStopClusterCount = tracked(promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "oba_unmatched_stop_cluster_count",
-			Help: "Number of unmatched stops grouped by station and S2 spatial cluster",
+			Help: "Number of unmatched physical stop locations grouped by station and S2 spatial cluster",
 		},
 		[]string{"agency_id", "agency_name", "server_name", "server_url", "station_id", "cluster_id", "cluster_lat", "cluster_lon"},
 	))
