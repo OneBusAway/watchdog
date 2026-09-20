@@ -51,6 +51,10 @@ type OBAMetrics struct {
 // ID resolves to at most one stop because the merge keeps the first occurrence
 // of duplicate stop IDs.
 //
+// Unmatched stop IDs are resolved against the shared merged GTFS bundle. Each
+// ID resolves to at most one stop because the merge keeps the first occurrence
+// of duplicate stop IDs.
+//
 // Server availability is *not* set here — that's the responsibility of the
 // server-ping routine, which labels ObaApiStatus with (server_name, server_url)
 // only. This function only emits per-agency metrics.
