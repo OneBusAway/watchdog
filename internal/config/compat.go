@@ -6,9 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/getsentry/sentry-go"
 	"watchdog.onebusaway.org/internal/models"
-	"watchdog.onebusaway.org/internal/report"
 )
 
 // legacyObaServer mirrors the pre-array (v1) flat server config schema. It
@@ -76,12 +74,6 @@ func legacyToCurrent(l legacyObaServer) models.ObaServer {
 		GtfsRTAPIKey:       l.GtfsRtApiKey,
 		GtfsRTAPIValue:     l.GtfsRtApiValue,
 	}
-	// Only record an agency for the feed when the legacy entry actually named
-	// one; []string{""} would advertise a feed serving an agency with an empty
-	// id, which is exactly what server-mode discovery must not see.
-	if strings.TrimSpace(l.AgencyID) != "" {
-		feed.AgencyIDs = []string{l.AgencyID}
-	}
 
 	out := models.ObaServer{
 		ServerName:      l.Name,
@@ -134,74 +126,7 @@ func decodeServerEntry(raw json.RawMessage) (models.ObaServer, error) {
 	return server, nil
 }
 
-// serverTagsFromRaw extracts the agency name and ID from a raw entry for
-// error tagging. Unmarshal failures are ignored since the entry is already
-// invalid.
-func serverTagsFromRaw(raw json.RawMessage) map[string]string {
-	var tags struct {
-		LegacyName string `json:"name"`
-		AgencyName string `json:"agency_name"`
-		AgencyID   string `json:"agency_id"`
-	}
-	if err := json.Unmarshal(raw, &tags); err != nil {
-		return nil
-	}
-	m := make(map[string]string, 2)
-	agencyName := tags.AgencyName
-	if agencyName == "" {
-		agencyName = tags.LegacyName
-	}
-	if agencyName != "" {
-		m["agency_name"] = agencyName
-	}
-	if tags.AgencyID != "" {
-		m["agency_id"] = tags.AgencyID
-	}
-	return m
-}
-
-// decodeServers decodes each raw config entry into the current schema,
-// converting legacy v1 entries. Invalid entries and entries that mix schemas
-// are reported to Sentry and dropped, and duplicate servers (same oba_base_url
-// and agency_id) are rejected, so one misconfigured entry cannot block
-// monitoring of the rest of the fleet. Distinct deployments that happen to
-// share an agency_id are kept, since agency IDs are only unique within a single
-// OBA server.
-func decodeServers(rawEntries []json.RawMessage, logger *slog.Logger) []models.ObaServer {
-	valid := make([]models.ObaServer, 0, len(rawEntries))
-	seenServers := make(map[string]struct{})
-	for _, raw := range rawEntries {
-		server, err := decodeServerEntry(raw)
-		if err != nil {
-			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-				Tags:  serverTagsFromRaw(raw),
-				Level: sentry.LevelError,
-			})
-			continue
-		}
-		serverKey := server.ServerKey()
-		if _, exists := seenServers[serverKey]; exists {
-			logger.Error("Dropping server with duplicate oba_base_url and agency_id",
-				"agency_id", server.AgencyID,
-				"agency_name", server.AgencyName,
-				"oba_base_url", server.ObaBaseURL,
-				"server_key", serverKey,
-			)
-			report.ReportErrorWithSentryOptions(fmt.Errorf("duplicate server key %q", serverKey), report.SentryReportOptions{
-				Tags: map[string]string{
-					"agency_id":   server.AgencyID,
-					"agency_name": server.AgencyName,
-				},
-				ExtraContext: map[string]interface{}{
-					"oba_base_url": server.ObaBaseURL,
-					"server_key":   serverKey,
-				},
-				Level: sentry.LevelError,
-			})
-			continue
-		}
-		seenServers[serverKey] = struct{}{}
-		valid = append(valid, server)
-	}
-	return valid
+// decodeServers decodes, validates, and deduplicates one configuration cycle.
+func decodeServers(rawEntries []json.RawMessage, logger *slog.Logger, droppedStore *DroppedServersStore) []models.ObaServer {
+	return droppedStore.Reconcile(rawEntries, logger)
 }

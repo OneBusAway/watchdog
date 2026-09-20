@@ -109,11 +109,14 @@ func main() {
 	// Load the configuration from the specified source
 	// If a config file is specified, load it from disk.
 	// If a config URL is specified, fetch it over HTTP(S).
+	// The dropped-servers store is shared between the initial load and the
+	// periodic refresh so an invalid server is reported to Sentry only once.
+	droppedStore := config.NewDroppedServersStore()
 	var servers []models.ObaServer
 	if *configFile != "" {
-		servers, err = config.LoadConfigFromFile(*configFile, logger)
+		servers, err = config.LoadConfigFromFile(*configFile, logger, droppedStore)
 	} else if *configURL != "" {
-		servers, err = config.LoadConfigFromURL(ctx, client, *configURL, configAuthUser, configAuthPass, 20, logger)
+		servers, err = config.LoadConfigFromURL(ctx, client, *configURL, configAuthUser, configAuthPass, 20, logger, droppedStore)
 	}
 
 	if err != nil {
@@ -136,7 +139,7 @@ func main() {
 	// and the required dependencies.
 	// this New() function is critical in understanding how we structure the application take a look at it.
 	// and also take a look at service file in each package to see the dependencies and the exposed methods and function.
-	app := app.New(&cfg, logger, client, version)
+	app := app.New(&cfg, logger, client, version, droppedStore)
 
 	// Report the agencies Watchdog is tracking (those that passed config
 	// validation). This runs once at startup; it is re-triggered only when the

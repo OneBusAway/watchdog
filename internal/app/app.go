@@ -35,7 +35,7 @@ type Application struct {
 // resolve scopes for both agency-mode and server-mode entries. The
 // gtfs-service constructor receives the route index too so it can populate it
 // during static-bundle parse.
-func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version string) *Application {
+func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version string, droppedStore *config.DroppedServersStore) *Application {
 
 	staticStore := gtfs.NewStaticStore()
 	realtimeStore := gtfs.NewRealtimeStore()
@@ -46,7 +46,7 @@ func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version s
 	backoffStore := config.NewBackoffStore()
 
 	obaSDKClientCache := NewObaSDKClientCache(client)
-	configService := config.NewConfigService(logger, client, cfg, backoffStore)
+	configService := config.NewConfigService(logger, client, cfg, backoffStore, droppedStore)
 	gtfsService := gtfs.NewGtfsService(staticStore, realtimeStore, boundingBoxStore, routeAgencyIndex, logger, client)
 	metricsService := metrics.NewMetricsService(staticStore, realtimeStore, boundingBoxStore, routeAgencyIndex, vehicleLastSeen, unmatchedStopTracker, logger, client, obaSDKClientCache.For)
 

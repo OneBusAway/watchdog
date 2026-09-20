@@ -34,14 +34,13 @@ Watchdog requires a configuration file (`config.json`) before running. Even plac
       "trip_update_url": "https://trip1.example.com",
       "vehicle_position_url": "https://vehicle1.example.com",
       "gtfs_rt_api_key": "api-key-1",
-      "gtfs_rt_api_value": "api-value-1",
-      "agency_ids": []
+      "gtfs_rt_api_value": "api-value-1"
     }]
   }
 ]
 ```
 
-The top-level `agency_id` decides what each entry observes: set it to track that agency. OBA API probes query only that agency, though static and realtime feed data is not filtered by agency; leave it out to track the server and every agency it serves. `agency_ids` on a feed is optional and unused by Watchdog today. See [Two observation modes](#two-observation-modes-agency-vs-server) below for both config shapes.
+The top-level `agency_id` decides what each entry observes: set it to track that agency. OBA API probes query only that agency, though static and realtime feed data is not filtered by agency; leave it out to track the server and every agency it serves. See [Two observation modes](#two-observation-modes-agency-vs-server) below for both config shapes.
 
 #### Ways to Provide the Config File
 
@@ -98,8 +97,7 @@ There are two ways Watchdog can observe an OBA deployment. The choice is made **
     "trip_update_url": "https://trip1.example.com",
     "vehicle_position_url": "https://vehicle1.example.com",
     "gtfs_rt_api_key": "api-key-1",
-    "gtfs_rt_api_value": "api-value-1",
-    "agency_ids": ["agency-1"]
+    "gtfs_rt_api_value": "api-value-1"
   }]
 }
 ```
@@ -116,8 +114,7 @@ There are two ways Watchdog can observe an OBA deployment. The choice is made **
     "trip_update_url": "https://trip2.example.com",
     "vehicle_position_url": "https://vehicle2.example.com",
     "gtfs_rt_api_key": "api-key-2",
-    "gtfs_rt_api_value": "api-value-2",
-    "agency_ids": []
+    "gtfs_rt_api_value": "api-value-2"
   }]
 }
 ```
