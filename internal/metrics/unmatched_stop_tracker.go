@@ -98,7 +98,7 @@ func (t *UnmatchedStopTracker) RecordLastSeen(serverKey, agencyID, agencyName, s
 	}
 	entry, exists := stops[key]
 	if exists && (entry.AgencyName != agencyName || entry.ServerName != serverName || entry.ServerURL != serverURL || entry.AgencyID != agencyID) {
-		// The stop changed its agency name or server identity, so the
+		// The stop's AgencyID, AgencyName, ServerName, or ServerURL changed, so the
 		// series labeled with its previous values is now stale. Stop name and
 		// location are part of stopKey and handled by the retirement loop
 		// above. Delete it so
