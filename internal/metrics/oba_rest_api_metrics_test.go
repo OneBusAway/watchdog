@@ -3,6 +3,7 @@ package metrics
 import (
 	"bytes"
 	"context"
+	"fmt"
 	remoteGtfs "github.com/OneBusAway/go-gtfs"
 	"gopkg.in/dnaeon/go-vcr.v4/pkg/recorder"
 	"io"
@@ -132,6 +133,51 @@ func TestFetchObaAPIMetrics(t *testing.T) {
 				t.Fatalf("expected oba_realtime_records_count to be 3, got %v", records)
 			}
 		})
+	}
+}
+
+func TestFetchObaAPIMetricsDropsNeverUpdatedRealtimeAge(t *testing.T) {
+	const (
+		agencyID    = "never-updated"
+		agencyName  = "Never Updated"
+		serverName  = "test-server"
+		currentTime = int64(1_789_960_789_955)
+	)
+	response := fmt.Sprintf(`{"code":200,"currentTime":%d,"data":{"entry":{"agencyIDs":[%q],"timeSinceLastRealtimeUpdate":{%q:%d}}}}`,
+		currentTime, agencyID, agencyID, currentTime/1000)
+	server := setupObaServer(t, response, http.StatusOK)
+	defer server.Close()
+
+	serverURL := utils.SanitizeServerURL(server.URL)
+	ObaTimeSinceUpdate.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(24)
+
+	err := fetchObaAPIMetrics(
+		context.Background(), agencyID, agencyName, serverName, server.URL, "key",
+		&http.Client{Timeout: 10 * time.Second}, gtfs.NewStaticStore(),
+		slog.New(slog.NewTextHandler(io.Discard, nil)), NewUnmatchedStopTracker(),
+	)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+
+	if got := seriesMatching(ObaTimeSinceUpdate, map[string]string{
+		"agency_id": agencyID, "agency_name": agencyName, "server_name": serverName, "server_url": serverURL,
+	}); len(got) != 0 {
+		t.Fatalf("expected never-updated realtime age series to be deleted, got %d", len(got))
+	}
+}
+
+func TestValidRealtimeAge(t *testing.T) {
+	const nowMillis = int64(1_789_960_789_955)
+
+	if !validRealtimeAge(24) {
+		t.Fatal("expected a normal age to be valid")
+	}
+	if validRealtimeAge(int(nowMillis / 1000)) {
+		t.Fatal("expected the current-time sentinel to be invalid")
+	}
+	if validRealtimeAge(-1) {
+		t.Fatal("expected a negative age to be invalid")
 	}
 }
 
