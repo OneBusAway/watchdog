@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
@@ -186,6 +187,9 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 		return nil
 	}
 
+	ObaMetricsLastSuccessfulFetch.WithLabelValues(agencyID, agencyName, serverName, serverURL).
+		Set(float64(time.Now().UTC().Unix()))
+
 	// Per-agency metrics below. Index the response maps with the configured
 	// agencyID so every series is labeled with it, and only report values when
 	// the server carries data for that agency.
@@ -206,6 +210,8 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 	total := matched + unmatched
 	if total > 0 {
 		TripMatchRatio.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(float64(matched) / float64(total))
+	} else {
+		TripMatchRatio.DeleteLabelValues(agencyID, agencyName, serverName, serverURL)
 	}
 
 	if count, ok := entry.ScheduledTripsCount[agencyID]; ok {
@@ -225,6 +231,8 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 	stopTotal := stopMatched + stopUnmatched
 	if stopTotal > 0 {
 		StopMatchRatio.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(float64(stopMatched) / float64(stopTotal))
+	} else {
+		StopMatchRatio.DeleteLabelValues(agencyID, agencyName, serverName, serverURL)
 	}
 
 	if seconds, ok := entry.TimeSinceLastRealtimeUpdate[agencyID]; ok && validRealtimeAge(seconds) {

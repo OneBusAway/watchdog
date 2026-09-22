@@ -56,6 +56,19 @@ func (app *Application) Routes(ctx context.Context) http.Handler {
 	router.HandlerFunc(http.MethodGet, "/v1/healthcheck", app.healthcheckHandler)
 	router.Handler(http.MethodGet, "/metrics", middleware.NewCachedPromHandler(ctx, prometheus.DefaultGatherer, 10*time.Second))
 
+	// TODO(investigation-api): Add authenticated, paginated JSON endpoints for
+	// focused dashboard investigation, separate from Prometheus exposition:
+	//   GET /v1/investigations/unmatched-stops
+	//   GET /v1/investigations/unmatched-trips
+	// Stop records should expose server/agency identity, stop ID/name,
+	// coordinates, station/cluster membership, last_seen, and age_seconds.
+	// Trip records should expose only authoritative diagnostics (trip/route ID,
+	// service date, reason, last_seen); OBA currently reports aggregate trip
+	// counts, so do not infer OBA failure reasons from an independent matcher.
+	// Keep entity IDs and locations out of /metrics to avoid unbounded label
+	// cardinality. Require service authentication, filters, bounded page sizes,
+	// and observation timestamps so retained data cannot be mistaken for current.
+
 	// Wrap router with Sentry and SecurityHeaders middlewares
 	// Return wrapped httprouter instance.
 	handler := middleware.SentryMiddleware(router)

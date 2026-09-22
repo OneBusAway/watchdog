@@ -167,6 +167,43 @@ func TestFetchObaAPIMetricsDropsNeverUpdatedRealtimeAge(t *testing.T) {
 	}
 }
 
+func TestFetchObaAPIMetricsRetiresRatiosWithoutObservations(t *testing.T) {
+	const (
+		agencyID   = "no-observations"
+		agencyName = "No Observations"
+		serverName = "test-server"
+	)
+	response := `{"code":200,"data":{"entry":{"agencyIDs":["no-observations"],"realtimeTripCountsMatched":{"no-observations":0},"realtimeTripCountsUnmatched":{"no-observations":0},"stopIDsMatchedCount":{"no-observations":0},"stopIDsUnmatchedCount":{"no-observations":0}}}}`
+	server := setupObaServer(t, response, http.StatusOK)
+	defer server.Close()
+
+	serverURL := utils.SanitizeServerURL(server.URL)
+	labels := map[string]string{
+		"agency_id": agencyID, "agency_name": agencyName, "server_name": serverName, "server_url": serverURL,
+	}
+	TripMatchRatio.With(labels).Set(0.75)
+	StopMatchRatio.With(labels).Set(0.8)
+
+	err := fetchObaAPIMetrics(
+		context.Background(), agencyID, agencyName, serverName, server.URL, "key",
+		&http.Client{Timeout: 10 * time.Second}, gtfs.NewStaticStore(),
+		slog.New(slog.NewTextHandler(io.Discard, nil)), NewUnmatchedStopTracker(),
+	)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+
+	if got := seriesMatching(TripMatchRatio, labels); len(got) != 0 {
+		t.Fatalf("expected trip ratio to be deleted, got %d series", len(got))
+	}
+	if got := seriesMatching(StopMatchRatio, labels); len(got) != 0 {
+		t.Fatalf("expected stop ratio to be deleted, got %d series", len(got))
+	}
+	if got := seriesMatching(ObaMetricsLastSuccessfulFetch, labels); len(got) != 1 {
+		t.Fatalf("expected one metrics freshness series, got %d", len(got))
+	}
+}
+
 func TestValidRealtimeAge(t *testing.T) {
 	const nowMillis = int64(1_789_960_789_955)
 

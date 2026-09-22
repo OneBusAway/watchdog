@@ -158,6 +158,12 @@ func countActiveVehiclesForAgency(ctx context.Context, client *onebusaway.Client
 	}
 
 	AgencyActiveVehiclesGauge.WithLabelValues(server.AgencyID, server.AgencyName, server.ServerName, utils.SanitizeServerURL(server.ObaBaseURL)).Set(float64(len(response.Data.List)))
+	ObaVehiclesLastSuccessfulFetch.WithLabelValues(
+		server.AgencyID,
+		server.AgencyName,
+		server.ServerName,
+		utils.SanitizeServerURL(server.ObaBaseURL),
+	).Set(float64(time.Now().UTC().Unix()))
 
 	return len(response.Data.List), nil
 }
