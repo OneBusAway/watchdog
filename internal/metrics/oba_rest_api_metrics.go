@@ -17,7 +17,7 @@ import (
 // metricsEndpoint is the OBA API metrics endpoint probed by fetchObaAPIMetrics.
 const metricsEndpoint = "/api/where/metrics.json"
 
-const maxRealtimeAgeSeconds = 365 * 24 * 60 * 60
+const maxAcceptedRealtimeAgeSeconds = 365 * 24 * 60 * 60
 
 type OBAMetrics struct {
 	Code        int    `json:"code"`
@@ -299,5 +299,5 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 }
 
 func validRealtimeAge(seconds int) bool {
-	return seconds >= 0 && seconds <= maxRealtimeAgeSeconds
+	return seconds >= 0 && seconds <= maxAcceptedRealtimeAgeSeconds
 }
