@@ -26,11 +26,13 @@ type OBAMetrics struct {
 	Version     int    `json:"version"`
 	Data        struct {
 		Entry struct {
-			AgenciesWithCoverageCount   int                 `json:"agenciesWithCoverageCount"`
-			AgencyIDs                   []string            `json:"agencyIDs"`
-			RealtimeRecordsTotal        map[string]int      `json:"realtimeRecordsTotal"`
-			RealtimeTripCountsMatched   map[string]int      `json:"realtimeTripCountsMatched"`
-			RealtimeTripCountsUnmatched map[string]int      `json:"realtimeTripCountsUnmatched"`
+			AgenciesWithCoverageCount   int            `json:"agenciesWithCoverageCount"`
+			AgencyIDs                   []string       `json:"agencyIDs"`
+			RealtimeRecordsTotal        map[string]int `json:"realtimeRecordsTotal"`
+			RealtimeTripCountsMatched   map[string]int `json:"realtimeTripCountsMatched"`
+			RealtimeTripCountsUnmatched map[string]int `json:"realtimeTripCountsUnmatched"`
+			// TODO: Provide bounded trip-match details through a structured endpoint for
+			// OBACloud investigation. Trip IDs must not become Prometheus labels.
 			RealtimeTripIDsUnmatched    map[string][]string `json:"realtimeTripIDsUnmatched"`
 			ScheduledTripsCount         map[string]int      `json:"scheduledTripsCount"`
 			StopIDsMatchedCount         map[string]int      `json:"stopIDsMatchedCount"`
