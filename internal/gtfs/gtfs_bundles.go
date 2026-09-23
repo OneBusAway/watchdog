@@ -121,7 +121,11 @@ func downloadGTFSBundles(ctx context.Context, client *http.Client, servers []mod
 // gtfs package needing to import it.
 func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static, staticStore *StaticStore, boundingBoxStore *geo.BoundingBoxStore, routeAgencyIndex *RouteAgencyIndex, observer StaticBundleObserver, logger *slog.Logger) error {
 	mergedbundle, declaredAgencies := mergeStaticAndDiscoverAgencies(bundles)
-	computedBoxes := computeBoundingBoxes(bundles)
+	var fallbackAgencyID string
+	if !server.IsServerScoped() {
+		fallbackAgencyID = server.AgencyID
+	}
+	computedBoxes := computeBoundingBoxes(bundles, fallbackAgencyID)
 
 	// Agency-mode: the operator named the agency, so the bundle is stored
 	// exactly once under server.ServerKey() — the same key every agency-mode
@@ -358,7 +362,17 @@ type computedBoundingBoxes struct {
 // Once the walk finishes, each accumulator is finalized into either a
 // geo.BoundingBox or an error. storeStaticForServer stores successful agency
 // boxes and uses union as the fallback for agencies without usable bounds.
-func computeBoundingBoxes(bundles []*remoteGtfs.Static) computedBoundingBoxes {
+//
+// In agency-mode, any feed that declares no non-empty agency_id (legal for a
+// single-agency feed) is folded into the configured agency's accumulator, matching
+// the union box behavior. In server-mode (or when fallbackAgencyIDs is empty), a
+// feed with no non-empty agency_id contributes only to the union.
+func computeBoundingBoxes(bundles []*remoteGtfs.Static, fallbackAgencyIDs ...string) computedBoundingBoxes {
+	var fallbackAgencyID string
+	if len(fallbackAgencyIDs) > 0 {
+		fallbackAgencyID = fallbackAgencyIDs[0]
+	}
+
 	union := &boundingBoxAccumulator{}
 	byAgency := make(map[string]*boundingBoxAccumulator)
 	for _, bundle := range bundles {
@@ -374,6 +388,14 @@ func computeBoundingBoxes(bundles []*remoteGtfs.Static) computedBoundingBoxes {
 			agencyIDs[agency.Id] = struct{}{}
 			if byAgency[agency.Id] == nil {
 				byAgency[agency.Id] = &boundingBoxAccumulator{}
+			}
+		}
+
+		// In agency-mode, fold blank-agency_id feeds into the configured agency's accumulator.
+		if len(agencyIDs) == 0 && fallbackAgencyID != "" {
+			agencyIDs[fallbackAgencyID] = struct{}{}
+			if byAgency[fallbackAgencyID] == nil {
+				byAgency[fallbackAgencyID] = &boundingBoxAccumulator{}
 			}
 		}
 
