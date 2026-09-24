@@ -373,6 +373,24 @@ func computeBoundingBoxes(bundles []*remoteGtfs.Static, fallbackAgencyIDs ...str
 		fallbackAgencyID = fallbackAgencyIDs[0]
 	}
 
+	var fallbackIsDeclared bool
+	if fallbackAgencyID != "" {
+		for _, bundle := range bundles {
+			if bundle == nil {
+				continue
+			}
+			for _, agency := range bundle.Agencies {
+				if agency.Id == fallbackAgencyID {
+					fallbackIsDeclared = true
+					break
+				}
+			}
+			if fallbackIsDeclared {
+				break
+			}
+		}
+	}
+
 	union := &boundingBoxAccumulator{}
 	byAgency := make(map[string]*boundingBoxAccumulator)
 	for _, bundle := range bundles {
@@ -391,8 +409,11 @@ func computeBoundingBoxes(bundles []*remoteGtfs.Static, fallbackAgencyIDs ...str
 			}
 		}
 
-		// In agency-mode, fold blank-agency_id feeds into the configured agency's accumulator.
-		if len(agencyIDs) == 0 && fallbackAgencyID != "" {
+		// In agency-mode, fold blank-agency_id feeds into the configured agency's accumulator
+		// only if the configured agency was declared by at least one feed. If the configured
+		// ID is absent from all declared agency IDs, blank-agency feeds contribute to unionBox
+		// only, preserving the union fallback in storeStaticForServer.
+		if len(agencyIDs) == 0 && fallbackIsDeclared {
 			agencyIDs[fallbackAgencyID] = struct{}{}
 			if byAgency[fallbackAgencyID] == nil {
 				byAgency[fallbackAgencyID] = &boundingBoxAccumulator{}

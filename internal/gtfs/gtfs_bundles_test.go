@@ -1140,3 +1140,39 @@ func TestAgencyModeBlankSiblingFeedBox(t *testing.T) {
 		t.Fatalf("expected box %+v, got %+v", want, box)
 	}
 }
+
+func TestAgencyModeMismatchedConfiguredAgencyWithBlankSiblingFeedUsesUnionBox(t *testing.T) {
+	declaring := makeSyntheticBundle(t, "agency-X", "Agency X", "https://x.example", []remoteGtfs.Stop{
+		{Id: "s1", Latitude: floatPtr(10.0), Longitude: floatPtr(10.0)},
+		{Id: "s2", Latitude: floatPtr(11.0), Longitude: floatPtr(11.0)},
+	})
+	blank := makeSyntheticBundle(t, "", "", "", []remoteGtfs.Stop{
+		{Id: "s3", Latitude: floatPtr(50.0), Longitude: floatPtr(50.0)},
+		{Id: "s4", Latitude: floatPtr(51.0), Longitude: floatPtr(51.0)},
+	})
+	// Configured agency ID differs from all declared agency IDs in the feeds ("agency-other" vs "agency-X").
+	server := models.ObaServer{
+		ServerName: "agency-mode-server",
+		ObaBaseURL: "https://oba.example.com",
+		AgencyID:   "agency-other",
+		AgencyName: "Other Agency",
+	}
+	staticStore := NewStaticStore()
+	bboxStore := geo.NewBoundingBoxStore()
+	idx := NewRouteAgencyIndex()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	if err := storeStaticForServer(server, []*remoteGtfs.Static{declaring, blank}, staticStore, bboxStore, idx, nil, logger); err != nil {
+		t.Fatalf("storeStaticForServer: %v", err)
+	}
+	box, ok := bboxStore.Get(server.ServerKey())
+	if !ok {
+		t.Fatalf("expected bounding box for %s", server.ServerKey())
+	}
+	// The union box contains both declaring (10-11) and blank (50-51) feeds.
+	want := geo.BoundingBox{MinLat: 10.0, MaxLat: 51.0, MinLon: 10.0, MaxLon: 51.0}
+	if box != want {
+		t.Fatalf("expected union box %+v, got %+v", want, box)
+	}
+}
+
