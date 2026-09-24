@@ -132,3 +132,58 @@ func TestClearStopsPrunesRenamedStopOnStale(t *testing.T) {
 		t.Fatalf("latest name series survived after stale clear: %+v", series)
 	}
 }
+
+func TestTrackerClearEmpty(t *testing.T) {
+	tracker := NewUnmatchedStopTracker()
+	// Should not panic or do anything on empty tracker
+	tracker.clear(24 * time.Hour)
+}
+
+func TestClearStopsKeepsRecentStops(t *testing.T) {
+	tracker := NewUnmatchedStopTracker()
+	tracker.RecordLastSeen("serverKey", "agency1", "agencyName", "server", "url", "stop1", "name", "1.0", "1.0")
+	// clear with large threshold should not clear this
+	tracker.clear(24 * time.Hour)
+	if len(tracker.Entries["serverKey"]) != 1 {
+		t.Fatalf("expected 1 stop, got %d", len(tracker.Entries["serverKey"]))
+	}
+}
+
+func TestClearClusters(t *testing.T) {
+	tracker := NewUnmatchedStopTracker()
+	// len(t.Clusters) == 0 return
+	tracker.clearClusters(time.Now(), 24*time.Hour)
+
+	// add cluster
+	tracker.RecordClusterSeen("server1", "agency1", "agencyName", "server", "url", "station1", "cluster1", "1.0", "1.0")
+	tracker.RecordClusterSeen("server1", "agency1", "agencyName", "server", "url", "station1", "cluster2", "1.0", "1.0")
+
+	// Test keeping recent cluster
+	tracker.clearClusters(time.Now(), 24*time.Hour)
+	if len(tracker.Clusters["server1"]) != 2 {
+		t.Fatalf("expected 2 clusters, got %d", len(tracker.Clusters["server1"]))
+	}
+
+	// Test clearing stale cluster
+	for k := range tracker.Clusters["server1"] {
+		entry := tracker.Clusters["server1"][k]
+		entry.LastSeen = time.Now().UTC().Add(-48 * time.Hour)
+		tracker.Clusters["server1"][k] = entry
+	}
+	tracker.clearClusters(time.Now(), 24*time.Hour)
+	if len(tracker.Clusters) != 0 {
+		t.Fatalf("expected 0 clusters, got %d", len(tracker.Clusters))
+	}
+}
+
+func TestClearRoutine(t *testing.T) {
+	tracker := NewUnmatchedStopTracker()
+	ctx, cancel := context.WithCancel(context.Background())
+	// start routine
+	go tracker.ClearRoutine(ctx, 10*time.Millisecond, 24*time.Hour)
+	// let it tick
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	// let it exit
+	time.Sleep(20 * time.Millisecond)
+}
