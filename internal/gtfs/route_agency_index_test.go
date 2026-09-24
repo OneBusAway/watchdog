@@ -109,3 +109,25 @@ func TestRouteAgencyIndexRangeServerKeys(t *testing.T) {
 		t.Fatalf("expected iteration to stop after one call, got %d", count)
 	}
 }
+
+func TestRouteAgencyIndexPruneServers(t *testing.T) {
+	idx := NewRouteAgencyIndex()
+	idx.Set("http://keep", map[string]string{"r": "a"})
+	idx.Set("http://drop", map[string]string{"r": "a"})
+	idx.Set("http://nil", nil) // cover the nil map guard
+
+	removed := idx.PruneServers(func(baseURL string) bool {
+		return baseURL == "http://keep"
+	})
+
+	if len(removed) != 2 {
+		t.Fatalf("expected 2 removed servers, got %v", removed)
+	}
+
+	if _, ok := idx.Get("http://keep", "r"); !ok {
+		t.Fatal("expected keep to survive")
+	}
+	if _, ok := idx.Get("http://drop", "r"); ok {
+		t.Fatal("expected drop to be removed")
+	}
+}

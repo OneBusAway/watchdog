@@ -1107,3 +1107,34 @@ func TestStoreStaticForServerSkipsServerScopedBoxInAgencyMode(t *testing.T) {
 		t.Fatal("agency-mode should not publish a server-scoped bounding box")
 	}
 }
+
+func TestAgencyIDFromRoute(t *testing.T) {
+	tests := []struct {
+		name     string
+		route    remoteGtfs.Route
+		expected string
+	}{
+		{"With AgencyID", remoteGtfs.Route{Agency: &remoteGtfs.Agency{Id: "agency-1"}}, "agency-1"},
+		{"Without AgencyID", remoteGtfs.Route{}, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := agencyIDFromRoute(tt.route); got != tt.expected {
+				t.Errorf("agencyIDFromRoute() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestFormatLatLon(t *testing.T) {
+	lat := 47.6062
+	expected := "47.6062"
+	if got := formatLatLon(&lat); got != expected {
+		t.Errorf("formatLatLon() = %v, want %v", got, expected)
+	}
+
+	if got := formatLatLon(nil); got != "nil" {
+		t.Errorf("formatLatLon() = %v, want nil", got)
+	}
+}

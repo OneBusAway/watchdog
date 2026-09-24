@@ -58,6 +58,28 @@ func TestCollectMetricsForServer(t *testing.T) {
 	getMetricsForTesting(t, metrics.ObaApiStatus)
 }
 
+func TestCollectAgencyChecksBackoff(t *testing.T) {
+	app := newTestApplication(t)
+	testServer := app.ConfigService.Config.Servers[0]
+
+	// Trigger a backoff
+	app.ConfigService.BackoffStore.UpdateBackoff(testServer.ServerKey())
+
+	// collectAgencyChecks should return false because it's backing off
+	if app.collectAgencyChecks(context.Background(), testServer) {
+		t.Fatal("expected collectAgencyChecks to return false during backoff")
+	}
+}
+
+func TestCollectMetricsForServer_GTFSRTError(t *testing.T) {
+	app := newTestApplication(t)
+	testServer := app.ConfigService.Config.Servers[0]
+	testServer.GtfsRTFeeds = []models.GtfsRTFeed{{VehiclePositionURL: "http://invalid-url-that-fails"}}
+
+	app.CollectMetricsForServer(context.Background(), testServer)
+	// It should exit early without panic
+}
+
 func TestCollectVehicleMetricsIsStandalone(t *testing.T) {
 	// collectVehicleMetrics should be safe to invoke independently of the
 	// pre-RT steps (server-ping, FetchObaAPIMetrics, etc.). This is the
@@ -118,4 +140,16 @@ func TestAgencyScopeFetchesRealtimeFeed(t *testing.T) {
 	if app.GtfsService.RealtimeStore.Get(server.ServerKey()) == nil {
 		t.Fatalf("expected realtime data to be stored under %s", server.ServerKey())
 	}
+}
+
+func TestStartMetricsCollection(t *testing.T) {
+	app := newTestApplication(t)
+	// Force a very short ticker to trigger loop quickly
+	app.ConfigService.Config.FetchInterval = 1 // 1 second
+
+	ctx, cancel := context.WithCancel(context.Background())
+	app.StartMetricsCollection(ctx)
+	
+	// Wait a tiny bit then cancel
+	cancel()
 }

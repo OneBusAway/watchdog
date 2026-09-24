@@ -134,3 +134,20 @@ func TestResolveScopeIgnoresOtherServers(t *testing.T) {
 		t.Fatalf("expected agency-Mine, got %q", scope.StaticAgencies[0].AgencyID)
 	}
 }
+
+func TestIsScope(t *testing.T) {
+	as := AgencyScope{}
+	as.isScope()
+
+	ss := ServerScope{}
+	ss.isScope()
+}
+
+func TestError(t *testing.T) {
+	ReportAgencyMissingStaticFeed("url", "agency", "server")
+	
+	e := &missingStaticFeedError{obaBaseURL: "url", agencyID: "agency"}
+	if e.Error() != "agency agency reported by /api/where/metrics.json for url but no static feed covers it" {
+		t.Fatalf("expected test error, got %q", e.Error())
+	}
+}

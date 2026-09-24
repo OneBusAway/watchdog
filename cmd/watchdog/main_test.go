@@ -109,3 +109,8 @@ func TestRun_ConfigURL(t *testing.T) {
 	cancel()
 	<-done
 }
+
+func TestRealMain(t *testing.T) {
+	// this should not exit(1) because -version returns no error, just prints
+	realMain([]string{"-version"})
+}

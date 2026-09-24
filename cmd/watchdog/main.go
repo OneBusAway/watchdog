@@ -24,10 +24,14 @@ import (
 var version = "dev"
 
 func main() {
+	realMain(os.Args[1:])
+}
+
+func realMain(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx, os.Args[1:]); err != nil {
+	if err := run(ctx, args); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
