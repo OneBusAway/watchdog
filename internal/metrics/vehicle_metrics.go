@@ -82,6 +82,10 @@ func attributeVehicle(server models.ObaServer, agencyByID map[string]models.ObaS
 // In server-mode the gauge is emitted once per live agency from the vehicles
 // attributed to it; agencies with no vehicles this tick are explicitly set to
 // 0 so a series never freezes at its previous value.
+//
+// This count and the vehicles-for-agency count below are independent operational
+// observations, not an agreement check. Their source snapshots and processing
+// semantics can differ; Maglev remains authoritative for its own API behavior.
 func countVehiclePositions(server models.ObaServer, agencies []models.ObaServer, realtimeStore *gtfs.RealtimeStore, routeAgencyIndex *gtfs.RouteAgencyIndex) (int, error) {
 	if realtimeStore == nil {
 		err := fmt.Errorf("realtimeStore is nil for agency %s", server.AgencyID)
@@ -227,6 +231,11 @@ func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer,
 	}
 
 	unattributed := 0
+	// TODO: Expose a bounded reason breakdown (missing vehicle ID, missing or
+	// unknown route, or agency not live) without putting vehicle IDs in labels.
+	// TODO: Expose low-cardinality per-agency counts for vehicle positions older
+	// than a documented stale threshold and for positions missing timestamps.
+	// Missing timestamps must remain unknown rather than being classified fresh.
 
 	for _, realtimeVehicle := range realtimeData.Vehicles {
 		vehicle := realtimeVehicle.Vehicle
