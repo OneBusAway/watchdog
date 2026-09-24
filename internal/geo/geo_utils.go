@@ -26,49 +26,73 @@ func (b *BoundingBox) Contains(lat, lon float64) bool {
 	return lat >= b.MinLat && lat <= b.MaxLat && lon >= b.MinLon && lon <= b.MaxLon
 }
 
+// BoundingBoxAccumulator incrementally computes geographic bounds without
+// retaining the stops that produced them.
+type BoundingBoxAccumulator struct {
+	box         BoundingBox
+	stopCount   int
+	initialized bool
+}
+
+// Add incorporates one stop into the running bounds. All stops increment
+// stopCount, but stops with missing or NaN coordinates cannot affect the box.
+// The first valid coordinate initializes all four extrema; every later valid
+// coordinate updates only the minima or maxima it exceeds.
+func (a *BoundingBoxAccumulator) Add(stop remoteGtfs.Stop) {
+	a.stopCount++
+	if stop.Latitude == nil || stop.Longitude == nil {
+		return
+	}
+	lat, lon := *stop.Latitude, *stop.Longitude
+	if math.IsNaN(lat) || math.IsNaN(lon) {
+		return
+	}
+	if !a.initialized {
+		a.box = BoundingBox{MinLat: lat, MaxLat: lat, MinLon: lon, MaxLon: lon}
+		a.initialized = true
+		return
+	}
+	if lat < a.box.MinLat {
+		a.box.MinLat = lat
+	}
+	if lat > a.box.MaxLat {
+		a.box.MaxLat = lat
+	}
+	if lon < a.box.MinLon {
+		a.box.MinLon = lon
+	}
+	if lon > a.box.MaxLon {
+		a.box.MaxLon = lon
+	}
+}
+
+// Result finalizes an accumulator after its source stops have been processed.
+// It distinguishes an accumulator that received no stops from one that received
+// stops but never saw a valid latitude/longitude pair.
+func (a *BoundingBoxAccumulator) Result() (BoundingBox, error) {
+	if a.stopCount == 0 {
+		return BoundingBox{}, fmt.Errorf("no stops to compute bounding box")
+	}
+	if !a.initialized {
+		return BoundingBox{}, fmt.Errorf("no valid latitude/longitude found in stops")
+	}
+	return a.box, nil
+}
+
+// StopCount returns the total number of stops added to the accumulator.
+func (a *BoundingBoxAccumulator) StopCount() int {
+	return a.stopCount
+}
+
 // computeBoundingBox returns the bounding box enclosing all valid stops.
 //
 // It returns an error if the input slice is empty or contains no valid lat/lon pairs.
 func computeBoundingBox(stops []remoteGtfs.Stop) (BoundingBox, error) {
-	if len(stops) == 0 {
-		return BoundingBox{}, fmt.Errorf("no stops to compute bounding box")
-	}
-
-	minLat := math.MaxFloat64
-	maxLat := -math.MaxFloat64
-	minLon := math.MaxFloat64
-	maxLon := -math.MaxFloat64
-
+	acc := &BoundingBoxAccumulator{}
 	for _, stop := range stops {
-		if stop.Latitude != nil && stop.Longitude != nil {
-			lat := *stop.Latitude
-			lon := *stop.Longitude
-			if lat < minLat {
-				minLat = lat
-			}
-			if lat > maxLat {
-				maxLat = lat
-			}
-			if lon < minLon {
-				minLon = lon
-			}
-			if lon > maxLon {
-				maxLon = lon
-			}
-		}
+		acc.Add(stop)
 	}
-
-	if minLat == math.MaxFloat64 || maxLat == -math.MaxFloat64 ||
-		minLon == math.MaxFloat64 || maxLon == -math.MaxFloat64 {
-		return BoundingBox{}, fmt.Errorf("no valid latitude/longitude found in stops")
-	}
-
-	return BoundingBox{
-		MinLat: minLat,
-		MaxLat: maxLat,
-		MinLon: minLon,
-		MaxLon: maxLon,
-	}, nil
+	return acc.Result()
 }
 
 // BoundingBoxStore is a concurrency-safe in-memory store for
