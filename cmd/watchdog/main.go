@@ -24,93 +24,54 @@ import (
 var version = "dev"
 
 func main() {
-	var cfg config.Config
-
-	flag.IntVar(&cfg.Port, "port", 4000, "API server port")
-	flag.StringVar(&cfg.Env, "env", "development", "Environment (development|staging|production)")
-	flag.IntVar(&cfg.FetchInterval, "fetch-interval", 30, "Interval (in seconds) at which the application fetches data from realtime APIs and updates Prometheus metrics")
-
-	// Server-scope design (deliberate decision, see README "Two observation
-	// modes: agency vs. server" and config.json.template):
-	//
-	// Every entry in config.json is server-scoped at the top level: server_name
-	// is required, server_url is derived from oba_base_url, and the operator
-	// lists the static feeds each server exposes. agency_id is optional.
-	//   - With agency_id set, the entry is narrowed to one agency: today's
-	//     per-agency pipeline runs once per tick for that agency.
-	//   - Without agency_id, the entry is server-scoped: Watchdog probes
-	//     /api/where/metrics.json each tick, cross-references the live agency
-	//     IDs against the static feeds' agency.txt declarations, and runs the
-	//     per-agency pipeline for every agency that has BOTH a static bundle
-	//     AND is reported as currently served.
-	//
-	// Multi-agency static feeds are accepted (one bundle pointer-shared across
-	// serverKeys); ambiguous feeds (zero or multiple agency_id rows in
-	// agency.txt) are Sentry-warned and skipped at download time.
-
-	var (
-		showVersion = flag.Bool("version", false, "display version and exit")
-		configFile  = flag.String("config-file", "", "Path to a local JSON configuration file")
-		configURL   = flag.String("config-url", "", "URL to a remote JSON configuration file")
-	)
-	flag.Parse()
-
-	if *showVersion {
-		fmt.Println(version)
-		os.Exit(0)
-	}
-
-	// Initialize a structured logger for the application
-	// This logger will be used throughout the application for logging messages.
-	// It can be configured to log to different outputs (e.g., console, file)
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	logger.Info("Starting OneBusAway Watchdog", "version", version)
-	// Load environment variables for configuration
-	configAuthUser := os.Getenv("CONFIG_AUTH_USER")
-	configAuthPass := os.Getenv("CONFIG_AUTH_PASS")
-
-	// Validate that only one configuration source is specified
-	// Either a config file or a remote config URL can be specified, but not both.
-	err := config.ValidateConfigFlags(configFile, configURL)
-	if err != nil {
-		logger.Error("Error validating config flags", "err", err)
-		flag.Usage()
-		os.Exit(1)
-	}
-
-	// At this point, we are sure that all command line flags have been parsed
-	// and we can proceed with the application initialization.
-
-	// Create a context for the application
-	// This context will be used to manage the application's lifecycle and cancel operations when needed.
-	// It allows us to gracefully shut down the application and clean up resources.
-	// we will use it to cancel and clean up routines when the application is shutting down.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Create a new HTTP client with a connection pool
-	// This client will be reused across the application to avoid creating new connections for each request.
-	// This is particularly useful for polling APIs like GTFS-RT endpoints.
-	// It can be configured with timeouts, retries, etc.
-	// Using a pooled client allows for better performance and resource management.
+	if err := run(ctx, os.Args[1:]); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func run(ctx context.Context, args []string) error {
+	var cfg config.Config
+
+	fs := flag.NewFlagSet("watchdog", flag.ContinueOnError)
+	fs.IntVar(&cfg.Port, "port", 4000, "API server port")
+	fs.StringVar(&cfg.Env, "env", "development", "Environment (development|staging|production)")
+	fs.IntVar(&cfg.FetchInterval, "fetch-interval", 30, "Interval (in seconds) at which the application fetches data from realtime APIs and updates Prometheus metrics")
+
+	showVersion := fs.Bool("version", false, "display version and exit")
+	configFile := fs.String("config-file", "", "Path to a local JSON configuration file")
+	configURL := fs.String("config-url", "", "URL to a remote JSON configuration file")
+	
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *showVersion {
+		fmt.Println(version)
+		return nil
+	}
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	logger.Info("Starting OneBusAway Watchdog", "version", version)
+	configAuthUser := os.Getenv("CONFIG_AUTH_USER")
+	configAuthPass := os.Getenv("CONFIG_AUTH_PASS")
+
+	err := config.ValidateConfigFlags(configFile, configURL)
+	if err != nil {
+		logger.Error("Error validating config flags", "err", err)
+		fs.Usage()
+		return err
+	}
+
 	client := app.NewPooledClient()
 
-	// Initialize Sentry for error reporting before anything else that might
-	// report an error. Configuration loading (below) validates servers and
-	// reports invalid ones to Sentry, so Sentry must be live first — otherwise
-	// those startup reports are captured by an uninitialized hub and lost.
-	//
-	// Note: you should have (SENTRY_DSN) environment variable set to your Sentry DSN.
-	// Link to official documentation: https://docs.sentry.io/concepts/key-terms/dsn-explainer/
 	report.SetupSentry()
 	defer report.FlushSentry()
 	report.ConfigureScope(cfg.Env, version)
 
-	// Load the configuration from the specified source
-	// If a config file is specified, load it from disk.
-	// If a config URL is specified, fetch it over HTTP(S).
-	// The dropped-servers store is shared between the initial load and the
-	// periodic refresh so an invalid server is reported to Sentry only once.
 	droppedStore := config.NewDroppedServersStore()
 	var servers []models.ObaServer
 	if *configFile != "" {
@@ -121,70 +82,36 @@ func main() {
 
 	if err != nil {
 		logger.Error("Error loading configuration", "err", err)
-		os.Exit(1)
+		return err
 	}
 
 	if len(servers) == 0 {
 		logger.Error("Error: No servers found in configuration.")
-		os.Exit(1)
+		return errors.New("no servers found in configuration")
 	}
 
 	cfg.UpdateConfig(servers)
 
-	// At this point, we have successfully loaded the configuration
-	// and have a list of OBA servers to work with.
+	application := app.New(&cfg, logger, client, version, droppedStore)
 
-	// Initialize the application struct with all services
-	// This includes the configuration service, GTFS service, and metrics service.
-	// and the required dependencies.
-	// this New() function is critical in understanding how we structure the application take a look at it.
-	// and also take a look at service file in each package to see the dependencies and the exposed methods and function.
-	app := app.New(&cfg, logger, client, version, droppedStore)
+	application.MetricsService.ReportTrackedAgencies(servers)
 
-	// Report the agencies Watchdog is tracking (those that passed config
-	// validation). This runs once at startup; it is re-triggered only when the
-	// remote config adds or removes an agency, never on the collection tick.
-	app.MetricsService.ReportTrackedAgencies(servers)
+	application.GtfsService.DownloadGTFSBundles(ctx, servers, 20)
+	application.StartMetricsCollection(ctx)
 
-	// From here we set up all dependencies and we are ready to start business logic.
+	go application.GtfsService.RefreshGTFSBundles(ctx, application.ConfigService.Config.GetServers, 24*time.Hour, 5)
+	go application.MetricsService.VehicleLastSeen.ClearRoutine(ctx, 15*time.Minute, time.Hour)
+	go application.MetricsService.UnmatchedStopTracker.ClearRoutine(ctx, 15*time.Minute, 24*time.Hour)
 
-	// On startup, download GTFS static bundles for all configured servers
-	app.GtfsService.DownloadGTFSBundles(ctx, servers, 20)
-
-	// This function starts the metrics collection process
-	// it intialize a routine the run every FetchInterval seconds (30 seconds by default)
-	// and collects metrics from all configured OBA servers.
-	app.StartMetricsCollection(ctx)
-
-	// Cron job to download GTFS bundles for all servers every 24 hours
-	// Read the server list on every tick rather than capturing it here: with
-	// --config-url the set of servers changes while we run.
-	go app.GtfsService.RefreshGTFSBundles(ctx, app.ConfigService.Config.GetServers, 24*time.Hour, 5)
-
-	// Cron job to delete the data of vehicles that has not sent updates for 1 hour
-	go app.MetricsService.VehicleLastSeen.ClearRoutine(ctx, 15*time.Minute, time.Hour)
-
-	// Cron job to prune unmatched-stop gauge series that have not been seen for 24 hours
-	go app.MetricsService.UnmatchedStopTracker.ClearRoutine(ctx, 15*time.Minute, 24*time.Hour)
-
-	// If a remote URL is specified, refresh the configuration every minute
 	if *configURL != "" {
-		go app.ConfigService.RefreshConfig(ctx, *configURL, configAuthUser, configAuthPass, time.Minute, 20, func(updated []models.ObaServer) {
-			app.OnConfigUpdated(ctx, updated)
+		go application.ConfigService.RefreshConfig(ctx, *configURL, configAuthUser, configAuthPass, time.Minute, 20, func(updated []models.ObaServer) {
+			application.OnConfigUpdated(ctx, updated)
 		})
 	}
 
-	// Start the HTTP server to serve the API and metrics endpoints
-	// take a look at the app.Routes() function to see how we set up the routes.
-	// This function returns an http.Handler that contains all the routes and middleware for the application.
-	// The server will listen on the port specified in the configuration (4000 by default).
-	// The server will handle incoming HTTP requests and route them to the appropriate handlers.
-	// It will also expose Prometheus metrics at /metrics endpoint.
-	// There is also a health check endpoint at /health that returns 200 OK if the server is running.
-
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
-		Handler:      app.Routes(ctx),
+		Handler:      application.Routes(ctx),
 		IdleTimeout:  time.Minute,
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
@@ -209,11 +136,12 @@ func main() {
 		}
 	case err := <-serverErr:
 		if err == nil || errors.Is(err, http.ErrServerClosed) {
-			return
+			return nil
 		}
 		report.ReportError(err, sentry.LevelFatal)
 		report.FlushSentry()
 		logger.Error(err.Error())
-		os.Exit(1)
+		return err
 	}
+	return nil
 }
