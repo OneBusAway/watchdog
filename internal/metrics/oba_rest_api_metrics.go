@@ -31,8 +31,10 @@ type OBAMetrics struct {
 			RealtimeRecordsTotal        map[string]int `json:"realtimeRecordsTotal"`
 			RealtimeTripCountsMatched   map[string]int `json:"realtimeTripCountsMatched"`
 			RealtimeTripCountsUnmatched map[string]int `json:"realtimeTripCountsUnmatched"`
-			// TODO: Provide bounded trip-match details through a structured endpoint for
-			// OBACloud investigation. Trip IDs must not become Prometheus labels.
+			// TODO(architecture): These authoritative unmatched-trip IDs exist only in the
+			// current upstream snapshot and disappear when that snapshot changes. Retain
+			// them only after the historical-investigation architecture is decided; do not
+			// place trip IDs in Prometheus labels without an approved cardinality design.
 			RealtimeTripIDsUnmatched    map[string][]string `json:"realtimeTripIDsUnmatched"`
 			ScheduledTripsCount         map[string]int      `json:"scheduledTripsCount"`
 			StopIDsMatchedCount         map[string]int      `json:"stopIDsMatchedCount"`

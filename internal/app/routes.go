@@ -56,18 +56,23 @@ func (app *Application) Routes(ctx context.Context) http.Handler {
 	router.HandlerFunc(http.MethodGet, "/v1/healthcheck", app.healthcheckHandler)
 	router.Handler(http.MethodGet, "/metrics", middleware.NewCachedPromHandler(ctx, prometheus.DefaultGatherer, 10*time.Second))
 
-	// TODO(investigation-api): Add authenticated, paginated JSON endpoints for
-	// focused dashboard investigation, separate from Prometheus exposition:
-	//   GET /v1/investigations/unmatched-stops
-	//   GET /v1/investigations/unmatched-trips
-	// Stop records should expose server/agency identity, stop ID/name,
-	// coordinates, station/cluster membership, last_seen, and age_seconds.
-	// Trip records should expose only authoritative diagnostics (trip/route ID,
-	// service date, reason, last_seen); OBA currently reports aggregate trip
-	// counts, so do not infer OBA failure reasons from an independent matcher.
-	// Keep entity IDs and locations out of /metrics to avoid unbounded label
-	// cardinality. Require service authentication, filters, bounded page sizes,
-	// and observation timestamps so retained data cannot be mistaken for current.
+	// TODO(architecture): Historical investigation of unmatched stops and trips is
+	// not currently reliable. The upstream /api/where/metrics.json endpoint exposes
+	// only its current in-memory snapshot, and Watchdog does not retain authoritative
+	// observation history across restarts. The existing unmatched-stop Prometheus
+	// series remains present for 24 hours after its last observation, so it represents
+	// retained state rather than the exact time an entity was unmatched. Adding an
+	// API over the current tracker would therefore expose only incomplete current
+	// state, not answer questions about previous hours or days.
+	//
+	// The challenge is to retain entity-level history without creating excessive
+	// Prometheus cardinality or imposing unsuitable infrastructure on open-source
+	// deployments. The architecture must decide between Prometheus, embedded SQLite,
+	// and an external event-oriented store; define snapshots versus events or
+	// coalesced episodes; establish retention, restart, backup, and pruning behavior;
+	// account for single and multiple Watchdog replicas; handle historical stop
+	// metadata when GTFS changes; and define how authenticated, filtered, paginated
+	// investigation queries access the selected historical source.
 
 	// Wrap router with Sentry and SecurityHeaders middlewares
 	// Return wrapped httprouter instance.
