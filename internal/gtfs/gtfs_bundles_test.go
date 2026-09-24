@@ -119,6 +119,27 @@ func TestDownloadGTFSBundle(t *testing.T) {
 		}
 	})
 
+	t.Run("404 Response", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer ts.Close()
+		_, err := downloadGTFSBundle(ctx, client, ts.URL, "agency-3", 1)
+		if err == nil {
+			t.Errorf("Expected error for 404 response, got none")
+		}
+	})
+
+	t.Run("Parse Failure", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte("invalid zip content"))
+		}))
+		defer ts.Close()
+		_, err := downloadGTFSBundle(ctx, client, ts.URL, "agency-4", 1)
+		if err == nil {
+			t.Errorf("Expected parse error, got none")
+		}
+	})
 }
 
 func TestAgencyParsing(t *testing.T) {
@@ -1137,4 +1158,48 @@ func TestFormatLatLon(t *testing.T) {
 	if got := formatLatLon(nil); got != "nil" {
 		t.Errorf("formatLatLon() = %v, want nil", got)
 	}
+}
+
+func TestFetchAndStoreGTFSRTFeed_ErrorPaths(t *testing.T) {
+	ctx := context.Background()
+	client := &http.Client{Timeout: 5 * time.Second}
+	realtimeStore := NewRealtimeStore()
+
+	t.Run("HTTP Error", func(t *testing.T) {
+		server := models.ObaServer{
+			AgencyID: "a",
+			GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: "http://invalid-url-that-fails"}},
+		}
+		if err := fetchAndStoreGTFSRTFeed(ctx, server, realtimeStore, client); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("HTTP 404", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(404)
+		}))
+		defer ts.Close()
+		server := models.ObaServer{
+			AgencyID: "a",
+			GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: ts.URL}},
+		}
+		if err := fetchAndStoreGTFSRTFeed(ctx, server, realtimeStore, client); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("Parse Error", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte("invalid content"))
+		}))
+		defer ts.Close()
+		server := models.ObaServer{
+			AgencyID: "a",
+			GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: ts.URL}},
+		}
+		if err := fetchAndStoreGTFSRTFeed(ctx, server, realtimeStore, client); err == nil {
+			t.Fatal("expected error")
+		}
+	})
 }

@@ -35,6 +35,7 @@ func TestGtfsService_Wrappers(t *testing.T) {
 	_ = gs.FetchAndStoreGTFSRTFeed(ctx, servers[0])
 
 	_, _, _ = GetEarliestAndLatestServiceDates(&models.StaticData{})
+	_, _, _ = GetEarliestAndLatestServiceDates(nil)
 	_, _ = GetStopLocationsByIDs("test", []string{"s1"}, static)
 
 	go gs.RefreshGTFSBundles(ctx, func() []models.ObaServer { return servers }, time.Millisecond, 1)

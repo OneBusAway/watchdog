@@ -30,4 +30,12 @@ func TestConfigService_Wrappers(t *testing.T) {
 
 	_, _ = LoadConfigFromFile("invalid.json", logger, droppedStore)
 	_, _ = LoadConfigFromURL(ctx, client, "http://invalid", "", "", 1, logger, droppedStore)
+
+	// test success path by writing a temporary config file
+	tmpFile, _ := os.CreateTemp("", "config-*.json")
+	tmpFile.Write([]byte(`{}`))
+	tmpFile.Close()
+	defer os.Remove(tmpFile.Name())
+
+	_, _ = LoadConfigFromFile(tmpFile.Name(), logger, droppedStore)
 }

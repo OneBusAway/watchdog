@@ -153,3 +153,63 @@ func TestStartMetricsCollection(t *testing.T) {
 	// Wait a tiny bit then cancel
 	cancel()
 }
+
+func TestCollectForScope(t *testing.T) {
+	app := newTestApplication(t)
+	server := app.ConfigService.Config.Servers[0]
+	
+	// Server scope error branch
+	app.collectForScope(context.Background(), server, config.ServerScope{})
+	// Agency scope branch
+	app.collectForScope(context.Background(), server, config.AgencyScope{})
+	// Invalid scope
+	app.collectForScope(context.Background(), server, nil)
+}
+
+func TestCollectForServerScope(t *testing.T) {
+	app := newTestApplication(t)
+	server := app.ConfigService.Config.Servers[0]
+
+	// Live agency
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"code":200,"data":{"entry":{"agencyIds":["a1"]}}}`))
+	}))
+	defer ts.Close()
+	server.ObaBaseURL = ts.URL
+	
+	scope := config.ServerScope{
+		StaticAgencies: []config.AgencyIdentity{{AgencyID: "a1"}},
+	}
+	app.collectForServerScope(context.Background(), server, scope)
+}
+
+func TestCollectVehicleMetricsError(t *testing.T) {
+	app := newTestApplication(t)
+	server := app.ConfigService.Config.Servers[0]
+	// should not panic if methods error internally due to missing mocked stores
+	app.collectVehicleMetrics(server, []models.ObaServer{})
+}
+
+func TestBoolToFloat(t *testing.T) {
+	if boolToFloat(true) != 1.0 {
+		t.Fatal("expected 1.0")
+	}
+	if boolToFloat(false) != 0.0 {
+		t.Fatal("expected 0.0")
+	}
+}
+
+func TestProbeLiveAgencies_Error(t *testing.T) {
+	app := newTestApplication(t)
+	server := models.ObaServer{ObaBaseURL: "http://invalid-url\n"} // malformed url
+	_, err := app.probeLiveAgencies(context.Background(), server)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	server2 := models.ObaServer{ObaBaseURL: "http://localhost:1"} // connection refused
+	_, err = app.probeLiveAgencies(context.Background(), server2)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}

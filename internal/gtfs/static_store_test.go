@@ -35,8 +35,17 @@ func TestStaticStore(t *testing.T) {
 		t.Fatalf("expected to iterate once")
 	}
 
-	// test prune
+	// test prune keep
+	store.Set(serverKey, data)
 	removed := store.Prune(func(key string) bool {
+		return true // keep it
+	})
+	if len(removed) != 0 {
+		t.Fatalf("expected to keep the server")
+	}
+
+	// test prune delete
+	removed = store.Prune(func(key string) bool {
 		return false
 	})
 	if len(removed) != 1 || removed[0] != serverKey {

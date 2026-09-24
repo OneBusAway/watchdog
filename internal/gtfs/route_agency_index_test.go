@@ -59,6 +59,9 @@ func TestRouteAgencyIndexSetAgencyName(t *testing.T) {
 	if _, ok := idx.AgencyNameFor("https://server.example.com", "agency-unknown"); ok {
 		t.Fatal("expected unknown agency_id to return ok=false")
 	}
+
+	idx.SetAgencyName("https://server.example.com", "", "Empty")
+	idx.SetAgencyName("https://missing.example.com", "a", "Missing")
 }
 
 func TestRouteAgencyIndexReplaceMap(t *testing.T) {

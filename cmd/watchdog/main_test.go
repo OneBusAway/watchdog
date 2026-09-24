@@ -114,3 +114,19 @@ func TestRealMain(t *testing.T) {
 	// this should not exit(1) because -version returns no error, just prints
 	realMain([]string{"-version"})
 }
+
+func TestRun_MissingConfig(t *testing.T) {
+	ctx := context.Background()
+	err := run(ctx, []string{}) // missing config
+	if err == nil {
+		t.Fatal("expected error for missing config")
+	}
+}
+
+func TestRun_BadEnv(t *testing.T) {
+	ctx := context.Background()
+	err := run(ctx, []string{"-env", "invalid"})
+	if err == nil {
+		t.Fatal("expected error for bad env")
+	}
+}
