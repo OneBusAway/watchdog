@@ -14,7 +14,7 @@ import (
 func TestSecurityHeaders(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", nil)
 	rr := httptest.NewRecorder()
-	
+
 	handler := SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
@@ -33,14 +33,14 @@ func TestSecurityHeaders(t *testing.T) {
 func TestSentryMiddleware(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", nil)
 	rr := httptest.NewRecorder()
-	
+
 	handler := SentryMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
 	}))
 
 	handler.ServeHTTP(rr, req)
-	
+
 	if rr.Code != http.StatusOK {
 		t.Errorf("expected 200")
 	}
@@ -75,7 +75,7 @@ func TestCachedPromHandler(t *testing.T) {
 	if !bytes.Contains(rr.Body.Bytes(), []byte("test_counter 1")) {
 		t.Errorf("cache missing test_counter metric")
 	}
-	
+
 	// Test early fallback
 	handler2 := NewCachedPromHandler(ctx, reg, 1*time.Hour)
 	rr2 := httptest.NewRecorder()

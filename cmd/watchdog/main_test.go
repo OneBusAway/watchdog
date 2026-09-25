@@ -2,12 +2,12 @@ package main
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
-	"net/http"
-	"net/http/httptest"
 )
 
 func TestRun_HelpAndVersion(t *testing.T) {
@@ -17,8 +17,13 @@ func TestRun_HelpAndVersion(t *testing.T) {
 	}
 
 	err = run(context.Background(), []string{"-h"})
+	if err != nil {
+		t.Fatalf("expected nil error for help, got %v", err)
+	}
+
+	err = run(context.Background(), []string{"-unknown"})
 	if err == nil {
-		t.Fatalf("expected error for help, got nil")
+		t.Fatalf("expected error for unknown flag, got nil")
 	}
 }
 
@@ -107,7 +112,14 @@ func TestRun_ConfigURL(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 	cancel()
-	<-done
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run failed: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timeout waiting for run to exit")
+	}
 }
 
 func TestRealMain(t *testing.T) {

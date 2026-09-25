@@ -22,14 +22,16 @@ func TestMetricsService(t *testing.T) {
 	vehicleLastSeen := NewVehicleLastSeen()
 	unmatchedStopTracker := NewUnmatchedStopTracker()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	client := http.DefaultClient
+	apiServer := setupObaServer(t, `{"code":200,"data":{"entry":{"agencyIDs":["a1"]}}}`, http.StatusOK)
+	defer apiServer.Close()
+	client := apiServer.Client()
 	newObaClient := func(s models.ObaServer) *onebusaway.Client {
 		return &onebusaway.Client{}
 	}
 
 	ms := NewMetricsService(static, realtime, bbox, routeAgencyIndex, vehicleLastSeen, unmatchedStopTracker, logger, client, newObaClient)
 
-	server := models.ObaServer{ServerName: "test-server", ObaBaseURL: "http://example.com"}
+	server := models.ObaServer{ServerName: "test-server", ObaBaseURL: apiServer.URL}
 
 	// Note: these will likely error out because we don't have mock data loaded,
 	// but we just want to hit the wrappers for coverage. Some functions are skipped
@@ -39,7 +41,9 @@ func TestMetricsService(t *testing.T) {
 	_, _, _ = ms.CheckBundleExpiration(time.Now(), server)
 	// _ = ms.ServerPing(context.Background(), server) // avoids SDK panic
 	// _ = ms.CountActiveVehiclesForAgency(context.Background(), server) // avoids SDK panic
-	_ = ms.FetchObaAPIMetrics(context.Background(), "a1", "agency1", "test-server", "http://example.com", "key")
+	if err := ms.FetchObaAPIMetrics(context.Background(), "a1", "agency1", "test-server", apiServer.URL, "key"); err != nil {
+		t.Fatal(err)
+	}
 	_ = ms.TrackVehicleTelemetry(server, nil)
 	_ = ms.TrackInvalidVehiclesAndStoppedOutOfBounds(server, nil)
 

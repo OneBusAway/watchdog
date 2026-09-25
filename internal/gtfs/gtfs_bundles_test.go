@@ -1167,7 +1167,7 @@ func TestFetchAndStoreGTFSRTFeed_ErrorPaths(t *testing.T) {
 
 	t.Run("HTTP Error", func(t *testing.T) {
 		server := models.ObaServer{
-			AgencyID: "a",
+			AgencyID:    "a",
 			GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: "http://invalid-url-that-fails"}},
 		}
 		if err := fetchAndStoreGTFSRTFeed(ctx, server, realtimeStore, client); err == nil {
@@ -1181,7 +1181,7 @@ func TestFetchAndStoreGTFSRTFeed_ErrorPaths(t *testing.T) {
 		}))
 		defer ts.Close()
 		server := models.ObaServer{
-			AgencyID: "a",
+			AgencyID:    "a",
 			GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: ts.URL}},
 		}
 		if err := fetchAndStoreGTFSRTFeed(ctx, server, realtimeStore, client); err == nil {
@@ -1195,7 +1195,7 @@ func TestFetchAndStoreGTFSRTFeed_ErrorPaths(t *testing.T) {
 		}))
 		defer ts.Close()
 		server := models.ObaServer{
-			AgencyID: "a",
+			AgencyID:    "a",
 			GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: ts.URL}},
 		}
 		if err := fetchAndStoreGTFSRTFeed(ctx, server, realtimeStore, client); err == nil {

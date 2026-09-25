@@ -1,8 +1,8 @@
 package geo
 
 import (
-	"testing"
 	remoteGtfs "github.com/OneBusAway/go-gtfs"
+	"testing"
 )
 
 func TestGeoServiceWrappers(t *testing.T) {

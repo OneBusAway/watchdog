@@ -73,11 +73,38 @@ func TestCollectAgencyChecksBackoff(t *testing.T) {
 
 func TestCollectMetricsForServer_GTFSRTError(t *testing.T) {
 	app := newTestApplication(t)
+	var rtHits int32
+	rtServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&rtHits, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer rtServer.Close()
+
+	obaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/where/current-time.json":
+			w.Write([]byte(`{"code":200,"data":{"entry":{"readableTime":"Test Time"}}}`))
+		case "/api/where/metrics.json":
+			w.Write([]byte(`{"code":200,"data":{"entry":{"agencyIDs":["test-agency"]}}}`))
+		default:
+			w.Write([]byte(`{"code":200,"data":{"list":[],"entry":{}}}`))
+		}
+	}))
+	defer obaServer.Close()
+
 	testServer := app.ConfigService.Config.Servers[0]
-	testServer.GtfsRTFeeds = []models.GtfsRTFeed{{VehiclePositionURL: "http://invalid-url-that-fails"}}
+	testServer.ObaBaseURL = obaServer.URL
+	testServer.GtfsRTFeeds = []models.GtfsRTFeed{{VehiclePositionURL: rtServer.URL}}
 
 	app.CollectMetricsForServer(context.Background(), testServer)
-	// It should exit early without panic
+
+	if atomic.LoadInt32(&rtHits) == 0 {
+		t.Fatal("expected GTFS-RT endpoint to be attempted")
+	}
+	if app.GtfsService.RealtimeStore.Get(testServer.ServerKey()) != nil {
+		t.Fatalf("expected no realtime data after GTFS-RT error")
+	}
 }
 
 func TestCollectVehicleMetricsIsStandalone(t *testing.T) {
@@ -149,7 +176,7 @@ func TestStartMetricsCollection(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	app.StartMetricsCollection(ctx)
-	
+
 	// Wait a tiny bit then cancel
 	cancel()
 }
@@ -157,7 +184,7 @@ func TestStartMetricsCollection(t *testing.T) {
 func TestCollectForScope(t *testing.T) {
 	app := newTestApplication(t)
 	server := app.ConfigService.Config.Servers[0]
-	
+
 	// Server scope error branch
 	app.collectForScope(context.Background(), server, config.ServerScope{})
 	// Agency scope branch
@@ -176,7 +203,7 @@ func TestCollectForServerScope(t *testing.T) {
 	}))
 	defer ts.Close()
 	server.ObaBaseURL = ts.URL
-	
+
 	scope := config.ServerScope{
 		StaticAgencies: []config.AgencyIdentity{{AgencyID: "a1"}},
 	}

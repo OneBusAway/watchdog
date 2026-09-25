@@ -13,7 +13,7 @@ func TestNewStaticData(t *testing.T) {
 		Services: []remoteGtfs.Service{{Id: "S1"}},
 		Routes:   []remoteGtfs.Route{{Id: "R1"}},
 	}
-	
+
 	sd := NewStaticData(bundle)
 	if len(sd.Stops) != 1 || sd.Stops[0].Id != "1" {
 		t.Errorf("expected 1 stop with ID 1")
@@ -33,7 +33,7 @@ func TestNewRealtimeData(t *testing.T) {
 	bundle := &remoteGtfs.Realtime{
 		Vehicles: make([]remoteGtfs.Vehicle, 2),
 	}
-	
+
 	rd := NewRealtimeData(bundle)
 	if len(rd.Vehicles) != 2 {
 		t.Errorf("expected 2 vehicles")

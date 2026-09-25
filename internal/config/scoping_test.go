@@ -145,7 +145,7 @@ func TestIsScope(t *testing.T) {
 
 func TestError(t *testing.T) {
 	ReportAgencyMissingStaticFeed("url", "agency", "server")
-	
+
 	e := &missingStaticFeedError{obaBaseURL: "url", agencyID: "agency"}
 	if e.Error() != "agency agency reported by /api/where/metrics.json for url but no static feed covers it" {
 		t.Fatalf("expected test error, got %q", e.Error())

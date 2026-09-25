@@ -35,7 +35,7 @@ func TestNewPooledClient(t *testing.T) {
 
 func TestLatencyTrackingRoundTripperError(t *testing.T) {
 	client := NewPooledClient()
-	
+
 	// Create a request to a non-existent server to trigger an error
 	req, err := http.NewRequest(http.MethodGet, "http://127.0.0.1:0/fail", nil)
 	if err != nil {

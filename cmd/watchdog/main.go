@@ -48,8 +48,11 @@ func run(ctx context.Context, args []string) error {
 	showVersion := fs.Bool("version", false, "display version and exit")
 	configFile := fs.String("config-file", "", "Path to a local JSON configuration file")
 	configURL := fs.String("config-url", "", "URL to a remote JSON configuration file")
-	
+
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 
@@ -63,7 +66,7 @@ func run(ctx context.Context, args []string) error {
 	configAuthUser := os.Getenv("CONFIG_AUTH_USER")
 	configAuthPass := os.Getenv("CONFIG_AUTH_PASS")
 
-	err := config.ValidateConfigFlags(configFile, configURL)
+	err := config.ValidateConfigFlags(configFile, configURL, fs.Args())
 	if err != nil {
 		logger.Error("Error validating config flags", "err", err)
 		fs.Usage()

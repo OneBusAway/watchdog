@@ -27,11 +27,11 @@ func TestGtfsService_Wrappers(t *testing.T) {
 	cancel() // cancel immediately so we don't hang if they do something
 
 	servers := []models.ObaServer{{ServerName: "test"}}
-	
+
 	// Just hit them for coverage. They will fail or return errors.
 	gs.DownloadGTFSBundles(ctx, servers, 1)
 	_, _ = gs.DownloadGTFSBundle(ctx, "http://example.com/gtfs.zip", "a1", 1)
-	
+
 	_ = gs.FetchAndStoreGTFSRTFeed(ctx, servers[0])
 
 	_, _, _ = GetEarliestAndLatestServiceDates(&models.StaticData{})

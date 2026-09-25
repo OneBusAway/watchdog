@@ -11,7 +11,7 @@ func ptrFloat(f float64) *float64 { return &f }
 
 func TestBoundingBoxAccumulator(t *testing.T) {
 	acc := &BoundingBoxAccumulator{}
-	
+
 	// isValidLatLon
 	if !isValidLatLon(1.0, 1.0) {
 		t.Fatalf("isValidLatLon failed")
@@ -24,7 +24,7 @@ func TestBoundingBoxAccumulator(t *testing.T) {
 	}
 
 	// Add invalid stops
-	acc.Add(remoteGtfs.Stop{}) // nil lat/lon
+	acc.Add(remoteGtfs.Stop{})                                                         // nil lat/lon
 	acc.Add(remoteGtfs.Stop{Latitude: ptrFloat(math.NaN()), Longitude: ptrFloat(1.0)}) // NaN lat
 	acc.Add(remoteGtfs.Stop{Latitude: ptrFloat(1.0), Longitude: ptrFloat(math.NaN())}) // NaN lon
 
@@ -44,11 +44,11 @@ func TestBoundingBoxAccumulator(t *testing.T) {
 	acc.Add(remoteGtfs.Stop{Latitude: ptrFloat(2.0), Longitude: ptrFloat(2.0)}) // hits MaxLat, MaxLon
 	acc.Add(remoteGtfs.Stop{Latitude: ptrFloat(0.5), Longitude: ptrFloat(2.5)}) // hits MinLat, MaxLon
 	acc.Add(remoteGtfs.Stop{Latitude: ptrFloat(2.5), Longitude: ptrFloat(0.5)}) // hits MaxLat, MinLon
-	
+
 	if acc.StopCount() != 7 {
 		t.Fatalf("StopCount %d != 7", acc.StopCount())
 	}
-	
+
 	res, err := acc.Result()
 	if err != nil {
 		t.Fatalf("Result error: %v", err)
@@ -78,7 +78,7 @@ func TestBoundingBoxAccumulator(t *testing.T) {
 	if cb.MinLat != 1.0 || cb.MaxLat != 3.0 || cb.MinLon != 1.0 || cb.MaxLon != 3.0 {
 		t.Fatalf("computeBoundingBox incorrect")
 	}
-    
+
 	// computeBoundingBox error
 	_, err = computeBoundingBox(nil)
 	if err == nil {

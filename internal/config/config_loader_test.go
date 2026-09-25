@@ -230,12 +230,12 @@ func TestValidateConfigFlags(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			flag.CommandLine = flag.NewFlagSet(tt.name, flag.ContinueOnError)
+			fs := flag.NewFlagSet(tt.name, flag.ContinueOnError)
 			var output bytes.Buffer
-			flag.CommandLine.SetOutput(&output)
+			fs.SetOutput(&output)
 
-			configFile := flag.String("config-file", "", "Path to config file")
-			configURL := flag.String("config-url", "", "URL to config")
+			configFile := fs.String("config-file", "", "Path to config file")
+			configURL := fs.String("config-url", "", "URL to config")
 
 			args := []string{"cmd"}
 			if tt.configFile != "" {
@@ -246,10 +246,11 @@ func TestValidateConfigFlags(t *testing.T) {
 			}
 			args = append(args, tt.extraArgs...)
 
-			os.Args = args
-			flag.CommandLine.Parse(args[1:])
+			if err := fs.Parse(args[1:]); err != nil {
+				t.Fatalf("parse flags: %v", err)
+			}
 
-			err := ValidateConfigFlags(configFile, configURL)
+			err := ValidateConfigFlags(configFile, configURL, fs.Args())
 
 			if (err != nil) != tt.expectError {
 				t.Errorf("Expected error: %v, got: %v", tt.expectError, err)
