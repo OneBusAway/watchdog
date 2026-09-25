@@ -36,17 +36,17 @@ func main() {
 	// Every entry in config.json is server-scoped at the top level: server_name
 	// is required, server_url is derived from oba_base_url, and the operator
 	// lists the static feeds each server exposes. agency_id is optional.
-	//   - With agency_id set, the entry is narrowed to one agency: today's
-	//     per-agency pipeline runs once per tick for that agency.
+	//   - With agency_id set, the entry is narrowed to one agency: its static
+	//     snapshot and realtime feed are filtered to that agency.
 	//   - Without agency_id, the entry is server-scoped: Watchdog probes
 	//     /api/where/metrics.json each tick, cross-references the live agency
 	//     IDs against the static feeds' agency.txt declarations, and runs the
 	//     per-agency pipeline for every agency that has BOTH a static bundle
 	//     AND is reported as currently served.
 	//
-	// Multi-agency static feeds are accepted (one bundle pointer-shared across
-	// serverKeys); ambiguous feeds (zero or multiple agency_id rows in
-	// agency.txt) are Sentry-warned and skipped at download time.
+	// Multi-agency static feeds are consolidated and pointer-shared in server
+	// mode; agency mode stores only its owned static snapshot. Ambiguous feeds
+	// are Sentry-warned and skipped at download time in server mode.
 
 	var (
 		showVersion = flag.Bool("version", false, "display version and exit")

@@ -19,14 +19,12 @@ import (
 //
 // Each pass takes an `agencies` slice alongside the server entry:
 //
-//   - nil (agency-mode): the configured entry names a single agency, so every
-//     vehicle in the feed belongs to it. The route → agency index is NOT
-//     consulted — the operator already told us the answer, and consulting the
-//     index would silently drop every vehicle whenever the static bundle
-//     failed to download.
+//   - nil (agency-mode): the realtime store already contains only vehicles
+//     resolved to the configured agency. The pass trusts that filtered
+//     snapshot and does not re-filter it.
 //   - non-nil (server-mode): the entry is server-scoped and the feed is the
 //     merged feed for every agency the server reports. Each vehicle is
-//     attributed to an agency through its TripDescriptor.route_id, and the
+//     attributed to an agency through its TripDescriptor.route_id/trip_id, and the
 //     pass runs ONCE per server per tick — not once per agency. Running it per
 //     agency would multiply the VehicleReportCount counter by the agency count
 //     and file every vehicle under every agency's last-seen slot.
@@ -37,8 +35,7 @@ import (
 // unattributed vehicles.
 
 // agencyIndex keys the live agency entries by agency_id so attribution is an
-// O(1) lookup. Returns nil for agency-mode, which every pass treats as "trust
-// server.AgencyID".
+// O(1) lookup. It returns nil for agency-mode, whose store is pre-filtered.
 func agencyIndex(agencies []models.ObaServer) map[string]models.ObaServer {
 	if len(agencies) == 0 {
 		return nil
@@ -52,15 +49,10 @@ func agencyIndex(agencies []models.ObaServer) map[string]models.ObaServer {
 
 // attributeVehicle resolves the agency a realtime vehicle belongs to.
 //
-// In agency-mode (agencyByID == nil) the answer is always the configured
-// entry. In server-mode the vehicle's route_id is resolved through the route →
-// agency index and matched against the live agency set. A vehicle whose trip
-// carries no route_id, whose route is unknown to the index, or whose route
-// belongs to an agency the server is not currently reporting cannot be
-// attributed. Callers must still account for such a vehicle rather than drop
-// it: trackVehicleTelemetry counts it in GtfsRtUnattributedVehicles, and
-// trackInvalidVehiclesAndStoppedOutOfBounds files it under the server-scoped
-// entry's labels.
+// In agency-mode the store has already applied the shared resolver, so the
+// configured entry is returned for each retained vehicle. In server-mode the
+// resolver checks both route_id and trip_id; conflicts and unknown vehicles are
+// unattributed and remain in the existing server-scoped quality paths.
 func attributeVehicle(server models.ObaServer, agencyByID map[string]models.ObaServer, routeAgencyIndex *gtfs.RouteAgencyIndex, vehicle remoteGtfs.Vehicle) (models.ObaServer, bool) {
 	if agencyByID == nil {
 		return server, true
@@ -68,7 +60,7 @@ func attributeVehicle(server models.ObaServer, agencyByID map[string]models.ObaS
 	if vehicle.Trip == nil || routeAgencyIndex == nil {
 		return models.ObaServer{}, false
 	}
-	agencyID, ok := routeAgencyIndex.Get(server.ObaBaseURL, vehicle.Trip.ID.RouteID)
+	agencyID, ok := routeAgencyIndex.ResolveVehicleAgency(server.ServerKey(), vehicle.Trip.ID.RouteID, vehicle.Trip.ID.ID)
 	if !ok || agencyID == "" {
 		return models.ObaServer{}, false
 	}

@@ -8,14 +8,10 @@ import (
 // It contains parts we use from GTFS static bundles
 // (stops, agencies, services, and routes).
 //
-// Routes are kept so the route → agency index can be populated when the bundle
-// is parsed: every route carries an agency_id in routes.txt, which is how we
-// attribute GTFS-RT vehicles to agencies in server-mode.
-//
-// After multiple feeds are merged, Stops is the server-wide flattened stop set
-// with duplicate IDs resolved by first occurrence. Agency-specific stop sets are
-// intentionally not retained; the GTFS refresh computes per-agency geographic
-// extrema directly from the source feeds before storing this shared bundle.
+// Routes are kept so the route and trip attribution index can be populated when
+// the bundle is parsed. In agency-mode this is an owned snapshot containing only
+// the configured agency's routes, services, and referenced stops. In server-mode
+// it remains the consolidated, shared static bundle.
 // IMPORTANT:
 // In the future, we may need to extend this structure
 // to include more fields from the GTFS Static bundle.

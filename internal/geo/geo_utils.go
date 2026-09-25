@@ -43,6 +43,9 @@ func computeBoundingBox(stops []remoteGtfs.Stop) (BoundingBox, error) {
 		if stop.Latitude != nil && stop.Longitude != nil {
 			lat := *stop.Latitude
 			lon := *stop.Longitude
+			if math.IsNaN(lat) || math.IsNaN(lon) {
+				continue
+			}
 			if lat < minLat {
 				minLat = lat
 			}
@@ -100,6 +103,15 @@ func (s *BoundingBoxStore) Get(serverKey string) (BoundingBox, bool) {
 	defer s.mu.RUnlock()
 	bbox, ok := s.store[serverKey]
 	return bbox, ok
+}
+
+// Delete removes the bounding box for serverKey. It is used when a successful
+// agency-scoped refresh has no valid coordinates, so an old broad box cannot
+// contaminate out-of-bounds checks.
+func (s *BoundingBoxStore) Delete(serverKey string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.store, serverKey)
 }
 
 // IsInBoundingBox checks whether the given lat/lon is within the

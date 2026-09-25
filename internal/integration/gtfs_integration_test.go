@@ -86,8 +86,9 @@ func subtestName(srv models.ObaServer) string {
 	return fmt.Sprintf("Agency_%s", srv.AgencyID)
 }
 
-// assertAgencyScopedBundle checks the single key an agency-scoped entry owns,
-// and that the configured agency_id is one the live feed actually declares.
+// assertAgencyScopedBundle checks the single agency-scoped snapshot owned by
+// the entry. A configured agency may be normalized when the feed is a valid
+// sole-agency feed with no agency ID.
 func assertAgencyScopedBundle(t *testing.T, srv models.ObaServer, staticStore *gtfs.StaticStore, boundingBoxStore *geo.BoundingBoxStore) {
 	t.Helper()
 
@@ -165,7 +166,7 @@ func assertServerScopedBundle(t *testing.T, srv models.ObaServer, staticStore *g
 	}
 
 	// Server-mode attributes each RT vehicle to an agency through the route
-	// index, keyed by the raw base URL rather than the sanitized one. Asserting
+	// index, keyed by the composite server key. Asserting
 	// the key merely exists proves nothing -- storeStaticForServer calls Set
 	// unconditionally, and Set registers even an empty map. What breaks the
 	// vehicle pass is routes that resolve to no agency (agency_id is optional
@@ -175,7 +176,7 @@ func assertServerScopedBundle(t *testing.T, srv models.ObaServer, staticStore *g
 	}
 	var resolved int
 	for _, route := range sample.Routes {
-		agencyID, ok := routeAgencyIndex.Get(srv.ObaBaseURL, route.Id)
+		agencyID, ok := routeAgencyIndex.Get(srv.ServerKey(), route.Id)
 		if !ok {
 			continue
 		}
@@ -184,7 +185,7 @@ func assertServerScopedBundle(t *testing.T, srv models.ObaServer, staticStore *g
 			t.Errorf("route %s resolved to agency %q, which has no stored bundle", route.Id, agencyID)
 			break
 		}
-		if name, ok := routeAgencyIndex.AgencyNameFor(srv.ObaBaseURL, agencyID); !ok || name == "" {
+		if name, ok := routeAgencyIndex.AgencyNameFor(srv.ServerKey(), agencyID); !ok || name == "" {
 			t.Errorf("agency %q has no name in the route index", agencyID)
 			break
 		}

@@ -103,12 +103,10 @@ func newTwoAgencyServerScope(t *testing.T) (*Application, models.ObaServer, conf
 	// server-scoped bounding box rather than any single agency's.
 	app.GtfsService.BoundingBoxStore.Set(server.ServerKey(), wholeWorld)
 
-	app.GtfsService.RouteAgencyIndex.Set(baseURL, map[string]string{
+	app.GtfsService.RouteAgencyIndex.Replace(models.ServerKey(baseURL, ""), map[string]string{
 		"route-a": "agency-a",
 		"route-b": "agency-b",
-	})
-	app.GtfsService.RouteAgencyIndex.SetAgencyName(baseURL, "agency-a", "Agency A")
-	app.GtfsService.RouteAgencyIndex.SetAgencyName(baseURL, "agency-b", "Agency B")
+	}, nil, map[string]string{"agency-a": "Agency A", "agency-b": "Agency B"})
 
 	scope := config.ResolveScope(server, app.GtfsService.StaticStore, app.GtfsService.RouteAgencyIndex)
 	if _, ok := scope.(config.ServerScope); !ok {

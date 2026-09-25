@@ -231,7 +231,7 @@ func TestStopsParsing(t *testing.T) {
 }
 
 func TestStoreGTFSBundleRecordsFetchTime(t *testing.T) {
-	server := models.ObaServer{ServerName: "test", AgencyID: "agency-1", AgencyName: "test", ObaBaseURL: "https://test.example.com"}
+	server := models.ObaServer{ServerName: "test", AgencyID: "40", AgencyName: "Sound Transit", ObaBaseURL: "https://test.example.com"}
 	data := readFixture(t, "gtfs.zip")
 	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
 	if err != nil {
@@ -246,12 +246,7 @@ func TestStoreGTFSBundleRecordsFetchTime(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// In agency-mode the bundle must be stored under the CONFIGURED agency_id,
-	// because that is the key every reader derives from the config entry
-	// (checkBundleExpiration, getStopLocationsByIDs, the bbox lookup all call
-	// server.ServerKey()). The fixture's agency.txt declares a different
-	// agency_id ("40"), so keying off agency.txt would leave every one of those
-	// lookups missing.
+	// Agency-mode stores the compact snapshot under the configured agency_id.
 	storeKey := server.ServerKey()
 	fetchTime, ok := staticStore.GetFetchTime(storeKey)
 	if !ok {
@@ -265,6 +260,37 @@ func TestStoreGTFSBundleRecordsFetchTime(t *testing.T) {
 	}
 	if _, ok := boundingBoxStore.Get(storeKey); !ok {
 		t.Fatalf("expected a bounding box under the configured server key %s", storeKey)
+	}
+}
+
+func TestStoreStaticForServerExcludesForeignAgencyData(t *testing.T) {
+	data := readFixture(t, "gtfs.zip")
+	bundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
+	if err != nil {
+		t.Fatalf("parse fixture: %v", err)
+	}
+	server := models.ObaServer{ServerName: "mismatch", AgencyID: "not-in-feed", ObaBaseURL: "https://mismatch.example.com"}
+	staticStore := NewStaticStore()
+	bounds := geo.NewBoundingBoxStore()
+	key := server.ServerKey()
+	bounds.Set(key, geo.BoundingBox{MinLat: 1, MaxLat: 2, MinLon: 3, MaxLon: 4})
+	index := NewRouteAgencyIndex()
+
+	if err := storeStaticForServer(server, []*remoteGtfs.Static{bundle}, staticStore, bounds, index, nil, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	stored, ok := staticStore.Get(key)
+	if !ok || stored == nil {
+		t.Fatal("expected an empty scoped snapshot to replace the old state")
+	}
+	if len(stored.Routes) != 0 || len(stored.Services) != 0 || len(stored.Stops) != 0 {
+		t.Fatalf("foreign static data leaked into scoped snapshot: %+v", stored)
+	}
+	if _, ok := bounds.Get(key); ok {
+		t.Fatal("expected stale agency bounding box to be deleted")
+	}
+	if !index.Has(key) {
+		t.Fatal("expected empty attribution snapshot to be published")
 	}
 }
 
@@ -361,7 +387,7 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 		defer mockServer.Close()
 
 		server := models.ObaServer{
-			AgencyID: "agency-1",
+			AgencyID: "",
 			GtfsRTFeeds: []models.GtfsRTFeed{
 				{VehiclePositionURL: mockServer.URL, GtfsRTAPIKey: "X-Test-Header", GtfsRTAPIValue: "test-value"},
 				{VehiclePositionURL: mockServer.URL},
@@ -372,7 +398,7 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 			Timeout: 5 * time.Second,
 		}
 		realtimeStore := NewRealtimeStore()
-		err := fetchAndStoreGTFSRTFeed(context.Background(), server, realtimeStore, client)
+		err := fetchAndStoreGTFSRTFeed(context.Background(), server, realtimeStore, client, nil)
 		if err != nil {
 			t.Fatalf("Expected no error, got: %v", err)
 		}
@@ -448,7 +474,7 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 		}
 		realtimeStore := NewRealtimeStore()
 
-		err := fetchAndStoreGTFSRTFeed(context.Background(), server, realtimeStore, client)
+		err := fetchAndStoreGTFSRTFeed(context.Background(), server, realtimeStore, client, nil)
 		if err == nil {
 			t.Error("Expected error due to invalid URL, got nil")
 		}
@@ -466,7 +492,7 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 			Timeout: 5 * time.Second,
 		}
 		realtimeStore := NewRealtimeStore()
-		err := fetchAndStoreGTFSRTFeed(context.Background(), server, realtimeStore, client)
+		err := fetchAndStoreGTFSRTFeed(context.Background(), server, realtimeStore, client, nil)
 		if err == nil {
 			t.Error("Expected error when accessing closed server, got nil")
 		}
@@ -481,12 +507,15 @@ func TestFetchAndStoreGTFSRTFeedKeepsAgenciesIsolated(t *testing.T) {
 	client := &http.Client{Timeout: 5 * time.Second}
 	first := models.ObaServer{AgencyID: "agency-1", ObaBaseURL: "https://first.example.com", GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: mockServer.URL}}}
 	second := models.ObaServer{AgencyID: "agency-2", ObaBaseURL: "https://second.example.com", GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: mockServer.URL}}}
+	index := NewRouteAgencyIndex()
+	index.Replace(first.ServerKey(), nil, nil, nil)
+	index.Replace(second.ServerKey(), nil, nil, nil)
 
-	if err := fetchAndStoreGTFSRTFeed(context.Background(), first, store, client); err != nil {
+	if err := fetchAndStoreGTFSRTFeed(context.Background(), first, store, client, index); err != nil {
 		t.Fatalf("fetch first agency feed: %v", err)
 	}
 	firstData := store.Get(first.ServerKey())
-	if err := fetchAndStoreGTFSRTFeed(context.Background(), second, store, client); err != nil {
+	if err := fetchAndStoreGTFSRTFeed(context.Background(), second, store, client, index); err != nil {
 		t.Fatalf("fetch second agency feed: %v", err)
 	}
 	if firstData == nil || store.Get(second.ServerKey()) == nil {
@@ -510,11 +539,14 @@ func TestFetchAndStoreGTFSRTFeedKeepsDistinctServersWithSameAgencyIDIsolated(t *
 		t.Fatalf("distinct deployments must not share a server key, got %q for both", first.ServerKey())
 	}
 
-	if err := fetchAndStoreGTFSRTFeed(context.Background(), first, store, client); err != nil {
+	index := NewRouteAgencyIndex()
+	index.Replace(first.ServerKey(), nil, nil, nil)
+	index.Replace(second.ServerKey(), nil, nil, nil)
+	if err := fetchAndStoreGTFSRTFeed(context.Background(), first, store, client, index); err != nil {
 		t.Fatalf("fetch first deployment feed: %v", err)
 	}
 	firstData := store.Get(first.ServerKey())
-	if err := fetchAndStoreGTFSRTFeed(context.Background(), second, store, client); err != nil {
+	if err := fetchAndStoreGTFSRTFeed(context.Background(), second, store, client, index); err != nil {
 		t.Fatalf("fetch second deployment feed: %v", err)
 	}
 	if firstData == nil || store.Get(second.ServerKey()) == nil {
@@ -537,7 +569,7 @@ func TestFetchAndStoreGTFSRTFeedKeepsSameIDAcrossFeeds(t *testing.T) {
 	defer serverB.Close()
 
 	server := models.ObaServer{
-		AgencyID: "agency-1",
+		AgencyID: "",
 		GtfsRTFeeds: []models.GtfsRTFeed{
 			{VehiclePositionURL: serverA.URL},
 			{VehiclePositionURL: serverB.URL},
@@ -545,7 +577,7 @@ func TestFetchAndStoreGTFSRTFeedKeepsSameIDAcrossFeeds(t *testing.T) {
 	}
 	client := &http.Client{Timeout: 5 * time.Second}
 	store := NewRealtimeStore()
-	if err := fetchAndStoreGTFSRTFeed(context.Background(), server, store, client); err != nil {
+	if err := fetchAndStoreGTFSRTFeed(context.Background(), server, store, client, nil); err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
 
@@ -649,7 +681,7 @@ func TestFetchAndStoreGTFSRTFeedSingleFetchUnderServerKey(t *testing.T) {
 	}
 
 	store := NewRealtimeStore()
-	if err := fetchAndStoreGTFSRTFeed(context.Background(), server, store, client); err != nil {
+	if err := fetchAndStoreGTFSRTFeed(context.Background(), server, store, client, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -688,8 +720,10 @@ func TestFetchAndStoreGTFSRTFeedAgencyModeUsesAgencyKey(t *testing.T) {
 		}},
 	}
 	store := NewRealtimeStore()
+	index := NewRouteAgencyIndex()
+	index.Replace(server.ServerKey(), nil, nil, nil)
 
-	if err := fetchAndStoreGTFSRTFeed(context.Background(), server, store, client); err != nil {
+	if err := fetchAndStoreGTFSRTFeed(context.Background(), server, store, client, index); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if rt.calls != 1 {
@@ -699,9 +733,73 @@ func TestFetchAndStoreGTFSRTFeedAgencyModeUsesAgencyKey(t *testing.T) {
 	if got == nil {
 		t.Fatal("expected the feed to populate server.ServerKey()")
 	}
-	if len(got.Vehicles) != 1 {
-		t.Fatalf("expected 1 vehicle, got %d", len(got.Vehicles))
+	if len(got.Vehicles) != 0 {
+		t.Fatalf("expected the unresolvable vehicle to be filtered, got %d", len(got.Vehicles))
 	}
+}
+
+func TestFetchAndStoreGTFSRTFeedFiltersAgencyVehiclesByRouteOrTrip(t *testing.T) {
+	feed := marshalRoutedVehicleFeed(t, []routedTestVehicle{
+		{ID: "both-a", RouteID: "route-a", TripID: "trip-a"},
+		{ID: "route-a", RouteID: "route-a"},
+		{ID: "trip-a", TripID: "trip-a"},
+		{ID: "foreign", RouteID: "route-b", TripID: "trip-b"},
+		{ID: "trip-fallback", RouteID: "unknown", TripID: "trip-a"},
+		{ID: "route-fallback", RouteID: "route-a", TripID: "unknown"},
+		{ID: "conflict", RouteID: "route-a", TripID: "trip-b"},
+		{ID: "unknown"},
+	})
+	rtServer := serveBytes(t, feed)
+	defer rtServer.Close()
+
+	server := models.ObaServer{
+		ServerName: "agency-a", AgencyID: "agency-a", ObaBaseURL: "https://example.com",
+		GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: rtServer.URL}},
+	}
+	index := NewRouteAgencyIndex()
+	index.Replace(server.ServerKey(),
+		map[string]string{"route-a": "agency-a", "route-b": "agency-b"},
+		map[string]string{"trip-a": "agency-a", "trip-b": "agency-b"},
+		nil)
+	store := NewRealtimeStore()
+	if err := fetchAndStoreGTFSRTFeed(context.Background(), server, store, &http.Client{}, index); err != nil {
+		t.Fatalf("fetch and filter: %v", err)
+	}
+	data := store.Get(server.ServerKey())
+	if data == nil || len(data.Vehicles) != 5 {
+		t.Fatalf("expected 5 agency-a vehicles after filtering, got %+v", data)
+	}
+	for _, vehicle := range data.Vehicles {
+		if vehicle.FeedID != "0" {
+			t.Fatalf("expected original feed ID to be preserved, got %q", vehicle.FeedID)
+		}
+	}
+}
+
+type routedTestVehicle struct {
+	ID      string
+	RouteID string
+	TripID  string
+}
+
+func marshalRoutedVehicleFeed(t *testing.T, vehicles []routedTestVehicle) []byte {
+	t.Helper()
+	entities := make([]*gtfsrt.FeedEntity, 0, len(vehicles))
+	for _, vehicle := range vehicles {
+		entity := &gtfsrt.FeedEntity{Id: proto.String(vehicle.ID), Vehicle: &gtfsrt.VehiclePosition{
+			Vehicle:  &gtfsrt.VehicleDescriptor{Id: proto.String(vehicle.ID)},
+			Position: &gtfsrt.Position{Latitude: proto.Float32(47), Longitude: proto.Float32(-122)},
+		}}
+		if vehicle.RouteID != "" || vehicle.TripID != "" {
+			entity.Vehicle.Trip = &gtfsrt.TripDescriptor{RouteId: proto.String(vehicle.RouteID), TripId: proto.String(vehicle.TripID)}
+		}
+		entities = append(entities, entity)
+	}
+	data, err := proto.Marshal(&gtfsrt.FeedMessage{Header: &gtfsrt.FeedHeader{GtfsRealtimeVersion: proto.String("2.0")}, Entity: entities})
+	if err != nil {
+		t.Fatalf("marshal routed feed: %v", err)
+	}
+	return data
 }
 
 // floatPtr returns a pointer to f. Used to build *float64 stop lat/lons for

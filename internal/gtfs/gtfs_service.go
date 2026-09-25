@@ -54,8 +54,11 @@ func (gs *GtfsService) RefreshGTFSBundles(ctx context.Context, servers func() []
 	refreshGTFSBundles(ctx, gs.Client, servers, gs.Logger, interval, gs.BoundingBoxStore, gs.StaticStore, gs.RouteAgencyIndex, gs.Observer, maxRetries)
 }
 
+// FetchAndStoreGTFSRTFeed stores a consolidated feed in server mode. In
+// agency-mode it resolves route_id/trip_id through RouteAgencyIndex and stores
+// only vehicles belonging to server.AgencyID.
 func (gs *GtfsService) FetchAndStoreGTFSRTFeed(ctx context.Context, server models.ObaServer) error {
-	return fetchAndStoreGTFSRTFeed(ctx, server, gs.RealtimeStore, gs.Client)
+	return fetchAndStoreGTFSRTFeed(ctx, server, gs.RealtimeStore, gs.Client, gs.RouteAgencyIndex)
 }
 
 // exported helper functions
@@ -67,7 +70,7 @@ func GetEarliestAndLatestServiceDates(staticData *models.StaticData) (earliest, 
 	return earliestTime, latestTime, nil
 }
 
-// GetStopLocationsByIDs resolves stop IDs from the merged static bundle.
+// GetStopLocationsByIDs resolves stop IDs from the stored static snapshot.
 func GetStopLocationsByIDs(serverKey string, stopIDs []string, staticStore *StaticStore) (map[string]remoteGtfs.Stop, error) {
 	return getStopLocationsByIDs(serverKey, stopIDs, staticStore)
 }

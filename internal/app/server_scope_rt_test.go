@@ -65,15 +65,16 @@ func TestServerScopeRTFeedFetchedOncePerTick(t *testing.T) {
 	for _, agencyID := range []string{"agency-A", "agency-B", "agency-C"} {
 		key := models.ServerKey(baseURL, agencyID)
 		app.GtfsService.StaticStore.Set(key, &models.StaticData{})
-		app.GtfsService.RouteAgencyIndex.Set(baseURL, map[string]string{
+		app.GtfsService.RouteAgencyIndex.Replace(models.ServerKey(baseURL, ""), map[string]string{
 			"route-1": agencyID,
-		})
-		app.GtfsService.RouteAgencyIndex.SetAgencyName(baseURL, agencyID, agencyID)
+		}, nil, map[string]string{agencyID: agencyID})
 	}
 
 	// Override the server's URL + RT-feed URL to point at our stub.
 	server := app.ConfigService.Config.Servers[0]
 	server.ObaBaseURL = baseURL
+	server.AgencyID = ""
+	server.AgencyName = ""
 	server.GtfsRTFeeds = []models.GtfsRTFeed{{
 		VehiclePositionURL: baseURL + "/vehicles.pb",
 	}}
