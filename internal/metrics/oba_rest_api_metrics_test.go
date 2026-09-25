@@ -176,10 +176,14 @@ func TestFetchObaAPIMetricsUsesMergedStop(t *testing.T) {
 	defer server.Close()
 
 	latA, lonA := 1.0, 2.0
+	latB, lonB := 9.0, 9.0
 	staticStore := gtfs.NewStaticStore()
 	serverKey := models.ServerKey(server.URL, "collision-agency")
 	staticStore.Set(serverKey, &models.StaticData{
-		Stops: []remoteGtfs.Stop{{Id: "stop-1", Name: "Stop One", Latitude: &latA, Longitude: &lonA}},
+		Stops: []remoteGtfs.Stop{
+			{Id: "stop-1", Name: "Stop One", Latitude: &latA, Longitude: &lonA},
+			{Id: "stop-1", Name: "Stop Collision", Latitude: &latB, Longitude: &lonB},
+		},
 	})
 	tracker := NewUnmatchedStopTracker()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -191,6 +195,9 @@ func TestFetchObaAPIMetricsUsesMergedStop(t *testing.T) {
 	series := collectStopSeries(t)
 	if findStopSeries(series, "collision-agency", "stop-1", "Stop One", "1.000000", "2.000000") == nil {
 		t.Fatalf("expected merged stop location: %+v", series)
+	}
+	if findStopSeries(series, "collision-agency", "stop-1", "Stop Collision", "9.000000", "9.000000") != nil {
+		t.Fatalf("colliding second-occurrence stop should not be emitted: %+v", series)
 	}
 	unresolved, err := getMetricValue(ObaUnmatchedStopUnresolved, map[string]string{
 		"agency_id":   "collision-agency",

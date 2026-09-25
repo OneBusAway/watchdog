@@ -61,6 +61,55 @@ func TestCollectMetricsForServer(t *testing.T) {
 	getMetricsForTesting(t, metrics.ObaApiStatus)
 }
 
+func TestCollectAgencyChecksBackoff(t *testing.T) {
+	app := newTestApplication(t)
+	testServer := app.ConfigService.Config.Servers[0]
+
+	// Trigger a backoff
+	app.ConfigService.BackoffStore.UpdateBackoff(testServer.ServerKey())
+
+	// collectAgencyChecks should return false because it's backing off
+	if app.collectAgencyChecks(context.Background(), testServer, nil) {
+		t.Fatal("expected collectAgencyChecks to return false during backoff")
+	}
+}
+
+func TestCollectMetricsForServer_GTFSRTError(t *testing.T) {
+	app := newTestApplication(t)
+	var rtHits int32
+	rtServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&rtHits, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer rtServer.Close()
+
+	obaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/where/current-time.json":
+			w.Write([]byte(`{"code":200,"data":{"entry":{"readableTime":"Test Time"}}}`))
+		case "/api/where/metrics.json":
+			w.Write([]byte(`{"code":200,"data":{"entry":{"agencyIDs":["test-agency"]}}}`))
+		default:
+			w.Write([]byte(`{"code":200,"data":{"list":[],"entry":{}}}`))
+		}
+	}))
+	defer obaServer.Close()
+
+	testServer := app.ConfigService.Config.Servers[0]
+	testServer.ObaBaseURL = obaServer.URL
+	testServer.GtfsRTFeeds = []models.GtfsRTFeed{{VehiclePositionURL: rtServer.URL}}
+
+	app.CollectMetricsForServer(context.Background(), testServer)
+
+	if atomic.LoadInt32(&rtHits) == 0 {
+		t.Fatal("expected GTFS-RT endpoint to be attempted")
+	}
+	if app.GtfsService.RealtimeStore.Get(testServer.ServerKey()) != nil {
+		t.Fatalf("expected no realtime data after GTFS-RT error")
+	}
+}
+
 func TestCollectVehicleMetricsIsStandalone(t *testing.T) {
 	// collectVehicleMetrics should be safe to invoke independently of the
 	// pre-RT steps (server-ping, FetchObaAPIMetrics, etc.). This is the
@@ -120,6 +169,78 @@ func TestAgencyScopeFetchesRealtimeFeed(t *testing.T) {
 	}
 	if app.GtfsService.RealtimeStore.Get(server.ServerKey()) == nil {
 		t.Fatalf("expected realtime data to be stored under %s", server.ServerKey())
+	}
+}
+
+func TestStartMetricsCollection(t *testing.T) {
+	app := newTestApplication(t)
+	// Force a very short ticker to trigger loop quickly
+	app.ConfigService.Config.FetchInterval = 1 // 1 second
+
+	ctx, cancel := context.WithCancel(context.Background())
+	app.StartMetricsCollection(ctx)
+
+	// Wait a tiny bit then cancel
+	cancel()
+}
+
+func TestCollectForScope(t *testing.T) {
+	app := newTestApplication(t)
+	server := app.ConfigService.Config.Servers[0]
+
+	// Server scope error branch
+	app.collectForScope(context.Background(), server, config.ServerScope{})
+	// Agency scope branch
+	app.collectForScope(context.Background(), server, config.AgencyScope{})
+	// Invalid scope
+	app.collectForScope(context.Background(), server, nil)
+}
+
+func TestCollectForServerScope(t *testing.T) {
+	app := newTestApplication(t)
+	server := app.ConfigService.Config.Servers[0]
+
+	// Live agency
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"code":200,"data":{"entry":{"agencyIds":["a1"]}}}`))
+	}))
+	defer ts.Close()
+	server.ObaBaseURL = ts.URL
+
+	scope := config.ServerScope{
+		StaticAgencies: []config.AgencyIdentity{{AgencyID: "a1"}},
+	}
+	app.collectForServerScope(context.Background(), server, scope)
+}
+
+func TestCollectVehicleMetricsError(t *testing.T) {
+	app := newTestApplication(t)
+	server := app.ConfigService.Config.Servers[0]
+	// should not panic if methods error internally due to missing mocked stores
+	app.collectVehicleMetrics(server, []models.ObaServer{})
+}
+
+func TestBoolToFloat(t *testing.T) {
+	if boolToFloat(true) != 1.0 {
+		t.Fatal("expected 1.0")
+	}
+	if boolToFloat(false) != 0.0 {
+		t.Fatal("expected 0.0")
+	}
+}
+
+func TestProbeLiveAgencies_Error(t *testing.T) {
+	app := newTestApplication(t)
+	server := models.ObaServer{ObaBaseURL: "http://invalid-url\n"} // malformed url
+	_, _, err := app.probeLiveAgencies(context.Background(), server)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	server2 := models.ObaServer{ObaBaseURL: "http://localhost:1"} // connection refused
+	_, _, err = app.probeLiveAgencies(context.Background(), server2)
+	if err == nil {
+		t.Fatal("expected error")
 	}
 }
 

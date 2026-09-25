@@ -3,7 +3,7 @@ package utils
 import (
 	"context"
 	"fmt"
-	"math/rand/v2"
+	"math/rand"
 	"net/http"
 	"time"
 )

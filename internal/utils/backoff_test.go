@@ -128,3 +128,19 @@ type roundTripperFunc func(req *http.Request) (*http.Response, error)
 func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
+
+func TestCalculateNextRetryAt(t *testing.T) {
+	now := time.Now()
+	next := CalculateNextRetryAt(5 * time.Second)
+	diff := next.Sub(now)
+	if diff < 5*time.Second || diff > 11*time.Second { // 5s * 2 + jitter
+		t.Fatalf("CalculateNextRetryAt returned incorrect time: %v", diff)
+	}
+}
+
+func TestCalculateNewBackoffDelay(t *testing.T) {
+	d := CalculateNewBackoffDelay(5 * time.Second)
+	if d < 5*time.Second || d > 10*time.Second { // 5s * 2 = 10s roughly, jitter makes it less
+		t.Fatalf("CalculateNewBackoffDelay returned out of range delay: %v", d)
+	}
+}

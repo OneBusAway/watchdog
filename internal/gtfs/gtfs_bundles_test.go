@@ -119,6 +119,27 @@ func TestDownloadGTFSBundle(t *testing.T) {
 		}
 	})
 
+	t.Run("404 Response", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer ts.Close()
+		_, err := downloadGTFSBundle(ctx, client, ts.URL, "agency-3", 1)
+		if err == nil {
+			t.Errorf("Expected error for 404 response, got none")
+		}
+	})
+
+	t.Run("Parse Failure", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte("invalid zip content"))
+		}))
+		defer ts.Close()
+		_, err := downloadGTFSBundle(ctx, client, ts.URL, "agency-4", 1)
+		if err == nil {
+			t.Errorf("Expected parse error, got none")
+		}
+	})
 }
 
 func TestAgencyParsing(t *testing.T) {
@@ -1106,4 +1127,79 @@ func TestStoreStaticForServerSkipsServerScopedBoxInAgencyMode(t *testing.T) {
 	if _, ok := boundingBoxStore.Get(models.ServerKey(server.ObaBaseURL, "")); ok {
 		t.Fatal("agency-mode should not publish a server-scoped bounding box")
 	}
+}
+
+func TestAgencyIDFromRoute(t *testing.T) {
+	tests := []struct {
+		name     string
+		route    remoteGtfs.Route
+		expected string
+	}{
+		{"With AgencyID", remoteGtfs.Route{Agency: &remoteGtfs.Agency{Id: "agency-1"}}, "agency-1"},
+		{"Without AgencyID", remoteGtfs.Route{}, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := agencyIDFromRoute(tt.route); got != tt.expected {
+				t.Errorf("agencyIDFromRoute() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestFormatLatLon(t *testing.T) {
+	lat := 47.6062
+	expected := "47.6062"
+	if got := formatLatLon(&lat); got != expected {
+		t.Errorf("formatLatLon() = %v, want %v", got, expected)
+	}
+
+	if got := formatLatLon(nil); got != "nil" {
+		t.Errorf("formatLatLon() = %v, want nil", got)
+	}
+}
+
+func TestFetchAndStoreGTFSRTFeed_ErrorPaths(t *testing.T) {
+	ctx := context.Background()
+	client := &http.Client{Timeout: 5 * time.Second}
+	realtimeStore := NewRealtimeStore()
+
+	t.Run("HTTP Error", func(t *testing.T) {
+		server := models.ObaServer{
+			AgencyID:    "a",
+			GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: "http://invalid-url-that-fails"}},
+		}
+		if err := fetchAndStoreGTFSRTFeed(ctx, server, realtimeStore, client); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("HTTP 404", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(404)
+		}))
+		defer ts.Close()
+		server := models.ObaServer{
+			AgencyID:    "a",
+			GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: ts.URL}},
+		}
+		if err := fetchAndStoreGTFSRTFeed(ctx, server, realtimeStore, client); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("Parse Error", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte("invalid content"))
+		}))
+		defer ts.Close()
+		server := models.ObaServer{
+			AgencyID:    "a",
+			GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: ts.URL}},
+		}
+		if err := fetchAndStoreGTFSRTFeed(ctx, server, realtimeStore, client); err == nil {
+			t.Fatal("expected error")
+		}
+	})
 }

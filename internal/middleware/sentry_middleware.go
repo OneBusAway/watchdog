@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/getsentry/sentry-go/http"
+	sentryhttp "github.com/getsentry/sentry-go/http"
 )
 
 // SentryMiddleware wraps the provided HTTP handler with Sentry's error tracking middleware.
