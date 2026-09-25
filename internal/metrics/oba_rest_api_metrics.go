@@ -53,7 +53,7 @@ type OBAMetrics struct {
 // ID resolves to at most one stop because the merge keeps the first occurrence
 // of duplicate stop IDs.
 //
-// Unmatched stop IDs are resolved against the shared merged GTFS bundle. Each
+// Unmatched stop IDs are resolved against the stored static snapshot. Each
 // ID resolves to at most one stop because the merge keeps the first occurrence
 // of duplicate stop IDs.
 //

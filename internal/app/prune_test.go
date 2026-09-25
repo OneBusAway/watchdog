@@ -27,7 +27,7 @@ func TestPruneStaleServersDropsDepartedServers(t *testing.T) {
 		app.GtfsService.StaticStore.Set(server.ServerKey(), &models.StaticData{})
 		app.GtfsService.BoundingBoxStore.Set(server.ServerKey(), geo.BoundingBox{})
 		app.GtfsService.RealtimeStore.Set(server.ServerKey(), &models.RealtimeData{})
-		app.GtfsService.RouteAgencyIndex.Set(server.ObaBaseURL, map[string]string{"r1": server.AgencyID})
+		app.GtfsService.RouteAgencyIndex.Replace(server.ServerKey(), map[string]string{"r1": server.AgencyID}, nil, nil)
 		app.MetricsService.VehicleLastSeen.Set(server.ServerKey(), "0", "v1", metrics.LastSeen{})
 	}
 
@@ -42,7 +42,7 @@ func TestPruneStaleServersDropsDepartedServers(t *testing.T) {
 	if app.GtfsService.RealtimeStore.Get(gone.ServerKey()) != nil {
 		t.Error("expected the departed server's realtime feed to be pruned")
 	}
-	if _, ok := app.GtfsService.RouteAgencyIndex.Get(goneURL, "r1"); ok {
+	if _, ok := app.GtfsService.RouteAgencyIndex.Get(gone.ServerKey(), "r1"); ok {
 		t.Error("expected the departed server's route index to be pruned")
 	}
 	if app.MetricsService.VehicleLastSeen.Count(gone.ServerKey()) != 0 {
@@ -52,7 +52,7 @@ func TestPruneStaleServersDropsDepartedServers(t *testing.T) {
 	if _, ok := app.GtfsService.StaticStore.Get(kept.ServerKey()); !ok {
 		t.Error("expected the configured server's static bundle to survive")
 	}
-	if _, ok := app.GtfsService.RouteAgencyIndex.Get(keptURL, "r1"); !ok {
+	if _, ok := app.GtfsService.RouteAgencyIndex.Get(kept.ServerKey(), "r1"); !ok {
 		t.Error("expected the configured server's route index to survive")
 	}
 	if app.MetricsService.VehicleLastSeen.Count(kept.ServerKey()) != 1 {

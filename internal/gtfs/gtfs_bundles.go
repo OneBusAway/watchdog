@@ -1,12 +1,16 @@
 package gtfs
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
+	"encoding/csv"
 	"fmt"
 	"io"
 	"log/slog"
 	"math"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,20 +37,16 @@ type StaticBundleObserver func(server models.ObaServer, agencyID, agencyName str
 //
 // Each server entry spawns its own goroutine that:
 //  1. Downloads every configured GTFS static feed (with backoff retries).
-//  2. Discovers the agencies each feed declares via agency.txt — multiple
-//     agencies per feed are accepted (one bundle pointer-shared across serverKeys).
-//  3. Merges the feeds into one StaticData per server.
-//  4. Stores the merged bundle under (oba_base_url, agency_id) for every
-//     declared agency, and computes the bounding box per agency.
-//  5. Populates the RouteAgencyIndex with route_id → agency_id mappings so the
-//     RT metrics can attribute vehicles by their TripDescriptor.route_id.
+//  2. In agency-mode, builds and stores an owned agency-scoped static snapshot.
+//  3. In server-mode, merges the feeds into one StaticData per server and stores
+//     the shared pointer under every declared agency key.
+//  4. Computes the appropriate bounding boxes for the selected mode.
+//  5. Populates RouteAgencyIndex with route_id and trip_id attribution maps.
 //
 // Server-mode vs. agency-mode:
 //
-//   - Agency-mode: server.AgencyID is non-empty. We still iterate agency.txt
-//     to learn each route's owning agency (for vehicle attribution), but the
-//     bundle is stored under server.ServerKey() = (oba_base_url, agency_id)
-//     exactly once.
+//   - Agency-mode: server.AgencyID is non-empty. Only static data resolved to
+//     that configured agency is stored under server.ServerKey().
 //   - Server-mode: server.AgencyID is empty. agency.txt is the SOLE source of
 //     agency identity. The bundle is stored once per declared agency_id,
 //     pointer-shared across serverKeys. If agency.txt is empty or has zero
@@ -101,46 +101,54 @@ func downloadGTFSBundles(ctx context.Context, client *http.Client, servers []mod
 	wg.Wait()
 }
 
-// storeStaticForServer merges the parsed bundles for one server and stores the
-// result under one serverKey (serverKey is a string containing the base URL and
-// agency ID) per declared agency. Multi-agency feeds are supported: a single
-// bundle pointer is registered under multiple serverKeys (one per agency_id
-// row in agency.txt).
+// storeStaticForServer stores either an agency-scoped static snapshot or the
+// server-mode consolidated bundle under the appropriate composite keys.
 //
-// The route → agency index is populated from each bundle's routes.txt. Every
-// route_id encountered is mapped to its owning agency_id, and the agency_name
-// is recorded for human-readable labels later.
+// Route and trip attribution maps are built from the parser graph. Agency-mode
+// publishes them under its configured server key; server-mode publishes them
+// under the empty-agency server key.
 //
-// Bounding boxes are computed from the original source bundles before their
-// stops are merged and duplicate IDs are removed. This lets every physical
-// coordinate contribute to the appropriate agency and server-wide bounds
-// without retaining a per-agency copy of the stop set.
+// Server-mode bounding boxes are computed from the original source bundles
+// before their stops are merged and duplicate IDs are removed. Agency-mode
+// computes its box from the retained scoped stops.
 //
 // observer, if non-nil, is invoked once per (server, agency) tuple after the
 // store call so the metrics layer can emit introspection gauges without the
 // gtfs package needing to import it.
 func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static, staticStore *StaticStore, boundingBoxStore *geo.BoundingBoxStore, routeAgencyIndex *RouteAgencyIndex, observer StaticBundleObserver, logger *slog.Logger) error {
+	if !server.IsServerScoped() {
+		result := buildAgencyStaticSnapshot(server, bundles, logger)
+		serverKey := server.ServerKey()
+		staticStore.Set(serverKey, result.data)
+		staticStore.SetFetchTime(serverKey, time.Now().UTC())
+		routeAgencyIndex.Replace(serverKey, result.routeIDs, result.tripIDs, result.agencyNames)
+
+		if bbox, err := geo.ComputeBoundingBox(result.data.Stops); err == nil {
+			boundingBoxStore.Set(serverKey, bbox)
+		} else {
+			// A successful refresh with no scoped coordinates must not leave a
+			// broad box from an older snapshot in place.
+			boundingBoxStore.Delete(serverKey)
+			logger.Warn("Could not compute agency bounding box", "server_key", serverKey, "agency_id", server.AgencyID, "error", err)
+			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+				Tags:  map[string]string{"server_name": server.ServerName, "agency_id": server.AgencyID},
+				Level: sentry.LevelWarning,
+			})
+		}
+		if observer != nil {
+			func() {
+				defer func() { _ = recover() }()
+				observer(server, server.AgencyID, result.data.Agencies[0].Name, result.data)
+			}()
+		}
+		return nil
+	}
+
 	mergedbundle, declaredAgencies := mergeStaticAndDiscoverAgencies(bundles)
 	computedBoxes := computeBoundingBoxes(bundles)
 
-	// Agency-mode: the operator named the agency, so the bundle is stored
-	// exactly once under server.ServerKey() — the same key every agency-mode
-	// reader (checkBundleExpiration, getStopLocationsByIDs, the bbox lookup)
-	// derives from the configured entry. Deriving the key from agency.txt
-	// instead would silently miss whenever the feed's agency_id differs from
-	// the configured one, or is blank — which is legal for a single-agency
-	// feed and would leave nothing stored at all.
 	storageAgencies := declaredAgencies
-	if !server.IsServerScoped() {
-		agencyName := server.AgencyName
-		for _, declared := range declaredAgencies {
-			if declared.AgencyID == server.AgencyID && declared.AgencyName != "" {
-				agencyName = declared.AgencyName
-				break
-			}
-		}
-		storageAgencies = []declaredAgency{{AgencyID: server.AgencyID, AgencyName: agencyName}}
-	} else if len(declaredAgencies) == 0 {
+	if len(declaredAgencies) == 0 {
 		logger.Warn("No agency_id declared in any static feed for server; skipping per-agency storage",
 			"server_name", server.ServerName,
 			"oba_base_url", server.ObaBaseURL)
@@ -161,15 +169,6 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 	// in a persistent per-agency stop index.
 	unionBox, unionBoxErr := computedBoxes.union, computedBoxes.unionErr
 	agencyBoxes, agencyBoxErrors := computedBoxes.byAgency, computedBoxes.errorsByAgency
-	if !server.IsServerScoped() {
-		for agencyID, err := range agencyBoxErrors {
-			if agencyID != server.AgencyID {
-				logger.Error("Could not compute agency bounding box",
-					"server_key", models.ServerKey(server.ObaBaseURL, agencyID), "agency_id", agencyID, "error", err)
-			}
-		}
-	}
-
 	// Per-agency storage. The merged StaticData is pointer-shared across all
 	// serverKeys. Only the four transient bounding-box extrema above are kept per
 	// agency, so stop storage does not grow with the number of declared agencies.
@@ -241,35 +240,21 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 		}
 	}
 
-	// Populate the per-server route → agency index. We build it in two passes:
-	// first we collect every (route_id, agency_id) pair from routes.txt, then we
-	// hand the whole map to the index in one Set call so the read lock isn't
-	// taken between individual writes.
-	routeMap := make(map[string]string, len(mergedbundle.Routes))
-	for _, route := range mergedbundle.Routes {
-		if route.Id == "" {
-			continue
-		}
-		agencyID := agencyIDFromRoute(route)
-		if agencyID == "" {
-			continue
-		}
-		routeMap[route.Id] = agencyID
-	}
-	routeAgencyIndex.Set(server.ObaBaseURL, routeMap)
+	// Publish route, trip, and agency-name maps together under the empty-agency
+	// server key. The parser graph is still available for trip attribution here.
+	routeMap, tripMap := buildAttributionMaps(server, bundles, false, logger)
+	names := make(map[string]string, len(declaredAgencies))
 	for _, decl := range declaredAgencies {
-		routeAgencyIndex.SetAgencyName(server.ObaBaseURL, decl.AgencyID, decl.AgencyName)
+		names[decl.AgencyID] = decl.AgencyName
 	}
-	for _, decl := range storageAgencies {
-		routeAgencyIndex.SetAgencyName(server.ObaBaseURL, decl.AgencyID, decl.AgencyName)
-	}
+	routeAgencyIndex.Replace(server.ServerKey(), routeMap, tripMap, names)
 
 	return nil
 }
 
 // boundingBoxAccumulator incrementally computes geographic bounds without
-// retaining the stops that produced them. computeBoundingBoxes creates one for
-// the server-wide union and one for each agency declared by the source feeds.
+// retaining the stops that produced them. In server mode computeBoundingBoxes
+// creates one for the server-wide union and one for each declared agency.
 // Its memory use remains constant as stops are added: box holds the four
 // extrema, stopCount distinguishes an empty feed from one whose coordinates are
 // all invalid, and initialized records whether a valid coordinate was seen.
@@ -327,14 +312,14 @@ func (a *boundingBoxAccumulator) result() (geo.BoundingBox, error) {
 
 // computedBoundingBoxes contains the complete transient result of the source-
 // feed walk. union covers every stop from every feed and is used by the
-// server-scoped vehicle pass and as the agency fallback. byAgency contains each
-// successfully computed agency box, while errorsByAgency records agencies that
-// had stops but no usable coordinates. unionErr reports the corresponding
-// server-wide failure.
+// server-scoped vehicle pass and as the server-mode agency fallback. byAgency
+// contains each successfully computed agency box, while errorsByAgency records
+// agencies that had stops but no usable coordinates. unionErr reports the
+// corresponding server-wide failure.
 //
-// When one pre-merged feed declares several agencies, each agency correctly
-// receives the same box as union because every agency shares that feed's stop
-// pool. Only the resulting four extrema are retained per agency.
+// When one pre-merged feed declares several agencies, each server-mode agency
+// correctly receives the same box as union because every agency shares that
+// feed's stop pool. Only the resulting four extrema are retained per agency.
 type computedBoundingBoxes struct {
 	union          geo.BoundingBox
 	unionErr       error
@@ -518,16 +503,6 @@ func mergeStaticAndDiscoverAgencies(bundles []*remoteGtfs.Static) (*models.Stati
 	return staticData, declared
 }
 
-// agencyIDFromRoute returns the agency_id of the agency that owns a route.
-// Returns "" when the route or its agency is missing — callers should treat
-// that as "unattributable" and either skip the route or report it.
-func agencyIDFromRoute(route remoteGtfs.Route) string {
-	if route.Agency == nil {
-		return ""
-	}
-	return route.Agency.Id
-}
-
 // refreshGTFSBundles periodically refreshes GTFS static bundles for a list of OBA servers.
 //
 // It runs in a loop, triggered at the specified interval, and performs the following:
@@ -620,7 +595,55 @@ func downloadGTFSBundle(ctx context.Context, client *http.Client, url, agencyID 
 		})
 		return nil, err
 	}
+	if err := normalizeOmittedAgencyID(data, staticBundle); err != nil {
+		err = fmt.Errorf("failed to inspect agency.txt in %s: %w", url, err)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: utils.MakeMap("agency_id", agencyID),
+			ExtraContext: map[string]interface{}{
+				"url": sanitizedURL,
+			},
+		})
+		return nil, err
+	}
 	return staticBundle, nil
+}
+
+// normalizeOmittedAgencyID restores the distinction between an omitted
+// agency_id column and an explicitly supplied ID. go-gtfs synthesizes an ID
+// for a single agency when the column is absent, but agency-mode needs to treat
+// that feed as unqualified so it can associate it with the configured agency.
+func normalizeOmittedAgencyID(data []byte, bundle *remoteGtfs.Static) error {
+	if bundle == nil || len(bundle.Agencies) != 1 {
+		return nil
+	}
+
+	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return err
+	}
+	for _, file := range reader.File {
+		if file.Name != "agency.txt" {
+			continue
+		}
+		body, err := file.Open()
+		if err != nil {
+			return err
+		}
+		defer body.Close()
+		header, err := csv.NewReader(body).Read()
+		if err != nil {
+			return err
+		}
+		for _, column := range header {
+			column = strings.TrimPrefix(column, "\ufeff")
+			if strings.TrimSpace(column) == "agency_id" {
+				return nil
+			}
+		}
+		bundle.Agencies[0].Id = ""
+		return nil
+	}
+	return nil
 }
 
 // getStopLocationsByIDs retrieves stops by ID from the shared merged GTFS
@@ -690,7 +713,7 @@ func getEarliestAndLatestServiceDates(staticData *models.StaticData) (earliestEn
 // One key, one fetch, per tick. For a server-scoped entry the key is the
 // server-scoped one (empty agency_id), because the vehicle pass reads the
 // merged feed once for the whole server and attributes each vehicle to its
-// owning agency through the route -> agency index. Registering the same feed
+// owning agency through the route/trip attribution index. Registering the same feed
 // under every agency's key would only invite a per-agency pass, which
 // double-counts.
 //
@@ -702,13 +725,33 @@ func getEarliestAndLatestServiceDates(staticData *models.StaticData) (earliestEn
 // Every retained vehicle is tagged with the zero-based index of the feed it
 // came from (see models.RealtimeVehicle.FeedID) so consumers can key
 // per-vehicle identity on the (feed, vehicle_id) pair.
-func fetchAndStoreGTFSRTFeed(ctx context.Context, server models.ObaServer, realtimeStore *RealtimeStore, client *http.Client) error {
+func fetchAndStoreGTFSRTFeed(ctx context.Context, server models.ObaServer, realtimeStore *RealtimeStore, client *http.Client, routeAgencyIndex *RouteAgencyIndex) error {
 	merged, err := parseGTFSRTFeeds(ctx, server, client)
 	if err != nil {
 		return err
 	}
 	if merged == nil {
 		return nil
+	}
+	// Agency-mode filtering is deliberately performed before publication so all
+	// metric passes consume the same scoped snapshot.
+	if !server.IsServerScoped() {
+		if routeAgencyIndex == nil || !routeAgencyIndex.Has(server.ServerKey()) {
+			return fmt.Errorf("no GTFS static attribution state for server key %s", server.ServerKey())
+		}
+		filtered := make([]models.RealtimeVehicle, 0, len(merged.Vehicles))
+		for _, realtimeVehicle := range merged.Vehicles {
+			routeID, tripID := "", ""
+			if realtimeVehicle.Vehicle.Trip != nil {
+				routeID = realtimeVehicle.Vehicle.Trip.ID.RouteID
+				tripID = realtimeVehicle.Vehicle.Trip.ID.ID
+			}
+			agencyID, ok := routeAgencyIndex.ResolveVehicleAgency(server.ServerKey(), routeID, tripID)
+			if ok && agencyID == server.AgencyID {
+				filtered = append(filtered, realtimeVehicle)
+			}
+		}
+		merged.Vehicles = filtered
 	}
 	realtimeStore.Set(server.ServerKey(), merged)
 	return nil

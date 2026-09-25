@@ -64,8 +64,8 @@ func (app *Application) StartMetricsCollection(ctx context.Context) {
 // collectForScope dispatches a single configured ObaServer entry through the
 // per-scope collection pipeline.
 //
-//   - AgencyScope: delegates to CollectMetricsForServer, which fetches this
-//     entry's own GTFS-RT feed as part of the pipeline (today's behavior).
+//   - AgencyScope: delegates to CollectMetricsForServer, which fetches and
+//     filters this entry's own GTFS-RT feed as part of the pipeline.
 //   - ServerScope: probes /metrics.json, runs the agency-scoped checks once
 //     for every agency that has a static bundle AND is reported by OBA, then
 //     runs the GTFS-RT vehicle pass once for the whole server. Static-only
@@ -143,8 +143,8 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 	}
 
 	// Resolve the agencies that are currently live. These entries carry the
-	// labels the vehicle pass emits, and the pass consults the route -> agency
-	// index to decide which of them owns each vehicle in the merged feed.
+	// labels the vehicle pass emits, and the pass consults the route/trip index
+	// to decide which of them owns each vehicle in the merged feed.
 	liveAgencyEntries := make([]models.ObaServer, 0, len(scope.StaticAgencies))
 	// Every other metric labels server_url with the sanitized base URL, and the
 	// dashboard's $server_url variable is sourced from those series. Use the
@@ -186,8 +186,8 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 	// attribute a vehicle to, and no reason to spend an RT fetch. Returning
 	// here rather than falling through also matters for correctness:
 	// collectVehicleMetrics reads an empty agency slice as agency-mode, which
-	// over a server-scoped entry would attribute every vehicle in the merged
-	// feed to an empty agency_id.
+	// over a server-scoped entry would treat the consolidated feed as already
+	// filtered to one configured agency.
 	if len(liveAgencyEntries) == 0 {
 		return
 	}
@@ -263,8 +263,8 @@ func (app *Application) CollectMetricsForServer(ctx context.Context, server mode
 		return
 	}
 
-	// nil agencies: this entry names a single agency, so every vehicle in the
-	// feed belongs to it and the route -> agency index is not consulted.
+	// nil agencies: the fetch has already filtered the store to vehicles
+	// resolved to this configured agency.
 	app.collectVehicleMetrics(server, nil)
 }
 
@@ -373,9 +373,9 @@ func (app *Application) collectAgencyChecks(ctx context.Context, server models.O
 // GTFS-RT realtime store. It walks the feed once and must therefore be called
 // exactly once per server per tick.
 //
-// agencies is nil for an agency-scoped entry (every vehicle belongs to the
-// configured agency) and holds the live agency entries for a server-scoped one
-// (each vehicle is attributed through the route -> agency index). See the
+// agencies is nil for an agency-scoped entry (the store is pre-filtered) and
+// holds the live agency entries for a server-scoped one (each vehicle is
+// attributed through the route/trip index). See the
 // scope-dispatch comment at the top of internal/metrics/vehicle_metrics.go.
 func (app *Application) collectVehicleMetrics(server models.ObaServer, agencies []models.ObaServer) {
 	if err := app.MetricsService.CountVehiclePositions(server, agencies); err != nil {

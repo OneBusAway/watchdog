@@ -1,153 +1,156 @@
 package gtfs
 
-import "sync"
+import (
+	"sync"
+)
 
-// RouteAgencyIndex maps every route_id known to a server to the agency_id that
-// owns it. It is the single source of truth for attributing GTFS-RT vehicles
-// to agencies: when an RT feed reports a vehicle, we look at
-// vehicle.Trip.RouteID, ask the index which agency owns that route, and only
-// then emit per-agency metrics for it.
-//
-// The index is built in one place (during static-feed parse) and read by every
-// RT-metric function on every 30-second scrape. Because the build is bounded
-// (once per static download, every 24h) and the reads are O(1) map lookups,
-// the index has no per-scrape cost beyond the lookup itself.
-//
-// Concurrency: the index uses sync.RWMutex. Writes (Set / Clear / SetAgencyName)
-// take the write lock; reads (Get / AgencyNameFor / Range) take the read lock.
-// A scrape that races a 24h refresh sees a stale index for at most one tick
-// (~30s); the next scrape sees the new state. No corruption, no torn reads.
+// RouteAgencyIndex is the attribution index for one static snapshot. It maps
+// both route_id and trip_id to their owning agency and keeps agency names next
+// to those maps so replacement is atomic. Entries are keyed by the composite
+// models.ServerKey identity; agency-mode entries therefore remain independent
+// even when they share a base URL.
 type RouteAgencyIndex struct {
 	mu       sync.RWMutex
 	byServer map[string]*serverIndex
 }
 
-// serverIndex is the per-server state. routeIDs is the canonical route_id ->
-// agency_id map. agencyNames is a reverse index built lazily so dashboards can
-// recover the human-friendly agency_name without re-parsing the static bundle
-// — useful when only the agency_id is known (e.g. from /metrics.json) and the
-// collector wants to label metrics consistently.
 type serverIndex struct {
-	routeIDs    map[string]string // route_id -> agency_id
-	agencyNames map[string]string // agency_id -> agency_name
+	routeIDs    map[string]string
+	tripIDs     map[string]string
+	agencyNames map[string]string
 }
 
-// NewRouteAgencyIndex returns an empty RouteAgencyIndex.
 func NewRouteAgencyIndex() *RouteAgencyIndex {
-	return &RouteAgencyIndex{
-		byServer: make(map[string]*serverIndex),
-	}
+	return &RouteAgencyIndex{byServer: make(map[string]*serverIndex)}
 }
 
-// Set replaces the route → agency map for a single server. Called once per
-// static-feed parse: the caller hands in a map covering every route declared
-// in every feed attributed to that server.
-//
-// baseURL is the OBA server's base URL, stored verbatim — it is NOT sanitized
-// here. Every reader (Get, AgencyNameFor) must therefore pass the same raw
-// oba_base_url the writer used, or attribution fails silently. Callers that
-// hold a sanitized URL must not mix the two forms.
-func (idx *RouteAgencyIndex) Set(baseURL string, routes map[string]string) {
-	if routes == nil {
-		routes = map[string]string{}
-	}
+// Replace atomically publishes all attribution maps for a static snapshot.
+func (idx *RouteAgencyIndex) Replace(serverKey string, routes, trips, agencyNames map[string]string) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	if idx.byServer == nil {
 		idx.byServer = make(map[string]*serverIndex)
 	}
-	idx.byServer[baseURL] = &serverIndex{
-		routeIDs:    routes,
-		agencyNames: map[string]string{},
+	idx.byServer[serverKey] = &serverIndex{
+		routeIDs:    cloneStringMap(routes),
+		tripIDs:     cloneStringMap(trips),
+		agencyNames: cloneStringMap(agencyNames),
 	}
 }
 
-// SetAgencyName records the human-readable name for one agency on a server.
-// Called during static-feed parse: the parser knows the agency_id and the
-// agency_name from agency.txt, so it can populate this side index without
-// scanning the route map.
-func (idx *RouteAgencyIndex) SetAgencyName(baseURL, agencyID, agencyName string) {
-	idx.mu.Lock()
-	defer idx.mu.Unlock()
-	si, ok := idx.byServer[baseURL]
-	if !ok {
-		si = &serverIndex{routeIDs: map[string]string{}, agencyNames: map[string]string{}}
-		idx.byServer[baseURL] = si
-	}
-	si.agencyNames[agencyID] = agencyName
-}
-
-// Get returns the agency_id that owns the given route_id on the given server.
-// The second return value is false when the route is unknown to this server,
-// which signals to callers that the vehicle cannot be attributed (its
-// TripDescriptor.route_id is empty, references a route we don't have static
-// data for, or the index hasn't been populated yet for this server).
-func (idx *RouteAgencyIndex) Get(baseURL, routeID string) (string, bool) {
+func (idx *RouteAgencyIndex) Get(serverKey, routeID string) (string, bool) {
 	if routeID == "" {
 		return "", false
 	}
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-	si, ok := idx.byServer[baseURL]
-	if !ok {
+	si := idx.lookupLocked(serverKey)
+	if si == nil {
 		return "", false
 	}
 	agencyID, ok := si.routeIDs[routeID]
-	return agencyID, ok
+	return agencyID, ok && agencyID != ""
 }
 
-// AgencyNameFor returns the agency_name recorded for an agency_id on a server.
-// Returns ("", false) if no name is known. The collector uses this to populate
-// the agency_name metric label when only the agency_id is known (e.g., when
-// /metrics.json reports a new agency we haven't seen yet).
-func (idx *RouteAgencyIndex) AgencyNameFor(baseURL, agencyID string) (string, bool) {
+func (idx *RouteAgencyIndex) GetTrip(serverKey, tripID string) (string, bool) {
+	if tripID == "" {
+		return "", false
+	}
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-	si, ok := idx.byServer[baseURL]
-	if !ok {
+	si := idx.lookupLocked(serverKey)
+	if si == nil {
+		return "", false
+	}
+	agencyID, ok := si.tripIDs[tripID]
+	return agencyID, ok && agencyID != ""
+}
+
+// ResolveVehicleAgency applies both identifiers. A disagreement is treated as
+// unresolved rather than silently preferring one source field.
+func (idx *RouteAgencyIndex) ResolveVehicleAgency(serverKey, routeID, tripID string) (string, bool) {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	si := idx.lookupLocked(serverKey)
+	if si == nil {
+		return "", false
+	}
+	routeAgency, routeOK := si.routeIDs[routeID]
+	tripAgency, tripOK := si.tripIDs[tripID]
+	if routeOK && routeAgency == "" {
+		routeOK = false
+	}
+	if tripOK && tripAgency == "" {
+		tripOK = false
+	}
+	switch {
+	case routeOK && tripOK && routeAgency != tripAgency:
+		return "", false
+	case routeOK:
+		return routeAgency, true
+	case tripOK:
+		return tripAgency, true
+	default:
+		return "", false
+	}
+}
+
+// Has reports whether an attribution snapshot exists for serverKey, even when
+// it contains no resolvable routes or trips.
+func (idx *RouteAgencyIndex) Has(serverKey string) bool {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.lookupLocked(serverKey) != nil
+}
+
+func (idx *RouteAgencyIndex) AgencyNameFor(serverKey, agencyID string) (string, bool) {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	si := idx.lookupLocked(serverKey)
+	if si == nil {
 		return "", false
 	}
 	name, ok := si.agencyNames[agencyID]
 	return name, ok
 }
 
-// RangeServerKeys invokes fn for every baseURL currently indexed. Stops early
-// if fn returns false. Useful for tests and for any caller that needs to
-// enumerate the servers the index knows about.
-func (idx *RouteAgencyIndex) RangeServerKeys(fn func(baseURL string) bool) {
+func (idx *RouteAgencyIndex) RangeServerKeys(fn func(serverKey string) bool) {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-	for k := range idx.byServer {
-		if !fn(k) {
+	for key := range idx.byServer {
+		if !fn(key) {
 			return
 		}
 	}
 }
 
-// Clear removes all entries for a single server. Currently unused by the
-// collection loop but exported so tests and admin tooling can reset state.
-func (idx *RouteAgencyIndex) Clear(baseURL string) {
+func (idx *RouteAgencyIndex) Clear(serverKey string) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-	delete(idx.byServer, baseURL)
+	delete(idx.byServer, serverKey)
 }
 
-// PruneServers removes every server whose base URL the keep predicate rejects
-// and returns the removed base URLs.
-//
-// Unlike the other stores this index is keyed by the raw oba_base_url the
-// writer used, not by a serverKey, so callers must sanitize on their side of
-// the predicate rather than expecting a serverKey here.
-func (idx *RouteAgencyIndex) PruneServers(keep func(baseURL string) bool) []string {
+func (idx *RouteAgencyIndex) PruneServers(keep func(serverKey string) bool) []string {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-
 	var removed []string
-	for baseURL := range idx.byServer {
-		if !keep(baseURL) {
-			removed = append(removed, baseURL)
-			delete(idx.byServer, baseURL)
+	for serverKey := range idx.byServer {
+		if !keep(serverKey) {
+			removed = append(removed, serverKey)
+			delete(idx.byServer, serverKey)
 		}
 	}
 	return removed
+}
+
+func (idx *RouteAgencyIndex) lookupLocked(serverKey string) *serverIndex {
+	return idx.byServer[serverKey]
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
