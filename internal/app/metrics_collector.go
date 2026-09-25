@@ -213,6 +213,10 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 			},
 			Level: sentry.LevelError,
 		})
+	} else {
+		metrics.GtfsRtLastSuccessfulFetch.WithLabelValues(
+			server.ServerName, utils.SanitizeServerURL(server.ObaBaseURL),
+		).Set(float64(time.Now().UTC().Unix()))
 	}
 
 	// Per-agency metric loop. Each iteration runs only the agency-scoped
@@ -262,6 +266,9 @@ func (app *Application) CollectMetricsForServer(ctx context.Context, server mode
 		})
 		return
 	}
+	metrics.GtfsRtLastSuccessfulFetch.WithLabelValues(
+		server.ServerName, utils.SanitizeServerURL(server.ObaBaseURL),
+	).Set(float64(time.Now().UTC().Unix()))
 
 	// nil agencies: this entry names a single agency, so every vehicle in the
 	// feed belongs to it and the route -> agency index is not consulted.

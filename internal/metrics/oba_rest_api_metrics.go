@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
@@ -16,6 +17,8 @@ import (
 // metricsEndpoint is the OBA API metrics endpoint probed by fetchObaAPIMetrics.
 const metricsEndpoint = "/api/where/metrics.json"
 
+const maxAcceptedRealtimeAgeSeconds = 365 * 24 * 60 * 60
+
 type OBAMetrics struct {
 	Code        int    `json:"code"`
 	CurrentTime int64  `json:"currentTime"`
@@ -23,11 +26,15 @@ type OBAMetrics struct {
 	Version     int    `json:"version"`
 	Data        struct {
 		Entry struct {
-			AgenciesWithCoverageCount   int                 `json:"agenciesWithCoverageCount"`
-			AgencyIDs                   []string            `json:"agencyIDs"`
-			RealtimeRecordsTotal        map[string]int      `json:"realtimeRecordsTotal"`
-			RealtimeTripCountsMatched   map[string]int      `json:"realtimeTripCountsMatched"`
-			RealtimeTripCountsUnmatched map[string]int      `json:"realtimeTripCountsUnmatched"`
+			AgenciesWithCoverageCount   int            `json:"agenciesWithCoverageCount"`
+			AgencyIDs                   []string       `json:"agencyIDs"`
+			RealtimeRecordsTotal        map[string]int `json:"realtimeRecordsTotal"`
+			RealtimeTripCountsMatched   map[string]int `json:"realtimeTripCountsMatched"`
+			RealtimeTripCountsUnmatched map[string]int `json:"realtimeTripCountsUnmatched"`
+			// TODO(architecture): These authoritative unmatched-trip IDs exist only in the
+			// current upstream snapshot and disappear when that snapshot changes. Retain
+			// them only after the historical-investigation architecture is decided; do not
+			// place trip IDs in Prometheus labels without an approved cardinality design.
 			RealtimeTripIDsUnmatched    map[string][]string `json:"realtimeTripIDsUnmatched"`
 			ScheduledTripsCount         map[string]int      `json:"scheduledTripsCount"`
 			StopIDsMatchedCount         map[string]int      `json:"stopIDsMatchedCount"`
@@ -184,6 +191,9 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 		return nil
 	}
 
+	ObaMetricsLastSuccessfulFetch.WithLabelValues(agencyID, agencyName, serverName, serverURL).
+		Set(float64(time.Now().UTC().Unix()))
+
 	// Per-agency metrics below. Index the response maps with the configured
 	// agencyID so every series is labeled with it, and only report values when
 	// the server carries data for that agency.
@@ -204,6 +214,8 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 	total := matched + unmatched
 	if total > 0 {
 		TripMatchRatio.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(float64(matched) / float64(total))
+	} else {
+		TripMatchRatio.DeleteLabelValues(agencyID, agencyName, serverName, serverURL)
 	}
 
 	if count, ok := entry.ScheduledTripsCount[agencyID]; ok {
@@ -223,10 +235,22 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 	stopTotal := stopMatched + stopUnmatched
 	if stopTotal > 0 {
 		StopMatchRatio.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(float64(stopMatched) / float64(stopTotal))
+	} else {
+		StopMatchRatio.DeleteLabelValues(agencyID, agencyName, serverName, serverURL)
 	}
 
-	if seconds, ok := entry.TimeSinceLastRealtimeUpdate[agencyID]; ok {
+	if seconds, ok := entry.TimeSinceLastRealtimeUpdate[agencyID]; ok && validRealtimeAge(seconds) {
 		ObaTimeSinceUpdate.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(float64(seconds))
+	} else {
+		// OBA reports currentTime/1000 when no realtime update has ever been
+		// received (the last-update timestamp is still zero). Publishing that as
+		// an age produces a misleading ~56-year duration, so expose no freshness
+		// sample until OBA has a real update timestamp.
+		ObaTimeSinceUpdate.DeleteLabelValues(agencyID, agencyName, serverName, serverURL)
+		if ok {
+			logger.Warn("Ignoring invalid OBA realtime update age",
+				"agency_id", agencyID, "server_name", serverName, "age_seconds", seconds)
+		}
 	}
 
 	unmatchedStopIDs := entry.StopIDsUnmatched[agencyID]
@@ -276,4 +300,8 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 	}
 	reportUnmatchedStopClusters(serverKey, agencyID, agencyName, serverName, serverURL, stopInfoMap, unmatchedStopTracker)
 	return nil
+}
+
+func validRealtimeAge(seconds int) bool {
+	return seconds >= 0 && seconds <= maxAcceptedRealtimeAgeSeconds
 }

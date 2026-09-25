@@ -44,6 +44,11 @@ var (
 )
 
 var (
+	GtfsRtLastSuccessfulFetch = tracked(promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "gtfs_rt_last_successful_fetch_timestamp_seconds",
+		Help: "Unix timestamp of the last successful fetch and parse of all configured GTFS-RT vehicle feeds for the server",
+	}, []string{"server_name", "server_url"}))
+
 	RealtimeVehiclePositions = tracked(promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "realtime_vehicle_positions_count_gtfs_rt",
 		Help: "Number of realtime vehicle positions in the GTFS-RT feed",
@@ -124,6 +129,22 @@ var (
 
 // OBA REST API 2.6.0 >= Metrics
 var (
+	ObaMetricsLastSuccessfulFetch = tracked(promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "oba_metrics_last_successful_fetch_timestamp_seconds",
+			Help: "Unix timestamp of the last successful OBA metrics response containing the configured agency",
+		},
+		[]string{"agency_id", "agency_name", "server_name", "server_url"},
+	))
+
+	ObaVehiclesLastSuccessfulFetch = tracked(promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "oba_vehicles_last_successful_fetch_timestamp_seconds",
+			Help: "Unix timestamp of the last successful OBA vehicles-for-agency response",
+		},
+		[]string{"agency_id", "agency_name", "server_name", "server_url"},
+	))
+
 	ObaRealtimeRecords = tracked(promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "oba_realtime_records_count",

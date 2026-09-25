@@ -56,6 +56,24 @@ func (app *Application) Routes(ctx context.Context) http.Handler {
 	router.HandlerFunc(http.MethodGet, "/v1/healthcheck", app.healthcheckHandler)
 	router.Handler(http.MethodGet, "/metrics", middleware.NewCachedPromHandler(ctx, prometheus.DefaultGatherer, 10*time.Second))
 
+	// TODO(architecture): Historical investigation of unmatched stops and trips is
+	// not currently reliable. The upstream /api/where/metrics.json endpoint exposes
+	// only its current in-memory snapshot, and Watchdog does not retain authoritative
+	// observation history across restarts. The existing unmatched-stop Prometheus
+	// series remains present for 24 hours after its last observation, so it represents
+	// retained state rather than the exact time an entity was unmatched. Adding an
+	// API over the current tracker would therefore expose only incomplete current
+	// state, not answer questions about previous hours or days.
+	//
+	// The challenge is to retain entity-level history without creating excessive
+	// Prometheus cardinality or imposing unsuitable infrastructure on open-source
+	// deployments. The architecture must decide between Prometheus, embedded SQLite,
+	// and an external event-oriented store; define snapshots versus events or
+	// coalesced episodes; establish retention, restart, backup, and pruning behavior;
+	// account for single and multiple Watchdog replicas; handle historical stop
+	// metadata when GTFS changes; and define how authenticated, filtered, paginated
+	// investigation queries access the selected historical source.
+
 	// Wrap router with Sentry and SecurityHeaders middlewares
 	// Return wrapped httprouter instance.
 	handler := middleware.SentryMiddleware(router)
