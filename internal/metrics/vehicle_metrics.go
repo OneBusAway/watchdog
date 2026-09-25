@@ -233,9 +233,16 @@ func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer,
 	unattributed := 0
 	// TODO: Expose a bounded reason breakdown (missing vehicle ID, missing or
 	// unknown route, or agency not live) without putting vehicle IDs in labels.
-	// TODO: Expose low-cardinality per-agency counts for vehicle positions older
-	// than a documented stale threshold and for positions missing timestamps.
-	// Missing timestamps must remain unknown rather than being classified fresh.
+	// TODO: Add low-cardinality feed-level change detection for GTFS-RT feeds.
+	// When VehiclePosition.timestamp is absent, compare substantive feed content
+	// between successful fetches and expose when Watchdog last observed a change.
+	// Consecutive successful fetches normally bound that observation interval by
+	// the configured polling interval (30 seconds by default), but do not prove
+	// when the source measured the position. Exclude FeedHeader.timestamp from
+	// the comparison so a changing header alone does not hide a frozen feed.
+	// Interpret this signal together with gtfs_rt_last_successful_fetch_timestamp_seconds;
+	// an unchanged vehicle position must not be classified as stale because the
+	// vehicle may be stationary.
 
 	for _, realtimeVehicle := range realtimeData.Vehicles {
 		vehicle := realtimeVehicle.Vehicle
