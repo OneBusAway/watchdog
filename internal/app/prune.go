@@ -66,10 +66,16 @@ func (app *Application) PruneStaleServers(servers []models.ObaServer) {
 		}
 	}
 
-	// The route index is keyed by the raw oba_base_url the writer used, so
-	// sanitize before comparing against the configured set.
-	app.GtfsService.RouteAgencyIndex.PruneServers(func(baseURL string) bool {
-		return configuredURLs[utils.SanitizeServerURL(baseURL)]
+	// The route index follows the same composite-key ownership rules as the
+	// other stores. In particular, server-mode owns only its empty-agency key;
+	// discovered agency static keys do not own the attribution entry.
+	app.GtfsService.RouteAgencyIndex.PruneServers(func(serverKey string) bool {
+		for _, server := range servers {
+			if server.OwnsServerKey(serverKey) {
+				return true
+			}
+		}
+		return false
 	})
 
 	// Retire the metric series. A server that left entirely loses everything

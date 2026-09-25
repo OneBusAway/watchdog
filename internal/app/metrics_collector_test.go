@@ -107,6 +107,9 @@ func TestAgencyScopeFetchesRealtimeFeed(t *testing.T) {
 	server := app.ConfigService.Config.Servers[0]
 	server.ObaBaseURL = obaServer.URL
 	server.GtfsRTFeeds = []models.GtfsRTFeed{{VehiclePositionURL: rtServer.URL}}
+	// A scoped RT fetch requires an attribution snapshot. This empty snapshot is
+	// enough to verify that an empty filtered result is still published.
+	app.GtfsService.RouteAgencyIndex.Replace(server.ServerKey(), nil, nil, map[string]string{"test-agency": "Test Agency"})
 
 	scope := config.ResolveScope(server, app.GtfsService.StaticStore, app.GtfsService.RouteAgencyIndex)
 	if _, ok := scope.(config.AgencyScope); !ok {
@@ -177,10 +180,10 @@ func TestServerScopeFetchesMetricsOncePerTick(t *testing.T) {
 	}
 	app.GtfsService.BoundingBoxStore.Set(server.ServerKey(), wholeWorld)
 
-	app.GtfsService.RouteAgencyIndex.Set(baseURL, map[string]string{
+	app.GtfsService.RouteAgencyIndex.Replace(server.ServerKey(), map[string]string{
 		"route-a": "agency-a",
 		"route-b": "agency-b",
-	})
+	}, nil, nil)
 
 	scope := config.ResolveScope(server, app.GtfsService.StaticStore, app.GtfsService.RouteAgencyIndex)
 	if _, ok := scope.(config.ServerScope); !ok {

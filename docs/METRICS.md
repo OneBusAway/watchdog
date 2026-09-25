@@ -35,7 +35,7 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
 | -------------------------------------------- | ----- | ----------- | ---- | ----------------------------------------------- |
 | `gtfs_bundle_days_until_earliest_expiration` | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url` | days | Days until the earliest GTFS bundle expiration. |
 | `gtfs_bundle_days_until_latest_expiration`   | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url` | days | Days until the latest GTFS bundle expiration.   |
-| `gtfs_bundle_last_fetched_timestamp_seconds` | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url` | unix_timestamp | When Watchdog last downloaded the server's GTFS static bundle. |
+| `gtfs_bundle_last_fetched_timestamp_seconds` | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url` | unix_timestamp | When Watchdog last downloaded the server's GTFS static feed and stored its scoped snapshot. |
 
 **Interpretation Guide:**
 
@@ -79,9 +79,9 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
 | `gtfs_rt_vehicle_computed_speed`           | Gauge   | `vehicle_id`, `feed`, `agency_id`, `agency_name`, `server_name`, `server_url` | m/s           | Computed vehicle speed from GTFS-RT positions.                |
 | `gtfs_rt_vehicle_speed_discrepancy_ratio`  | Gauge   | `vehicle_id`, `feed`, `agency_id`, `agency_name`, `server_name`, `server_url` | ratio         | Ratio of computed to reported vehicle speed.                  |
 | `gtfs_rt_invalid_vehicle_coordinates`      | Gauge   | `agency_id`, `agency_name`, `server_name`, `server_url`           | count         | Number of GTFS-RT vehicle positions with invalid coordinates. In server-mode, vehicles that cannot be attributed to an agency are counted under an empty `agency_id`, so the series always sum to the server-wide count. |
-| `gtfs_rt_stopped_out_of_bounds_vehicles`   | Gauge   | `agency_id`, `agency_name`, `server_name`, `server_url`           | count         | Vehicles outside bounding box while stopped. Same empty-`agency_id` fallback as the metric above. |
+| `gtfs_rt_stopped_out_of_bounds_vehicles`   | Gauge   | `agency_id`, `agency_name`, `server_name`, `server_url`           | count         | Vehicles outside the applicable static bounding box while stopped. In server-mode, unattributed vehicles use the empty-`agency_id` server-scoped box. |
 | `gtfs_rt_tracked_vehicles_count`           | Gauge   | `agency_id`, `agency_name`, `server_name`, `server_url`           | count         | Number of vehicles currently being tracked.                   |
-| `gtfs_rt_unattributed_vehicles_count`      | Gauge   | `server_name`, `server_url`                        | count         | Server-mode only. Vehicles the per-vehicle series could not cover: route unresolvable to a reported agency, or no vehicle ID at all. |
+| `gtfs_rt_unattributed_vehicles_count`      | Gauge   | `server_name`, `server_url`                        | count         | Server-mode only. Vehicles the per-vehicle series could not cover because neither route/trip attribution resolved to a live agency, or because the vehicle has no ID. |
 
 **Interpretation Guide:**
 - **Vehicle counts:** Sudden drop may indicate feed outage.
@@ -100,19 +100,19 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
   ```promql
   max by (vehicle_id) (vehicle_position_report_interval_seconds{agency_id="unitrans"})
   ```
-- **Per-agency attribution in server-mode:** A server-scoped config entry (no `agency_id`) exposes one merged GTFS-RT feed covering several agencies. Watchdog walks that feed once per tick and attributes each vehicle to an agency by resolving its `TripDescriptor.route_id` against the agencies declared in the static feeds, so `agency_id` on every metric in this section means the agency that actually owns the vehicle. A vehicle is *unattributable* when its trip carries no `route_id`, its route is unknown to any static feed, or its route belongs to an agency the server is not currently reporting.
+- **Per-agency attribution in server-mode:** A server-scoped config entry (no `agency_id`) exposes one merged GTFS-RT feed covering several agencies. Watchdog walks that feed once per tick and attributes each vehicle by resolving its `route_id` and `trip_id` against the route/trip maps built from static data, then checks that the resolved agency is live. Therefore, `agency_id` on an attributed metric means the agency that owns the vehicle. A vehicle is *unattributable* when neither identifier resolves, the identifiers resolve to different agencies, or the resolved agency is not currently live.
 - **Where unattributable vehicles land:** No vehicle disappears entirely, but the metric that accounts for it differs, and the three paths below do not add up to a single tidy identity — do not write an alert that assumes they do:
   - **Per-vehicle series** (`vehicle_report_total`, `vehicle_position_report_interval_seconds`, `gtfs_rt_vehicle_computed_speed`, `gtfs_rt_vehicle_speed_discrepancy_ratio`) and `gtfs_rt_tracked_vehicles_count` and `realtime_vehicle_positions_count_gtfs_rt` omit them. They are counted instead in `gtfs_rt_unattributed_vehicles_count{server_name, server_url}`, along with vehicles carrying no vehicle ID (those have no `vehicle_id` label to be filed under). A persistently non-zero value there means the static feeds do not cover everything the RT feed references, or the feed is emitting malformed entities.
   - **Attributable vehicles with no usable position** are a third case, counted in neither of the above: they are omitted from the per-vehicle series and from `gtfs_rt_unattributed_vehicles_count`, and appear only in `gtfs_rt_invalid_vehicle_coordinates`. This is why `sum(realtime_vehicle_positions_count_gtfs_rt) + gtfs_rt_unattributed_vehicles_count` does not equal the feed size in either direction.
-  - **The data-quality gauges** (`gtfs_rt_invalid_vehicle_coordinates`, `gtfs_rt_stopped_out_of_bounds_vehicles`) count them under the server-scoped series — the one with an empty `agency_id`/`agency_name`. Coordinate validity is judged *before* attribution precisely because the most malformed entities (no `TripDescriptor`, no position) are the ones attribution cannot place, and they are the ones these gauges exist to catch. So `sum by (server_url) (gtfs_rt_invalid_vehicle_coordinates)` is the true server-wide count, while the non-empty `agency_id` series give the breakdown:
+  - **The data-quality gauges in server-mode** (`gtfs_rt_invalid_vehicle_coordinates`, `gtfs_rt_stopped_out_of_bounds_vehicles`) count unattributed vehicles under the server-scoped series — the one with an empty `agency_id`/`agency_name`. Coordinate validity is judged *before* attribution precisely because the most malformed entities (no `TripDescriptor`, no position) are the ones attribution cannot place, and they are the ones these gauges exist to catch. So `sum by (server_url) (gtfs_rt_invalid_vehicle_coordinates)` is the true server-wide count, while the non-empty `agency_id` series give the breakdown:
   ```promql
   # server-wide, including unattributable vehicles
   sum by (server_url) (gtfs_rt_invalid_vehicle_coordinates)
   # just the vehicles that could not be placed with an agency
   gtfs_rt_invalid_vehicle_coordinates{agency_id=""}
   ```
-  In agency-mode (an entry with an `agency_id`) every vehicle belongs to the configured agency by definition, so no empty-`agency_id` series is emitted and `gtfs_rt_unattributed_vehicles_count` is not published at all.
-- **Bounding box accuracy depends on attribution:** `gtfs_rt_stopped_out_of_bounds_vehicles` is attributed per agency. Attributed vehicles are validated against their own agency's bounding box. Unattributed vehicles and agency-mode entries fall back to the server-wide union box — on a multi-agency server that rectangle covers all agencies' stops, so the empty-`agency_id` series is a looser bound than the per-agency ones.
+  In agency-mode (an entry with an `agency_id`) only vehicles retained by the route/trip filter reach these passes, so no empty-`agency_id` series is emitted and `gtfs_rt_unattributed_vehicles_count` is not published at all.
+- **Bounding box accuracy depends on attribution:** `gtfs_rt_stopped_out_of_bounds_vehicles` is attributed per agency. Agency-mode uses the box calculated from its owned static snapshot and does not fall back to a server union. In server-mode, attributed vehicles use their agency box when available and otherwise use the server-wide union; unattributed vehicles use that server-scoped union box.
 - **Report intervals:** If significantly longer than agency update policy, data is stale.
 - **Speed discrepancy ratio:** Persistent high ratios may mean faulty onboard GPS.
 - **Invalid coordinates:** If >0, indicates bad GPS or malformed feed data.
@@ -143,7 +143,7 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
     - `cluster_lat` / `cluster_lon` are the center of that S2 cell, so clusters can be plotted on a map or joined by coordinates without decoding the ID.
     - `station_id` is the root parent station ID when the stops belong to a station hierarchy, or `no_station` when they do not. A large station can span several S2 cells, yielding one series per `(station_id, cluster_id)` pair; group by `cluster_id` for spatial aggregation and by `station_id` for per-station totals.
 - **Time since update:** If unusually high, real-time feed is stale.
-- **`oba_unmatched_stop_info` retention:** Each `(agency_id, stop_id)` resolves to one stop in Watchdog's merged static bundle. Its series is emitted at every scrape and pruned 24 hours after the stop last appeared unmatched. If its name or location changes, the old label set is retired immediately. A `1` means the stop was unmatched at some point in the last 24 hours; history is preserved by Prometheus itself — use range queries to separate days:
+- **`oba_unmatched_stop_info` retention:** Each `(agency_id, stop_id)` resolves to one stop in Watchdog's stored static snapshot. In server-mode that snapshot is the merged bundle; in agency-mode it is the owned agency-scoped snapshot. Its series is emitted at every scrape and pruned 24 hours after the stop last appeared unmatched. If its name or location changes, the old label set is retired immediately. A `1` means the stop was unmatched at some point in the last 24 hours; history is preserved by Prometheus itself — use range queries to separate days:
 ```promql
   # unmatched at some point during the last day
   max_over_time(oba_unmatched_stop_info{agency_id="unitrans"}[1d])

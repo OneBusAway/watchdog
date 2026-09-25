@@ -16,6 +16,8 @@ import (
 // metricsEndpoint is the OBA API metrics endpoint probed by fetchObaAPIMetrics.
 const metricsEndpoint = "/api/where/metrics.json"
 
+const maxRealtimeAgeSeconds = 365 * 24 * 60 * 60
+
 type OBAMetrics struct {
 	Code        int    `json:"code"`
 	CurrentTime int64  `json:"currentTime"`
@@ -51,7 +53,7 @@ type OBAMetrics struct {
 // ID resolves to at most one stop because the merge keeps the first occurrence
 // of duplicate stop IDs.
 //
-// Unmatched stop IDs are resolved against the shared merged GTFS bundle. Each
+// Unmatched stop IDs are resolved against the stored static snapshot. Each
 // ID resolves to at most one stop because the merge keeps the first occurrence
 // of duplicate stop IDs.
 //
@@ -225,8 +227,18 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 		StopMatchRatio.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(float64(stopMatched) / float64(stopTotal))
 	}
 
-	if seconds, ok := entry.TimeSinceLastRealtimeUpdate[agencyID]; ok {
+	if seconds, ok := entry.TimeSinceLastRealtimeUpdate[agencyID]; ok && validRealtimeAge(seconds) {
 		ObaTimeSinceUpdate.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(float64(seconds))
+	} else {
+		// OBA reports currentTime/1000 when no realtime update has ever been
+		// received (the last-update timestamp is still zero). Publishing that as
+		// an age produces a misleading ~56-year duration, so expose no freshness
+		// sample until OBA has a real update timestamp.
+		ObaTimeSinceUpdate.DeleteLabelValues(agencyID, agencyName, serverName, serverURL)
+		if ok {
+			logger.Warn("Ignoring invalid OBA realtime update age",
+				"agency_id", agencyID, "server_name", serverName, "age_seconds", seconds)
+		}
 	}
 
 	unmatchedStopIDs := entry.StopIDsUnmatched[agencyID]
@@ -276,4 +288,8 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 	}
 	reportUnmatchedStopClusters(serverKey, agencyID, agencyName, serverName, serverURL, stopInfoMap, unmatchedStopTracker)
 	return nil
+}
+
+func validRealtimeAge(seconds int) bool {
+	return seconds >= 0 && seconds <= maxRealtimeAgeSeconds
 }
