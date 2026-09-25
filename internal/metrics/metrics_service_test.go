@@ -41,7 +41,7 @@ func TestMetricsService(t *testing.T) {
 	_, _, _ = ms.CheckBundleExpiration(time.Now(), server)
 	// _ = ms.ServerPing(context.Background(), server) // avoids SDK panic
 	// _ = ms.CountActiveVehiclesForAgency(context.Background(), server) // avoids SDK panic
-	if err := ms.FetchObaAPIMetrics(context.Background(), "a1", "agency1", "test-server", apiServer.URL, "key"); err != nil {
+	if err := ms.FetchObaAPIMetrics(context.Background(), "a1", "agency1", "test-server", apiServer.URL, "key", nil); err != nil {
 		t.Fatal(err)
 	}
 	_ = ms.TrackVehicleTelemetry(server, nil)
