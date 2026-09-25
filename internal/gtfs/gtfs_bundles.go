@@ -350,7 +350,7 @@ type computedBoundingBoxes struct {
 // source feeds are still separate. For each feed it first collects the agency
 // IDs declared by that feed. It then adds every stop once to the union
 // accumulator and once to each of those agency accumulators. A feed with no
-// non-empty agency_id contributes only to the union.
+// non-empty agency_id contributes only to the union, unless folded (see below).
 //
 // This feed provenance provides the desired scoping without a persistent
 // stop-to-agency index. Separate single-agency feeds naturally produce distinct
@@ -363,10 +363,11 @@ type computedBoundingBoxes struct {
 // geo.BoundingBox or an error. storeStaticForServer stores successful agency
 // boxes and uses union as the fallback for agencies without usable bounds.
 //
-// In agency-mode, any feed that declares no non-empty agency_id (legal for a
-// single-agency feed) is folded into the configured agency's accumulator, matching
-// the union box behavior. In server-mode (or when fallbackAgencyIDs is empty), a
-// feed with no non-empty agency_id contributes only to the union.
+// In agency-mode, if the configured agency ID is explicitly declared by at
+// least one feed, any feed that declares no non-empty agency_id is folded into
+// the configured agency's accumulator. In server-mode (or when the configured
+// agency ID is not declared by any feed), a feed with no non-empty agency_id
+// contributes only to the union.
 func computeBoundingBoxes(bundles []*remoteGtfs.Static, fallbackAgencyIDs ...string) computedBoundingBoxes {
 	var fallbackAgencyID string
 	if len(fallbackAgencyIDs) > 0 {

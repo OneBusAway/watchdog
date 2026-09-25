@@ -1175,4 +1175,3 @@ func TestAgencyModeMismatchedConfiguredAgencyWithBlankSiblingFeedUsesUnionBox(t 
 		t.Fatalf("expected union box %+v, got %+v", want, box)
 	}
 }
-
