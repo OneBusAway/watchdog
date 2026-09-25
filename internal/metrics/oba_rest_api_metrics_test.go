@@ -154,7 +154,7 @@ func TestFetchObaAPIMetricsDropsNeverUpdatedRealtimeAge(t *testing.T) {
 	err := fetchObaAPIMetrics(
 		context.Background(), agencyID, agencyName, serverName, server.URL, "key",
 		&http.Client{Timeout: 10 * time.Second}, gtfs.NewStaticStore(),
-		slog.New(slog.NewTextHandler(io.Discard, nil)), NewUnmatchedStopTracker(),
+		slog.New(slog.NewTextHandler(io.Discard, nil)), NewUnmatchedStopTracker(), nil,
 	)
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
@@ -187,7 +187,7 @@ func TestFetchObaAPIMetricsRetiresRatiosWithoutObservations(t *testing.T) {
 	err := fetchObaAPIMetrics(
 		context.Background(), agencyID, agencyName, serverName, server.URL, "key",
 		&http.Client{Timeout: 10 * time.Second}, gtfs.NewStaticStore(),
-		slog.New(slog.NewTextHandler(io.Discard, nil)), NewUnmatchedStopTracker(),
+		slog.New(slog.NewTextHandler(io.Discard, nil)), NewUnmatchedStopTracker(), nil,
 	)
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
