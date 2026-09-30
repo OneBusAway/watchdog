@@ -9,7 +9,7 @@ It exposes a comprehensive set of **Prometheus metrics** for monitoring:
 - Vehicle telemetry
 - Agency and stop coverage
 - Overall operational health
-  See the full list of metrics and interpretation guide [here](./docs/METRICS.md)
+  See the full list of metrics and interpretation guide [here](./docs/METRICS.md), and the client freshness contract in [docs/FRESHNESS.md](./docs/FRESHNESS.md).
 
 ## Requirements
 
@@ -130,14 +130,15 @@ There are two ways Watchdog can observe an OBA deployment. The choice is made **
 
 **Server mode** — `agency_id` is absent. Watchdog probes `/api/where/metrics.json` every tick to learn which agencies OBA is currently serving, cross-references the live agency IDs against the static feeds' `agency.txt` declarations, and runs the per-agency pipeline for every agency that has BOTH a static bundle AND is reported as currently live.
 
-Multi-agency static feeds are accepted in server mode: one consolidated bundle pointer-shared across the serverKeys of every agency declared in its `agency.txt`. Agency mode instead stores an owned snapshot containing only the configured agency's routes, referenced services, stops, and parent stations. Static feeds whose `agency.txt` is empty, declares multiple agencies ambiguously, or whose declared agency isn't currently reported by OBA are reported to Sentry (`gtfs_static_feed_attribution_status` flips to 0) in server mode.
+Multi-agency static feeds are accepted in server mode: one consolidated bundle pointer-shared across the serverKeys of every agency declared in its `agency.txt`. Agency mode instead stores an owned snapshot containing only the configured agency's routes, referenced services, stops, and parent stations. Feed-to-agency mapping metrics are derived while each source feed is parsed, before feeds are merged, so they describe only relationships proven by that feed's own `agency.txt` rather than a feed-by-live-agency cross-product.
 
 #### Liveness signals
 
-The two metrics below are the operator's view into server-mode health:
+These metrics expose static agency liveness and source-feed mapping health:
 
 - `gtfs_static_agency_currently_live{agency_id, agency_name, server_name, server_url}` — 1 if the agency has a static bundle AND is in `/api/where/metrics.json` `entry.AgencyIDs` in the current scrape; 0 otherwise.
-- `gtfs_static_feed_attribution_status{feed_url, agency_id, agency_name, server_name, server_url}` — 1 if the feed was successfully attributed to a server-reported agency; 0 otherwise.
+- `gtfs_static_feed_agency_mapping_info{feed_url, agency_id, agency_name, server_name, server_url}` — always 1, with one series for each proven source-feed relationship. An explicit multi-agency feed produces one series per declared agency in server mode. Agency mode emits only its configured agency; a sole agency with omitted `agency_id` is associated with that configured agency as allowed by GTFS.
+- `gtfs_static_feed_agency_mapping_failure{feed_url, server_name, server_url, reason}` — always 1 when a parsed feed cannot be fully mapped. `reason` is one of `missing_agency`, `ambiguous_agency`, or `unknown_agency`.
 
 #### Vehicle attribution in server-mode
 
