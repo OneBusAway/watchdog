@@ -1,18 +1,30 @@
 package gtfs
 
 import (
+	"reflect"
 	"sync"
 	"time"
 
 	"watchdog.onebusaway.org/internal/models"
 )
 
+type StaticRefreshState struct {
+	LastAttempt time.Time
+	Success     bool
+	Retrying    bool
+	GaveUp      bool
+}
+
 // StaticStore is a thread-safe in-memory store for GTFS static bundles,
 // indexed by server key (oba_base_url + agency_id). It allows concurrent access
 // to GTFS data using read-write locks using a sync.RWMutex.
 type StaticStore struct {
-	mu   sync.RWMutex
-	data map[string]*models.StaticData
+	mu               sync.RWMutex
+	refreshMu        sync.Mutex
+	data             map[string]*models.StaticData
+	schedules        *ScheduleStore
+	configured       map[string]models.ObaServer
+	configurationSet bool
 
 	// lastFetched records when Watchdog last downloaded the GTFS static bundle
 	// for each server key. It backs the `gtfs_bundle_last_fetched_timestamp_seconds`
@@ -29,7 +41,8 @@ type StaticStore struct {
 	//   - Correlates `oba_unmatched_stop_unresolved` with bundle age: drift right
 	//     after a fresh fetch indicates a genuine feed content mismatch, whereas
 	//     drift on an old snapshot is an expected refresh-timing artifact.
-	lastFetched map[string]time.Time
+	lastFetched  map[string]time.Time
+	refreshState map[string]StaticRefreshState
 }
 
 // NewStaticStore initializes and returns a new instance of StaticStore.
@@ -38,7 +51,79 @@ type StaticStore struct {
 // Returns:
 //   - *StaticStore: A new, empty StaticStore instance.
 func NewStaticStore() *StaticStore {
-	return &StaticStore{}
+	return &StaticStore{schedules: NewScheduleStore()}
+}
+
+func (s *StaticStore) ScheduleStore() *ScheduleStore {
+	s.mu.RLock()
+	schedules := s.schedules
+	s.mu.RUnlock()
+	if schedules != nil {
+		return schedules
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.schedules == nil {
+		s.schedules = NewScheduleStore()
+	}
+	return s.schedules
+}
+
+// WithRefreshLock serializes static publication with configuration pruning.
+func (s *StaticStore) WithRefreshLock(fn func()) {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+	fn()
+}
+
+func (s *StaticStore) SetConfiguredServers(servers []models.ObaServer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.configured = make(map[string]models.ObaServer, len(servers))
+	for _, server := range servers {
+		s.configured[server.ServerKey()] = server
+	}
+	s.configurationSet = true
+}
+
+func (s *StaticStore) IsConfigured(server models.ObaServer) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if !s.configurationSet {
+		return true
+	}
+	configured, ok := s.configured[server.ServerKey()]
+	return ok && reflect.DeepEqual(configured, server)
+}
+
+// ReplaceServerSnapshot publishes one complete static snapshot and retires
+// server-scoped agencies that disappeared from it.
+func (s *StaticStore) ReplaceServerSnapshot(server models.ObaServer, snapshots map[string]*models.StaticData, fetchedAt time.Time) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.data == nil {
+		s.data = make(map[string]*models.StaticData)
+	}
+	if s.lastFetched == nil {
+		s.lastFetched = make(map[string]time.Time)
+	}
+	var removed []string
+	if server.IsServerScoped() {
+		for key := range s.data {
+			if server.OwnsServerKey(key) {
+				if _, retained := snapshots[key]; !retained {
+					removed = append(removed, key)
+					delete(s.data, key)
+					delete(s.lastFetched, key)
+				}
+			}
+		}
+	}
+	for key, snapshot := range snapshots {
+		s.data[key] = snapshot
+		s.lastFetched[key] = fetchedAt
+	}
+	return removed
 }
 
 // Set stores the given GTFS static data for the specified server key.
@@ -112,6 +197,33 @@ func (s *StaticStore) GetFetchTime(serverKey string) (time.Time, bool) {
 	return fetchTime, exists
 }
 
+func (s *StaticStore) SetRefreshState(server models.ObaServer, state StaticRefreshState) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.refreshState == nil {
+		s.refreshState = make(map[string]StaticRefreshState)
+	}
+	s.refreshState[server.ServerKey()] = state
+}
+
+func (s *StaticStore) GetRefreshState(server models.ObaServer) (StaticRefreshState, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	state, ok := s.refreshState[server.ServerKey()]
+	if !ok && server.AgencyID != "" {
+		state, ok = s.refreshState[models.ServerKey(server.ObaBaseURL, "")]
+	}
+	return state, ok
+}
+
+func (s *StaticStore) BundleState(server models.ObaServer, now time.Time, currentMaxAge time.Duration) (current, usable bool) {
+	usable = s.ScheduleStore().CoversDate(server.ServerKey(), now)
+	fetchedAt, fetched := s.GetFetchTime(server.ServerKey())
+	refresh, attempted := s.GetRefreshState(server)
+	current = usable && fetched && attempted && refresh.Success && !fetchedAt.After(now) && now.Sub(fetchedAt) <= currentMaxAge
+	return current, usable
+}
+
 // Prune removes every entry whose server key the keep predicate rejects,
 // including its recorded fetch time, and returns the removed keys.
 //
@@ -138,6 +250,14 @@ func (s *StaticStore) Prune(keep func(serverKey string) bool) []string {
 			removed = append(removed, serverKey)
 			delete(s.lastFetched, serverKey)
 		}
+	}
+	for serverKey := range s.refreshState {
+		if !keep(serverKey) {
+			delete(s.refreshState, serverKey)
+		}
+	}
+	if s.schedules != nil {
+		removed = append(removed, s.schedules.Prune(keep)...)
 	}
 	return removed
 }

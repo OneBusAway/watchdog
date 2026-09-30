@@ -23,7 +23,8 @@ const (
 // DoWithBackoff executes an HTTP request with exponential backoff on failure.
 // - If maxRetries is zero, it retries indefinitely.
 // - If the context is canceled, it returns immediately.
-// It applies jitter to avoid synchronized retries across clients.
+// Delays are deterministic. config.BackoffStore applies jitter to its separate
+// per-server API-ping backoff.
 //
 // This function lives in the utils package (rather than config) so packages
 // that import config (or are imported by config) can use it without creating

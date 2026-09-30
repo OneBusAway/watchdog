@@ -49,11 +49,9 @@ func serverModeFixture(t *testing.T, baseURL string) (models.ObaServer, []models
 	return server, agencies, store, index
 }
 
-// TestTrackVehicleTelemetryCountsEachVehicleOnceInServerMode pins the core
-// server-mode contract: the telemetry pass runs once per server per tick, so
-// each vehicle's report counter advances exactly once even though the server
-// serves several agencies.
-func TestTrackVehicleTelemetryCountsEachVehicleOnceInServerMode(t *testing.T) {
+// TestTrackVehicleTelemetryInitialObservationIsNotAChange pins the transition
+// semantics: discovering a vehicle initializes state but is not a change.
+func TestTrackVehicleTelemetryInitialObservationIsNotAChange(t *testing.T) {
 	const baseURL = "https://once.example.com"
 	server, agencies, store, index := serverModeFixture(t, baseURL)
 	lastSeen := NewVehicleLastSeen()
@@ -62,8 +60,7 @@ func TestTrackVehicleTelemetryCountsEachVehicleOnceInServerMode(t *testing.T) {
 		t.Fatalf("track: %v", err)
 	}
 
-	got, err := getCounterValue(VehicleReportCount, map[string]string{
-		"vehicle_id":  "va",
+	got, err := getCounterValue(GtfsRtVehicleStateChanges, map[string]string{
 		"agency_id":   "agency-a",
 		"agency_name": "Agency A",
 		"server_name": "multi",
@@ -73,8 +70,8 @@ func TestTrackVehicleTelemetryCountsEachVehicleOnceInServerMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read counter: %v", err)
 	}
-	if got != 1 {
-		t.Fatalf("expected vehicle va to be counted once per tick, got %v", got)
+	if got != 0 {
+		t.Fatalf("expected initial observation not to count as a state change, got %v", got)
 	}
 }
 

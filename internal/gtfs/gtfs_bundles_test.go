@@ -28,8 +28,95 @@ func TestDownloadGTFSBundles(t *testing.T) {
 	staticStore := NewStaticStore()
 	ctx := context.Background()
 	client := &http.Client{Timeout: 10 * time.Second}
-	downloadGTFSBundles(ctx, client, servers, logger, boundingBoxStore, staticStore, NewRouteAgencyIndex(), nil, 1)
+	downloadGTFSBundles(ctx, client, servers, logger, boundingBoxStore, staticStore, NewRouteAgencyIndex(), nil, nil, 1)
 
+}
+
+func TestIncompleteStaticRefreshPreservesPriorCompleteSnapshot(t *testing.T) {
+	bundle := readFixture(t, "gtfs.zip")
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/good.zip" {
+			_, _ = w.Write(bundle)
+			return
+		}
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer ts.Close()
+
+	server := models.ObaServer{
+		ServerName: "OBA", AgencyID: "40", AgencyName: "Sound Transit", ObaBaseURL: ts.URL,
+		GtfsStaticFeeds: []string{ts.URL + "/good.zip", ts.URL + "/failed.zip"},
+	}
+	store := NewStaticStore()
+	previous := &models.StaticData{}
+	previousFetch := time.Date(2026, time.September, 28, 12, 0, 0, 0, time.UTC)
+	store.Set(server.ServerKey(), previous)
+	store.SetFetchTime(server.ServerKey(), previousFetch)
+
+	results := downloadGTFSBundles(context.Background(), ts.Client(), []models.ObaServer{server},
+		slog.New(slog.NewTextHandler(io.Discard, nil)), geo.NewBoundingBoxStore(), store,
+		NewRouteAgencyIndex(), nil, nil, 1)
+
+	if len(results) != 1 || results[0].Err == nil {
+		t.Fatalf("expected one failed refresh result, got %+v", results)
+	}
+	got, ok := store.Get(server.ServerKey())
+	if !ok || got != previous {
+		t.Fatal("incomplete refresh replaced the previous complete snapshot")
+	}
+	gotFetch, ok := store.GetFetchTime(server.ServerKey())
+	if !ok || !gotFetch.Equal(previousFetch) {
+		t.Fatalf("fetch time changed after incomplete refresh: %v", gotFetch)
+	}
+}
+
+func TestStaticRefreshCampaignGivesUpWithinBudget(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer ts.Close()
+
+	server := models.ObaServer{ServerName: "OBA", AgencyID: "a", ObaBaseURL: ts.URL, GtfsStaticFeeds: []string{ts.URL + "/gtfs.zip"}}
+	var observations []StaticRefreshObservation
+	runStaticRefreshCampaign(context.Background(), ts.Client(), func() []models.ObaServer { return []models.ObaServer{server} },
+		slog.New(slog.NewTextHandler(io.Discard, nil)), geo.NewBoundingBoxStore(), NewStaticStore(),
+		NewRouteAgencyIndex(), nil, nil, func(_ models.ObaServer, observation StaticRefreshObservation) {
+			observations = append(observations, observation)
+		}, 1, staticRefreshRetryPolicy{initialDelay: time.Millisecond, maxDelay: 2 * time.Millisecond, budget: 5 * time.Millisecond})
+
+	if len(observations) < 2 {
+		t.Fatalf("expected retry and exhausted observations, got %+v", observations)
+	}
+	if !observations[len(observations)-1].GaveUp || observations[len(observations)-1].Retrying {
+		t.Fatalf("last observation did not exhaust the campaign: %+v", observations[len(observations)-1])
+	}
+}
+
+func TestStaticRefreshCampaignStopsRetryingRemovedServer(t *testing.T) {
+	requests := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer ts.Close()
+
+	server := models.ObaServer{ServerName: "OBA", AgencyID: "a", ObaBaseURL: ts.URL, GtfsStaticFeeds: []string{ts.URL + "/gtfs.zip"}}
+	supplierCalls := 0
+	servers := func() []models.ObaServer {
+		supplierCalls++
+		if supplierCalls <= 2 {
+			return []models.ObaServer{server}
+		}
+		return nil
+	}
+	runStaticRefreshCampaign(context.Background(), ts.Client(), servers,
+		slog.New(slog.NewTextHandler(io.Discard, nil)), geo.NewBoundingBoxStore(), NewStaticStore(),
+		NewRouteAgencyIndex(), nil, nil, nil, 1,
+		staticRefreshRetryPolicy{initialDelay: time.Millisecond, maxDelay: time.Millisecond, budget: time.Second})
+
+	if requests != 1 {
+		t.Fatalf("requests = %d, want one attempt before removal", requests)
+	}
 }
 
 func TestRefreshGTFSBundles(t *testing.T) {
@@ -48,7 +135,7 @@ func TestRefreshGTFSBundles(t *testing.T) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	go func() {
 		defer close(done)
-		refreshGTFSBundles(ctx, client, func() []models.ObaServer { return servers }, logger, 10*time.Millisecond, boundingBoxStore, staticStore, NewRouteAgencyIndex(), nil, 1)
+		refreshGTFSBundles(ctx, client, func() []models.ObaServer { return servers }, logger, 10*time.Millisecond, boundingBoxStore, staticStore, NewRouteAgencyIndex(), nil, nil, nil, 1)
 	}()
 
 	time.Sleep(15 * time.Millisecond)

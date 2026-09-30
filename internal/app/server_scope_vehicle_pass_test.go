@@ -54,17 +54,22 @@ func buildRoutedVehicleFeedProtobuf(t *testing.T, vehicles []routedVehicle) []by
 // newTwoAgencyServerScope stands up an Application and a stub OBA server for a
 // server-scoped entry serving agency-a and agency-b, whose merged GTFS-RT feed
 // carries one vehicle per agency.
-func newTwoAgencyServerScope(t *testing.T) (*Application, models.ObaServer, config.Scope) {
+func newTwoAgencyServerScope(t *testing.T) (*Application, models.ObaServer, config.Scope, *bool) {
 	t.Helper()
 
 	rtBody := buildRoutedVehicleFeedProtobuf(t, []routedVehicle{
 		{vehicleID: "va", routeID: "route-a"},
 		{vehicleID: "vb", routeID: "route-b"},
 	})
+	failRT := false
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/vehicles.pb":
+			if failRT {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
 			w.Header().Set("Content-Type", "application/octet-stream")
 			// #nosec G104
 			w.Write(rtBody)
@@ -112,28 +117,18 @@ func newTwoAgencyServerScope(t *testing.T) (*Application, models.ObaServer, conf
 	if _, ok := scope.(config.ServerScope); !ok {
 		t.Fatalf("expected a ServerScope for an entry without agency_id, got %T", scope)
 	}
-	return app, server, scope
+	return app, server, scope, &failRT
 }
 
-// TestServerScopeCountsEachVehicleOncePerTick is the regression test for the
-// server-mode double-count: the vehicle pass must run once per server per
-// tick, not once per live agency, or VehicleReportCount inflates by the live
-// agency count on every tick, permanently.
-func TestServerScopeCountsEachVehicleOncePerTick(t *testing.T) {
-	app, server, scope := newTwoAgencyServerScope(t)
+// TestServerScopeTracksEachVehicleOncePerTick verifies the once-per-server
+// vehicle pass by checking each attributed vehicle has one state slot.
+func TestServerScopeTracksEachVehicleOncePerTick(t *testing.T) {
+	app, server, scope, _ := newTwoAgencyServerScope(t)
 
 	app.collectForScope(context.Background(), server, scope)
 
-	got := readCounter(t, metrics.VehicleReportCount, map[string]string{
-		"vehicle_id":  "va",
-		"agency_id":   "agency-a",
-		"agency_name": "Agency A",
-		"server_name": "multi",
-		"server_url":  server.ObaBaseURL,
-		"feed":        "0",
-	})
-	if got != 1 {
-		t.Fatalf("expected vehicle va to be counted once per tick, got %v", got)
+	if got := app.MetricsService.VehicleLastSeen.Count(models.ServerKey(server.ObaBaseURL, "agency-a")); got != 1 {
+		t.Fatalf("expected one tracked agency-a vehicle, got %d", got)
 	}
 }
 
@@ -141,7 +136,7 @@ func TestServerScopeCountsEachVehicleOncePerTick(t *testing.T) {
 // last-seen slots: each vehicle belongs to the agency that owns its route,
 // not to every agency on the server.
 func TestServerScopeAttributesVehiclesToOwningAgency(t *testing.T) {
-	app, server, scope := newTwoAgencyServerScope(t)
+	app, server, scope, _ := newTwoAgencyServerScope(t)
 
 	app.collectForScope(context.Background(), server, scope)
 
@@ -157,28 +152,46 @@ func TestServerScopeAttributesVehiclesToOwningAgency(t *testing.T) {
 	}
 }
 
-// TestServerScopeCountsEachVehicleOnceAcrossTicks extends the single-tick
-// regression test to the bug's actual signature. The defect was permanent
-// inflation: a regression that stayed correct on the first tick and duplicated
-// on the second would satisfy the single-tick test while still doubling every
-// rate() an operator computes.
-func TestServerScopeCountsEachVehicleOnceAcrossTicks(t *testing.T) {
-	app, server, scope := newTwoAgencyServerScope(t)
+// TestServerScopeIdenticalTicksDoNotCreateStateChanges verifies repeated
+// identical snapshots do not inflate the aggregate transition counter.
+func TestServerScopeIdenticalTicksDoNotCreateStateChanges(t *testing.T) {
+	app, server, scope, _ := newTwoAgencyServerScope(t)
 
 	const ticks = 3
 	for i := 0; i < ticks; i++ {
 		app.collectForScope(context.Background(), server, scope)
 	}
 
-	got := readCounter(t, metrics.VehicleReportCount, map[string]string{
-		"vehicle_id":  "va",
+	got := readCounter(t, metrics.GtfsRtVehicleStateChanges, map[string]string{
 		"agency_id":   "agency-a",
 		"agency_name": "Agency A",
 		"server_name": "multi",
 		"server_url":  server.ObaBaseURL,
 		"feed":        "0",
 	})
-	if got != ticks {
-		t.Fatalf("expected exactly one increment per tick over %d ticks, got %v", ticks, got)
+	if got != 0 {
+		t.Fatalf("expected identical ticks not to increment state changes, got %v", got)
+	}
+}
+
+func TestServerScopeFailedFetchDoesNotProcessCachedSnapshot(t *testing.T) {
+	app, server, scope, failRT := newTwoAgencyServerScope(t)
+	app.collectForScope(context.Background(), server, scope)
+
+	// If the cached snapshot were processed again, this edited FULL_DATASET
+	// value would retire every tracked vehicle. The failed fetch must gate the
+	// pass before it can observe cached data.
+	cached := app.GtfsService.RealtimeStore.Get(server.ServerKey())
+	cached.Vehicles = nil
+	app.GtfsService.RealtimeStore.Set(server.ServerKey(), cached)
+	*failRT = true
+	app.collectForScope(context.Background(), server, scope)
+
+	if got := app.MetricsService.VehicleLastSeen.Count(models.ServerKey(server.ObaBaseURL, "agency-a")); got != 1 {
+		t.Fatalf("failed fetch processed cached snapshot; tracked count = %d, want 1", got)
+	}
+	serverURL := server.ObaBaseURL
+	if value, found := gaugeValueFor(metrics.GtfsRtFeedFetchSuccess, map[string]string{"server_url": serverURL, "feed": "0"}); !found || value != 0 {
+		t.Fatalf("failed fetch success metric = %v, found=%v", value, found)
 	}
 }

@@ -29,8 +29,8 @@ import (
 //   - error: any error encountered during processing.
 func checkBundleExpiration(staticStore *gtfs.StaticStore, currentTime time.Time, server models.ObaServer) (int, int, error) {
 	currentTime = currentTime.UTC()
-	staticData, ok := staticStore.Get(server.ServerKey())
-	if !ok {
+	staticData, hasStaticData := staticStore.Get(server.ServerKey())
+	if !hasStaticData {
 		err := fmt.Errorf("there is no bundle for server key %s", server.ServerKey())
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags:  utils.MakeMap("agency_id", server.AgencyID),
@@ -46,7 +46,11 @@ func checkBundleExpiration(staticStore *gtfs.StaticStore, currentTime time.Time,
 		})
 		return 0, 0, err
 	}
-	earliestEndDate, latestEndDate, err := gtfs.GetEarliestAndLatestServiceDates(staticData)
+	earliestEndDate, latestEndDate, hasScheduleRange := staticStore.ScheduleStore().ServiceDateRange(server.ServerKey())
+	var err error
+	if !hasScheduleRange {
+		earliestEndDate, latestEndDate, err = gtfs.GetEarliestAndLatestServiceDates(staticData)
+	}
 
 	if err != nil {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{

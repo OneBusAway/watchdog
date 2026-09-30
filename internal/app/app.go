@@ -3,6 +3,7 @@ package app
 import (
 	"log/slog"
 	"net/http"
+	"time"
 
 	"watchdog.onebusaway.org/internal/config"
 	"watchdog.onebusaway.org/internal/geo"
@@ -38,6 +39,7 @@ type Application struct {
 func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version string, droppedStore *config.DroppedServersStore) *Application {
 
 	staticStore := gtfs.NewStaticStore()
+	staticStore.SetConfiguredServers(cfg.GetServers())
 	realtimeStore := gtfs.NewRealtimeStore()
 	boundingBoxStore := geo.NewBoundingBoxStore()
 	routeAgencyIndex := gtfs.NewRouteAgencyIndex()
@@ -49,10 +51,14 @@ func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version s
 	configService := config.NewConfigService(logger, client, cfg, backoffStore, droppedStore)
 	gtfsService := gtfs.NewGtfsService(staticStore, realtimeStore, boundingBoxStore, routeAgencyIndex, logger, client)
 	metricsService := metrics.NewMetricsService(staticStore, realtimeStore, boundingBoxStore, routeAgencyIndex, vehicleLastSeen, unmatchedStopTracker, logger, client, obaSDKClientCache.For)
+	metricsService.ReportCollectionInterval(time.Duration(cfg.FetchInterval) * time.Second)
 
 	// Wire the per-agency introspection gauge emission through a callback so
 	// the metrics package doesn't need to import gtfs (and vice versa).
 	gtfsService.SetBundleObserver(metricsService.StaticBundleObserver())
+	gtfsService.SetFeedMappingObserver(metricsService.StaticFeedMappingObserver())
+	gtfsService.SetStaticRefreshObserver(metricsService.StaticRefreshObserver())
+	gtfsService.SetStaticFeedRefreshObserver(metricsService.StaticFeedRefreshObserver())
 
 	return &Application{
 		ConfigService:  configService,

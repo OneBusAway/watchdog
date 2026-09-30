@@ -58,6 +58,8 @@ func (app *Application) PruneStaleServers(servers []models.ObaServer) {
 		app.GtfsService.RealtimeStore.Prune(keep),
 		app.GtfsService.BoundingBoxStore.Prune(keep),
 		app.MetricsService.VehicleLastSeen.Prune(keep),
+		app.MetricsService.FeedFreshness.Prune(keep),
+		app.MetricsService.StaticFeedMappings.Prune(keep),
 		app.MetricsService.UnmatchedStopTracker.Prune(keep),
 		app.ConfigService.BackoffStore.Prune(keep),
 	} {

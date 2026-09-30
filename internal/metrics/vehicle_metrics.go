@@ -2,6 +2,9 @@ package metrics
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math"
 	"time"
@@ -26,8 +29,8 @@ import (
 //     merged feed for every agency the server reports. Each vehicle is
 //     attributed to an agency through its TripDescriptor.route_id/trip_id, and the
 //     pass runs ONCE per server per tick — not once per agency. Running it per
-//     agency would multiply the VehicleReportCount counter by the agency count
-//     and file every vehicle under every agency's last-seen slot.
+//     agency would multiply transition observations and file every vehicle
+//     under every agency's last-seen slot.
 //
 // In server-mode the realtime feed is read from the server-scoped key
 // (models.ServerKey(oba_base_url, "")), while an attributed vehicle uses its
@@ -164,14 +167,13 @@ func countActiveVehiclesForAgency(ctx context.Context, client *onebusaway.Client
 	return len(response.Data.List), nil
 }
 
-// trackVehicleTelemetry collects and reports per-vehicle telemetry — report
-// count, reporting interval, computed speed, and the discrepancy against the
-// speed the feed reports — for every vehicle in the GTFS-RT feed.
+// trackVehicleTelemetry reports source timestamps, semantic state-change time,
+// computed speed, and speed discrepancy for every vehicle in a successful
+// GTFS-RT snapshot.
 //
 // See the scope-dispatch comment at the top of this file. The important
-// invariant: this runs exactly once per server per tick. VehicleReportCount is
-// a Counter, so a second pass over the same feed within one tick would
-// permanently inflate it, and vehicleLastSeen entries are keyed by the agency
+// invariant: this runs exactly once per server per tick. Transition counters
+// would otherwise inflate, and vehicleLastSeen entries are keyed by the agency
 // that owns the vehicle rather than by whichever agency is being iterated.
 //
 // In server-mode a vehicle whose route does not resolve to a live agency, or
@@ -190,13 +192,9 @@ func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer,
 
 	realtimeData := realtimeStore.Get(server.ServerKey())
 	if realtimeData == nil {
-		// Zero the gauges before returning. "No feed in the store" is reachable
-		// on the first tick and whenever the fetch failed — and server-mode runs
-		// this pass anyway after a failed fetch — so returning without emitting
-		// would freeze every gauge below at the last good tick's values, which
-		// is the exact failure this function's summary emitter exists to
-		// prevent. An absent feed and an empty feed should look identical here;
-		// only the fetch error distinguishes them, and it goes to Sentry.
+		// This is reachable before the first successful fetch. Failed fetches gate
+		// this pass in both collection modes and therefore cannot process a cached
+		// snapshot as a new observation.
 		emitTickSummary(server, agencies, vehicleLastSeen, tickSummary{feedEmpty: true}, serverURL)
 		err := fmt.Errorf("no GTFS-RT data available for agency %s", server.AgencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -206,6 +204,7 @@ func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer,
 	}
 
 	if len(realtimeData.Vehicles) == 0 {
+		cleanupFullDatasetVehicles(server, agencies, vehicleLastSeen, realtimeData, nil)
 		// Nothing is reporting right now. Say so immediately rather than
 		// coasting on last-seen entries, which ClearRoutine will not expire
 		// for another hour; nothing in an empty feed can be unattributed
@@ -225,16 +224,11 @@ func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer,
 	unattributed := 0
 	// TODO: Expose a bounded reason breakdown (missing vehicle ID, missing or
 	// unknown route, or agency not live) without putting vehicle IDs in labels.
-	// TODO: Add low-cardinality feed-level change detection for GTFS-RT feeds.
-	// When VehiclePosition.timestamp is absent, compare substantive feed content
-	// between successful fetches and expose when Watchdog last observed a change.
-	// Consecutive successful fetches normally bound that observation interval by
-	// the configured polling interval (30 seconds by default), but do not prove
-	// when the source measured the position. Exclude FeedHeader.timestamp from
-	// the comparison so a changing header alone does not hide a frozen feed.
-	// Interpret this signal together with gtfs_rt_last_successful_fetch_timestamp_seconds;
-	// an unchanged vehicle position must not be classified as stale because the
-	// vehicle may be stationary.
+	observedAt := realtimeData.ObservationAt
+	if observedAt.IsZero() {
+		observedAt = now
+	}
+	seen := make(map[string]map[string]bool)
 
 	for _, realtimeVehicle := range realtimeData.Vehicles {
 		vehicle := realtimeVehicle.Vehicle
@@ -258,52 +252,144 @@ func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer,
 			continue
 		}
 		agencyKey := agencyKeys[agency.AgencyID]
-
-		if vehicle.Position == nil || vehicle.Position.Latitude == nil || vehicle.Position.Longitude == nil {
-			continue
-		}
-		lat := float64(*vehicle.Position.Latitude)
-		lon := float64(*vehicle.Position.Longitude)
-
-		seenAt := now
-		if vehicle.Timestamp != nil {
-			seenAt = *vehicle.Timestamp
-		}
-
-		interval := now.Sub(seenAt).Seconds()
-		VehicleReportCount.WithLabelValues(vehicleID, agency.AgencyID, agency.AgencyName, serverName, serverURL, feedID).Inc()
-		VehicleReportInterval.WithLabelValues(vehicleID, agency.AgencyID, agency.AgencyName, serverName, serverURL, feedID).Set(interval)
-
-		// Compute speed
 		prev, ok := vehicleLastSeen.Get(agencyKey, feedID, vehicleID)
+		labels := []string{vehicleID, agency.AgencyID, agency.AgencyName, serverName, serverURL, feedID}
+		stateHash := realtimeVehicle.StateHash
+		if stateHash == "" {
+			stateHash = semanticVehicleHash(vehicle)
+		}
+		stateLastChanged := observedAt
 		if ok {
-			timeDelta := seenAt.Sub(prev.Time).Seconds()
-			if timeDelta > 0 {
-				distance := geo.HaversineDistance(prev.Lat, prev.Lon, lat, lon)
-				computedSpeed := distance / timeDelta
-
-				VehicleSpeedGauge.WithLabelValues(vehicleID, agency.AgencyID, agency.AgencyName, serverName, serverURL, feedID).Set(computedSpeed)
-
-				if vehicle.Position.Speed != nil {
-					reportedSpeed := float64(*vehicle.Position.Speed)
-					if reportedSpeed > 0 {
-						diffRatio := math.Abs(computedSpeed-reportedSpeed) / reportedSpeed
-						VehicleSpeedDiscrepancyRatioGauge.WithLabelValues(vehicleID, agency.AgencyID, agency.AgencyName, serverName, serverURL, feedID).Set(diffRatio)
-					}
-				}
+			stateLastChanged = prev.StateLastChanged
+			if stateLastChanged.IsZero() {
+				stateLastChanged = observedAt
+			}
+			if prev.StateHash != stateHash {
+				stateLastChanged = observedAt
+				GtfsRtVehicleStateChanges.WithLabelValues(agency.AgencyID, agency.AgencyName, serverName, serverURL, feedID).Inc()
 			}
 		}
+		GtfsRtVehicleStateLastChangedTimestamp.WithLabelValues(labels...).Set(float64(stateLastChanged.Unix()))
 
-		vehicleLastSeen.Set(agencyKey, feedID, vehicleID, LastSeen{
-			Time: seenAt,
-			Lat:  lat,
-			Lon:  lon,
-		})
+		if vehicle.Timestamp != nil {
+			GtfsRtVehicleSourceTimestamp.WithLabelValues(labels...).Set(float64(vehicle.Timestamp.Unix()))
+			if ok && !prev.SourceTimestamp.IsZero() && vehicle.Timestamp.After(prev.SourceTimestamp) {
+				GtfsRtVehicleSourceTimestampAdvances.WithLabelValues(agency.AgencyID, agency.AgencyName, serverName, serverURL, feedID).Inc()
+			}
+		} else {
+			GtfsRtVehicleSourceTimestamp.DeleteLabelValues(labels...)
+		}
+		if seen[agencyKey+"|"+feedID] == nil {
+			seen[agencyKey+"|"+feedID] = make(map[string]bool)
+		}
+		seen[agencyKey+"|"+feedID][vehicleID] = true
+
+		lat, lon, positionValid := vehicleLatLon(vehicle)
+		next := prev
+		if !ok {
+			next = LastSeen{}
+		}
+		next.ObservedAt = observedAt
+		next.StateHash = stateHash
+		next.StateLastChanged = stateLastChanged
+		next.VehicleID = vehicleID
+		next.FeedID = feedID
+		next.AgencyID = agency.AgencyID
+		next.AgencyName = agency.AgencyName
+		next.ServerName = serverName
+		next.ServerURL = serverURL
+
+		// Retain a computed speed only while the source repeats the exact same
+		// valid state and remains inside its cadence-derived grace window.
+		if !positionValid || vehicle.Timestamp == nil {
+			deleteVehicleSpeedSeries(labels)
+			next.Time = time.Time{}
+			next.SourceTimestamp = time.Time{}
+			next.HasPosition = false
+			next.SourceInterval = 0
+			next.SpeedLastComputed = time.Time{}
+		} else {
+			timeDelta := time.Duration(0)
+			if ok && prev.HasPosition && !prev.Time.IsZero() {
+				timeDelta = vehicle.Timestamp.Sub(prev.Time)
+			}
+			switch {
+			case timeDelta > 0:
+				distance := geo.HaversineDistance(prev.Lat, prev.Lon, lat, lon)
+				computedSpeed := distance / timeDelta.Seconds()
+				VehicleSpeedGauge.WithLabelValues(labels...).Set(computedSpeed)
+				VehicleSpeedDiscrepancyRatioGauge.DeleteLabelValues(labels...)
+				if vehicle.Position.Speed != nil && *vehicle.Position.Speed > 0 {
+					reportedSpeed := float64(*vehicle.Position.Speed)
+					VehicleSpeedDiscrepancyRatioGauge.WithLabelValues(labels...).Set(math.Abs(computedSpeed-reportedSpeed) / reportedSpeed)
+				}
+				next.SourceInterval = timeDelta
+				next.SpeedLastComputed = observedAt
+				GtfsRtVehicleSpeedLastComputedTimestamp.WithLabelValues(labels...).Set(float64(observedAt.Unix()))
+			case timeDelta == 0 && ok && prev.HasPosition && prev.StateHash == stateHash && !prev.SpeedLastComputed.IsZero():
+				if observedAt.Sub(prev.SpeedLastComputed) > vehicleSpeedGrace(vehicleLastSeen.CollectionInterval(), prev.SourceInterval) {
+					deleteVehicleSpeedSeries(labels)
+					next.SpeedLastComputed = time.Time{}
+				}
+			default:
+				deleteVehicleSpeedSeries(labels)
+				next.SourceInterval = 0
+				next.SpeedLastComputed = time.Time{}
+			}
+			next.Time = *vehicle.Timestamp
+			next.Lat = lat
+			next.Lon = lon
+			next.HasPosition = true
+			next.SourceTimestamp = *vehicle.Timestamp
+		}
+		vehicleLastSeen.Set(agencyKey, feedID, vehicleID, next)
 	}
+	cleanupFullDatasetVehicles(server, agencies, vehicleLastSeen, realtimeData, seen)
 
 	emitTickSummary(server, agencies, vehicleLastSeen, tickSummary{unattributed: unattributed}, serverURL)
 
 	return nil
+}
+
+func vehicleSpeedGrace(collectionInterval, sourceInterval time.Duration) time.Duration {
+	grace := 3 * collectionInterval
+	if sourceGrace := 2 * sourceInterval; sourceGrace > grace {
+		grace = sourceGrace
+	}
+	return min(max(grace, time.Minute), 5*time.Minute)
+}
+
+func deleteVehicleSpeedSeries(labels []string) {
+	VehicleSpeedGauge.DeleteLabelValues(labels...)
+	VehicleSpeedDiscrepancyRatioGauge.DeleteLabelValues(labels...)
+	GtfsRtVehicleSpeedLastComputedTimestamp.DeleteLabelValues(labels...)
+}
+
+func semanticVehicleHash(vehicle remoteGtfs.Vehicle) string {
+	vehicle.Timestamp = nil
+	data, _ := json.Marshal(vehicle)
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+func cleanupFullDatasetVehicles(server models.ObaServer, agencies []models.ObaServer, store *VehicleLastSeen, data *models.RealtimeData, seen map[string]map[string]bool) {
+	if len(agencies) > 0 {
+		for _, feed := range data.Feeds {
+			if feed.FullDataset {
+				store.RemoveMissingForServer(server, feed.FeedID, seen)
+			}
+		}
+		return
+	}
+	keys := []string{server.ServerKey()}
+	for _, feed := range data.Feeds {
+		if !feed.FullDataset {
+			continue
+		}
+		for _, key := range keys {
+			store.RemoveMissing(key, feed.FeedID, seen[key+"|"+feed.FeedID])
+		}
+	}
 }
 
 // tickSummary carries the per-tick facts emitTickSummary needs beyond the

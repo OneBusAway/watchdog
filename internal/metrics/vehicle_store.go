@@ -4,13 +4,28 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"watchdog.onebusaway.org/internal/models"
 )
 
 // LastSeen stores timestamp & coordinates for speed computation
 type LastSeen struct {
-	Time time.Time
-	Lat  float64
-	Lon  float64
+	Time              time.Time
+	SourceTimestamp   time.Time
+	ObservedAt        time.Time
+	Lat               float64
+	Lon               float64
+	HasPosition       bool
+	StateHash         string
+	StateLastChanged  time.Time
+	SourceInterval    time.Duration
+	SpeedLastComputed time.Time
+	VehicleID         string
+	FeedID            string
+	AgencyID          string
+	AgencyName        string
+	ServerName        string
+	ServerURL         string
 }
 
 // vehicleKey composes the inner store key from the feed identity and vehicle
@@ -33,16 +48,35 @@ func vehicleKey(feedID, vehicleID string) string {
 //   - Detect anomalies in vehicle movement patterns (e.g., unrealistic jumps).
 
 type VehicleLastSeen struct {
-	Mu    sync.RWMutex
-	Store map[string]map[string]LastSeen
+	Mu                 sync.RWMutex
+	Store              map[string]map[string]LastSeen
+	collectionInterval time.Duration
 }
 
 // NewVehicleLastSeen creates and returns a new VehicleLastSeen instance
 // with an initialized storage map. This is the constructor for VehicleLastSeen.
 func NewVehicleLastSeen() *VehicleLastSeen {
 	return &VehicleLastSeen{
-		Store: make(map[string]map[string]LastSeen),
+		Store:              make(map[string]map[string]LastSeen),
+		collectionInterval: 30 * time.Second,
 	}
+}
+
+func (vehicleLastSeen *VehicleLastSeen) SetCollectionInterval(interval time.Duration) {
+	vehicleLastSeen.Mu.Lock()
+	defer vehicleLastSeen.Mu.Unlock()
+	if interval > 0 {
+		vehicleLastSeen.collectionInterval = interval
+	}
+}
+
+func (vehicleLastSeen *VehicleLastSeen) CollectionInterval() time.Duration {
+	vehicleLastSeen.Mu.RLock()
+	defer vehicleLastSeen.Mu.RUnlock()
+	if vehicleLastSeen.collectionInterval <= 0 {
+		return 30 * time.Second
+	}
+	return vehicleLastSeen.collectionInterval
 }
 
 // Get retrieves the LastSeen data for a specific vehicle on a given server key.
@@ -118,18 +152,27 @@ func (vehicleLastSeen *VehicleLastSeen) ClearRoutine(ctx context.Context, timeIn
 // threshold: Duration after which a vehicle entry is considered stale.
 func (vehicleLastSeen *VehicleLastSeen) clear(threshold time.Duration) {
 	vehicleLastSeen.Mu.Lock()
-	defer vehicleLastSeen.Mu.Unlock()
 
 	if len(vehicleLastSeen.Store) == 0 {
+		vehicleLastSeen.Mu.Unlock()
 		return
 	}
 
 	now := time.Now().UTC()
 
+	var removed []LastSeen
 	for agencyID, vehicles := range vehicleLastSeen.Store {
 
 		for vehicleID, lastSeen := range vehicles {
-			if lastSeen.Time.Before(now) && now.Sub(lastSeen.Time) > threshold {
+			lastObservation := lastSeen.ObservedAt
+			if lastObservation.IsZero() {
+				lastObservation = lastSeen.SourceTimestamp
+				if lastObservation.IsZero() {
+					lastObservation = lastSeen.Time
+				}
+			}
+			if lastObservation.Before(now) && now.Sub(lastObservation) > threshold {
+				removed = append(removed, lastSeen)
 				delete(vehicleLastSeen.Store[agencyID], vehicleID)
 			}
 		}
@@ -138,6 +181,91 @@ func (vehicleLastSeen *VehicleLastSeen) clear(threshold time.Duration) {
 			delete(vehicleLastSeen.Store, agencyID)
 		}
 
+	}
+	vehicleLastSeen.Mu.Unlock()
+	deleteVehicleSeries(removed)
+}
+
+// RemoveMissing retires vehicles absent from a successful FULL_DATASET
+// snapshot for one feed and agency.
+func (vehicleLastSeen *VehicleLastSeen) RemoveMissing(serverKey, feedID string, seen map[string]bool) {
+	vehicleLastSeen.Mu.Lock()
+	var removed []LastSeen
+	for key, lastSeen := range vehicleLastSeen.Store[serverKey] {
+		if lastSeen.FeedID == feedID && !seen[lastSeen.VehicleID] {
+			removed = append(removed, lastSeen)
+			delete(vehicleLastSeen.Store[serverKey], key)
+		}
+	}
+	if len(vehicleLastSeen.Store[serverKey]) == 0 {
+		delete(vehicleLastSeen.Store, serverKey)
+	}
+	vehicleLastSeen.Mu.Unlock()
+	deleteVehicleSeries(removed)
+}
+
+// RemoveMissingForServer retires absent vehicles for a server-scoped full
+// snapshot, including agencies that disappeared from the current live list.
+func (vehicleLastSeen *VehicleLastSeen) RemoveMissingForServer(server models.ObaServer, feedID string, seen map[string]map[string]bool) {
+	vehicleLastSeen.Mu.Lock()
+	var removed []LastSeen
+	for serverKey, vehicles := range vehicleLastSeen.Store {
+		if !server.OwnsServerKey(serverKey) {
+			continue
+		}
+		feedSeen := seen[serverKey+"|"+feedID]
+		for key, lastSeen := range vehicles {
+			if lastSeen.FeedID == feedID && !feedSeen[lastSeen.VehicleID] {
+				removed = append(removed, lastSeen)
+				delete(vehicles, key)
+			}
+		}
+		if len(vehicles) == 0 {
+			delete(vehicleLastSeen.Store, serverKey)
+		}
+	}
+	vehicleLastSeen.Mu.Unlock()
+	deleteVehicleSeries(removed)
+}
+
+// RemoveFeeds retires all vehicle history for feeds removed or replaced in a
+// server's realtime configuration, including their Prometheus series.
+func (vehicleLastSeen *VehicleLastSeen) RemoveFeeds(server models.ObaServer, feedIDs []string) {
+	if len(feedIDs) == 0 {
+		return
+	}
+	removedFeeds := make(map[string]bool, len(feedIDs))
+	for _, feedID := range feedIDs {
+		removedFeeds[feedID] = true
+	}
+	vehicleLastSeen.Mu.Lock()
+	var removed []LastSeen
+	for serverKey, vehicles := range vehicleLastSeen.Store {
+		if !server.OwnsServerKey(serverKey) {
+			continue
+		}
+		for key, lastSeen := range vehicles {
+			if removedFeeds[lastSeen.FeedID] {
+				removed = append(removed, lastSeen)
+				delete(vehicles, key)
+			}
+		}
+		if len(vehicles) == 0 {
+			delete(vehicleLastSeen.Store, serverKey)
+		}
+	}
+	vehicleLastSeen.Mu.Unlock()
+	deleteVehicleSeries(removed)
+}
+
+func deleteVehicleSeries(entries []LastSeen) {
+	for _, entry := range entries {
+		labels := []string{entry.VehicleID, entry.AgencyID, entry.AgencyName, entry.ServerName, entry.ServerURL, entry.FeedID}
+		GtfsRtVehicleSourceTimestamp.DeleteLabelValues(labels...)
+		GtfsRtVehicleStateLastChangedTimestamp.DeleteLabelValues(labels...)
+		VehicleSpeedGauge.DeleteLabelValues(labels...)
+		VehicleSpeedDiscrepancyRatioGauge.DeleteLabelValues(labels...)
+		GtfsRtVehicleSpeedLastComputedTimestamp.DeleteLabelValues(labels...)
 	}
 }
 

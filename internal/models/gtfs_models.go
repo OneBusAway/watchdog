@@ -1,6 +1,8 @@
 package models
 
 import (
+	"time"
+
 	remoteGtfs "github.com/OneBusAway/go-gtfs"
 )
 
@@ -43,8 +45,17 @@ func NewStaticData(GtfsStaticBundle *remoteGtfs.Static) *StaticData {
 // observed in so downstream consumers can key per-vehicle identity on the
 // (feed, vehicle_id) pair instead of the vehicle ID alone.
 type RealtimeVehicle struct {
-	Vehicle remoteGtfs.Vehicle
-	FeedID  string
+	Vehicle   remoteGtfs.Vehicle
+	FeedID    string
+	StateHash string
+}
+
+// RealtimeFeed describes one successful source snapshot in merged realtime
+// data. FullDataset controls safe retirement of absent vehicle series.
+type RealtimeFeed struct {
+	FeedID      string
+	FeedURL     string
+	FullDataset bool
 }
 
 // RealtimeData represents the realtime GTFS data structure.
@@ -55,7 +66,9 @@ type RealtimeVehicle struct {
 // to include more fields from the GTFS Realtime bundle.
 // Don't forget to include them here
 type RealtimeData struct {
-	Vehicles []RealtimeVehicle
+	Vehicles      []RealtimeVehicle
+	Feeds         []RealtimeFeed
+	ObservationAt time.Time
 }
 
 // NewRealtimeData wraps every vehicle in a bundle with an empty FeedID. It is

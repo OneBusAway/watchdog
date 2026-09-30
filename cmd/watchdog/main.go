@@ -15,6 +15,7 @@ import (
 	"github.com/getsentry/sentry-go"
 	"watchdog.onebusaway.org/internal/app"
 	"watchdog.onebusaway.org/internal/config"
+	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
 )
@@ -148,8 +149,10 @@ func main() {
 
 	// From here we set up all dependencies and we are ready to start business logic.
 
-	// On startup, download GTFS static bundles for all configured servers
-	app.GtfsService.DownloadGTFSBundles(ctx, servers, 20)
+	// Startup uses the same managed campaign as scheduled refreshes so a slow or
+	// failing feed cannot block metrics collection or force successful peers to
+	// be downloaded again on every retry.
+	app.GtfsService.StartStaticRefreshCampaigns(ctx, servers, gtfs.StaticRefreshStartup, 20)
 
 	// This function starts the metrics collection process
 	// it intialize a routine the run every FetchInterval seconds (30 seconds by default)
