@@ -216,8 +216,8 @@ var (
 
 	GtfsRtUnattributedVehicleCandidateAssociations = tracked(promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "gtfs_rt_unattributed_vehicle_candidate_associations_count",
-			Help: "Possible agency associations for unattributed GTFS-RT vehicles; one vehicle may contribute to multiple agency series",
+			Name: "gtfs_rt_unattributed_vehicle_potential_agency_associations_count",
+			Help: "Potential agency associations for unattributed GTFS-RT vehicles; one vehicle may contribute to multiple agency series",
 		},
 		[]string{"agency_id", "agency_name", "server_name", "server_url"},
 	))

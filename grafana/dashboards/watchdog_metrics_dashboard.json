@@ -295,7 +295,7 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: realtime_vehicle_positions_count_gtfs_rt, oba_agency_active_vehicles_count, gtfs_rt_tracked_vehicles_count, gtfs_rt_unattributed_vehicles_count, gtfs_rt_unattributed_vehicles_by_reason_count, gtfs_rt_unattributed_vehicle_candidate_associations_count, gtfs_schedule_available, gtfs_scheduled_service_active\nQuestion answered: \"Is zero realtime coverage expected, and why were vehicles not assigned?\" Outside service is only schedule available=1 and active=0. Unexpected Zero uses the dynamic collection freshness window. Candidate associations are possible owners, not assignments: one ambiguous vehicle may appear under multiple candidate agencies, so do not sum them as a distinct vehicle total. No alert is installed by default.",
+      "description": "Metrics: realtime_vehicle_positions_count_gtfs_rt, oba_agency_active_vehicles_count, gtfs_rt_tracked_vehicles_count, gtfs_rt_unattributed_vehicles_count, gtfs_rt_unattributed_vehicles_by_reason_count, gtfs_rt_unattributed_vehicle_potential_agency_associations_count, gtfs_schedule_available, gtfs_scheduled_service_active\nQuestion answered: \"Is zero realtime coverage expected, and why were vehicles not assigned?\" Outside service is only schedule available=1 and active=0. Unexpected Zero uses the dynamic collection freshness window. Potential agency associations are possible owners, not assignments: one ambiguous vehicle may appear under multiple potential agencies, so do not sum them as a distinct vehicle total. No alert is installed by default.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -366,7 +366,7 @@
           }
         },
         {
-          "expr": "gtfs_rt_unattributed_vehicle_candidate_associations_count{agency_id=~\"$agency_id\",server_url=~\"$server_url\"} and on (server_name, server_url) (min by (server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id=\"\"}) == 1) and on (server_name, server_url) ((time() - min by (server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=\"\"})) < on() group_left watchdog:collection_freshness_window_seconds) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < on() group_left watchdog:collection_freshness_window_seconds)",
+          "expr": "gtfs_rt_unattributed_vehicle_potential_agency_associations_count{agency_id=~\"$agency_id\",server_url=~\"$server_url\"} and on (server_name, server_url) (min by (server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id=\"\"}) == 1) and on (server_name, server_url) ((time() - min by (server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=\"\"})) < on() group_left watchdog:collection_freshness_window_seconds) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < on() group_left watchdog:collection_freshness_window_seconds)",
           "legendFormat": "Possible owner {{agency_name}} (non-additive)",
           "refId": "I",
           "datasource": {
