@@ -95,6 +95,7 @@ func (s *StaticFeedMappingStore) Prune(keep func(string) bool) []string {
 
 func emitStaticFeedMappingSeries(server models.ObaServer, feedURL string, series staticFeedMappingSeries) {
 	serverURL := utils.SanitizeServerURL(server.ObaBaseURL)
+	feedURL = utils.SanitizeServerURL(feedURL)
 	for _, mapping := range series.mappings {
 		GtfsStaticFeedAgencyMappingInfo.WithLabelValues(feedURL, mapping.AgencyID, mapping.AgencyName, server.ServerName, serverURL).Set(1)
 	}
@@ -105,6 +106,7 @@ func emitStaticFeedMappingSeries(server models.ObaServer, feedURL string, series
 
 func deleteStaticFeedMappingSeries(server models.ObaServer, feedURL string, series staticFeedMappingSeries) {
 	serverURL := utils.SanitizeServerURL(server.ObaBaseURL)
+	feedURL = utils.SanitizeServerURL(feedURL)
 	for _, mapping := range series.mappings {
 		GtfsStaticFeedAgencyMappingInfo.DeleteLabelValues(feedURL, mapping.AgencyID, mapping.AgencyName, server.ServerName, serverURL)
 	}
