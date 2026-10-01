@@ -205,7 +205,7 @@ func (vehicleLastSeen *VehicleLastSeen) RemoveMissing(serverKey, feedID string, 
 }
 
 // RemoveMissingForServer retires absent vehicles for a server-scoped full
-// snapshot, including agencies that disappeared from the current live list.
+// snapshot, including agencies that disappeared from the current reported list.
 func (vehicleLastSeen *VehicleLastSeen) RemoveMissingForServer(server models.ObaServer, feedID string, seen map[string]map[string]bool) {
 	vehicleLastSeen.Mu.Lock()
 	var removed []LastSeen
@@ -224,6 +224,40 @@ func (vehicleLastSeen *VehicleLastSeen) RemoveMissingForServer(server models.Oba
 			delete(vehicleLastSeen.Store, serverKey)
 		}
 	}
+	vehicleLastSeen.Mu.Unlock()
+	deleteVehicleSeries(removed)
+}
+
+// RemoveVehicleFromOtherAgencies prevents a differential feed from leaving one
+// physical vehicle assigned to both its old and current agency.
+func (vehicleLastSeen *VehicleLastSeen) RemoveVehicleFromOtherAgencies(server models.ObaServer, feedID, vehicleID, keepServerKey string) {
+	vehicleLastSeen.Mu.Lock()
+	var removed []LastSeen
+	key := vehicleKey(feedID, vehicleID)
+	for serverKey, vehicles := range vehicleLastSeen.Store {
+		if serverKey == keepServerKey || !server.OwnsServerKey(serverKey) {
+			continue
+		}
+		if lastSeen, ok := vehicles[key]; ok {
+			removed = append(removed, lastSeen)
+			delete(vehicles, key)
+		}
+		if len(vehicles) == 0 {
+			delete(vehicleLastSeen.Store, serverKey)
+		}
+	}
+	vehicleLastSeen.Mu.Unlock()
+	deleteVehicleSeries(removed)
+}
+
+func (vehicleLastSeen *VehicleLastSeen) RemoveAgency(serverKey string) {
+	vehicleLastSeen.Mu.Lock()
+	vehicles := vehicleLastSeen.Store[serverKey]
+	removed := make([]LastSeen, 0, len(vehicles))
+	for _, lastSeen := range vehicles {
+		removed = append(removed, lastSeen)
+	}
+	delete(vehicleLastSeen.Store, serverKey)
 	vehicleLastSeen.Mu.Unlock()
 	deleteVehicleSeries(removed)
 }

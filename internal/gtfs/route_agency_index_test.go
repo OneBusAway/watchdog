@@ -1,6 +1,7 @@
 package gtfs
 
 import (
+	"reflect"
 	"testing"
 
 	"watchdog.onebusaway.org/internal/models"
@@ -142,6 +143,54 @@ func TestRouteAgencyIndexResolvesRouteAndTrip(t *testing.T) {
 	}
 }
 
+func TestRouteAgencyIndexResolvesCandidateIntersections(t *testing.T) {
+	idx := NewRouteAgencyIndex()
+	key := models.ServerKey("https://server.example.com", "")
+	idx.ReplaceCandidates(key,
+		map[string][]string{
+			"route-ab": {"B", "A", "A"},
+			"route-a":  {"A"},
+		},
+		map[string][]string{
+			"trip-a":  {"A"},
+			"trip-ab": {"A", "B"},
+			"trip-bc": {"B", "C"},
+			"trip-b":  {"B"},
+		},
+		map[string]string{"A": "Agency A", "B": "Agency B", "C": "Agency C"},
+	)
+
+	for _, tc := range []struct {
+		name, routeID, tripID string
+		wantAgency            string
+		wantReason            AttributionFailureReason
+		wantCandidates        []string
+	}{
+		{"unique intersection", "route-ab", "trip-a", "A", "", []string{"A"}},
+		{"overlapping intersection", "route-ab", "trip-bc", "B", "", []string{"B"}},
+		{"ambiguous intersection", "route-ab", "trip-ab", "", AttributionAmbiguousIdentifier, []string{"A", "B"}},
+		{"ambiguous route", "route-ab", "", "", AttributionAmbiguousIdentifier, []string{"A", "B"}},
+		{"route trip conflict", "route-a", "trip-b", "", AttributionRouteTripConflict, []string{"A", "B"}},
+		{"trip fallback", "missing", "trip-a", "A", "", []string{"A"}},
+		{"missing route", "", "", "", AttributionMissingRouteID, nil},
+		{"unknown route", "missing", "", "", AttributionUnknownRouteID, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := idx.ResolveVehicleAttribution(key, tc.routeID, tc.tripID)
+			if got.AgencyID != tc.wantAgency || got.Reason != tc.wantReason || !reflect.DeepEqual(got.Candidates, tc.wantCandidates) {
+				t.Fatalf("ResolveVehicleAttribution() = %+v; want agency=%q reason=%q candidates=%v", got, tc.wantAgency, tc.wantReason, tc.wantCandidates)
+			}
+		})
+	}
+
+	if _, ok := idx.Get(key, "route-ab"); ok {
+		t.Fatal("ambiguous route unexpectedly resolved through singleton compatibility lookup")
+	}
+	if got := idx.AgencyNames(key); !reflect.DeepEqual(got, map[string]string{"A": "Agency A", "B": "Agency B", "C": "Agency C"}) {
+		t.Fatalf("agency names = %v", got)
+	}
+}
+
 func TestRouteAgencyIndexAgencyKeysAreIsolated(t *testing.T) {
 	idx := NewRouteAgencyIndex()
 	idx.Replace(models.ServerKey("https://server.example.com", "A"), map[string]string{"route": "A"}, nil, nil)
@@ -170,5 +219,24 @@ func TestRouteAgencyIndexAttributesOnlyTo(t *testing.T) {
 	idx.Replace(key, map[string]string{"route-a": "A"}, map[string]string{"trip-b": "B"}, nil)
 	if idx.AttributesOnlyTo(key, "A") {
 		t.Fatal("expected false when a trip belongs to another agency")
+	}
+}
+
+func TestRouteAgencyIndexSnapshotRemainsConsistentAcrossReplace(t *testing.T) {
+	idx := NewRouteAgencyIndex()
+	key := models.ServerKey("https://server.example.com", "")
+	idx.ReplaceCandidates(key, map[string][]string{"route": {"A", "B"}}, map[string][]string{"trip": {"A"}}, map[string]string{"A": "Agency A", "B": "Agency B"})
+	snapshot := idx.Snapshot(key)
+
+	idx.ReplaceCandidates(key, map[string][]string{"route": {"C"}}, nil, map[string]string{"C": "Agency C"})
+
+	if got := snapshot.ResolveVehicleAttribution(key, "route", "trip"); got.AgencyID != "A" || !got.Resolved() {
+		t.Fatalf("snapshot changed after replace: %+v", got)
+	}
+	if got := snapshot.AgencyNames(key); !reflect.DeepEqual(got, map[string]string{"A": "Agency A", "B": "Agency B"}) {
+		t.Fatalf("snapshot names changed after replace: %v", got)
+	}
+	if got := idx.ResolveVehicleAttribution(key, "route", ""); got.AgencyID != "C" || !got.Resolved() {
+		t.Fatalf("live index did not replace snapshot: %+v", got)
 	}
 }

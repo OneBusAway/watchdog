@@ -66,8 +66,8 @@ type OBAMetrics struct {
 // server-ping routine, which labels ObaApiStatus with (server_name, server_url)
 // only. This function only emits per-agency metrics.
 //
-// In server-mode this function is called once per live agency per tick,
-// but reuses the response cached by probeLiveAgencies instead of
+// In server-mode this function is called once per OBA-reported agency per tick,
+// but reuses the response cached by probeReportedAgencies instead of
 // issuing another HTTP request. Agency-mode callers pass nil and fetch
 // their own response.
 //

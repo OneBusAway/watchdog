@@ -40,7 +40,7 @@ func main() {
 	//   - With agency_id set, the entry is narrowed to one agency: its static
 	//     snapshot and realtime feed are filtered to that agency.
 	//   - Without agency_id, the entry is server-scoped: Watchdog probes
-	//     /api/where/metrics.json each tick, cross-references the live agency
+	//     /api/where/metrics.json each tick, cross-references the agencies
 	//     IDs against the static feeds' agency.txt declarations, and runs the
 	//     per-agency pipeline for every agency that has BOTH a static bundle
 	//     AND is reported as currently served.

@@ -10,6 +10,7 @@ import (
 
 	"github.com/getsentry/sentry-go"
 	"watchdog.onebusaway.org/internal/config"
+	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/metrics"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
@@ -27,9 +28,9 @@ import (
 // Server-scope behavior (added with the redesign):
 //   - For each configured entry, ResolveScope returns either an AgencyScope
 //     (one agency) or a ServerScope (potentially many agencies). The collector
-//     fans out into the per-agency pipeline once per live agency.
+//     fans out into the per-agency pipeline once per agency reported by OBA.
 //   - In server-mode, /api/where/metrics.json is probed every tick to discover
-//     which configured agencies are currently served. Static feed-to-agency
+//     which configured agencies are present in OBA's loaded static coverage. Static feed-to-agency
 //     mappings are emitted separately when each source feed is parsed.
 //
 // The collection routine gracefully shuts down when the provided context is
@@ -72,8 +73,8 @@ func (app *Application) StartMetricsCollection(ctx context.Context) {
 //   - ServerScope: probes /metrics.json, runs the agency-scoped checks once
 //     for every agency that has a static bundle AND is reported by OBA, then
 //     runs the GTFS-RT vehicle pass once for the whole server. Static-only
-//     agencies (configured but not currently live) get
-//     gtfs_static_agency_currently_live = 0 and are left out of both.
+//     agencies (present locally but not reported by OBA) get
+//     gtfs_static_agency_reported_by_oba = 0 and are left out of both.
 func (app *Application) collectForScope(ctx context.Context, server models.ObaServer, scope config.Scope) {
 	switch s := scope.(type) {
 	case config.AgencyScope:
@@ -92,7 +93,7 @@ func (app *Application) collectForScope(ctx context.Context, server models.ObaSe
 
 // collectForServerScope runs the per-agency pipeline for every agency declared
 // in the static store under this server's oba_base_url, gated on whether OBA
-// currently reports the agency as live.
+// reports the agency in its loaded static coverage.
 //
 // Two things happen exactly once per tick, regardless of how many agencies
 // the server serves: the RT feed is fetched (and stored under the
@@ -135,49 +136,53 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 	}
 	app.ConfigService.BackoffStore.ResetBackoff(server.ServerKey())
 
-	// Probe /metrics.json for the live agency set.
-	liveAgencies, prefetchedMetrics, err := app.probeLiveAgencies(ctx, server)
+	// Probe /metrics.json for OBA's loaded static agency set.
+	reportedAgencies, prefetchedMetrics, err := app.probeReportedAgencies(ctx, server)
 	if err != nil {
-		// Treat as "no agencies live" for this tick; static bundles stay
-		// stored so their introspection metrics keep emitting.
-		app.Logger.Warn("Failed to probe /metrics.json; treating no agencies as live this tick",
+		// Coverage is unknown, not empty. Preserve the last successful vehicle
+		// state rather than destructively retiring agencies on a probe failure.
+		app.Logger.Warn("Failed to probe /metrics.json; preserving prior agency state for this tick",
 			"server_name", server.ServerName, "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags:  map[string]string{"server_name": server.ServerName},
 			Level: sentry.LevelWarning,
 		})
+		return
 	}
 
-	// Resolve the agencies that are currently live. These entries carry the
+	// Resolve the agencies reported by OBA. These entries carry the
 	// labels the vehicle pass emits, and the pass consults the route/trip index
 	// to decide which of them owns each vehicle in the merged feed.
-	liveAgencyEntries := make([]models.ObaServer, 0, len(scope.StaticAgencies))
+	reportedAgencyEntries := make([]models.ObaServer, 0, len(scope.StaticAgencies))
 	// Every other metric labels server_url with the sanitized base URL, and the
 	// dashboard's $server_url variable is sourced from those series. Use the
 	// same form here so these gauges join with the rest (and so credentials
 	// embedded in the configured URL never reach a label).
 	serverURL := utils.SanitizeServerURL(server.ObaBaseURL)
 	for _, agency := range scope.StaticAgencies {
-		isLive := liveAgencies[agency.AgencyID]
-		metrics.GtfsStaticAgencyCurrentlyLive.WithLabelValues(
+		reportedByOBA := reportedAgencies[agency.AgencyID]
+		metrics.GtfsStaticAgencyReportedByOBA.WithLabelValues(
 			agency.AgencyID,
 			agency.AgencyName,
 			server.ServerName,
 			serverURL,
-		).Set(boolToFloat(isLive))
+		).Set(boolToFloat(reportedByOBA))
 
-		if isLive {
-			liveAgencyEntries = append(liveAgencyEntries, serverForAgency(server, agency.AgencyID, agency.AgencyName))
+		if reportedByOBA {
+			reportedAgencyEntries = append(reportedAgencyEntries, serverForAgency(server, agency.AgencyID, agency.AgencyName))
+		} else {
+			app.MetricsService.RetireInactiveVehicleAgency(serverForAgency(server, agency.AgencyID, agency.AgencyName))
 		}
 	}
 
-	// No live agency means there is nothing agency-scoped to check, nothing to
+	// No reported agency means there is nothing agency-scoped to check, nothing to
 	// attribute a vehicle to, and no reason to spend an RT fetch. Returning
 	// here rather than falling through also matters for correctness:
 	// collectVehicleMetrics reads an empty agency slice as agency-mode, which
 	// over a server-scoped entry would treat the consolidated feed as already
 	// filtered to one configured agency.
-	if len(liveAgencyEntries) == 0 {
+	if len(reportedAgencyEntries) == 0 {
+		app.MetricsService.RetireVehicleAttributionDiagnostics(server)
 		return
 	}
 
@@ -211,7 +216,7 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 	// intentionally called once per agency here because the gauge is
 	// server-scoped — the per-agency call is cheap (one HTTP probe) and keeps
 	// the metric series up-to-date even if a single agency's checks bail out.
-	for _, agencyServer := range liveAgencyEntries {
+	for _, agencyServer := range reportedAgencyEntries {
 		app.collectAgencyChecks(ctx, agencyServer, prefetchedMetrics)
 	}
 
@@ -220,7 +225,7 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 	// inflates transition counters and files every vehicle under every agency's
 	// last-seen slot. Never process the cached store after a failed fetch.
 	if rtFetchSucceeded {
-		app.collectVehicleMetrics(server, liveAgencyEntries)
+		app.collectVehicleMetrics(server, reportedAgencyEntries)
 	}
 }
 
@@ -272,7 +277,7 @@ func (app *Application) CollectMetricsForServer(ctx context.Context, server mode
 // backoff). Every other step logs-and-continues, because one failing probe
 // should not suppress the others.
 //
-// Server-mode calls this once per live agency; agency-mode calls it once for
+// Server-mode calls this once per OBA-reported agency; agency-mode calls it once for
 // the configured entry. The GTFS-RT vehicle pass is deliberately NOT part of
 // it — that pass runs once per server, in the caller.
 func (app *Application) collectAgencyChecks(ctx context.Context, server models.ObaServer, prefetchedMetrics *metrics.OBAMetrics) bool {
@@ -368,11 +373,15 @@ func (app *Application) collectAgencyChecks(ctx context.Context, server models.O
 // exactly once per server per tick.
 //
 // agencies is nil for an agency-scoped entry (the store is pre-filtered) and
-// holds the live agency entries for a server-scoped one (each vehicle is
+// holds the OBA-reported agency entries for a server-scoped one (each vehicle is
 // attributed through the route/trip index). See the
 // scope-dispatch comment at the top of internal/metrics/vehicle_metrics.go.
 func (app *Application) collectVehicleMetrics(server models.ObaServer, agencies []models.ObaServer) {
-	if err := app.MetricsService.CountVehiclePositions(server, agencies); err != nil {
+	resolver := gtfs.VehicleAttributionResolver(app.MetricsService.RouteAgencyIndex)
+	if agencies != nil {
+		resolver = app.MetricsService.RouteAgencyIndex.Snapshot(server.ServerKey())
+	}
+	if err := app.MetricsService.CountVehiclePositions(server, agencies, resolver); err != nil {
 		app.Logger.Error("Failed to count vehicle positions from GTFS-RT", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
@@ -383,7 +392,7 @@ func (app *Application) collectVehicleMetrics(server models.ObaServer, agencies 
 		})
 	}
 
-	if err := app.MetricsService.TrackVehicleTelemetry(server, agencies); err != nil {
+	if err := app.MetricsService.TrackVehicleTelemetry(server, agencies, resolver); err != nil {
 		app.Logger.Error("Failed to track vehicle reporting frequency", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
@@ -394,7 +403,7 @@ func (app *Application) collectVehicleMetrics(server models.ObaServer, agencies 
 		})
 	}
 
-	if err := app.MetricsService.TrackInvalidVehiclesAndStoppedOutOfBounds(server, agencies); err != nil {
+	if err := app.MetricsService.TrackInvalidVehiclesAndStoppedOutOfBounds(server, agencies, resolver); err != nil {
 		app.Logger.Error("Failed to count invalid vehicle coordinates", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
@@ -430,13 +439,13 @@ func boolToFloat(b bool) float64 {
 	return 0
 }
 
-// probeLiveAgencies fetches /api/where/metrics.json for the given server and
+// probeReportedAgencies fetches /api/where/metrics.json for the given server and
 // returns the set of agency IDs OBA currently reports, along with the parsed
 // response so the caller can pass it into the per-agency metrics calls rather
 // than refetching the same body once per agency. Returns an empty map (not an
 // error) if the response is missing or malformed — the caller treats empty as
-// "no agencies live this tick" so static-only metrics keep emitting.
-func (app *Application) probeLiveAgencies(ctx context.Context, server models.ObaServer) (map[string]bool, *metrics.OBAMetrics, error) {
+// "no agencies reported this tick" so static-only metrics keep emitting.
+func (app *Application) probeReportedAgencies(ctx context.Context, server models.ObaServer) (map[string]bool, *metrics.OBAMetrics, error) {
 	endpoint := fmt.Sprintf("%s/api/where/metrics.json?key=%s", server.ObaBaseURL, url.QueryEscape(server.ObaApiKey))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {

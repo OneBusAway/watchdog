@@ -658,3 +658,115 @@ func TestTrackVehicleTelemetryAgencyModeEmitsNoUnattributedSeriesOnEmptyFeed(t *
 		t.Fatalf("expected agency-mode to emit no unattributed series on an empty feed, got %d", len(series))
 	}
 }
+
+func TestTrackVehicleTelemetryReportsAttributionReasonsAndCandidates(t *testing.T) {
+	const baseURL = "https://candidate-attribution.example.com"
+	server := models.ObaServer{ServerName: "multi", ObaBaseURL: baseURL}
+	agencies := []models.ObaServer{
+		{ServerName: "multi", ObaBaseURL: baseURL, AgencyID: "A", AgencyName: "Agency A"},
+		{ServerName: "multi", ObaBaseURL: baseURL, AgencyID: "B", AgencyName: "Agency B"},
+	}
+	index := gtfs.NewRouteAgencyIndex()
+	index.ReplaceCandidates(server.ServerKey(),
+		map[string][]string{"route-ab": {"A", "B"}, "route-a": {"A"}, "route-c": {"C"}},
+		map[string][]string{"trip-a": {"A"}, "trip-b": {"B"}},
+		map[string]string{"A": "Agency A", "B": "Agency B", "C": "Agency C"},
+	)
+	vehicle := func(id, routeID, tripID string) models.RealtimeVehicle {
+		var vehicleID *remoteGtfs.VehicleID
+		if id != "" {
+			vehicleID = &remoteGtfs.VehicleID{ID: id}
+		}
+		var trip *remoteGtfs.Trip
+		if routeID != "" || tripID != "" {
+			trip = &remoteGtfs.Trip{ID: remoteGtfs.TripID{RouteID: routeID, ID: tripID}}
+		}
+		return models.RealtimeVehicle{FeedID: "0", Vehicle: remoteGtfs.Vehicle{ID: vehicleID, Trip: trip}}
+	}
+	store := gtfs.NewRealtimeStore()
+	store.Set(server.ServerKey(), &models.RealtimeData{Vehicles: []models.RealtimeVehicle{
+		vehicle("unknown", "unknown", ""),
+		vehicle("missing", "", ""),
+		vehicle("ambiguous", "route-ab", ""),
+		vehicle("conflict", "route-a", "trip-b"),
+		vehicle("not-live", "route-c", ""),
+		vehicle("", "route-a", ""),
+		vehicle("resolved", "route-ab", "trip-a"),
+	}})
+
+	lastSeen := NewVehicleLastSeen()
+	if err := trackVehicleTelemetry(server, agencies, lastSeen, store, index); err != nil {
+		t.Fatalf("track: %v", err)
+	}
+	labels := map[string]string{"server_name": server.ServerName, "server_url": baseURL}
+	if got, _ := getMetricValue(GtfsRtUnattributedVehicles, labels); got != 6 {
+		t.Fatalf("aggregate unattributed vehicles = %v, want 6", got)
+	}
+	for _, reason := range gtfs.AttributionFailureReasons {
+		reasonLabels := map[string]string{"server_name": server.ServerName, "server_url": baseURL, "reason": string(reason)}
+		if got, _ := getMetricValue(GtfsRtUnattributedVehiclesByReason, reasonLabels); got != 1 {
+			t.Fatalf("reason %s = %v, want 1", reason, got)
+		}
+	}
+	for agencyID, want := range map[string]float64{"A": 3, "B": 2, "C": 1} {
+		candidateLabels := map[string]string{
+			"agency_id": agencyID, "agency_name": "Agency " + agencyID,
+			"server_name": server.ServerName, "server_url": baseURL,
+		}
+		if got, _ := getMetricValue(GtfsRtUnattributedVehicleCandidateAssociations, candidateLabels); got != want {
+			t.Fatalf("candidate associations for %s = %v, want %v", agencyID, got, want)
+		}
+	}
+	if got := lastSeen.Count(models.ServerKey(baseURL, "A")); got != 1 {
+		t.Fatalf("uniquely intersecting vehicle was not assigned exactly once: %d", got)
+	}
+
+	store.Set(server.ServerKey(), &models.RealtimeData{})
+	if err := trackVehicleTelemetry(server, agencies, lastSeen, store, index); err != nil {
+		t.Fatalf("empty tick: %v", err)
+	}
+	for _, reason := range gtfs.AttributionFailureReasons {
+		reasonLabels := map[string]string{"server_name": server.ServerName, "server_url": baseURL, "reason": string(reason)}
+		if got, _ := getMetricValue(GtfsRtUnattributedVehiclesByReason, reasonLabels); got != 0 {
+			t.Fatalf("reason %s did not reset: %v", reason, got)
+		}
+	}
+	for agencyID := range map[string]struct{}{"A": {}, "B": {}, "C": {}} {
+		candidateLabels := map[string]string{
+			"agency_id": agencyID, "agency_name": "Agency " + agencyID,
+			"server_name": server.ServerName, "server_url": baseURL,
+		}
+		if got, _ := getMetricValue(GtfsRtUnattributedVehicleCandidateAssociations, candidateLabels); got != 0 {
+			t.Fatalf("candidate associations for %s did not reset: %v", agencyID, got)
+		}
+	}
+}
+
+func TestTrackVehicleTelemetryRetiresPreviousAgencyWhenVehicleBecomesUnattributed(t *testing.T) {
+	const baseURL = "https://differential-reassignment.example.com"
+	server, agencies, store, index := serverModeFixture(t, baseURL)
+	lastSeen := NewVehicleLastSeen()
+	if err := trackVehicleTelemetry(server, agencies, lastSeen, store, index); err != nil {
+		t.Fatalf("initial tick: %v", err)
+	}
+	if got := lastSeen.Count(models.ServerKey(baseURL, "agency-a")); got != 1 {
+		t.Fatalf("initial agency-a count = %d", got)
+	}
+
+	data := store.Get(server.ServerKey())
+	vehicle := data.Vehicles[0]
+	vehicle.Vehicle.Trip.ID.RouteID = "unknown"
+	store.Set(server.ServerKey(), &models.RealtimeData{Vehicles: []models.RealtimeVehicle{vehicle}})
+	if err := trackVehicleTelemetry(server, agencies, lastSeen, store, index); err != nil {
+		t.Fatalf("unattributed tick: %v", err)
+	}
+
+	if got := lastSeen.Count(models.ServerKey(baseURL, "agency-a")); got != 0 {
+		t.Fatalf("old agency assignment survived: %d", got)
+	}
+	if series := seriesMatching(GtfsRtVehicleStateLastChangedTimestamp, map[string]string{
+		"vehicle_id": "va", "agency_id": "agency-a", "server_url": baseURL, "feed": "0",
+	}); len(series) != 0 {
+		t.Fatalf("old per-vehicle series survived: %d", len(series))
+	}
+}

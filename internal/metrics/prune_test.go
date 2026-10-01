@@ -69,6 +69,28 @@ func TestDeleteSeriesForAgencyLeavesServerScopedSeries(t *testing.T) {
 	}
 }
 
+func TestDeleteSeriesForServerScopeRetiresAttributionDiagnostics(t *testing.T) {
+	const url = "https://scope-change.example.com"
+	GtfsRtUnattributedVehicles.WithLabelValues("multi", url).Set(2)
+	GtfsRtUnattributedVehiclesByReason.WithLabelValues("multi", url, "ambiguous_identifier").Set(2)
+	GtfsRtUnattributedVehicleCandidateAssociations.WithLabelValues("A", "Agency A", "multi", url).Set(2)
+
+	DeleteSeriesForServerScope(url)
+
+	for _, tc := range []struct {
+		name string
+		vec  prometheus.Collector
+	}{
+		{"aggregate", GtfsRtUnattributedVehicles},
+		{"reason", GtfsRtUnattributedVehiclesByReason},
+		{"candidate", GtfsRtUnattributedVehicleCandidateAssociations},
+	} {
+		if got := seriesMatching(tc.vec, map[string]string{"server_url": url}); len(got) != 0 {
+			t.Fatalf("%s attribution series survived scope deletion: %d", tc.name, len(got))
+		}
+	}
+}
+
 // seriesExists reports whether a collector currently exposes a series carrying
 // exactly the given labels. Exact rather than subset matching, because these
 // assertions name the whole label set of the series they mean.

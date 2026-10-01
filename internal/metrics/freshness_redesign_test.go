@@ -145,7 +145,7 @@ func TestVehicleLatLonRejectsNonFiniteCoordinates(t *testing.T) {
 	}
 }
 
-func TestServerFullDatasetRemovesVehiclesFromNoLongerLiveAgency(t *testing.T) {
+func TestServerFullDatasetRemovesVehiclesFromAgencyNoLongerReportedByOBA(t *testing.T) {
 	server := models.ObaServer{ServerName: "server", ObaBaseURL: "https://full-dataset.example"}
 	agencyA := models.ObaServer{ServerName: "server", ObaBaseURL: server.ObaBaseURL, AgencyID: "a"}
 	agencyB := models.ObaServer{ServerName: "server", ObaBaseURL: server.ObaBaseURL, AgencyID: "b"}
@@ -161,7 +161,7 @@ func TestServerFullDatasetRemovesVehiclesFromNoLongerLiveAgency(t *testing.T) {
 		t.Fatal("seen vehicle was removed")
 	}
 	if _, ok := store.Get(agencyB.ServerKey(), "0", "b-vehicle"); ok {
-		t.Fatal("vehicle from no-longer-live agency was retained")
+		t.Fatal("vehicle from agency no longer reported by OBA was retained")
 	}
 }
 

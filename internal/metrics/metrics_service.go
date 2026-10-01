@@ -119,10 +119,10 @@ func boolValue(value bool) float64 {
 }
 
 // CountVehiclePositions reports the GTFS-RT vehicle-position count. Pass nil
-// agencies for an agency-scoped entry; pass the live agency entries for a
+// agencies for an agency-scoped entry; pass the OBA-reported agency entries for a
 // server-scoped one so the gauge is attributed per agency.
-func (ms *MetricsService) CountVehiclePositions(server models.ObaServer, agencies []models.ObaServer) error {
-	_, err := countVehiclePositions(server, agencies, ms.RealtimeStore, ms.RouteAgencyIndex)
+func (ms *MetricsService) CountVehiclePositions(server models.ObaServer, agencies []models.ObaServer, resolver gtfs.VehicleAttributionResolver) error {
+	_, err := countVehiclePositions(server, agencies, ms.RealtimeStore, resolver)
 	return err
 }
 
@@ -133,6 +133,24 @@ func (ms *MetricsService) CountActiveVehiclesForAgency(ctx context.Context, serv
 
 func (ms *MetricsService) ReportTrackedAgencies(servers []models.ObaServer) {
 	reportTrackedAgencies(servers)
+}
+
+func (ms *MetricsService) RetireInactiveVehicleAgency(server models.ObaServer) {
+	ms.VehicleLastSeen.RemoveAgency(server.ServerKey())
+	labels := []string{server.AgencyID, server.AgencyName, server.ServerName, utils.SanitizeServerURL(server.ObaBaseURL)}
+	RealtimeVehiclePositions.WithLabelValues(labels...).Set(0)
+	TrackedVehiclesGauge.WithLabelValues(labels...).Set(0)
+	InvalidVehicleCoordinatesGauge.WithLabelValues(labels...).Set(0)
+	StoppedOutOfBoundsVehiclesGauge.WithLabelValues(labels...).Set(0)
+	AgencyActiveVehiclesGauge.DeleteLabelValues(labels...)
+	ObaVehiclesLastSuccessfulFetch.DeleteLabelValues(labels...)
+}
+
+func (ms *MetricsService) RetireVehicleAttributionDiagnostics(server models.ObaServer) {
+	labels := prometheus.Labels{"server_url": utils.SanitizeServerURL(server.ObaBaseURL)}
+	GtfsRtUnattributedVehicles.DeletePartialMatch(labels)
+	GtfsRtUnattributedVehiclesByReason.DeletePartialMatch(labels)
+	GtfsRtUnattributedVehicleCandidateAssociations.DeletePartialMatch(labels)
 }
 
 func (ms *MetricsService) CheckBundleExpiration(currentTime time.Time, server models.ObaServer) (int, int, error) {
@@ -148,17 +166,17 @@ func (ms *MetricsService) FetchObaAPIMetrics(ctx context.Context, agencyID, agen
 }
 
 // TrackVehicleTelemetry runs the per-vehicle telemetry pass exactly once per
-// server per tick. Pass nil agencies for an agency-scoped entry; pass the live
+// server per tick. Pass nil agencies for an agency-scoped entry; pass the OBA-reported
 // agency entries for a server-scoped one.
-func (ms *MetricsService) TrackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer) error {
-	return trackVehicleTelemetry(server, agencies, ms.VehicleLastSeen, ms.RealtimeStore, ms.RouteAgencyIndex)
+func (ms *MetricsService) TrackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer, resolver gtfs.VehicleAttributionResolver) error {
+	return trackVehicleTelemetry(server, agencies, ms.VehicleLastSeen, ms.RealtimeStore, resolver)
 }
 
 // TrackInvalidVehiclesAndStoppedOutOfBounds reports coordinate validity and
 // out-of-bounds counts. Pass nil agencies for an agency-scoped entry; pass the
-// live agency entries for a server-scoped one.
-func (ms *MetricsService) TrackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, agencies []models.ObaServer) error {
-	return trackInvalidVehiclesAndStoppedOutOfBounds(server, agencies, ms.BoundingBoxStore, ms.RealtimeStore, ms.RouteAgencyIndex)
+// agency entries for a server-scoped one.
+func (ms *MetricsService) TrackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, agencies []models.ObaServer, resolver gtfs.VehicleAttributionResolver) error {
+	return trackInvalidVehiclesAndStoppedOutOfBounds(server, agencies, ms.BoundingBoxStore, ms.RealtimeStore, resolver)
 }
 
 // StaticBundleObserver returns a callback suitable for GtfsService.SetBundleObserver.

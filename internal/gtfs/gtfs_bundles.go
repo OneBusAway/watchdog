@@ -317,7 +317,7 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 			})
 		}
 		staticStore.ReplaceServerSnapshot(server, map[string]*models.StaticData{serverKey: result.data}, time.Now().UTC())
-		routeAgencyIndex.Replace(serverKey, result.routeIDs, result.tripIDs, result.agencyNames)
+		routeAgencyIndex.ReplaceCandidates(serverKey, result.routeIDs, result.tripIDs, result.agencyNames)
 
 		if bbox, err := geo.ComputeBoundingBox(result.data.Stops); err == nil {
 			boundingBoxStore.Set(serverKey, bbox)
@@ -456,7 +456,7 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 	for _, decl := range declaredAgencies {
 		names[decl.AgencyID] = decl.AgencyName
 	}
-	routeAgencyIndex.Replace(server.ServerKey(), routeMap, tripMap, names)
+	routeAgencyIndex.ReplaceCandidates(server.ServerKey(), routeMap, tripMap, names)
 
 	return nil
 }
@@ -1075,11 +1075,12 @@ func fetchAndStoreGTFSRTFeed(ctx context.Context, server models.ObaServer, realt
 	// fetch would drop every vehicle metric and raise a realtime error for
 	// what is a static-side problem, already reported by the static download.
 	if !server.IsServerScoped() && routeAgencyIndex != nil && routeAgencyIndex.Has(server.ServerKey()) {
+		attribution := routeAgencyIndex.Snapshot(server.ServerKey())
 		// In a feed whose static data names no other agency there is nothing
 		// to filter out, so vehicles that cannot be attributed (no trip, or
 		// IDs missing from a stale bundle) are kept: they are exactly what
 		// the invalid-vehicle checks exist to surface.
-		keepUnresolved := routeAgencyIndex.AttributesOnlyTo(server.ServerKey(), server.AgencyID)
+		keepUnresolved := attribution.AttributesOnlyTo(server.ServerKey(), server.AgencyID)
 		filtered := make([]models.RealtimeVehicle, 0, len(merged.Vehicles))
 		for _, realtimeVehicle := range merged.Vehicles {
 			routeID, tripID := "", ""
@@ -1087,8 +1088,8 @@ func fetchAndStoreGTFSRTFeed(ctx context.Context, server models.ObaServer, realt
 				routeID = realtimeVehicle.Vehicle.Trip.ID.RouteID
 				tripID = realtimeVehicle.Vehicle.Trip.ID.ID
 			}
-			agencyID, ok := routeAgencyIndex.ResolveVehicleAgency(server.ServerKey(), routeID, tripID)
-			if (ok && agencyID == server.AgencyID) || (!ok && keepUnresolved) {
+			resolution := attribution.ResolveVehicleAttribution(server.ServerKey(), routeID, tripID)
+			if (resolution.Resolved() && resolution.AgencyID == server.AgencyID) || (!resolution.Resolved() && keepUnresolved) {
 				filtered = append(filtered, realtimeVehicle)
 			}
 		}

@@ -11,6 +11,7 @@ import (
 
 	remoteGtfs "github.com/OneBusAway/go-gtfs"
 	onebusaway "github.com/OneBusAway/go-sdk"
+	"github.com/prometheus/client_golang/prometheus"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
@@ -37,7 +38,7 @@ import (
 // agency-scoped bounding box. The server-scoped box remains the fallback for
 // unattributed vehicles.
 
-// agencyIndex keys the live agency entries by agency_id so attribution is an
+// agencyIndex keys the OBA-reported agency entries by agency_id so attribution is an
 // O(1) lookup. It returns nil for agency-mode, whose store is pre-filtered.
 func agencyIndex(agencies []models.ObaServer) map[string]models.ObaServer {
 	if len(agencies) == 0 {
@@ -56,32 +57,51 @@ func agencyIndex(agencies []models.ObaServer) map[string]models.ObaServer {
 // configured entry is returned for each retained vehicle. In server-mode the
 // resolver checks both route_id and trip_id; conflicts and unknown vehicles are
 // unattributed and remain in the existing server-scoped quality paths.
-func attributeVehicle(server models.ObaServer, agencyByID map[string]models.ObaServer, routeAgencyIndex *gtfs.RouteAgencyIndex, vehicle remoteGtfs.Vehicle) (models.ObaServer, bool) {
+type vehicleAttribution struct {
+	agency     models.ObaServer
+	candidates []string
+	reason     gtfs.AttributionFailureReason
+}
+
+func (a vehicleAttribution) resolved() bool { return a.reason == "" }
+
+func attributeVehicle(server models.ObaServer, agencyByID map[string]models.ObaServer, routeAgencyIndex gtfs.VehicleAttributionResolver, vehicle remoteGtfs.Vehicle) vehicleAttribution {
 	if agencyByID == nil {
-		return server, true
+		return vehicleAttribution{agency: server}
 	}
-	if vehicle.Trip == nil || routeAgencyIndex == nil {
-		return models.ObaServer{}, false
+	var routeID, tripID string
+	if vehicle.Trip != nil {
+		routeID = vehicle.Trip.ID.RouteID
+		tripID = vehicle.Trip.ID.ID
 	}
-	agencyID, ok := routeAgencyIndex.ResolveVehicleAgency(server.ServerKey(), vehicle.Trip.ID.RouteID, vehicle.Trip.ID.ID)
-	if !ok || agencyID == "" {
-		return models.ObaServer{}, false
+	resolution := gtfs.AttributionResult{Reason: gtfs.AttributionMissingRouteID}
+	if routeAgencyIndex != nil {
+		resolution = routeAgencyIndex.ResolveVehicleAttribution(server.ServerKey(), routeID, tripID)
 	}
-	agency, ok := agencyByID[agencyID]
-	return agency, ok
+	if vehicle.ID == nil || vehicle.ID.ID == "" {
+		return vehicleAttribution{candidates: resolution.Candidates, reason: gtfs.AttributionMissingVehicleID}
+	}
+	if !resolution.Resolved() {
+		return vehicleAttribution{candidates: resolution.Candidates, reason: resolution.Reason}
+	}
+	agency, ok := agencyByID[resolution.AgencyID]
+	if !ok {
+		return vehicleAttribution{candidates: resolution.Candidates, reason: gtfs.AttributionAgencyNotReportedByOBA}
+	}
+	return vehicleAttribution{agency: agency, candidates: resolution.Candidates}
 }
 
 // countVehiclePositions reports how many GTFS-RT vehicle positions each agency
 // on the server currently has, and returns the server-wide total.
 //
-// In server-mode the gauge is emitted once per live agency from the vehicles
+// In server-mode the gauge is emitted once per OBA-reported agency from the vehicles
 // attributed to it; agencies with no vehicles this tick are explicitly set to
 // 0 so a series never freezes at its previous value.
 //
 // This count and the vehicles-for-agency count below are independent operational
 // observations, not an agreement check. Their source snapshots and processing
 // semantics can differ; Maglev remains authoritative for its own API behavior.
-func countVehiclePositions(server models.ObaServer, agencies []models.ObaServer, realtimeStore *gtfs.RealtimeStore, routeAgencyIndex *gtfs.RouteAgencyIndex) (int, error) {
+func countVehiclePositions(server models.ObaServer, agencies []models.ObaServer, realtimeStore *gtfs.RealtimeStore, routeAgencyIndex gtfs.VehicleAttributionResolver) (int, error) {
 	if realtimeStore == nil {
 		err := fmt.Errorf("realtimeStore is nil for agency %s", server.AgencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
@@ -112,8 +132,9 @@ func countVehiclePositions(server models.ObaServer, agencies []models.ObaServer,
 
 	perAgency := make(map[string]int, len(agencies))
 	for _, realtimeVehicle := range realtimeData.Vehicles {
-		if agency, ok := attributeVehicle(server, agencyByID, routeAgencyIndex, realtimeVehicle.Vehicle); ok {
-			perAgency[agency.AgencyID]++
+		attribution := attributeVehicle(server, agencyByID, routeAgencyIndex, realtimeVehicle.Vehicle)
+		if attribution.resolved() {
+			perAgency[attribution.agency.AgencyID]++
 		}
 	}
 	emitAgencyPositions(server, agencies, perAgency, serverURL)
@@ -176,7 +197,7 @@ func countActiveVehiclesForAgency(ctx context.Context, client *onebusaway.Client
 // would otherwise inflate, and vehicleLastSeen entries are keyed by the agency
 // that owns the vehicle rather than by whichever agency is being iterated.
 //
-// In server-mode a vehicle whose route does not resolve to a live agency, or
+// In server-mode a vehicle whose route does not resolve to an agency reported by OBA, or
 // which carries no vehicle ID, is counted in GtfsRtUnattributedVehicles. That
 // gauge is NOT a complete reconciliation of the feed against the per-agency
 // series: a vehicle that is attributable and has an ID but carries no usable
@@ -184,7 +205,7 @@ func countActiveVehiclesForAgency(ctx context.Context, client *onebusaway.Client
 // trackInvalidVehiclesAndStoppedOutOfBounds under
 // gtfs_rt_invalid_vehicle_coordinates instead. Any query that tries to
 // reconcile the two has to account for all three paths.
-func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer, vehicleLastSeen *VehicleLastSeen, realtimeStore *gtfs.RealtimeStore, routeAgencyIndex *gtfs.RouteAgencyIndex) error {
+func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer, vehicleLastSeen *VehicleLastSeen, realtimeStore *gtfs.RealtimeStore, routeAgencyIndex gtfs.VehicleAttributionResolver) error {
 	serverURL := utils.SanitizeServerURL(server.ObaBaseURL)
 	serverName := server.ServerName
 	now := time.Now().UTC()
@@ -195,7 +216,7 @@ func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer,
 		// This is reachable before the first successful fetch. Failed fetches gate
 		// this pass in both collection modes and therefore cannot process a cached
 		// snapshot as a new observation.
-		emitTickSummary(server, agencies, vehicleLastSeen, tickSummary{feedEmpty: true}, serverURL)
+		emitTickSummary(server, agencies, vehicleLastSeen, routeAgencyIndex, tickSummary{feedEmpty: true}, serverURL)
 		err := fmt.Errorf("no GTFS-RT data available for agency %s", server.AgencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": serverName},
@@ -209,7 +230,7 @@ func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer,
 		// coasting on last-seen entries, which ClearRoutine will not expire
 		// for another hour; nothing in an empty feed can be unattributed
 		// either, so that gauge zeroes with it.
-		emitTickSummary(server, agencies, vehicleLastSeen, tickSummary{feedEmpty: true}, serverURL)
+		emitTickSummary(server, agencies, vehicleLastSeen, routeAgencyIndex, tickSummary{feedEmpty: true}, serverURL)
 		return nil
 	}
 
@@ -222,8 +243,8 @@ func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer,
 	}
 
 	unattributed := 0
-	// TODO: Expose a bounded reason breakdown (missing vehicle ID, missing or
-	// unknown route, or agency not live) without putting vehicle IDs in labels.
+	reasons := make(map[gtfs.AttributionFailureReason]int, len(gtfs.AttributionFailureReasons))
+	candidates := make(map[string]int)
 	observedAt := realtimeData.ObservationAt
 	if observedAt.IsZero() {
 		observedAt = now
@@ -233,25 +254,27 @@ func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer,
 	for _, realtimeVehicle := range realtimeData.Vehicles {
 		vehicle := realtimeVehicle.Vehicle
 		feedID := realtimeVehicle.FeedID
-		if vehicle.ID == nil || vehicle.ID.ID == "" {
-			// Every per-vehicle series is keyed by vehicle_id, so an entity
-			// without one cannot be reported anywhere else. In server-mode it
-			// still has to be accounted for, otherwise a malformed vehicle
-			// lands in no metric at all. Agency-mode does not publish this
-			// gauge, so nothing changes there.
-			if agencyByID != nil {
-				unattributed++
+		attribution := attributeVehicle(server, agencyByID, routeAgencyIndex, vehicle)
+		if !attribution.resolved() {
+			if agencyByID != nil && vehicle.ID != nil && vehicle.ID.ID != "" {
+				vehicleLastSeen.RemoveVehicleFromOtherAgencies(server, feedID, vehicle.ID.ID, "")
+			}
+			unattributed++
+			reasons[attribution.reason]++
+			for _, agencyID := range attribution.candidates {
+				candidates[agencyID]++
 			}
 			continue
 		}
-		vehicleID := vehicle.ID.ID
-
-		agency, ok := attributeVehicle(server, agencyByID, routeAgencyIndex, vehicle)
-		if !ok {
-			unattributed++
+		if vehicle.ID == nil || vehicle.ID.ID == "" {
 			continue
 		}
+		vehicleID := vehicle.ID.ID
+		agency := attribution.agency
 		agencyKey := agencyKeys[agency.AgencyID]
+		if agencyByID != nil {
+			vehicleLastSeen.RemoveVehicleFromOtherAgencies(server, feedID, vehicleID, agencyKey)
+		}
 		prev, ok := vehicleLastSeen.Get(agencyKey, feedID, vehicleID)
 		labels := []string{vehicleID, agency.AgencyID, agency.AgencyName, serverName, serverURL, feedID}
 		stateHash := realtimeVehicle.StateHash
@@ -346,7 +369,7 @@ func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer,
 	}
 	cleanupFullDatasetVehicles(server, agencies, vehicleLastSeen, realtimeData, seen)
 
-	emitTickSummary(server, agencies, vehicleLastSeen, tickSummary{unattributed: unattributed}, serverURL)
+	emitTickSummary(server, agencies, vehicleLastSeen, routeAgencyIndex, tickSummary{unattributed: unattributed, reasons: reasons, candidates: candidates}, serverURL)
 
 	return nil
 }
@@ -397,6 +420,8 @@ func cleanupFullDatasetVehicles(server models.ObaServer, agencies []models.ObaSe
 // so "the feed reported nothing" cannot be confused with "there is no store".
 type tickSummary struct {
 	unattributed int
+	reasons      map[gtfs.AttributionFailureReason]int
+	candidates   map[string]int
 	feedEmpty    bool
 }
 
@@ -414,7 +439,7 @@ type tickSummary struct {
 // GtfsRtUnattributedVehicles is server-scoped and meaningless for a
 // single-agency entry, so agency-mode publishes no series for it at all. See
 // the scope-dispatch comment at the top of this file.
-func emitTickSummary(server models.ObaServer, agencies []models.ObaServer, vehicleLastSeen *VehicleLastSeen, summary tickSummary, serverURL string) {
+func emitTickSummary(server models.ObaServer, agencies []models.ObaServer, vehicleLastSeen *VehicleLastSeen, routeAgencyIndex gtfs.VehicleAttributionResolver, summary tickSummary, serverURL string) {
 	count := func(serverKey string) float64 {
 		if summary.feedEmpty {
 			return 0
@@ -431,7 +456,19 @@ func emitTickSummary(server models.ObaServer, agencies []models.ObaServer, vehic
 		TrackedVehiclesGauge.WithLabelValues(agency.AgencyID, agency.AgencyName, agency.ServerName, serverURL).
 			Set(count(models.ServerKey(server.ObaBaseURL, agency.AgencyID)))
 	}
+	serverLabels := prometheus.Labels{"server_url": serverURL}
+	GtfsRtUnattributedVehicles.DeletePartialMatch(serverLabels)
+	GtfsRtUnattributedVehiclesByReason.DeletePartialMatch(serverLabels)
+	GtfsRtUnattributedVehicleCandidateAssociations.DeletePartialMatch(serverLabels)
 	GtfsRtUnattributedVehicles.WithLabelValues(server.ServerName, serverURL).Set(float64(summary.unattributed))
+	for _, reason := range gtfs.AttributionFailureReasons {
+		GtfsRtUnattributedVehiclesByReason.WithLabelValues(server.ServerName, serverURL, string(reason)).Set(float64(summary.reasons[reason]))
+	}
+	if routeAgencyIndex != nil {
+		for agencyID, agencyName := range routeAgencyIndex.AgencyNames(server.ServerKey()) {
+			GtfsRtUnattributedVehicleCandidateAssociations.WithLabelValues(agencyID, agencyName, server.ServerName, serverURL).Set(float64(summary.candidates[agencyID]))
+		}
+	}
 }
 
 // VehicleStatusStoppedAtStop represents the GTFS-realtime vehicle stop status
@@ -465,7 +502,7 @@ const VehicleStatusStoppedAtStop = 1
 // would break the invariant that
 // `sum by (server_url) (gtfs_rt_invalid_vehicle_coordinates)` equals the
 // server-wide count.
-func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, agencies []models.ObaServer, boundingBoxStore *geo.BoundingBoxStore, realtimeStore *gtfs.RealtimeStore, routeAgencyIndex *gtfs.RouteAgencyIndex) error {
+func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, agencies []models.ObaServer, boundingBoxStore *geo.BoundingBoxStore, realtimeStore *gtfs.RealtimeStore, routeAgencyIndex gtfs.VehicleAttributionResolver) error {
 	realtimeData := realtimeStore.Get(server.ServerKey())
 	if realtimeData == nil {
 		err := fmt.Errorf("no GTFS-RT data available for agency %s", server.AgencyID)
@@ -507,9 +544,10 @@ func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, agencies
 		// That keeps sum by (server_url) equal to the server-wide count.
 		bucket := server.AgencyID
 		boundingBox := serverBox
-		if agency, attributed := attributeVehicle(server, agencyByID, routeAgencyIndex, v); attributed {
-			bucket = agency.AgencyID
-			if agencyBox, ok := agencyBoxes[agency.AgencyID]; ok {
+		attribution := attributeVehicle(server, agencyByID, routeAgencyIndex, v)
+		if attribution.resolved() {
+			bucket = attribution.agency.AgencyID
+			if agencyBox, ok := agencyBoxes[attribution.agency.AgencyID]; ok {
 				boundingBox = agencyBox
 			}
 		}

@@ -201,9 +201,25 @@ var (
 	GtfsRtUnattributedVehicles = tracked(promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "gtfs_rt_unattributed_vehicles_count",
-			Help: "Number of GTFS-RT vehicles not attributable to a server-reported agency_id (unresolvable route_id, or no vehicle ID)",
+			Help: "Number of GTFS-RT vehicles not attributable to exactly one agency reported by OBA",
 		},
 		[]string{"server_name", "server_url"},
+	))
+
+	GtfsRtUnattributedVehiclesByReason = tracked(promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "gtfs_rt_unattributed_vehicles_by_reason_count",
+			Help: "Number of server-mode GTFS-RT vehicles not attributable to exactly one agency reported by OBA, partitioned by bounded reason",
+		},
+		[]string{"server_name", "server_url", "reason"},
+	))
+
+	GtfsRtUnattributedVehicleCandidateAssociations = tracked(promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "gtfs_rt_unattributed_vehicle_candidate_associations_count",
+			Help: "Possible agency associations for unattributed GTFS-RT vehicles; one vehicle may contribute to multiple agency series",
+		},
+		[]string{"agency_id", "agency_name", "server_name", "server_url"},
 	))
 )
 
@@ -382,10 +398,10 @@ var (
 // refresh for every agency we have a bundle for. They let operators alert on
 // sudden drops (e.g., a feed that lost all its routes overnight).
 //
-// GtfsStaticAgencyCurrentlyLive is set on every scrape: 1 if the agency has
+// GtfsStaticAgencyReportedByOBA is set on every scrape: 1 if the agency has
 // a static bundle AND is reported by /api/where/metrics.json entry.AgencyIDs
-// in the current scrape, 0 otherwise. The 0 case is the operator's signal
-// that an agency is configured but not currently served.
+// in the current scrape, 0 otherwise. The 0 case signals that an agency in
+// the local static snapshot is not present in OBA's loaded static coverage.
 //
 // Feed-to-agency mapping metrics are emitted from static parsing, where source
 // feed provenance is still available. Info series represent only proven
@@ -407,9 +423,9 @@ var (
 		[]string{"agency_id", "agency_name", "server_name", "server_url"},
 	))
 
-	GtfsStaticAgencyCurrentlyLive = tracked(promauto.NewGaugeVec(
+	GtfsStaticAgencyReportedByOBA = tracked(promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "gtfs_static_agency_currently_live",
+			Name: "gtfs_static_agency_reported_by_oba",
 			Help: "1 if the agency has a static bundle AND is reported by /api/where/metrics.json entry.AgencyIDs in the current scrape, 0 otherwise",
 		},
 		[]string{"agency_id", "agency_name", "server_name", "server_url"},

@@ -123,26 +123,26 @@ There are two ways Watchdog can observe an OBA deployment. The choice is made **
 |---|---|---|
 | `agency_id` | set (paired with required `agency_name`) | unset |
 | Scope | one agency | whole OBA deployment |
-| Agency set comes from | the config entry | each static feed's `agency.txt`, filtered by `/api/where/metrics.json` liveness |
+| Agency set comes from | the config entry | each static feed's `agency.txt`, filtered by `/api/where/metrics.json` agency coverage |
 | Typical source | hand-written config | OBACloud service discovery (one entry per OBA API server) |
 
 **Agency mode** — `agency_id` is set. Watchdog monitors only that one agency; today's per-agency pipeline runs once per tick for that agency. `agency_name` is required (paired with `agency_id`).
 
-**Server mode** — `agency_id` is absent. Watchdog probes `/api/where/metrics.json` every tick to learn which agencies OBA is currently serving, cross-references the live agency IDs against the static feeds' `agency.txt` declarations, and runs the per-agency pipeline for every agency that has BOTH a static bundle AND is reported as currently live.
+**Server mode** — `agency_id` is absent. Watchdog probes `/api/where/metrics.json` every tick to learn which agencies are present in OBA's loaded static coverage, cross-references those agency IDs against the static feeds' `agency.txt` declarations, and runs the per-agency pipeline for every agency that has BOTH a static bundle AND is reported by OBA.
 
 Multi-agency static feeds are accepted in server mode: one consolidated bundle pointer-shared across the serverKeys of every agency declared in its `agency.txt`. Agency mode instead stores an owned snapshot containing only the configured agency's routes, referenced services, stops, and parent stations. Feed-to-agency mapping metrics are derived while each source feed is parsed, before feeds are merged, so they describe only relationships proven by that feed's own `agency.txt` rather than a feed-by-live-agency cross-product.
 
-#### Liveness signals
+#### Static coverage signals
 
-These metrics expose static agency liveness and source-feed mapping health:
+These metrics expose static agency coverage and source-feed mapping health:
 
-- `gtfs_static_agency_currently_live{agency_id, agency_name, server_name, server_url}` — 1 if the agency has a static bundle AND is in `/api/where/metrics.json` `entry.AgencyIDs` in the current scrape; 0 otherwise.
+- `gtfs_static_agency_reported_by_oba{agency_id, agency_name, server_name, server_url}` — 1 if the agency has a static bundle AND is in `/api/where/metrics.json` `entry.AgencyIDs` in the current scrape; 0 otherwise.
 - `gtfs_static_feed_agency_mapping_info{feed_url, agency_id, agency_name, server_name, server_url}` — always 1, with one series for each proven source-feed relationship. An explicit multi-agency feed produces one series per declared agency in server mode. Agency mode emits only its configured agency; a sole agency with omitted `agency_id` is associated with that configured agency as allowed by GTFS.
 - `gtfs_static_feed_agency_mapping_failure{feed_url, server_name, server_url, reason}` — always 1 when a parsed feed cannot be fully mapped. `reason` is one of `missing_agency`, `ambiguous_agency`, or `unknown_agency`.
 
 #### Vehicle attribution in server-mode
 
-In agency-mode the RT fetch resolves each vehicle by route or trip and stores only vehicles resolved to the configured `agency_id`; foreign and conflicting vehicles are dropped before any metric pass. Vehicles that cannot be resolved at all (no trip, or IDs missing from the static bundle) are dropped only when the static data names another agency; in a single-agency feed they are kept so the quality checks still see them. Until the first static snapshot loads, the feed is stored unfiltered. In server-mode one RT feed may carry vehicles from multiple agencies, so Watchdog attributes each vehicle through the same route/trip index built from static data. Unattributed vehicles retain the existing server-scoped quality behavior. See `docs/METRICS.md` for details.
+In agency-mode the RT fetch resolves each vehicle by route or trip and stores only vehicles uniquely resolved to the configured `agency_id`; foreign, ambiguous, and conflicting vehicles are dropped before any metric pass. Vehicles that cannot be resolved at all (no trip, or IDs missing from the static bundle) are dropped only when the static data names another agency; in a single-agency feed they are kept so the quality checks still see them. Until the first static snapshot loads, the feed is stored unfiltered. In server-mode one RT feed may carry vehicles from multiple agencies. Watchdog retains every static candidate owner for colliding route/trip IDs and assigns a vehicle operationally only when the available evidence yields exactly one agency reported by OBA. A unique route/trip candidate-set intersection can disambiguate a collision; otherwise the vehicle stays server-scoped and is reported by bounded reason. `gtfs_rt_unattributed_vehicle_candidate_associations_count` reports possible owners without pretending they are assignments or distinct vehicle totals. See `docs/METRICS.md` for the resolution rules and all reason values.
 
 ### Backward Compatibility (v1 → v2)
 
