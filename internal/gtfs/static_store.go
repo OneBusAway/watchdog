@@ -1,7 +1,7 @@
 package gtfs
 
 import (
-	"reflect"
+	"sort"
 	"sync"
 	"time"
 
@@ -51,7 +51,15 @@ type StaticStore struct {
 // Returns:
 //   - *StaticStore: A new, empty StaticStore instance.
 func NewStaticStore() *StaticStore {
-	return &StaticStore{schedules: NewScheduleStore()}
+	s := &StaticStore{}
+	s.schedules = s.newScheduleStore()
+	return s
+}
+
+func (s *StaticStore) newScheduleStore() *ScheduleStore {
+	schedules := NewScheduleStore()
+	schedules.preserve = s.isConfiguredAgencyEntry
+	return schedules
 }
 
 func (s *StaticStore) ScheduleStore() *ScheduleStore {
@@ -64,7 +72,7 @@ func (s *StaticStore) ScheduleStore() *ScheduleStore {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.schedules == nil {
-		s.schedules = NewScheduleStore()
+		s.schedules = s.newScheduleStore()
 	}
 	return s.schedules
 }
@@ -93,7 +101,25 @@ func (s *StaticStore) IsConfigured(server models.ObaServer) bool {
 		return true
 	}
 	configured, ok := s.configured[server.ServerKey()]
-	return ok && reflect.DeepEqual(configured, server)
+	// Compare only static-relevant identity, matching the refresh campaign
+	// fingerprint: an API-key or GTFS-RT-only change must not orphan a running
+	// static campaign whose fingerprint is unchanged.
+	return ok && staticConfigFingerprint(configured) == staticConfigFingerprint(server)
+}
+
+// configuredAgencyEntryLocked reports whether key belongs to a separately
+// configured agency-scoped entry. A server-scoped entry may share its
+// oba_base_url with such entries, so its cleanup must leave their keys alone.
+// Callers must hold s.mu.
+func (s *StaticStore) configuredAgencyEntryLocked(key string) bool {
+	configured, ok := s.configured[key]
+	return ok && !configured.IsServerScoped()
+}
+
+func (s *StaticStore) isConfiguredAgencyEntry(key string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.configuredAgencyEntryLocked(key)
 }
 
 // ConfiguredServers returns a copy of the currently configured server entries.
@@ -104,6 +130,9 @@ func (s *StaticStore) ConfiguredServers() []models.ObaServer {
 	for _, server := range s.configured {
 		servers = append(servers, server)
 	}
+	sort.Slice(servers, func(i, j int) bool {
+		return servers[i].ServerKey() < servers[j].ServerKey()
+	})
 	return servers
 }
 
@@ -121,7 +150,7 @@ func (s *StaticStore) ReplaceServerSnapshot(server models.ObaServer, snapshots m
 	var removed []string
 	if server.IsServerScoped() {
 		for key := range s.data {
-			if server.OwnsServerKey(key) {
+			if server.OwnsServerKey(key) && !s.configuredAgencyEntryLocked(key) {
 				if _, retained := snapshots[key]; !retained {
 					removed = append(removed, key)
 					delete(s.data, key)

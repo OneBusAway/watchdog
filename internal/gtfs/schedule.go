@@ -58,6 +58,10 @@ type scheduleState struct {
 type ScheduleStore struct {
 	mu   sync.RWMutex
 	data map[string]scheduleState
+	// preserve reports keys a server-scoped entry must not retire or mark
+	// unavailable because a separately configured agency-scoped entry on the
+	// same oba_base_url owns them. Nil preserves nothing.
+	preserve func(key string) bool
 }
 
 func NewScheduleStore() *ScheduleStore {
@@ -72,7 +76,7 @@ func (s *ScheduleStore) Replace(server models.ObaServer, snapshots map[string]*S
 	defer s.mu.Unlock()
 	if server.IsServerScoped() {
 		for key := range s.data {
-			if server.OwnsServerKey(key) {
+			if server.OwnsServerKey(key) && !s.preserved(key) {
 				delete(s.data, key)
 			}
 		}
@@ -88,11 +92,15 @@ func (s *ScheduleStore) MarkUnavailable(server models.ObaServer) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for key, state := range s.data {
-		if (server.IsServerScoped() && server.OwnsServerKey(key)) || (!server.IsServerScoped() && key == server.ServerKey()) {
+		if (server.IsServerScoped() && server.OwnsServerKey(key) && !s.preserved(key)) || (!server.IsServerScoped() && key == server.ServerKey()) {
 			state.available = false
 			s.data[key] = state
 		}
 	}
+}
+
+func (s *ScheduleStore) preserved(key string) bool {
+	return s.preserve != nil && s.preserve(key)
 }
 
 // Evaluate reports whether a complete current snapshot exists and whether at

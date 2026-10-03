@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -54,19 +55,19 @@ func buildRoutedVehicleFeedProtobuf(t *testing.T, vehicles []routedVehicle) []by
 // newTwoAgencyServerScope stands up an Application and a stub OBA server for a
 // server-scoped entry serving agency-a and agency-b, whose merged GTFS-RT feed
 // carries one vehicle per agency.
-func newTwoAgencyServerScope(t *testing.T) (*Application, models.ObaServer, config.Scope, *bool) {
+func newTwoAgencyServerScope(t *testing.T) (*Application, models.ObaServer, config.Scope, *atomic.Bool) {
 	t.Helper()
 
 	rtBody := buildRoutedVehicleFeedProtobuf(t, []routedVehicle{
 		{vehicleID: "va", routeID: "route-a"},
 		{vehicleID: "vb", routeID: "route-b"},
 	})
-	failRT := false
+	var failRT atomic.Bool
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/vehicles.pb":
-			if failRT {
+			if failRT.Load() {
 				w.WriteHeader(http.StatusServiceUnavailable)
 				return
 			}
@@ -184,7 +185,7 @@ func TestServerScopeFailedFetchDoesNotProcessCachedSnapshot(t *testing.T) {
 	cached := app.GtfsService.RealtimeStore.Get(server.ServerKey())
 	cached.Vehicles = nil
 	app.GtfsService.RealtimeStore.Set(server.ServerKey(), cached)
-	*failRT = true
+	failRT.Store(true)
 	app.collectForScope(context.Background(), server, scope)
 
 	if got := app.MetricsService.VehicleLastSeen.Count(models.ServerKey(server.ObaBaseURL, "agency-a")); got != 1 {

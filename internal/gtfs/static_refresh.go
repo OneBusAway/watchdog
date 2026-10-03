@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -28,6 +29,11 @@ func staticConfigFingerprint(server models.ObaServer) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
+
+// errStaticServerUnconfigured is returned by publishStaticCampaign when the
+// entry is no longer configured. It is terminal: retrying would only discard
+// cached artifacts and re-download feeds for a snapshot that cannot publish.
+var errStaticServerUnconfigured = errors.New("static refresh server is no longer configured")
 
 type StaticRefreshTrigger string
 
@@ -372,7 +378,7 @@ func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server mode
 				gs.reportStaticRefresh(server, StaticRefreshObservation{AttemptedAt: attemptedAt, Success: true})
 				return
 			} else {
-				if ctx.Err() != nil {
+				if ctx.Err() != nil || errors.Is(err, errStaticServerUnconfigured) {
 					return
 				}
 				failure := asStaticFeedError(err)
@@ -507,7 +513,10 @@ func (gs *GtfsService) publishStaticCampaign(ctx context.Context, server models.
 		}
 	})
 	if !configured {
-		return context.Canceled
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return errStaticServerUnconfigured
 	}
 	if storeErr != nil {
 		report.ReportErrorWithSentryOptions(storeErr, report.SentryReportOptions{Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName}, Level: sentry.LevelError})

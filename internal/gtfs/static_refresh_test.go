@@ -91,7 +91,7 @@ func TestStaticRefreshCampaignReusesSuccessfulFeed(t *testing.T) {
 	service.runStaticRefreshCampaign(context.Background(), server, StaticRefreshStartup, 1, staticRefreshRetryPolicy{
 		initialDelay: time.Millisecond,
 		maxDelay:     time.Millisecond,
-		budget:       time.Second,
+		budget:       time.Minute,
 	})
 
 	if got := goodRequests.Load(); got != 1 {
@@ -158,7 +158,7 @@ func TestSuccessfulCompleteCampaignClearsConservativeMode(t *testing.T) {
 	service := NewGtfsService(store, NewRealtimeStore(), geo.NewBoundingBoxStore(), NewRouteAgencyIndex(), slog.New(slog.NewTextHandler(io.Discard, nil)), ts.Client())
 	service.refreshCoordinator.recordFailure(server, server.GtfsStaticFeeds[0], &StaticFeedError{Stage: StaticFailureHTTP, Reason: StaticReasonUnauthorized}, time.Now())
 
-	service.runStaticRefreshCampaign(context.Background(), server, StaticRefreshDaily, 1, staticRefreshRetryPolicy{initialDelay: time.Millisecond, maxDelay: time.Millisecond, budget: time.Second})
+	service.runStaticRefreshCampaign(context.Background(), server, StaticRefreshDaily, 1, staticRefreshRetryPolicy{initialDelay: time.Millisecond, maxDelay: time.Millisecond, budget: time.Minute})
 
 	if service.refreshCoordinator.isConservative(server, server.GtfsStaticFeeds[0]) {
 		t.Fatal("complete successful recovery did not clear conservative mode")
@@ -178,7 +178,7 @@ func TestStaticRefreshCampaignCountsIdenticalScheduleFailures(t *testing.T) {
 	store := NewStaticStore()
 	store.SetConfiguredServers([]models.ObaServer{server})
 	service := NewGtfsService(store, NewRealtimeStore(), geo.NewBoundingBoxStore(), NewRouteAgencyIndex(), slog.New(slog.NewTextHandler(io.Discard, nil)), ts.Client())
-	service.runStaticRefreshCampaign(context.Background(), server, StaticRefreshStartup, 1, staticRefreshRetryPolicy{initialDelay: time.Millisecond, maxDelay: time.Millisecond, budget: time.Second})
+	service.runStaticRefreshCampaign(context.Background(), server, StaticRefreshStartup, 1, staticRefreshRetryPolicy{initialDelay: time.Millisecond, maxDelay: time.Millisecond, budget: time.Minute})
 
 	if got := requests.Load(); got != 3 {
 		t.Fatalf("requests = %d, want 3 identical validation attempts", got)

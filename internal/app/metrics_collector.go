@@ -53,13 +53,26 @@ func (app *Application) StartMetricsCollection(ctx context.Context) {
 				app.Logger.Info("Stopping metrics collection routine")
 				return
 			case <-ticker.C:
+				// Resolve scopes against a consistent static/config view, but
+				// collect outside the refresh lock: collection makes upstream
+				// network calls and must not stall static publication or config
+				// refreshes. A server pruned mid-tick is retired on the next
+				// refresh through KnownServerSet.DepartedURLs.
+				type collectionTarget struct {
+					server models.ObaServer
+					scope  config.Scope
+				}
+				var targets []collectionTarget
 				app.GtfsService.StaticStore.WithRefreshLock(func() {
 					for _, server := range app.ConfigService.Config.GetServers() {
 						scope := config.ResolveScope(server, app.GtfsService.StaticStore, app.GtfsService.RouteAgencyIndex)
-						app.collectForScope(ctx, server, scope)
+						targets = append(targets, collectionTarget{server: server, scope: scope})
 					}
-					app.MetricsService.ReportCollectionCompleted(time.Now())
 				})
+				for _, target := range targets {
+					app.collectForScope(ctx, target.server, target.scope)
+				}
+				app.MetricsService.ReportCollectionCompleted(time.Now())
 			}
 		}
 	}()
