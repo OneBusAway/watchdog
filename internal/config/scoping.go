@@ -12,8 +12,8 @@ import (
 
 // Scope describes how a single ObaServer entry should be monitored.
 //
-// AgencyScope: the entry has an agency_id; monitor only that agency. Today’s
-// behavior.
+// AgencyScope: the entry has an agency_id; monitor only that agency and its
+// agency-scoped static/realtime snapshots.
 //
 // ServerScope: the entry has no agency_id; Watchdog must enumerate the
 // agencies the server serves (by combining /api/where/metrics.json with the
@@ -125,15 +125,13 @@ func ResolveScope(server models.ObaServer, staticStore *gtfs.StaticStore, routeA
 //
 // Every agency on a server resolves to the SAME merged *StaticData pointer in
 // staticStore. Runtime stop lookup deliberately scans that one flattened bundle,
-// where duplicate stop IDs are first-occurrence-wins. Per-agency stop slices are
-// not retained: while the source feeds are still separate, the GTFS refresh uses
-// each feed's agency declarations to compute only min/max latitude and longitude
-// for its agencies, then stores those small bounding boxes separately.
+// where duplicate stop IDs are first-occurrence-wins. Agency-mode instead stores
+// an owned stop slice selected through trips, including each selected stop's
+// parent chain.
 //
-// Vehicle attribution is NOT part of this any more: the RT vehicle pass
-// resolves route_id -> agency_id through gtfs.RouteAgencyIndex, which is
-// built per route rather than per feed, so per-agency vehicle metrics are
-// already correct.
+// Vehicle attribution is not part of scope discovery: server-mode resolves
+// route_id/trip_id through gtfs.RouteAgencyIndex, while agency-mode filtering
+// happens before the realtime snapshot is published.
 func discoverAgenciesForServer(obaBaseURL string, staticStore *gtfs.StaticStore, routeAgencyIndex *gtfs.RouteAgencyIndex) []AgencyIdentity {
 	prefix := models.ServerKeyPrefix(obaBaseURL)
 	// agenciesByID indexes the agencies discovered under this server's
@@ -163,7 +161,7 @@ func discoverAgenciesForServer(obaBaseURL string, staticStore *gtfs.StaticStore,
 		// per-agency pipeline falls back to "" which is acceptable for label
 		// cardinality.
 		if identity.AgencyName == "" && routeAgencyIndex != nil {
-			if name, ok := routeAgencyIndex.AgencyNameFor(obaBaseURL, agencyID); ok {
+			if name, ok := routeAgencyIndex.AgencyNameFor(models.ServerKey(obaBaseURL, ""), agencyID); ok {
 				identity.AgencyName = name
 			}
 		}

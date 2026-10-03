@@ -86,8 +86,10 @@ func TestResolveScopeServerModeWithBundles(t *testing.T) {
 	staticStore.Set(models.ServerKey("https://multi.example.com", "agency-B"), &models.StaticData{})
 
 	index := gtfs.NewRouteAgencyIndex()
-	index.SetAgencyName("https://multi.example.com", "agency-A", "Agency Alpha")
-	index.SetAgencyName("https://multi.example.com", "agency-B", "Agency Beta")
+	index.Replace(models.ServerKey("https://multi.example.com", ""), nil, nil, map[string]string{
+		"agency-A": "Agency Alpha",
+		"agency-B": "Agency Beta",
+	})
 
 	scope := ResolveScope(server, staticStore, index)
 	serverScope := scope.(ServerScope)

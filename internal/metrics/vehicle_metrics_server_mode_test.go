@@ -24,7 +24,7 @@ func serverModeFixture(t *testing.T, baseURL string) (models.ObaServer, []models
 	}
 
 	index := gtfs.NewRouteAgencyIndex()
-	index.Set(baseURL, map[string]string{"route-a": "agency-a", "route-b": "agency-b"})
+	index.Replace(models.ServerKey(baseURL, ""), map[string]string{"route-a": "agency-a", "route-b": "agency-b"}, nil, nil)
 
 	now := time.Now().UTC()
 	vehicle := func(id, routeID string, lat, lon float32) models.RealtimeVehicle {
@@ -217,11 +217,10 @@ func TestTrackInvalidVehiclesBucketsByAgencyInServerMode(t *testing.T) {
 	}
 }
 
-// TestTrackVehicleTelemetryAgencyModeIgnoresRouteIndex is a regression test
-// for the dispatch bug: agency-mode must attribute every vehicle to the
-// configured agency, even when the route → agency index is empty because the
-// static bundle failed to download.
-func TestTrackVehicleTelemetryAgencyModeIgnoresRouteIndex(t *testing.T) {
+// TestTrackVehicleTelemetryAgencyModeUsesFilteredSnapshot verifies that the
+// agency metric pass consumes the already-filtered realtime snapshot without
+// trying to attribute vehicles a second time.
+func TestTrackVehicleTelemetryAgencyModeUsesFilteredSnapshot(t *testing.T) {
 	const baseURL = "https://agencymode.example.com"
 	server := models.ObaServer{ServerName: "solo", ObaBaseURL: baseURL, AgencyID: "agency-a", AgencyName: "Agency A"}
 
@@ -239,7 +238,7 @@ func TestTrackVehicleTelemetryAgencyModeIgnoresRouteIndex(t *testing.T) {
 	}}})
 
 	lastSeen := NewVehicleLastSeen()
-	// Empty index: no route is resolvable.
+	// The metric pass intentionally does not consult the index in agency mode.
 	if err := trackVehicleTelemetry(server, nil, lastSeen, store, gtfs.NewRouteAgencyIndex()); err != nil {
 		t.Fatalf("track: %v", err)
 	}
@@ -521,8 +520,7 @@ func TestTrackStoppedOutOfBoundsUsesAttributedAgencyBoundingBox(t *testing.T) {
 }
 
 // TestTrackInvalidVehiclesAgencyModeEmitsSingleSeries pins that agency-mode
-// is untouched: every vehicle belongs to the configured entry, so a malformed
-// one is counted there and no server-scoped series appears alongside it.
+// emits one configured-agency series and no server-scoped catch-all series.
 func TestTrackInvalidVehiclesAgencyModeEmitsSingleSeries(t *testing.T) {
 	const baseURL = "https://agencyghost.example.com"
 	server := models.ObaServer{ServerName: "solo", ObaBaseURL: baseURL, AgencyID: "agency-a", AgencyName: "Agency A"}
@@ -540,7 +538,7 @@ func TestTrackInvalidVehiclesAgencyModeEmitsSingleSeries(t *testing.T) {
 		ghostVehicle("vghost"),
 	}})
 
-	// Empty index: agency-mode must not consult it at all.
+	// Agency-mode consumes the filtered store and does not consult the index.
 	if err := trackInvalidVehiclesAndStoppedOutOfBounds(server, nil, wideOpenBounds(server), store, gtfs.NewRouteAgencyIndex()); err != nil {
 		t.Fatalf("track: %v", err)
 	}
@@ -585,8 +583,8 @@ func TestTrackVehicleTelemetryCountsNilIDVehicleAsUnattributed(t *testing.T) {
 }
 
 // TestTrackVehicleTelemetryAgencyModeEmitsNoUnattributedSeries keeps the
-// unattributed gauge a server-mode-only signal: in agency-mode every vehicle
-// belongs to the configured agency by definition, ID or not.
+// unattributed gauge a server-mode-only signal: agency-mode has already
+// removed vehicles that cannot be resolved to the configured agency.
 func TestTrackVehicleTelemetryAgencyModeEmitsNoUnattributedSeries(t *testing.T) {
 	const baseURL = "https://nilidagency.example.com"
 	server := models.ObaServer{ServerName: "solo", ObaBaseURL: baseURL, AgencyID: "agency-a", AgencyName: "Agency A"}

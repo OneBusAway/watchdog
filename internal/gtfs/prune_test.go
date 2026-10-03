@@ -62,22 +62,22 @@ func TestRealtimeStorePruneDropsUnknownKeys(t *testing.T) {
 	}
 }
 
-// TestRouteAgencyIndexPruneServersDropsUnknownBaseURLs guards the one store
-// keyed by raw oba_base_url rather than by serverKey.
-func TestRouteAgencyIndexPruneServersDropsUnknownBaseURLs(t *testing.T) {
+// TestRouteAgencyIndexPruneServersDropsUnknownKeys guards composite-key index
+// ownership during pruning.
+func TestRouteAgencyIndexPruneServersDropsUnknownKeys(t *testing.T) {
 	idx := NewRouteAgencyIndex()
-	idx.Set("https://keep.example.com", map[string]string{"r1": "agency-a"})
-	idx.Set("https://drop.example.com", map[string]string{"r2": "agency-b"})
+	idx.Replace(models.ServerKey("https://keep.example.com", "agency-a"), map[string]string{"r1": "agency-a"}, nil, nil)
+	idx.Replace(models.ServerKey("https://drop.example.com", "agency-b"), map[string]string{"r2": "agency-b"}, nil, nil)
 
-	removed := idx.PruneServers(keepOnly("https://keep.example.com"))
+	removed := idx.PruneServers(keepOnly(models.ServerKey("https://keep.example.com", "agency-a")))
 
-	if len(removed) != 1 || removed[0] != "https://drop.example.com" {
-		t.Fatalf("expected the stale base URL to be reported as removed, got %v", removed)
+	if len(removed) != 1 || removed[0] != models.ServerKey("https://drop.example.com", "agency-b") {
+		t.Fatalf("expected the stale server key to be reported as removed, got %v", removed)
 	}
-	if _, ok := idx.Get("https://drop.example.com", "r2"); ok {
+	if _, ok := idx.Get(models.ServerKey("https://drop.example.com", "agency-b"), "r2"); ok {
 		t.Fatal("expected the stale route mapping to be gone")
 	}
-	if _, ok := idx.Get("https://keep.example.com", "r1"); !ok {
+	if _, ok := idx.Get(models.ServerKey("https://keep.example.com", "agency-a"), "r1"); !ok {
 		t.Fatal("expected the configured route mapping to survive")
 	}
 }

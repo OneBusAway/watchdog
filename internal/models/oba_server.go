@@ -45,9 +45,10 @@ func ParseServerKey(key string) (baseURL, agencyID string, ok bool) {
 //
 // Scoping: every entry carries a ServerName that identifies the OBA deployment.
 // AgencyID and AgencyName are optional. When AgencyID is set the entry is
-// scoped to that single agency (today's behavior); when AgencyID is absent the
-// entry is server-scoped and Watchdog discovers the agencies it serves from
-// /api/where/metrics.json cross-referenced with each static feed's agency.txt.
+// scoped to that single agency and Watchdog stores only data attributed to it;
+// when AgencyID is absent the entry is server-scoped and Watchdog discovers the
+// agencies it serves from /api/where/metrics.json cross-referenced with each
+// static feed's agency.txt.
 // In server-mode the Operator must list every static feed the server exposes;
 // Watchdog refuses to guess agency ownership from a feed whose agency.txt is
 // empty or ambiguous (it logs to Sentry and skips the feed's pipeline).
