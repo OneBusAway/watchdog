@@ -71,6 +71,24 @@ func TestCompileSchedulesCalendarDatesOnly(t *testing.T) {
 	}
 }
 
+func TestCompileSchedulesCalendarDatesOnlyDateRangeSpansAllDates(t *testing.T) {
+	feed := basicScheduleFiles("UTC", "12:00:00", "13:00:00")
+	delete(feed, "calendar.txt")
+	feed["calendar_dates.txt"] = "service_id,date,exception_type\nWK,20260910,1\nWK,20261231,1\nWK,20260905,1\n"
+	server := scheduleServer("A", "https://dates-only-range.zip")
+	snapshots, err := compileSchedules(server, []downloadedStaticFeed{{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, feed)}})
+	if err != nil {
+		t.Fatalf("compile calendar-dates-only feed: %v", err)
+	}
+	store := NewScheduleStore()
+	store.Replace(server, snapshots)
+	earliest, latest, ok := store.ServiceDateRange(server.ServerKey())
+	want := time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC)
+	if !ok || !earliest.Equal(want) || !latest.Equal(want) {
+		t.Fatalf("service date range = %s..%s (ok=%t), want end %s for both", earliest, latest, ok, want)
+	}
+}
+
 func TestCompileSchedulesFrequencyWindows(t *testing.T) {
 	files := basicScheduleFiles("UTC", "00:00:00", "00:10:00")
 	files["frequencies.txt"] = "trip_id,start_time,end_time,headway_secs,exact_times\nT,06:00:00,07:00:00,1800,1\n"

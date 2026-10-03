@@ -467,6 +467,7 @@ func (gs *GtfsService) publishStaticCampaign(ctx context.Context, server models.
 	}
 	bundles := make([]*remoteGtfs.Static, 0, len(server.GtfsStaticFeeds))
 	downloaded := make([]downloadedStaticFeed, 0, len(server.GtfsStaticFeeds))
+	raws := make([]rawScheduleFeed, 0, len(server.GtfsStaticFeeds))
 	for _, feedURL := range server.GtfsStaticFeeds {
 		data, err := cache.Read(feedURL)
 		if err != nil {
@@ -480,14 +481,16 @@ func (gs *GtfsService) publishStaticCampaign(ctx context.Context, server models.
 			artifact, _ := cache.Get(feedURL)
 			return &StaticFeedError{FeedURL: feedURL, Stage: StaticFailureAgencyDiscovery, Reason: reason, ContentHash: artifact.hash, Err: fmt.Errorf("static feed %s failed agency discovery: %s", feedURL, reason)}
 		}
-		if _, err := parseRawScheduleFeed(feedURL, data, server); err != nil {
+		raw, err := parseRawScheduleFeed(feedURL, data, server)
+		if err != nil {
 			artifact, _ := cache.Get(feedURL)
 			return &StaticFeedError{FeedURL: feedURL, Stage: StaticFailureSchedule, Reason: StaticReasonInvalidSchedule, ContentHash: artifact.hash, Err: fmt.Errorf("validate schedule in %s: %w", feedURL, err)}
 		}
 		bundles = append(bundles, bundle)
 		downloaded = append(downloaded, downloadedStaticFeed{url: feedURL, data: data, bundle: bundle})
+		raws = append(raws, raw)
 	}
-	schedules, err := compileSchedules(server, downloaded)
+	schedules, err := compileRawSchedules(server, raws)
 	if err != nil {
 		return &StaticFeedError{Stage: StaticFailureCompleteValidate, Reason: StaticReasonInvalidSchedule, Err: err}
 	}

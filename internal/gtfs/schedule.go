@@ -283,6 +283,10 @@ type rawService struct {
 	end      int
 	added    map[int]bool
 	removed  map[int]bool
+	// datesOnly marks a service defined solely by calendar_dates.txt. Its
+	// start/end span every listed exception date (matching go-gtfs) so the
+	// service date range reflects the last date, not the first row seen.
+	datesOnly bool
 }
 
 type rawTrip struct {
@@ -313,6 +317,15 @@ func compileSchedules(server models.ObaServer, feeds []downloadedStaticFeed) (ma
 			return nil, fmt.Errorf("compile static feed %d (%s): %w", i, utils.SanitizeServerURL(feed.url), err)
 		}
 		compiled = append(compiled, raw)
+	}
+	return compileRawSchedules(server, compiled)
+}
+
+// compileRawSchedules compiles already-parsed raw feeds, in configured order,
+// so a caller that validated each feed individually need not reparse them.
+func compileRawSchedules(server models.ObaServer, compiled []rawScheduleFeed) (map[string]*ScheduleSnapshot, error) {
+	if len(compiled) != len(server.GtfsStaticFeeds) {
+		return nil, fmt.Errorf("only %d of %d configured static feeds succeeded", len(compiled), len(server.GtfsStaticFeeds))
 	}
 
 	type builder struct {
@@ -544,6 +557,14 @@ type csvTable struct {
 	rows  [][]string
 }
 
+// scheduleTables are the only GTFS files the schedule compiler reads. Large
+// unrelated tables such as shapes.txt are never decoded into memory, and a
+// malformed optional file cannot block static publication.
+var scheduleTables = map[string]struct{}{
+	"agency.txt": {}, "routes.txt": {}, "stops.txt": {}, "trips.txt": {},
+	"stop_times.txt": {}, "calendar.txt": {}, "calendar_dates.txt": {}, "frequencies.txt": {},
+}
+
 func scheduleCSVFiles(data []byte) (map[string]csvTable, error) {
 	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
@@ -552,7 +573,7 @@ func scheduleCSVFiles(data []byte) (map[string]csvTable, error) {
 	files := make(map[string]csvTable)
 	for _, file := range zr.File {
 		name := strings.TrimPrefix(file.Name, "./")
-		if !strings.HasSuffix(name, ".txt") || strings.Contains(name, "/") {
+		if _, needed := scheduleTables[name]; !needed {
 			continue
 		}
 		body, err := file.Open()
@@ -560,6 +581,9 @@ func scheduleCSVFiles(data []byte) (map[string]csvTable, error) {
 			return nil, err
 		}
 		reader := csv.NewReader(body)
+		// Rows shorter than the header read as blank cells (see cell), rather
+		// than rejecting the whole feed.
+		reader.FieldsPerRecord = -1
 		records, readErr := reader.ReadAll()
 		closeErr := body.Close()
 		if readErr != nil {
@@ -662,8 +686,15 @@ func parseRawServices(files map[string]csvTable, result *rawScheduleFeed) error 
 			}
 			service := result.services[id]
 			if service == nil {
-				service = &rawService{start: date, end: date, added: make(map[int]bool), removed: make(map[int]bool)}
+				service = &rawService{start: date, end: date, added: make(map[int]bool), removed: make(map[int]bool), datesOnly: true}
 				result.services[id] = service
+			} else if service.datesOnly {
+				if date < service.start {
+					service.start = date
+				}
+				if date > service.end {
+					service.end = date
+				}
 			}
 			if service.added[date] || service.removed[date] {
 				return fmt.Errorf("service %q has duplicate exception date %d", id, date)

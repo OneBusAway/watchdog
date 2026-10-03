@@ -41,6 +41,12 @@ func NewMetricsService(static *gtfs.StaticStore, realtime *gtfs.RealtimeStore, b
 		vehicleLastSeen.RemoveFeeds(server, removedFeeds)
 		for _, feedID := range removedFeeds {
 			labels := prometheus.Labels{"feed": feedID, "server_url": utils.SanitizeServerURL(server.ObaBaseURL)}
+			// Feed IDs are per-entry indexes, so another agency-mode entry on
+			// the same base URL also has a feed "0". Scope the delete to this
+			// entry's agency so its counters are not reset.
+			if !server.IsServerScoped() {
+				labels["agency_id"] = server.AgencyID
+			}
 			GtfsRtVehicleSourceTimestampAdvances.DeletePartialMatch(labels)
 			GtfsRtVehicleStateChanges.DeletePartialMatch(labels)
 		}

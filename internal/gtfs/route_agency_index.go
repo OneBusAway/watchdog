@@ -196,10 +196,10 @@ func (idx *RouteAgencyIndex) Snapshot(serverKey string) *AttributionSnapshot {
 	if si == nil {
 		return &AttributionSnapshot{serverKey: serverKey}
 	}
-	return &AttributionSnapshot{serverKey: serverKey, index: &serverIndex{
-		routeIDs: cloneCandidates(si.routeIDs), tripIDs: cloneCandidates(si.tripIDs), agencyNames: cloneStringMap(si.agencyNames),
-		agencies: si.agencies,
-	}}
+	// A serverIndex is never mutated after ReplaceCandidates publishes it (a
+	// replacement installs a new pointer), so the snapshot can share it rather
+	// than deep-copying every route and trip map on each collection tick.
+	return &AttributionSnapshot{serverKey: serverKey, index: si}
 }
 
 // AttributesOnlyTo is the snapshot counterpart of RouteAgencyIndex.AttributesOnlyTo.
