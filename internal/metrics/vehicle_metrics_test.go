@@ -12,6 +12,7 @@ import (
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/utils"
 )
 
 func TestCountVehiclePositionsUsesAgencyStore(t *testing.T) {
@@ -79,7 +80,7 @@ func TestCountVehiclePositionsKeepsDistinctServersWithSameAgencyIDDisjoint(t *te
 func TestCountActiveVehiclesForAgency(t *testing.T) {
 	ts := setupObaServer(t, `{"data":{"list":[{"vehicleId":"1"},{"vehicleId":"2"}]}}`, http.StatusOK)
 	defer ts.Close()
-	server := models.ObaServer{AgencyID: "agency-a", ObaBaseURL: ts.URL, ObaApiKey: "key"}
+	server := models.ObaServer{AgencyID: "agency-a", AgencyName: "Agency A", ServerName: "test-server", ObaBaseURL: ts.URL, ObaApiKey: "key"}
 	client := onebusaway.NewClient(
 		option.WithAPIKey(server.ObaApiKey),
 		option.WithBaseURL(server.ObaBaseURL),
@@ -87,6 +88,12 @@ func TestCountActiveVehiclesForAgency(t *testing.T) {
 	count, err := countActiveVehiclesForAgency(context.Background(), client, server)
 	if err != nil || count != 2 {
 		t.Fatalf("count=%d err=%v", count, err)
+	}
+	if got := seriesMatching(ObaVehiclesLastSuccessfulFetch, map[string]string{
+		"agency_id": "agency-a", "agency_name": "Agency A", "server_name": "test-server",
+		"server_url": utils.SanitizeServerURL(ts.URL),
+	}); len(got) != 1 {
+		t.Fatalf("expected one vehicles freshness series, got %d", len(got))
 	}
 }
 
