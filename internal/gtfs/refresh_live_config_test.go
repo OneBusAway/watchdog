@@ -60,14 +60,14 @@ func TestRefreshGTFSBundlesReadsLiveConfig(t *testing.T) {
 		defer suppliedMu.Unlock()
 		list := []models.ObaServer{{
 			ServerName:      "initial",
-			AgencyID:        "agency-a",
+			AgencyID:        "40",
 			ObaBaseURL:      ts.URL,
 			GtfsStaticFeeds: []string{ts.URL + "/initial.zip"},
 		}}
 		if added {
 			list = append(list, models.ObaServer{
 				ServerName:      "added",
-				AgencyID:        "agency-b",
+				AgencyID:        "40",
 				ObaBaseURL:      ts.URL + "/other",
 				GtfsStaticFeeds: []string{ts.URL + "/added.zip"},
 			})
@@ -88,7 +88,7 @@ func TestRefreshGTFSBundlesReadsLiveConfig(t *testing.T) {
 	go func() {
 		defer close(done)
 		refreshGTFSBundles(ctx, ts.Client(), servers, slog.New(slog.NewTextHandler(io.Discard, nil)),
-			10*time.Millisecond, geo.NewBoundingBoxStore(), NewStaticStore(), NewRouteAgencyIndex(), nil, 1)
+			10*time.Millisecond, geo.NewBoundingBoxStore(), NewStaticStore(), NewRouteAgencyIndex(), nil, nil, nil, 1)
 	}()
 
 	// Wait for a tick that used the original list before changing it, so a

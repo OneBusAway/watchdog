@@ -3,6 +3,7 @@ package gtfs
 import (
 	"fmt"
 	"log/slog"
+	"sort"
 	"time"
 
 	remoteGtfs "github.com/OneBusAway/go-gtfs"
@@ -13,8 +14,8 @@ import (
 
 type agencyStaticResult struct {
 	data        *models.StaticData
-	routeIDs    map[string]string
-	tripIDs     map[string]string
+	routeIDs    map[string][]string
+	tripIDs     map[string][]string
 	agencyNames map[string]string
 }
 
@@ -47,7 +48,7 @@ func buildAgencyStaticSnapshot(server models.ObaServer, bundles []*remoteGtfs.St
 		}
 		for i := range bundle.Routes {
 			route := &bundle.Routes[i]
-			if route.Id == "" || routeIDs[route.Id] != server.AgencyID {
+			if route.Id == "" || effectiveRouteAgency(server, bundle, route, true) != server.AgencyID {
 				continue
 			}
 			if _, seen := seenRoutes[route.Id]; seen {
@@ -58,7 +59,7 @@ func buildAgencyStaticSnapshot(server models.ObaServer, bundles []*remoteGtfs.St
 		}
 		for i := range bundle.Trips {
 			trip := &bundle.Trips[i]
-			if trip.ID == "" || tripIDs[trip.ID] != server.AgencyID {
+			if trip.ID == "" || trip.Route == nil || effectiveRouteAgency(server, bundle, trip.Route, true) != server.AgencyID {
 				continue
 			}
 			if trip.Service != nil {
@@ -136,9 +137,8 @@ func configuredAgency(server models.ObaServer, bundles []*remoteGtfs.Static) rem
 	return remoteGtfs.Agency{Id: server.AgencyID, Name: server.AgencyName}
 }
 
-func buildAttributionMaps(server models.ObaServer, bundles []*remoteGtfs.Static, agencyMode bool, logger *slog.Logger) (map[string]string, map[string]string) {
-	routes := make(map[string]string)
-	ambiguousRoutes := make(map[string]struct{})
+func buildAttributionMaps(server models.ObaServer, bundles []*remoteGtfs.Static, agencyMode bool, logger *slog.Logger) (map[string][]string, map[string][]string) {
+	routes := make(map[string][]string)
 	for _, bundle := range bundles {
 		if bundle == nil {
 			continue
@@ -152,12 +152,11 @@ func buildAttributionMaps(server models.ObaServer, bundles []*remoteGtfs.Static,
 			if agencyID == "" {
 				continue
 			}
-			addAttribution(routes, ambiguousRoutes, route.Id, agencyID, "route", server, logger)
+			addAttribution(routes, route.Id, agencyID, "route", server, logger)
 		}
 	}
 
-	trips := make(map[string]string)
-	ambiguousTrips := make(map[string]struct{})
+	trips := make(map[string][]string)
 	for _, bundle := range bundles {
 		if bundle == nil {
 			continue
@@ -167,11 +166,11 @@ func buildAttributionMaps(server models.ObaServer, bundles []*remoteGtfs.Static,
 			if trip.ID == "" || trip.Route == nil || trip.Route.Id == "" {
 				continue
 			}
-			agencyID, ok := routes[trip.Route.Id]
-			if !ok || agencyID == "" {
+			agencyID := effectiveRouteAgency(server, bundle, trip.Route, agencyMode)
+			if agencyID == "" {
 				continue
 			}
-			addAttribution(trips, ambiguousTrips, trip.ID, agencyID, "trip", server, logger)
+			addAttribution(trips, trip.ID, agencyID, "trip", server, logger)
 		}
 	}
 	return routes, trips
@@ -187,30 +186,27 @@ func effectiveRouteAgency(server models.ObaServer, bundle *remoteGtfs.Static, ro
 	return ""
 }
 
-func addAttribution(values map[string]string, ambiguous map[string]struct{}, identifier, agencyID, kind string, server models.ObaServer, logger *slog.Logger) {
-	if _, isAmbiguous := ambiguous[identifier]; isAmbiguous {
-		return
-	}
-	if existing, exists := values[identifier]; exists {
+func addAttribution(values map[string][]string, identifier, agencyID, kind string, server models.ObaServer, logger *slog.Logger) {
+	for _, existing := range values[identifier] {
 		if existing == agencyID {
 			return
 		}
-		delete(values, identifier)
-		ambiguous[identifier] = struct{}{}
+	}
+	if existing := values[identifier]; len(existing) > 0 {
 		if logger != nil {
-			logger.Warn("Ambiguous GTFS attribution identifier", "kind", kind, "identifier", identifier, "existing_agency_id", existing, "duplicate_agency_id", agencyID, "server_name", server.ServerName)
+			logger.Warn("Ambiguous GTFS attribution identifier", "kind", kind, "identifier", identifier, "existing_agency_ids", existing, "duplicate_agency_id", agencyID, "server_name", server.ServerName)
 		}
 		report.ReportErrorWithSentryOptions(
 			fmt.Errorf("ambiguous %s identifier %q maps to agencies %q and %q", kind, identifier, existing, agencyID),
 			report.SentryReportOptions{
 				Tags:         map[string]string{"server_name": server.ServerName, "identifier_kind": kind},
-				ExtraContext: map[string]interface{}{"identifier": identifier, "existing_agency_id": existing, "duplicate_agency_id": agencyID},
+				ExtraContext: map[string]interface{}{"identifier": identifier, "existing_agency_ids": existing, "duplicate_agency_id": agencyID},
 				Level:        sentry.LevelWarning,
 			},
 		)
-		return
 	}
-	values[identifier] = agencyID
+	values[identifier] = append(values[identifier], agencyID)
+	sort.Strings(values[identifier])
 }
 
 func addStopAndParents(stop *remoteGtfs.Stop, selected *[]*remoteGtfs.Stop, seen map[string]struct{}) {

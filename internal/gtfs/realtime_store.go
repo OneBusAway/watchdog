@@ -2,9 +2,54 @@ package gtfs
 
 import (
 	"sync"
+	"time"
 
 	"watchdog.onebusaway.org/internal/models"
 )
+
+// FeedObservation describes one configured feed fetch. PayloadHash is
+// canonical and excludes the FeedHeader; SourceTimestamp is retained
+// separately.
+type FeedObservation struct {
+	FeedID                  string
+	FeedURL                 string
+	Success                 bool
+	ObservedAt              time.Time
+	SourceTimestamp         *time.Time
+	PayloadHash             string
+	VehicleEntities         int
+	VehicleTimestampMissing int
+}
+
+func (s *RealtimeStore) SetObserver(observer func(models.ObaServer, FeedObservation)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.observer = observer
+}
+
+func (s *RealtimeStore) SetConfigurationObserver(observer func(models.ObaServer)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.configurationObserver = observer
+}
+
+func (s *RealtimeStore) ReconcileConfiguration(server models.ObaServer) {
+	s.mu.RLock()
+	observer := s.configurationObserver
+	s.mu.RUnlock()
+	if observer != nil {
+		observer(server)
+	}
+}
+
+func (s *RealtimeStore) Observe(server models.ObaServer, observation FeedObservation) {
+	s.mu.RLock()
+	observer := s.observer
+	s.mu.RUnlock()
+	if observer != nil {
+		observer(server, observation)
+	}
+}
 
 // RealtimeStore is used to store GTFS-RT data
 // fetched once by a designated function. This avoids making multiple API calls for the same data
@@ -13,8 +58,10 @@ import (
 // It provides a thread-safe way to store and retrieve parsed GTFS-RT data.
 // It ensures that multiple goroutines can safely read the same data after it is set once.
 type RealtimeStore struct {
-	mu   sync.RWMutex
-	data map[string]*models.RealtimeData
+	mu                    sync.RWMutex
+	data                  map[string]*models.RealtimeData
+	observer              func(models.ObaServer, FeedObservation)
+	configurationObserver func(models.ObaServer)
 }
 
 // NewRealtimeStore creates and returns a new empty RealtimeStore instance.

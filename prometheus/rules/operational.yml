@@ -2,7 +2,13 @@ groups:
   - name: watchdog-operational
     rules:
       - alert: ObaAPIDown
-        expr: oba_api_status == 0
+        expr: |
+          (oba_api_status == 0)
+          and on()
+          (
+            (time() - watchdog_collection_last_completed_timestamp_seconds)
+            < on() group_left watchdog:collection_freshness_window_seconds
+          )
         for: 2m
         labels:
           severity: critical
@@ -12,7 +18,9 @@ groups:
             The OneBusAway API at {{ $labels.server_url }} has reported
             unavailable for 2m+ (oba_api_status={{ $value }}).
       - alert: GTFSBundleExpiringSoon
-        expr: gtfs_bundle_days_until_earliest_expiration < 3
+        expr: |
+          (gtfs_bundle_days_until_earliest_expiration < 3)
+          and on (agency_id, server_url) (gtfs_static_bundle_current == 1)
         for: 10m
         labels:
           severity: warning
@@ -21,3 +29,65 @@ groups:
           description: >-
             The earliest GTFS bundle for {{ $labels.agency_name }} ({{ $labels.agency_id }})
             at {{ $labels.server_url }} expires in {{ $value }} days, below the 3-day threshold.
+      - alert: GTFSStaticFeedAgencyMappingFailure
+        expr: gtfs_static_feed_agency_mapping_failure == 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GTFS static feed agency mapping failed for {{ $labels.server_name }}"
+          description: >-
+            Static feed {{ $labels.feed_url }} at {{ $labels.server_url }} cannot be fully
+            mapped to an agency (reason={{ $labels.reason }}).
+      - alert: GTFSStaticFeedFetchFailed
+        expr: gtfs_static_feed_fetch_success == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GTFS static feed refresh failed for {{ $labels.server_name }}"
+          description: >-
+            Static feed {{ $labels.feed_url }} at {{ $labels.server_url }} has failed
+            for at least 30 minutes. Inspect gtfs_static_feed_failure_info for its bounded cause.
+      - alert: GTFSStaticAgencyDiscoveryFailed
+        expr: gtfs_static_feed_failure_info{stage="agency_discovery"} == 1
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "GTFS static agency discovery failed for {{ $labels.server_name }}"
+          description: >-
+            Watchdog cannot discover agency ownership in static feed {{ $labels.feed_url }}
+            at {{ $labels.server_url }} (reason={{ $labels.reason }}).
+      - alert: GTFSStaticBundleStale
+        expr: |
+          (gtfs_static_bundle_current == 0)
+          and on (agency_id, server_url) (gtfs_static_bundle_usable == 1)
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Retained GTFS static bundle is stale for {{ $labels.agency_name }}"
+          description: >-
+            Watchdog is retaining an unexpired but non-current static bundle for
+            {{ $labels.agency_id }} at {{ $labels.server_url }}.
+      - alert: GTFSStaticBundleUnusable
+        expr: gtfs_static_bundle_usable == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "GTFS static bundle is unusable for {{ $labels.agency_name }}"
+          description: >-
+            No complete retained static bundle covers the agency-local date for
+            {{ $labels.agency_id }} at {{ $labels.server_url }}.
+      - alert: GTFSStaticRefreshRetryExhausted
+        expr: gtfs_static_refresh_gave_up == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "GTFS static refresh retries exhausted for {{ $labels.server_name }}"
+          description: >-
+            The daily refresh campaign for {{ $labels.server_url }} exhausted its
+            12-hour retry budget.

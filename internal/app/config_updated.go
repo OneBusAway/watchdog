@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/getsentry/sentry-go"
+	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
 )
@@ -41,15 +42,25 @@ func (app *Application) OnConfigUpdated(ctx context.Context, updated []models.Ob
 		return
 	}
 
-	app.MetricsService.ReportTrackedAgencies(updated)
+	var newcomers []models.ObaServer
+	app.GtfsService.StaticStore.WithRefreshLock(func() {
+		app.GtfsService.StaticStore.SetConfiguredServers(updated)
+		app.MetricsService.ReportTrackedAgencies(updated)
 
-	// Servers that left the config keep their store entries and their
-	// Prometheus series until they are explicitly retired.
-	app.PruneStaleServers(updated)
+		// Servers that left the config keep their store entries and their
+		// Prometheus series until they are explicitly retired.
+		app.PruneStaleServers(updated)
+		newcomers = app.NewlyAddedServers(updated)
+	})
+	app.GtfsService.ReconcileStaticRefreshCampaigns(updated)
+	app.MetricsService.ReconcileStaticFeedHealth(updated)
+	for _, server := range updated {
+		app.GtfsService.ReconcileRealtimeConfiguration(server)
+	}
 
 	// Servers that just joined would otherwise wait for the next 24h refresh
 	// before any static-derived metric appeared for them.
-	if newcomers := app.NewlyAddedServers(updated); len(newcomers) > 0 {
-		go app.GtfsService.DownloadGTFSBundles(ctx, newcomers, 5)
+	if len(newcomers) > 0 {
+		app.GtfsService.StartStaticRefreshCampaigns(ctx, newcomers, gtfs.StaticRefreshConfigChange, 5)
 	}
 }

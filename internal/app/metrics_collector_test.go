@@ -13,6 +13,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"watchdog.onebusaway.org/internal/config"
 	"watchdog.onebusaway.org/internal/geo"
+	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/metrics"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/utils"
@@ -127,7 +128,7 @@ func TestAgencyScopeFetchesRealtimeFeed(t *testing.T) {
 }
 
 // Server mode should fetch /api/where/metrics.json once per tick.
-// The parsed response is reused by each live agency's
+// The parsed response is reused by each OBA-reported agency's
 // FetchObaAPIMetrics call.
 func TestServerScopeFetchesMetricsOncePerTick(t *testing.T) {
 	rtData := readTestFixture(t, "../../testdata/gtfs_rt_feed_vehicles.pb")
@@ -210,5 +211,110 @@ func TestServerScopeFetchesMetricsOncePerTick(t *testing.T) {
 		if value != want {
 			t.Fatalf("%s: expected %v from the threaded response, got %v", agencyID, want, value)
 		}
+	}
+}
+
+func TestServerScopeRetiresVehicleStateWhenNoAgencyIsReported(t *testing.T) {
+	var rtCalls atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/vehicles.pb":
+			rtCalls.Add(1)
+		case "/api/where/metrics.json":
+			_, _ = w.Write([]byte(`{"code":200,"version":2,"data":{"entry":{"agencyIDs":[],"realtimeRecordsTotal":{}}}}`))
+		default:
+			_, _ = w.Write([]byte(`{"code":200,"data":{"list":[],"entry":{"readableTime":"now"}}}`))
+		}
+	}))
+	t.Cleanup(ts.Close)
+
+	app := newTestApplication(t)
+	server := models.ObaServer{
+		ServerName: "multi", ObaBaseURL: ts.URL,
+		GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: ts.URL + "/vehicles.pb"}},
+	}
+	agency := serverForAgency(server, "agency-a", "Agency A")
+	app.GtfsService.StaticStore.Set(agency.ServerKey(), &models.StaticData{})
+	app.GtfsService.RouteAgencyIndex.Replace(server.ServerKey(), map[string]string{"route-a": agency.AgencyID}, nil, map[string]string{agency.AgencyID: agency.AgencyName})
+
+	serverURL := utils.SanitizeServerURL(server.ObaBaseURL)
+	metrics.RealtimeVehiclePositions.WithLabelValues(agency.AgencyID, agency.AgencyName, server.ServerName, serverURL).Set(4)
+	metrics.TrackedVehiclesGauge.WithLabelValues(agency.AgencyID, agency.AgencyName, server.ServerName, serverURL).Set(4)
+	metrics.AgencyActiveVehiclesGauge.WithLabelValues(agency.AgencyID, agency.AgencyName, server.ServerName, serverURL).Set(4)
+	metrics.ObaVehiclesLastSuccessfulFetch.WithLabelValues(agency.AgencyID, agency.AgencyName, server.ServerName, serverURL).Set(123)
+	metrics.GtfsRtUnattributedVehicles.WithLabelValues(server.ServerName, serverURL).Set(2)
+	metrics.GtfsRtUnattributedVehiclesByReason.WithLabelValues(server.ServerName, serverURL, string(gtfs.AttributionAmbiguousIdentifier)).Set(2)
+	metrics.GtfsRtUnattributedVehicleCandidateAssociations.WithLabelValues(agency.AgencyID, agency.AgencyName, server.ServerName, serverURL).Set(2)
+	app.MetricsService.VehicleLastSeen.Set(agency.ServerKey(), "0", "vehicle-a", metrics.LastSeen{
+		VehicleID: "vehicle-a", FeedID: "0", AgencyID: agency.AgencyID, AgencyName: agency.AgencyName,
+		ServerName: server.ServerName, ServerURL: serverURL,
+	})
+
+	scope := config.ResolveScope(server, app.GtfsService.StaticStore, app.GtfsService.RouteAgencyIndex)
+	app.collectForScope(context.Background(), server, scope)
+
+	if rtCalls.Load() != 0 {
+		t.Fatalf("GTFS-RT fetched with no reported agencies: %d", rtCalls.Load())
+	}
+	if got := app.MetricsService.VehicleLastSeen.Count(agency.ServerKey()); got != 0 {
+		t.Fatalf("inactive agency retained %d vehicles", got)
+	}
+	for _, vec := range []*prometheus.GaugeVec{metrics.RealtimeVehiclePositions, metrics.TrackedVehiclesGauge} {
+		if value, found := gaugeValueFor(vec, map[string]string{"agency_id": agency.AgencyID, "server_url": serverURL}); !found || value != 0 {
+			t.Fatalf("inactive agency gauge = %v, found=%t", value, found)
+		}
+	}
+	for _, vec := range []prometheus.Collector{metrics.AgencyActiveVehiclesGauge, metrics.ObaVehiclesLastSuccessfulFetch} {
+		if got := seriesCount(vec, prometheus.Labels{"agency_id": agency.AgencyID, "server_url": serverURL}); got != 0 {
+			t.Fatalf("inactive agency retained stale OBA vehicle series: %d", got)
+		}
+	}
+	for _, vec := range []prometheus.Collector{
+		metrics.GtfsRtUnattributedVehicles,
+		metrics.GtfsRtUnattributedVehiclesByReason,
+		metrics.GtfsRtUnattributedVehicleCandidateAssociations,
+	} {
+		if got := seriesCount(vec, prometheus.Labels{"server_url": serverURL}); got != 0 {
+			t.Fatalf("stale attribution diagnostics survived: %d", got)
+		}
+	}
+}
+
+func TestServerScopePreservesVehicleStateWhenCoverageProbeFails(t *testing.T) {
+	var rtCalls atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/vehicles.pb":
+			rtCalls.Add(1)
+		case "/api/where/metrics.json":
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		default:
+			_, _ = w.Write([]byte(`{"code":200,"data":{"list":[],"entry":{"readableTime":"now"}}}`))
+		}
+	}))
+	t.Cleanup(ts.Close)
+
+	app := newTestApplication(t)
+	server := models.ObaServer{ServerName: "multi", ObaBaseURL: ts.URL, GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: ts.URL + "/vehicles.pb"}}}
+	agency := serverForAgency(server, "agency-a", "Agency A")
+	app.GtfsService.StaticStore.Set(agency.ServerKey(), &models.StaticData{})
+	app.GtfsService.RouteAgencyIndex.Replace(server.ServerKey(), map[string]string{"route-a": agency.AgencyID}, nil, map[string]string{agency.AgencyID: agency.AgencyName})
+	serverURL := utils.SanitizeServerURL(server.ObaBaseURL)
+	metrics.RealtimeVehiclePositions.WithLabelValues(agency.AgencyID, agency.AgencyName, server.ServerName, serverURL).Set(4)
+	app.MetricsService.VehicleLastSeen.Set(agency.ServerKey(), "0", "vehicle-a", metrics.LastSeen{VehicleID: "vehicle-a", FeedID: "0"})
+
+	scope := config.ResolveScope(server, app.GtfsService.StaticStore, app.GtfsService.RouteAgencyIndex)
+	app.collectForScope(context.Background(), server, scope)
+
+	if rtCalls.Load() != 0 {
+		t.Fatalf("GTFS-RT fetched after failed coverage probe: %d", rtCalls.Load())
+	}
+	if got := app.MetricsService.VehicleLastSeen.Count(agency.ServerKey()); got != 1 {
+		t.Fatalf("failed coverage probe retired vehicle state: %d", got)
+	}
+	if value, found := gaugeValueFor(metrics.RealtimeVehiclePositions, map[string]string{"agency_id": agency.AgencyID, "server_url": serverURL}); !found || value != 4 {
+		t.Fatalf("failed coverage probe changed vehicle gauge: %v, found=%t", value, found)
 	}
 }

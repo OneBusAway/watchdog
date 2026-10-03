@@ -202,7 +202,7 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: oba_tracked_agencies_count, oba_tracked_agencies_info\nQuestion answered: \"How many agencies is Watchdog currently tracking?\"",
+      "description": "Metrics: gtfs_static_feed_fetch_success, gtfs_static_feed_failure_since_timestamp_seconds, gtfs_static_feed_conservative_mode, gtfs_static_feed_failure_info, gtfs_static_feed_agency_mapping_info, gtfs_static_feed_agency_mapping_failure\nQuestion answered: \"Which source feeds are healthy, retry-limited, and proven to map to which agencies?\"",
       "fieldConfig": {
         "defaults": {
           "unit": "short"
@@ -217,33 +217,66 @@
       },
       "id": 202,
       "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "textMode": "auto"
+        "showHeader": true
       },
       "targets": [
         {
-          "expr": "oba_tracked_agencies_count",
+          "expr": "gtfs_static_feed_agency_mapping_info{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}",
           "refId": "A",
+          "format": "table",
+          "instant": true,
           "datasource": {
             "name": "Prometheus"
           }
         },
         {
-          "expr": "oba_tracked_agencies_info{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}",
+          "expr": "gtfs_static_feed_agency_mapping_failure{server_url=~\"$server_url\"}",
           "refId": "B",
+          "format": "table",
+          "instant": true,
+          "datasource": {
+            "name": "Prometheus"
+          }
+        },
+        {
+          "expr": "gtfs_static_feed_fetch_success{server_url=~\"$server_url\"}",
+          "refId": "C",
+          "format": "table",
+          "instant": true,
+          "datasource": {
+            "name": "Prometheus"
+          }
+        },
+        {
+          "expr": "time() - gtfs_static_feed_failure_since_timestamp_seconds{server_url=~\"$server_url\"} > 0",
+          "refId": "D",
+          "format": "table",
+          "instant": true,
+          "datasource": {
+            "name": "Prometheus"
+          }
+        },
+        {
+          "expr": "gtfs_static_feed_conservative_mode{server_url=~\"$server_url\"}",
+          "refId": "E",
+          "format": "table",
+          "instant": true,
+          "datasource": {
+            "name": "Prometheus"
+          }
+        },
+        {
+          "expr": "gtfs_static_feed_failure_info{server_url=~\"$server_url\"} == 1",
+          "refId": "F",
+          "format": "table",
+          "instant": true,
           "datasource": {
             "name": "Prometheus"
           }
         }
       ],
-      "title": "2.2 Tracked Agencies",
-      "type": "stat"
+      "title": "2.2 Static Feed Health / Agency Mapping",
+      "type": "table"
     },
     {
       "collapsed": false,
@@ -262,7 +295,7 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: realtime_vehicle_positions_count_gtfs_rt, oba_agency_active_vehicles_count, gtfs_rt_tracked_vehicles_count\nQuestion answered: \"Is realtime coverage dropping?\"",
+      "description": "Metrics: realtime_vehicle_positions_count_gtfs_rt, oba_agency_active_vehicles_count, gtfs_rt_tracked_vehicles_count, gtfs_rt_unattributed_vehicles_count, gtfs_rt_unattributed_vehicles_by_reason_count, gtfs_rt_unattributed_vehicle_potential_agency_associations_count, gtfs_schedule_available, gtfs_scheduled_service_active\nQuestion answered: \"Is zero realtime coverage expected, and why were vehicles not assigned?\" Outside service is only schedule available=1 and active=0. Unexpected Zero uses the dynamic collection freshness window. Potential agency associations are possible owners, not assignments: one ambiguous vehicle may appear under multiple potential agencies, so do not sum them as a distinct vehicle total. No alert is installed by default.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -291,6 +324,54 @@
           "datasource": {
             "name": "Prometheus"
           }
+        },
+        {
+          "expr": "gtfs_schedule_available{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}",
+          "legendFormat": "Schedule available {{agency_name}} ({{agency_id}})",
+          "refId": "D",
+          "datasource": {
+            "name": "Prometheus"
+          }
+        },
+        {
+          "expr": "gtfs_scheduled_service_active{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}",
+          "legendFormat": "Scheduled service active {{agency_name}} ({{agency_id}})",
+          "refId": "E",
+          "datasource": {
+            "name": "Prometheus"
+          }
+        },
+        {
+          "expr": "(((realtime_vehicle_positions_count_gtfs_rt{agency_id=~\"$agency_id\",server_url=~\"$server_url\"} == 0) and on (agency_id, agency_name, server_name, server_url) (gtfs_schedule_available == 1) and on (agency_id, agency_name, server_name, server_url) (gtfs_scheduled_service_active == 1) and on (agency_id, agency_name, server_name, server_url) (gtfs_static_bundle_usable == 1) and on (agency_id, server_name, server_url) (min by (agency_id, server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id!=\"\"}) == 1) and on (agency_id, server_name, server_url) ((time() - min by (agency_id, server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=\"\"})) < on() group_left (clamp_max(clamp_min(watchdog_collection_interval_seconds * 3, 60), 300)))) or ((realtime_vehicle_positions_count_gtfs_rt{agency_id=~\"$agency_id\",server_url=~\"$server_url\"} == 0) and on (agency_id, agency_name, server_name, server_url) (gtfs_schedule_available == 1) and on (agency_id, agency_name, server_name, server_url) (gtfs_scheduled_service_active == 1) and on (agency_id, agency_name, server_name, server_url) (gtfs_static_bundle_usable == 1) and on (server_name, server_url) (min by (server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id=\"\"}) == 1) and on (server_name, server_url) ((time() - min by (server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=\"\"})) < on() group_left (clamp_max(clamp_min(watchdog_collection_interval_seconds * 3, 60), 300))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < on() group_left (clamp_max(clamp_min(watchdog_collection_interval_seconds * 3, 60), 300)))",
+          "legendFormat": "Unexpected zero {{agency_name}} ({{agency_id}})",
+          "refId": "F",
+          "datasource": {
+            "name": "Prometheus"
+          }
+        },
+        {
+          "expr": "gtfs_rt_unattributed_vehicles_count{server_url=~\"$server_url\"} and on (server_name, server_url) (min by (server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id=\"\"}) == 1) and on (server_name, server_url) ((time() - min by (server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=\"\"})) < on() group_left (clamp_max(clamp_min(watchdog_collection_interval_seconds * 3, 60), 300))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < on() group_left (clamp_max(clamp_min(watchdog_collection_interval_seconds * 3, 60), 300)))",
+          "legendFormat": "Unattributed total {{server_name}}",
+          "refId": "G",
+          "datasource": {
+            "name": "Prometheus"
+          }
+        },
+        {
+          "expr": "gtfs_rt_unattributed_vehicles_by_reason_count{server_url=~\"$server_url\"} and on (server_name, server_url) (min by (server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id=\"\"}) == 1) and on (server_name, server_url) ((time() - min by (server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=\"\"})) < on() group_left (clamp_max(clamp_min(watchdog_collection_interval_seconds * 3, 60), 300))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < on() group_left (clamp_max(clamp_min(watchdog_collection_interval_seconds * 3, 60), 300)))",
+          "legendFormat": "Unattributed {{reason}}",
+          "refId": "H",
+          "datasource": {
+            "name": "Prometheus"
+          }
+        },
+        {
+          "expr": "gtfs_rt_unattributed_vehicle_potential_agency_associations_count{agency_id=~\"$agency_id\",server_url=~\"$server_url\"} and on (server_name, server_url) (min by (server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id=\"\"}) == 1) and on (server_name, server_url) ((time() - min by (server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=\"\"})) < on() group_left (clamp_max(clamp_min(watchdog_collection_interval_seconds * 3, 60), 300))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < on() group_left (clamp_max(clamp_min(watchdog_collection_interval_seconds * 3, 60), 300)))",
+          "legendFormat": "Possible owner {{agency_name}} (non-additive)",
+          "refId": "I",
+          "datasource": {
+            "name": "Prometheus"
+          }
         }
       ],
       "title": "3.1 Vehicle Volume",
@@ -300,7 +381,7 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: vehicle_position_report_interval_seconds, oba_time_since_last_update_seconds\nQuestion answered: \"How stale is realtime data?\"",
+      "description": "Metrics: gtfs_rt_feed_source_timestamp_seconds, gtfs_rt_feed_payload_last_changed_timestamp_seconds\nQuestion answered: \"Is each successfully fetched source and payload fresh?\"",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -310,14 +391,14 @@
       "id": 302,
       "targets": [
         {
-          "expr": "vehicle_position_report_interval_seconds{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}",
+          "expr": "(time() - gtfs_rt_feed_source_timestamp_seconds{server_url=~\"$server_url\"}) and on (agency_id, agency_name, server_name, server_url, feed, feed_url) (gtfs_rt_feed_fetch_success{server_url=~\"$server_url\"} == 1)",
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
           }
         },
         {
-          "expr": "oba_time_since_last_update_seconds{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}",
+          "expr": "(time() - gtfs_rt_feed_payload_last_changed_timestamp_seconds{server_url=~\"$server_url\"}) and on (agency_id, agency_name, server_name, server_url, feed, feed_url) (gtfs_rt_feed_fetch_success{server_url=~\"$server_url\"} == 1)",
           "refId": "B",
           "datasource": {
             "name": "Prometheus"
@@ -331,7 +412,7 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: vehicle_report_total\nQuestion answered: \"Are realtime updates continuously flowing?\"",
+      "description": "Metrics: gtfs_rt_vehicle_source_timestamp_advances_total, gtfs_rt_vehicle_state_changes_total\nQuestion answered: \"Are source clocks and semantic vehicle states advancing?\"",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -341,8 +422,15 @@
       "id": 303,
       "targets": [
         {
-          "expr": "vehicle_report_total{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}",
+          "expr": "sum by (agency_id, server_url, feed) (rate(gtfs_rt_vehicle_source_timestamp_advances_total{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}[$__rate_interval]))",
           "refId": "A",
+          "datasource": {
+            "name": "Prometheus"
+          }
+        },
+        {
+          "expr": "sum by (agency_id, server_url, feed) (rate(gtfs_rt_vehicle_state_changes_total{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}[$__rate_interval]))",
+          "refId": "B",
           "datasource": {
             "name": "Prometheus"
           }
@@ -488,7 +576,7 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: gtfs_rt_vehicle_computed_speed, gtfs_rt_vehicle_speed_discrepancy_ratio\nQuestion answered: \"Are vehicles reporting unrealistic speeds?\"",
+      "description": "Metrics: gtfs_rt_vehicle_computed_speed, gtfs_rt_vehicle_speed_discrepancy_ratio, gtfs_rt_vehicle_speed_last_computed_timestamp_seconds\nQuestion answered: \"Are vehicles reporting unrealistic speeds, and how old is each retained calculation?\"",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -507,6 +595,14 @@
         {
           "expr": "gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}",
           "refId": "B",
+          "datasource": {
+            "name": "Prometheus"
+          }
+        },
+        {
+          "expr": "time() - gtfs_rt_vehicle_speed_last_computed_timestamp_seconds{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}",
+          "legendFormat": "Speed age {{vehicle_id}}",
+          "refId": "C",
           "datasource": {
             "name": "Prometheus"
           }

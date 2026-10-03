@@ -1,6 +1,9 @@
 groups:
   - name: watchdog-meta
     rules:
+      - record: watchdog:collection_freshness_window_seconds
+        expr: clamp_max(clamp_min(watchdog_collection_interval_seconds * 3, 60), 300)
+
       - alert: WatchdogDown
         expr: (up{job="watchdog"} == 0) or absent(up{job="watchdog"})
         for: 2m
@@ -13,3 +16,17 @@ groups:
             Watchdog (job={{ or $labels.job "watchdog" }},
             instance={{ or $labels.instance "unknown" }}) has been down
             (up == 0) or its metric series has been absent for 2m+ (value={{ $value }}).
+
+      - alert: WatchdogCollectionStalled
+        expr: |
+          (time() - watchdog_collection_last_completed_timestamp_seconds)
+          > on() group_left watchdog:collection_freshness_window_seconds
+        for: 2m
+        keep_firing_for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Watchdog collection loop is not advancing"
+          description: >-
+            The metrics endpoint is scrapeable, but collection has not completed
+            within the configured freshness window.

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"io"
 	"log/slog"
+	"reflect"
 	"testing"
 
 	remoteGtfs "github.com/OneBusAway/go-gtfs"
@@ -44,7 +45,9 @@ func TestBuildAgencyStaticSnapshotSelectsAndOwnsGraph(t *testing.T) {
 	if got := len(result.data.Routes); got != 2 {
 		t.Fatalf("expected both A routes, including unused route, got %d", got)
 	}
-	if result.routeIDs["route-b"] != "B" || result.tripIDs["trip-b"] != "B" {
+	routeAgency, routeOK := singletonCandidate(result.routeIDs["route-b"])
+	tripAgency, tripOK := singletonCandidate(result.tripIDs["trip-b"])
+	if !routeOK || routeAgency != "B" || !tripOK || tripAgency != "B" {
 		t.Fatalf("expected foreign attribution maps to remain resolvable: routes=%v trips=%v", result.routeIDs, result.tripIDs)
 	}
 	if len(result.data.Services) != 1 || result.data.Services[0].Id != "service-a" {
@@ -82,7 +85,7 @@ func TestBuildAgencyStaticSnapshotNormalizesSoleBlankAgency(t *testing.T) {
 	if len(result.data.Agencies) != 1 || result.data.Agencies[0].Id != "configured" {
 		t.Fatalf("expected blank sole agency to be normalized, got %+v", result.data.Agencies)
 	}
-	if result.routeIDs["route-a"] != "configured" {
+	if agencyID, ok := singletonCandidate(result.routeIDs["route-a"]); !ok || agencyID != "configured" {
 		t.Fatalf("expected unqualified sole-agency route to use configured agency, got %v", result.routeIDs)
 	}
 }
@@ -130,7 +133,41 @@ func TestNormalizeOmittedAgencyIDAfterParsing(t *testing.T) {
 	}
 	server := models.ObaServer{AgencyID: "configured", AgencyName: "Configured"}
 	result := buildAgencyStaticSnapshot(server, []*remoteGtfs.Static{bundle}, nil)
-	if result.routeIDs["route-a"] != server.AgencyID || len(result.data.Routes) != 1 {
+	agencyID, ok := singletonCandidate(result.routeIDs["route-a"])
+	if !ok || agencyID != server.AgencyID || len(result.data.Routes) != 1 {
 		t.Fatalf("expected the normalized sole-agency route to belong to %q, got routes=%v map=%v", server.AgencyID, result.data.Routes, result.routeIDs)
+	}
+}
+
+func TestBuildAttributionMapsRetainsCrossFeedCandidates(t *testing.T) {
+	bundle := func(agencyID, routeID, tripID string) *remoteGtfs.Static {
+		result := &remoteGtfs.Static{
+			Agencies: []remoteGtfs.Agency{{Id: agencyID}},
+			Routes:   []remoteGtfs.Route{{Id: routeID}},
+		}
+		result.Routes[0].Agency = &result.Agencies[0]
+		result.Trips = []remoteGtfs.ScheduledTrip{{ID: tripID, Route: &result.Routes[0]}}
+		return result
+	}
+
+	routes, trips := buildAttributionMaps(
+		models.ObaServer{ServerName: "multi", ObaBaseURL: "https://example.com"},
+		[]*remoteGtfs.Static{
+			bundle("A", "shared-route", "trip-a"),
+			bundle("B", "shared-route", "trip-b"),
+			bundle("C", "shared-route", "trip-a"),
+		},
+		false,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	if got := routes["shared-route"]; !reflect.DeepEqual(got, []string{"A", "B", "C"}) {
+		t.Fatalf("route candidates = %v", got)
+	}
+	if got := trips["trip-a"]; !reflect.DeepEqual(got, []string{"A", "C"}) {
+		t.Fatalf("trip candidates = %v", got)
+	}
+	if got := trips["trip-b"]; !reflect.DeepEqual(got, []string{"B"}) {
+		t.Fatalf("unique trip candidates = %v", got)
 	}
 }

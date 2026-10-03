@@ -68,6 +68,8 @@ func DeleteSeriesForAgency(serverURL, agencyID string) int {
 func DeleteSeriesForServerScope(serverURL string) int {
 	deleted := deleteMatching(prometheus.Labels{"server_url": serverURL, "agency_id": ""})
 	deleted += GtfsRtUnattributedVehicles.DeletePartialMatch(prometheus.Labels{"server_url": serverURL})
+	deleted += GtfsRtUnattributedVehiclesByReason.DeletePartialMatch(prometheus.Labels{"server_url": serverURL})
+	deleted += GtfsRtUnattributedVehicleCandidateAssociations.DeletePartialMatch(prometheus.Labels{"server_url": serverURL})
 	return deleted
 }
 

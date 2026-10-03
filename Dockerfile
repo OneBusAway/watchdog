@@ -16,7 +16,7 @@ RUN CGO_ENABLED=0 go build -v -ldflags="-X main.version=${VERSION}" -o . ./...
 FROM debian:bookworm-slim
 
 RUN apt-get update && \
-    apt-get install -y ca-certificates tzdata
+    apt-get install -y ca-certificates tzdata wget
 
 # Add non-root user
 RUN addgroup --system watchdog && adduser --system --group --no-create-home watchdog

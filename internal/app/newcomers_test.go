@@ -57,6 +57,29 @@ func TestNewlyAddedServersIgnoresServersAlreadyInConfig(t *testing.T) {
 	assertServerKeys(t, app.NewlyAddedServers([]models.ObaServer{existing}))
 }
 
+func TestNewlyAddedServersRefreshesChangedStaticFeeds(t *testing.T) {
+	app := newTestApplication(t)
+	server := models.ObaServer{
+		ServerName: "existing", ObaBaseURL: "https://existing.example.com", AgencyID: "agency-a",
+		GtfsStaticFeeds: []string{"https://feeds.example.com/old.zip"},
+	}
+	assertServerKeys(t, app.NewlyAddedServers([]models.ObaServer{server}), server.ServerKey())
+
+	server.GtfsStaticFeeds = []string{"https://feeds.example.com/new.zip"}
+	assertServerKeys(t, app.NewlyAddedServers([]models.ObaServer{server}), server.ServerKey())
+	assertServerKeys(t, app.NewlyAddedServers([]models.ObaServer{server}))
+}
+
+func TestNewlyAddedServersRefreshesChangedStaticNames(t *testing.T) {
+	app := newTestApplication(t)
+	server := models.ObaServer{ServerName: "old server", AgencyName: "old agency", ObaBaseURL: "https://existing.example.com", AgencyID: "agency-a"}
+	assertServerKeys(t, app.NewlyAddedServers([]models.ObaServer{server}), server.ServerKey())
+
+	server.AgencyName = "renamed agency"
+	assertServerKeys(t, app.NewlyAddedServers([]models.ObaServer{server}), server.ServerKey())
+	assertServerKeys(t, app.NewlyAddedServers([]models.ObaServer{server}))
+}
+
 // TestNewlyAddedServersDetectsNewAgencyOnKnownBaseURL is the Bug B regression
 // test. An agency-scoped entry owns exactly one store key, so a second agency
 // added on a base URL that is already configured is a genuine newcomer even

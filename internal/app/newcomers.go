@@ -1,6 +1,7 @@
 package app
 
 import (
+	"slices"
 	"sync"
 
 	"watchdog.onebusaway.org/internal/models"
@@ -11,9 +12,9 @@ import (
 // holds two of them, because the two questions a refresh asks need different
 // spans of history:
 //
-//   - keys: the identity (ServerKey) of every entry in the most recently seen
-//     configuration, replaced wholesale on each Diff. That is what makes
-//     "which entries are genuinely new?" answerable.
+//   - keys and staticFeeds: the identities and static-feed configuration of
+//     entries in the most recently seen config. A static-feed change needs an
+//     immediate refresh even though its ServerKey is unchanged.
 //   - everConfiguredURLs: every oba_base_url ever configured, accumulated and
 //     never forgotten. That is what makes "which series must not be on
 //     /metrics?" answerable on *every* refresh rather than only on the one
@@ -25,6 +26,8 @@ import (
 type KnownServerSet struct {
 	mu                 sync.RWMutex
 	keys               map[string]bool
+	staticFeeds        map[string][]string
+	staticNames        map[string]string
 	everConfiguredURLs map[string]bool
 }
 
@@ -36,6 +39,8 @@ type KnownServerSet struct {
 func NewKnownServerSet(servers []models.ObaServer) *KnownServerSet {
 	set := &KnownServerSet{
 		keys:               make(map[string]bool, len(servers)),
+		staticFeeds:        make(map[string][]string, len(servers)),
+		staticNames:        make(map[string]string, len(servers)),
 		everConfiguredURLs: make(map[string]bool, len(servers)),
 	}
 	set.Diff(servers)
@@ -57,6 +62,8 @@ func (s *KnownServerSet) Diff(servers []models.ObaServer) []models.ObaServer {
 	s.rememberURLs(servers)
 
 	current := make(map[string]bool, len(servers))
+	currentStaticFeeds := make(map[string][]string, len(servers))
+	currentStaticNames := make(map[string]string, len(servers))
 	var added []models.ObaServer
 	for _, server := range servers {
 		key := server.ServerKey()
@@ -64,11 +71,15 @@ func (s *KnownServerSet) Diff(servers []models.ObaServer) []models.ObaServer {
 			continue
 		}
 		current[key] = true
-		if !s.keys[key] {
+		currentStaticFeeds[key] = append([]string(nil), server.GtfsStaticFeeds...)
+		currentStaticNames[key] = server.ServerName + "\x00" + server.AgencyName
+		if !s.keys[key] || !slices.Equal(s.staticFeeds[key], server.GtfsStaticFeeds) || s.staticNames[key] != currentStaticNames[key] {
 			added = append(added, server)
 		}
 	}
 	s.keys = current
+	s.staticFeeds = currentStaticFeeds
+	s.staticNames = currentStaticNames
 	return added
 }
 
