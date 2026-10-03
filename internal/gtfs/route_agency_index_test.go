@@ -153,3 +153,22 @@ func TestRouteAgencyIndexAgencyKeysAreIsolated(t *testing.T) {
 		t.Fatalf("agency B was overwritten: %q", got)
 	}
 }
+
+func TestRouteAgencyIndexAttributesOnlyTo(t *testing.T) {
+	idx := NewRouteAgencyIndex()
+	key := models.ServerKey("https://server.example.com", "A")
+	if idx.AttributesOnlyTo(key, "A") {
+		t.Fatal("expected false without a snapshot")
+	}
+	idx.Replace(key, map[string]string{"route-a": "A"}, map[string]string{"trip-a": "A", "trip-x": ""}, nil)
+	if !idx.AttributesOnlyTo(key, "A") {
+		t.Fatal("expected true when every attribution names A")
+	}
+	if idx.AttributesOnlyTo(key, "B") {
+		t.Fatal("expected false for an agency the snapshot does not name")
+	}
+	idx.Replace(key, map[string]string{"route-a": "A"}, map[string]string{"trip-b": "B"}, nil)
+	if idx.AttributesOnlyTo(key, "A") {
+		t.Fatal("expected false when a trip belongs to another agency")
+	}
+}

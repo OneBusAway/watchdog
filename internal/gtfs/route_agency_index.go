@@ -18,6 +18,9 @@ type serverIndex struct {
 	routeIDs    map[string]string
 	tripIDs     map[string]string
 	agencyNames map[string]string
+	// agencies is every non-empty agency_id the route and trip maps attribute
+	// to, precomputed so per-tick callers need not scan the maps.
+	agencies map[string]struct{}
 }
 
 func NewRouteAgencyIndex() *RouteAgencyIndex {
@@ -31,11 +34,38 @@ func (idx *RouteAgencyIndex) Replace(serverKey string, routes, trips, agencyName
 	if idx.byServer == nil {
 		idx.byServer = make(map[string]*serverIndex)
 	}
+	agencies := make(map[string]struct{})
+	for _, m := range []map[string]string{routes, trips} {
+		for _, agencyID := range m {
+			if agencyID != "" {
+				agencies[agencyID] = struct{}{}
+			}
+		}
+	}
 	idx.byServer[serverKey] = &serverIndex{
 		routeIDs:    cloneStringMap(routes),
 		tripIDs:     cloneStringMap(trips),
 		agencyNames: cloneStringMap(agencyNames),
+		agencies:    agencies,
 	}
+}
+
+// AttributesOnlyTo reports whether the snapshot for serverKey attributes no
+// route or trip to any agency other than agencyID. It is false when no
+// snapshot exists.
+func (idx *RouteAgencyIndex) AttributesOnlyTo(serverKey, agencyID string) bool {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	si := idx.lookupLocked(serverKey)
+	if si == nil {
+		return false
+	}
+	for attributed := range si.agencies {
+		if attributed != agencyID {
+			return false
+		}
+	}
+	return true
 }
 
 func (idx *RouteAgencyIndex) Get(serverKey, routeID string) (string, bool) {

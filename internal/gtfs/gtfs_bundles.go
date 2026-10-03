@@ -4,7 +4,6 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
-	"encoding/csv"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	remoteGtfs "github.com/OneBusAway/go-gtfs"
+	gtfscsv "github.com/OneBusAway/go-gtfs/csv"
 	"github.com/getsentry/sentry-go"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/models"
@@ -119,6 +119,17 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 	if !server.IsServerScoped() {
 		result := buildAgencyStaticSnapshot(server, bundles, logger)
 		serverKey := server.ServerKey()
+		if len(result.data.Routes) == 0 {
+			// Usually the configured agency_id does not match agency.txt/routes.txt.
+			// The snapshot is still stored (filtering is intentional), but the
+			// misconfiguration must not be silent: every vehicle will be filtered out.
+			err := fmt.Errorf("no routes in static feeds resolve to configured agency_id %q", server.AgencyID)
+			logger.Warn("Agency-scoped static snapshot is empty", "server_key", serverKey, "agency_id", server.AgencyID, "error", err)
+			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+				Tags:  map[string]string{"server_name": server.ServerName, "agency_id": server.AgencyID},
+				Level: sentry.LevelWarning,
+			})
+		}
 		staticStore.Set(serverKey, result.data)
 		staticStore.SetFetchTime(serverKey, time.Now().UTC())
 		routeAgencyIndex.Replace(serverKey, result.routeIDs, result.tripIDs, result.agencyNames)
@@ -630,7 +641,9 @@ func normalizeOmittedAgencyID(data []byte, bundle *remoteGtfs.Static) error {
 			return err
 		}
 		defer body.Close()
-		header, err := csv.NewReader(body).Read()
+		// Use the same BOM-aware reader go-gtfs parsed the file with, so a BOM
+		// before a quoted header (or a UTF-16 file) is read identically here.
+		header, err := gtfscsv.BOMAwareCSVReader(body).Read()
 		if err != nil {
 			return err
 		}
@@ -735,10 +748,18 @@ func fetchAndStoreGTFSRTFeed(ctx context.Context, server models.ObaServer, realt
 	}
 	// Agency-mode filtering is deliberately performed before publication so all
 	// metric passes consume the same scoped snapshot.
-	if !server.IsServerScoped() {
-		if routeAgencyIndex == nil || !routeAgencyIndex.Has(server.ServerKey()) {
-			return fmt.Errorf("no GTFS static attribution state for server key %s", server.ServerKey())
-		}
+	//
+	// Until a static snapshot exists (startup, or a server whose static
+	// download keeps failing) there is nothing to attribute against, so the
+	// feed is published unfiltered rather than failing the fetch: a failed
+	// fetch would drop every vehicle metric and raise a realtime error for
+	// what is a static-side problem, already reported by the static download.
+	if !server.IsServerScoped() && routeAgencyIndex != nil && routeAgencyIndex.Has(server.ServerKey()) {
+		// In a feed whose static data names no other agency there is nothing
+		// to filter out, so vehicles that cannot be attributed (no trip, or
+		// IDs missing from a stale bundle) are kept: they are exactly what
+		// the invalid-vehicle checks exist to surface.
+		keepUnresolved := routeAgencyIndex.AttributesOnlyTo(server.ServerKey(), server.AgencyID)
 		filtered := make([]models.RealtimeVehicle, 0, len(merged.Vehicles))
 		for _, realtimeVehicle := range merged.Vehicles {
 			routeID, tripID := "", ""
@@ -747,7 +768,7 @@ func fetchAndStoreGTFSRTFeed(ctx context.Context, server models.ObaServer, realt
 				tripID = realtimeVehicle.Vehicle.Trip.ID.ID
 			}
 			agencyID, ok := routeAgencyIndex.ResolveVehicleAgency(server.ServerKey(), routeID, tripID)
-			if ok && agencyID == server.AgencyID {
+			if (ok && agencyID == server.AgencyID) || (!ok && keepUnresolved) {
 				filtered = append(filtered, realtimeVehicle)
 			}
 		}

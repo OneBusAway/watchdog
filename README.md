@@ -141,7 +141,7 @@ The two metrics below are the operator's view into server-mode health:
 
 #### Vehicle attribution in server-mode
 
-In agency-mode the RT fetch resolves each vehicle by route or trip and stores only vehicles resolved to the configured `agency_id`; foreign, unknown, and conflicting vehicles are dropped before any metric pass. In server-mode one RT feed may carry vehicles from multiple agencies, so Watchdog attributes each vehicle through the same route/trip index built from static data. Unattributed vehicles retain the existing server-scoped quality behavior. See `docs/METRICS.md` for details.
+In agency-mode the RT fetch resolves each vehicle by route or trip and stores only vehicles resolved to the configured `agency_id`; foreign and conflicting vehicles are dropped before any metric pass. Vehicles that cannot be resolved at all (no trip, or IDs missing from the static bundle) are dropped only when the static data names another agency; in a single-agency feed they are kept so the quality checks still see them. Until the first static snapshot loads, the feed is stored unfiltered. In server-mode one RT feed may carry vehicles from multiple agencies, so Watchdog attributes each vehicle through the same route/trip index built from static data. Unattributed vehicles retain the existing server-scoped quality behavior. See `docs/METRICS.md` for details.
 
 ### Backward Compatibility (v1 → v2)
 

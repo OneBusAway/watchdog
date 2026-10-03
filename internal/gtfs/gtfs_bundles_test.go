@@ -733,8 +733,53 @@ func TestFetchAndStoreGTFSRTFeedAgencyModeUsesAgencyKey(t *testing.T) {
 	if got == nil {
 		t.Fatal("expected the feed to populate server.ServerKey()")
 	}
-	if len(got.Vehicles) != 0 {
-		t.Fatalf("expected the unresolvable vehicle to be filtered, got %d", len(got.Vehicles))
+	if len(got.Vehicles) != 1 {
+		t.Fatalf("expected the unresolvable vehicle to be kept when no other agency is known, got %d", len(got.Vehicles))
+	}
+}
+
+func TestFetchAndStoreGTFSRTFeedAgencyModeKeepsUnresolvedVehiclesInSingleAgencyFeed(t *testing.T) {
+	feed := marshalRoutedVehicleFeed(t, []routedTestVehicle{
+		{ID: "owned", RouteID: "route-a", TripID: "trip-a"},
+		{ID: "deadhead"},
+		{ID: "stale", RouteID: "not-in-bundle", TripID: "not-in-bundle"},
+	})
+	rtServer := serveBytes(t, feed)
+	defer rtServer.Close()
+
+	server := models.ObaServer{
+		ServerName: "agency-a", AgencyID: "agency-a", ObaBaseURL: "https://example.com",
+		GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: rtServer.URL}},
+	}
+	index := NewRouteAgencyIndex()
+	index.Replace(server.ServerKey(), map[string]string{"route-a": "agency-a"}, map[string]string{"trip-a": "agency-a"}, nil)
+	store := NewRealtimeStore()
+	if err := fetchAndStoreGTFSRTFeed(context.Background(), server, store, &http.Client{}, index); err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if data := store.Get(server.ServerKey()); data == nil || len(data.Vehicles) != 3 {
+		t.Fatalf("expected all 3 vehicles kept in a single-agency feed, got %+v", data)
+	}
+}
+
+func TestFetchAndStoreGTFSRTFeedAgencyModePublishesUnfilteredWithoutStaticSnapshot(t *testing.T) {
+	feed := marshalRoutedVehicleFeed(t, []routedTestVehicle{
+		{ID: "a", RouteID: "route-a"},
+		{ID: "b", RouteID: "route-b"},
+	})
+	rtServer := serveBytes(t, feed)
+	defer rtServer.Close()
+
+	server := models.ObaServer{
+		ServerName: "agency-a", AgencyID: "agency-a", ObaBaseURL: "https://example.com",
+		GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: rtServer.URL}},
+	}
+	store := NewRealtimeStore()
+	if err := fetchAndStoreGTFSRTFeed(context.Background(), server, store, &http.Client{}, NewRouteAgencyIndex()); err != nil {
+		t.Fatalf("a missing static snapshot must not fail the realtime fetch: %v", err)
+	}
+	if data := store.Get(server.ServerKey()); data == nil || len(data.Vehicles) != 2 {
+		t.Fatalf("expected the unfiltered feed to be published, got %+v", data)
 	}
 }
 
