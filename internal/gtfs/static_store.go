@@ -96,6 +96,17 @@ func (s *StaticStore) IsConfigured(server models.ObaServer) bool {
 	return ok && reflect.DeepEqual(configured, server)
 }
 
+// ConfiguredServers returns a copy of the currently configured server entries.
+func (s *StaticStore) ConfiguredServers() []models.ObaServer {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	servers := make([]models.ObaServer, 0, len(s.configured))
+	for _, server := range s.configured {
+		servers = append(servers, server)
+	}
+	return servers
+}
+
 // ReplaceServerSnapshot publishes one complete static snapshot and retires
 // server-scoped agencies that disappeared from it.
 func (s *StaticStore) ReplaceServerSnapshot(server models.ObaServer, snapshots map[string]*models.StaticData, fetchedAt time.Time) []string {

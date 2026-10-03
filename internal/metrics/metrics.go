@@ -44,14 +44,14 @@ var (
 )
 
 var (
-	AgenciesTrackedCount = promauto.NewGauge(prometheus.GaugeOpts{
+	AgenciesTrackedCount = tracked(promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "oba_tracked_agencies_count",
-		Help: "Number of agencies currently tracked by Watchdog (validated config entries)",
-	})
+		Help: "Number of distinct agencies in the latest complete static GTFS snapshot for this OBA server; agency mode reports 1 when its configured agency snapshot is loaded, otherwise 0",
+	}, []string{"server_name", "server_url"}))
 
 	AgenciesTrackedInfo = tracked(promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "oba_tracked_agencies_info",
-		Help: "One series per agency currently tracked by Watchdog (always 1)",
+		Help: "One series per distinct agency ID found in the latest complete static GTFS snapshot for this OBA server (always 1)",
 	}, []string{"agency_id", "agency_name", "server_name", "server_url"}))
 )
 

@@ -8,7 +8,7 @@ Metrics follow [Prometheus naming conventions](https://prometheus.io/docs/practi
 
 **Identity — the Server Key:** The unique identity of a monitored deployment is the composite of its `oba_base_url` plus `agency_id`. GTFS `agency_id` values are only unique *within* a single OBA server, so two distinct deployments can legitimately reuse the same `agency_id` (e.g. both use `"1"` or `"MTA"`). All Watchdog stores (GTFS static/real-time bundles, bounding boxes, backoff state, vehicle last-seen, unmatched-stop tracking) and config validation are keyed on this composite, so both deployments are monitored independently. Config validation only rejects *exact* duplicates — the same `oba_base_url` **and** `agency_id` — since those are genuine mistakes.
 
-**Shared `agency_id` across deployments:** The metric series labeled with `agency_id`/`agency_name` also carry `server_url` (the sanitized base URL), so the `(agency_id, server_url)` pair is a unique deployment identity mirroring the composite `ServerKey`. Observations from two deployments that share an `agency_id` no longer collide — each keeps its own series. The only exception is the scalar `oba_tracked_agencies_count`, which has no per-deployment series.
+**Shared `agency_id` across deployments:** The metric series labeled with `agency_id`/`agency_name` also carry `server_url` (the sanitized base URL), so the `(agency_id, server_url)` pair is a unique deployment identity mirroring the composite `ServerKey`. Observations from two deployments that share an `agency_id` no longer collide — each keeps its own series. Server-scoped inventory metrics also carry `server_url`.
 
 See [FRESHNESS.md](FRESHNESS.md) for the normative client contract. A recent Prometheus sample proves that `/metrics` was scraped, not that collection advanced.
 
@@ -85,16 +85,18 @@ Clients define the current-value window as `clamp(3 * interval, 60, 300)` second
 
 | Metric Name                    | Type  | Labels                              | Unit    | Description                                                              |
 | ------------------------------ | ----- | ----------------------------------- | ------- | ------------------------------------------------------------------------ |
-| `oba_tracked_agencies_count`   | Gauge | (none)                              | count   | Number of agencies currently tracked by Watchdog (validated config entries). |
+| `oba_tracked_agencies_count`   | Gauge | `server_name`, `server_url` | count   | Number of distinct agencies declared in the latest complete static snapshot for this server. In agency mode, 1 means the configured agency snapshot is present; 0 means it is not currently trackable from static data. |
 | `oba_tracked_agencies_info`    | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url` | presence | One series per tracked agency (always 1), listing the agencies themselves. |
 
 **Interpretation Guide:**
-- **Normal:** `oba_tracked_agencies_count` equals the number of servers in the config that passed validation.
-- **Investigate if:** The count doesn't match the number of servers you expect in the config.
-- **Possible causes:** A config entry failed validation (missing required fields, exact `oba_base_url` + `agency_id` duplicate) and was dropped; or a refresh source (see `--config-url`) removed an agency.
+- **Normal:** In server mode, the count equals the number of distinct agency IDs declared by the server's configured static feeds. In agency mode, the count is 1 when the configured agency is present in the retained static snapshot and 0 otherwise.
+- **Investigate if:** The count unexpectedly changes after a successful complete static refresh or is 0 when an agency snapshot is expected.
+- **Possible causes:** A changed static feed, an agency removed or added in `agency.txt`, a config change, or no successfully published static snapshot yet.
 - **Notes:**
-  - These metrics are emitted once at startup and re-emitted only when the tracked set changes (a remote config refresh adds or removes an agency) — never on the periodic collection tick.
-  - Stale series are pruned when an agency is removed, so `sum(oba_tracked_agencies_info) == oba_tracked_agencies_count`.
+  - Inventory reflects Watchdog's latest complete static snapshot, not the number of accepted configuration objects and not OBA's current realtime agency set.
+  - `oba_tracked_agencies_info` has one series per distinct static agency ID, with the agency name, server name, and server URL.
+  - These gauges refresh when configuration changes and after a complete static snapshot is published. Failed refreshes preserve the prior snapshot and inventory.
+  - **TODO (#163):** compare this static agency set with the agency IDs reported by OBA's `metrics.json` API and expose alignment/mismatch status. Until then, `gtfs_static_agency_reported_by_oba` remains the separate OBA-side coverage signal.
 - **Example alert:**
 ```promql
   oba_tracked_agencies_count < 1

@@ -132,7 +132,7 @@ func (ms *MetricsService) CountActiveVehiclesForAgency(ctx context.Context, serv
 }
 
 func (ms *MetricsService) ReportTrackedAgencies(servers []models.ObaServer) {
-	reportTrackedAgencies(servers)
+	reportTrackedAgencies(servers, ms.StaticStore)
 }
 
 func (ms *MetricsService) RetireInactiveVehicleAgency(server models.ObaServer) {
@@ -189,6 +189,7 @@ func (ms *MetricsService) StaticBundleObserver() func(server models.ObaServer, a
 		serverURL := utils.SanitizeServerURL(server.ObaBaseURL)
 		if bundle == nil {
 			DeleteSeriesForAgency(serverURL, agencyID)
+			reportTrackedAgenciesForServer(server, ms.StaticStore)
 			return
 		}
 		GtfsStaticStopsCount.WithLabelValues(
@@ -197,5 +198,6 @@ func (ms *MetricsService) StaticBundleObserver() func(server models.ObaServer, a
 		GtfsStaticRoutesCount.WithLabelValues(
 			agencyID, agencyName, server.ServerName, serverURL,
 		).Set(float64(len(bundle.Routes)))
+		reportTrackedAgenciesForServer(server, ms.StaticStore)
 	}
 }
