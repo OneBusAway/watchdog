@@ -3,7 +3,6 @@ package config
 import (
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -22,11 +21,11 @@ import (
 // either a config file "--config-file", a remote config URL "--config-url".
 //
 // Returns an error if more than one input method is specified.
-func ValidateConfigFlags(configFile, configURL *string) error {
+func ValidateConfigFlags(configFile, configURL *string, extraArgs []string) error {
 	if *configFile == "" && *configURL == "" {
 		return fmt.Errorf("no configuration provided, either --config-file or --config-url must be specified")
 	}
-	if (*configFile != "" && *configURL != "") || (*configFile != "" && len(flag.Args()) > 0) || (*configURL != "" && len(flag.Args()) > 0) {
+	if (*configFile != "" && *configURL != "") || len(extraArgs) > 0 {
 		return fmt.Errorf("only one of --config-file or --config-url can be specified")
 	}
 	return nil

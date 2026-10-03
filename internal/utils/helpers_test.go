@@ -73,3 +73,10 @@ func TestSanitizeServerURL(t *testing.T) {
 		})
 	}
 }
+
+func TestMakeMap(t *testing.T) {
+	m := MakeMap("key", "value")
+	if len(m) != 1 || m["key"] != "value" {
+		t.Fatalf("MakeMap failed, got %v", m)
+	}
+}

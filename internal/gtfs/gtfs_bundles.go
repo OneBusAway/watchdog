@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
 	"net/http"
 	"sync"
 	"time"
@@ -164,7 +163,7 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 	if !server.IsServerScoped() {
 		for agencyID, err := range agencyBoxErrors {
 			if agencyID != server.AgencyID {
-				logger.Error("Could not compute agency bounding box",
+				logger.Warn("Could not compute agency bounding box",
 					"server_key", models.ServerKey(server.ObaBaseURL, agencyID), "agency_id", agencyID, "error", err)
 			}
 		}
@@ -267,64 +266,6 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 	return nil
 }
 
-// boundingBoxAccumulator incrementally computes geographic bounds without
-// retaining the stops that produced them. computeBoundingBoxes creates one for
-// the server-wide union and one for each agency declared by the source feeds.
-// Its memory use remains constant as stops are added: box holds the four
-// extrema, stopCount distinguishes an empty feed from one whose coordinates are
-// all invalid, and initialized records whether a valid coordinate was seen.
-type boundingBoxAccumulator struct {
-	box         geo.BoundingBox
-	stopCount   int
-	initialized bool
-}
-
-// add incorporates one stop into the running bounds. All stops increment
-// stopCount, but stops with missing or NaN coordinates cannot affect the box.
-// The first valid coordinate initializes all four extrema; every later valid
-// coordinate updates only the minima or maxima it exceeds.
-func (a *boundingBoxAccumulator) add(stop remoteGtfs.Stop) {
-	a.stopCount++
-	if stop.Latitude == nil || stop.Longitude == nil {
-		return
-	}
-	lat, lon := *stop.Latitude, *stop.Longitude
-	if math.IsNaN(lat) || math.IsNaN(lon) {
-		return
-	}
-	if !a.initialized {
-		a.box = geo.BoundingBox{MinLat: lat, MaxLat: lat, MinLon: lon, MaxLon: lon}
-		a.initialized = true
-		return
-	}
-	if lat < a.box.MinLat {
-		a.box.MinLat = lat
-	}
-	if lat > a.box.MaxLat {
-		a.box.MaxLat = lat
-	}
-	if lon < a.box.MinLon {
-		a.box.MinLon = lon
-	}
-	if lon > a.box.MaxLon {
-		a.box.MaxLon = lon
-	}
-}
-
-// result finalizes an accumulator after its source stops have been processed.
-// It distinguishes an accumulator that received no stops from one that received
-// stops but never saw a valid latitude/longitude pair, allowing the caller to
-// log the appropriate failure or fall back to the server-wide union box.
-func (a *boundingBoxAccumulator) result() (geo.BoundingBox, error) {
-	if a.stopCount == 0 {
-		return geo.BoundingBox{}, fmt.Errorf("no stops to compute bounding box")
-	}
-	if !a.initialized {
-		return geo.BoundingBox{}, fmt.Errorf("no valid latitude/longitude found in stops")
-	}
-	return a.box, nil
-}
-
 // computedBoundingBoxes contains the complete transient result of the source-
 // feed walk. union covers every stop from every feed and is used by the
 // server-scoped vehicle pass and as the agency fallback. byAgency contains each
@@ -359,8 +300,8 @@ type computedBoundingBoxes struct {
 // geo.BoundingBox or an error. storeStaticForServer stores successful agency
 // boxes and uses union as the fallback for agencies without usable bounds.
 func computeBoundingBoxes(bundles []*remoteGtfs.Static) computedBoundingBoxes {
-	union := &boundingBoxAccumulator{}
-	byAgency := make(map[string]*boundingBoxAccumulator)
+	union := &geo.BoundingBoxAccumulator{}
+	byAgency := make(map[string]*geo.BoundingBoxAccumulator)
 	for _, bundle := range bundles {
 		if bundle == nil {
 			continue
@@ -373,14 +314,14 @@ func computeBoundingBoxes(bundles []*remoteGtfs.Static) computedBoundingBoxes {
 			}
 			agencyIDs[agency.Id] = struct{}{}
 			if byAgency[agency.Id] == nil {
-				byAgency[agency.Id] = &boundingBoxAccumulator{}
+				byAgency[agency.Id] = &geo.BoundingBoxAccumulator{}
 			}
 		}
 
 		for _, stop := range bundle.Stops {
-			union.add(stop)
+			union.Add(stop)
 			for agencyID := range agencyIDs {
-				byAgency[agencyID].add(stop)
+				byAgency[agencyID].Add(stop)
 			}
 		}
 	}
@@ -389,10 +330,10 @@ func computeBoundingBoxes(bundles []*remoteGtfs.Static) computedBoundingBoxes {
 		byAgency:       make(map[string]geo.BoundingBox, len(byAgency)),
 		errorsByAgency: make(map[string]error),
 	}
-	result.union, result.unionErr = union.result()
+	result.union, result.unionErr = union.Result()
 	for agencyID, accumulator := range byAgency {
-		box, err := accumulator.result()
-		if accumulator.stopCount == 0 {
+		box, err := accumulator.Result()
+		if accumulator.StopCount() == 0 {
 			continue
 		}
 		if err != nil {

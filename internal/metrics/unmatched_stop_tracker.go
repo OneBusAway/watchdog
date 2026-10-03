@@ -43,13 +43,6 @@ type trackedCluster struct {
 	LastSeen   time.Time
 }
 
-type stopKey struct {
-	StopID   string
-	StopName string
-	Lat      string
-	Lon      string
-}
-
 // UnmatchedStopTracker stores the most recent observation of each unmatched
 // stop and unmatched-stop cluster per server. Stop series and cluster series
 // are tracked independently: a cluster series is deleted once the cluster
@@ -57,19 +50,17 @@ type stopKey struct {
 // its members.
 //
 // The outer map key is the composite server key (oba_base_url + agency_id) and
-// the innermost map key is the stop identity including location (Entries) or
-// the cluster key (Clusters).
+// the innermost map key is the stop ID (Entries) or the cluster key (Clusters).
 type UnmatchedStopTracker struct {
 	Mu       sync.RWMutex
-	Entries  map[string]map[stopKey]trackedStop
+	Entries  map[string]map[string]trackedStop
 	Clusters map[string]map[clusterKey]trackedCluster
 }
 
-// NewUnmatchedStopTracker creates an empty tracker. Stop entries include every
-// metric label in the key so the exact Prometheus series can be retired.
+// NewUnmatchedStopTracker creates an empty tracker.
 func NewUnmatchedStopTracker() *UnmatchedStopTracker {
 	return &UnmatchedStopTracker{
-		Entries:  make(map[string]map[stopKey]trackedStop),
+		Entries:  make(map[string]map[string]trackedStop),
 		Clusters: make(map[string]map[clusterKey]trackedCluster),
 	}
 }
@@ -85,27 +76,25 @@ func (t *UnmatchedStopTracker) RecordLastSeen(serverKey, agencyID, agencyName, s
 
 	stops, ok := t.Entries[serverKey]
 	if !ok {
-		stops = make(map[stopKey]trackedStop)
+		stops = make(map[string]trackedStop)
 		t.Entries[serverKey] = stops
 	}
 
-	key := stopKey{StopID: stopID, StopName: stopName, Lat: lat, Lon: lon}
-	for oldKey, oldEntry := range stops {
-		if oldKey.StopID == stopID && oldKey != key {
-			ObaUnmatchedStopInfo.DeleteLabelValues(oldEntry.AgencyID, oldEntry.AgencyName, oldEntry.ServerName, oldEntry.ServerURL, oldKey.StopID, oldEntry.StopName, oldEntry.Lat, oldEntry.Lon)
-			delete(stops, oldKey)
+	if oldEntry, exists := stops[stopID]; exists {
+		if oldEntry.AgencyID != agencyID || oldEntry.AgencyName != agencyName ||
+			oldEntry.ServerName != serverName || oldEntry.ServerURL != serverURL ||
+			oldEntry.StopName != stopName || oldEntry.Lat != lat || oldEntry.Lon != lon {
+			// The stop changed its agency, server, name, or location, so the
+			// series labeled with its previous values is now stale. Delete it so
+			// the new series can be emitted without leaking the old one.
+			ObaUnmatchedStopInfo.DeleteLabelValues(
+				oldEntry.AgencyID, oldEntry.AgencyName, oldEntry.ServerName, oldEntry.ServerURL,
+				stopID, oldEntry.StopName, oldEntry.Lat, oldEntry.Lon,
+			)
 		}
 	}
-	entry, exists := stops[key]
-	if exists && (entry.AgencyName != agencyName || entry.ServerName != serverName || entry.ServerURL != serverURL || entry.AgencyID != agencyID) {
-		// The stop changed its agency name, server, name, or location, so the
-		// series labeled with its previous values is now stale. Delete it so
-		// both it and the new series are pruned correctly, instead of freezing
-		// the first-seen labels.
-		ObaUnmatchedStopInfo.DeleteLabelValues(entry.AgencyID, entry.AgencyName, entry.ServerName, entry.ServerURL, stopID, entry.StopName, entry.Lat, entry.Lon)
-	}
 
-	stops[key] = trackedStop{
+	stops[stopID] = trackedStop{
 		AgencyID:   agencyID,
 		AgencyName: agencyName,
 		ServerName: serverName,
@@ -189,13 +178,13 @@ func (t *UnmatchedStopTracker) clearStops(now time.Time, threshold time.Duration
 	}
 
 	for serverKey, stops := range t.Entries {
-		for key, entry := range stops {
+		for stopID, entry := range stops {
 			if now.Sub(entry.LastSeen) <= threshold {
 				continue
 			}
 
-			ObaUnmatchedStopInfo.DeleteLabelValues(entry.AgencyID, entry.AgencyName, entry.ServerName, entry.ServerURL, key.StopID, entry.StopName, entry.Lat, entry.Lon)
-			delete(stops, key)
+			ObaUnmatchedStopInfo.DeleteLabelValues(entry.AgencyID, entry.AgencyName, entry.ServerName, entry.ServerURL, stopID, entry.StopName, entry.Lat, entry.Lon)
+			delete(stops, stopID)
 		}
 
 		if len(stops) == 0 {
