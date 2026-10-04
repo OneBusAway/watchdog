@@ -203,3 +203,39 @@ func TestReconcileForgetsPublishedContentOfRemovedServers(t *testing.T) {
 		t.Fatal("a re-added server's unchanged feeds were not re-published")
 	}
 }
+
+// Server-scoped entries store one snapshot per agency declared in agency.txt,
+// none under the agency-less server key, so confirming an unchanged refresh
+// must renew every agency's fetch time.
+func TestDailyRefreshOfUnchangedFeedsRenewsEveryServerScopedAgency(t *testing.T) {
+	h := newUnchangedFeedHarness(t)
+	server := h.server
+	server.AgencyID, server.AgencyName = "", ""
+	h.server = server
+	h.store.SetConfiguredServers([]models.ObaServer{server})
+	h.run(t, server, StaticRefreshStartup)
+
+	stale := time.Now().UTC().Add(-time.Hour)
+	before := map[string]*models.StaticData{}
+	h.store.Range(func(key string, data *models.StaticData) bool {
+		before[key] = data
+		return true
+	})
+	if len(before) == 0 {
+		t.Fatal("setup: server-scoped startup published no agency snapshots")
+	}
+	for key := range before {
+		h.store.SetFetchTime(key, stale)
+	}
+
+	h.run(t, server, StaticRefreshDaily)
+
+	for key, data := range before {
+		if current, _ := h.store.Get(key); current != data {
+			t.Fatalf("%s: unchanged feeds were re-published", key)
+		}
+		if fetchedAt, _ := h.store.GetFetchTime(key); !fetchedAt.After(stale) {
+			t.Fatalf("%s: fetch time = %v, want it advanced past %v", key, fetchedAt, stale)
+		}
+	}
+}
