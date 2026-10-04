@@ -10,6 +10,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+	// Embedded zones back time.LoadLocation when the host's tz database lacks
+	// a name, as newer Debian releases do for links like US/Pacific unless
+	// tzdata-legacy is installed.
+	_ "time/tzdata"
 
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/utils"
@@ -275,6 +279,7 @@ type rawScheduleFeed struct {
 type rawAgency struct {
 	id       string
 	timezone string
+	location *time.Location
 }
 
 type rawService struct {
@@ -340,10 +345,9 @@ func compileRawSchedules(server models.ObaServer, compiled []rawScheduleFeed) (m
 		for agencyID, agency := range feed.agencies {
 			b := builders[agencyID]
 			if b == nil {
-				location, _ := time.LoadLocation(agency.timezone)
-				b = &builder{timezoneName: agency.timezone, timezone: location, services: make(map[string]*scheduleService), feeds: make(map[string]struct{})}
+				b = &builder{timezoneName: agency.timezone, timezone: agency.location, services: make(map[string]*scheduleService), feeds: make(map[string]struct{})}
 				builders[agencyID] = b
-			} else if b.timezoneName != agency.timezone {
+			} else if !sameTimezoneRules(b.timezone, agency.location) {
 				return nil, fmt.Errorf("agency %q uses mixed timezones %q and %q", agencyID, b.timezoneName, agency.timezone)
 			}
 			b.feeds[utils.SanitizeServerURL(feed.url)] = struct{}{}
@@ -455,14 +459,24 @@ func parseRawScheduleFeed(feedURL string, data []byte, server models.ObaServer) 
 	if err != nil {
 		return result, err
 	}
+	// Agencies in one feed must share a zone, but not necessarily its name:
+	// San Diego's merged feed mixes America/Los_Angeles with its link
+	// US/Pacific.
+	var feedTimezone *time.Location
 	for _, row := range agencyRows.rows {
 		id := cell(row, agencyRows.index["agency_id"])
 		zone := cell(row, agencyRows.index["agency_timezone"])
 		if zone == "" {
 			return result, fmt.Errorf("agency has no agency_timezone")
 		}
-		if _, err := time.LoadLocation(zone); err != nil {
+		location, err := time.LoadLocation(zone)
+		if err != nil {
 			return result, fmt.Errorf("invalid agency_timezone %q: %w", zone, err)
+		}
+		if feedTimezone == nil {
+			feedTimezone = location
+		} else if !sameTimezoneRules(feedTimezone, location) {
+			return result, fmt.Errorf("agency.txt contains mixed timezones %q and %q", feedTimezone, zone)
 		}
 		effectiveID := id
 		if effectiveID == "" && !server.IsServerScoped() && len(agencyRows.rows) == 1 {
@@ -474,18 +488,10 @@ func parseRawScheduleFeed(feedURL string, data []byte, server models.ObaServer) 
 		if _, duplicate := result.agencies[effectiveID]; duplicate {
 			return result, fmt.Errorf("duplicate agency_id %q", effectiveID)
 		}
-		result.agencies[effectiveID] = rawAgency{id: effectiveID, timezone: zone}
+		result.agencies[effectiveID] = rawAgency{id: effectiveID, timezone: zone, location: location}
 	}
 	if len(result.agencies) == 0 {
 		return result, fmt.Errorf("agency.txt has no rows")
-	}
-	var feedTimezone string
-	for _, agency := range result.agencies {
-		if feedTimezone == "" {
-			feedTimezone = agency.timezone
-		} else if agency.timezone != feedTimezone {
-			return result, fmt.Errorf("agency.txt contains mixed timezones %q and %q", feedTimezone, agency.timezone)
-		}
 	}
 
 	routeRows, err := requiredTable(files, "routes.txt", "route_id")
@@ -875,4 +881,68 @@ func maxDuration(a, b time.Duration) time.Duration {
 		return a
 	}
 	return b
+}
+
+// timezoneRuleSpans are the instants over which sameTimezoneRules compares two
+// zones: every day from 1970 through 2100, which includes years governed by
+// each zone's final recurring rule, plus a sample of the far future.
+var timezoneRuleSpans = [][2]time.Time{
+	{time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2101, 1, 1, 0, 0, 0, 0, time.UTC)},
+	{time.Date(2500, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2502, 1, 1, 0, 0, 0, 0, time.UTC)},
+}
+
+// sameTimezoneRules reports whether a and b are the same zone under different
+// names, such as America/Los_Angeles and its backward-compatibility link
+// US/Pacific. Go does not canonicalize links, so the zones are compared by
+// their rules rather than their names: the UTC offset must agree once a day
+// across timezoneRuleSpans, and wherever it changes, both zones must change at
+// the same second. Zones that share an offset today but not their rules
+// (America/Phoenix and America/Denver, or America/Los_Angeles and
+// America/Tijuana) differ within that span. Both locations come from the same
+// tz database, so a link compares equal to its target whichever database the
+// host provides. The daily sampling assumes no zone changes its offset twice
+// within one day; no zone in the tz database does between 1970 and 2100.
+//
+// Time.ZoneBounds would avoid the sampling, but in years governed by a zone's
+// final rule it reports stale period ends around the year boundary.
+func sameTimezoneRules(a, b *time.Location) bool {
+	if a.String() == b.String() {
+		return true
+	}
+	for _, span := range timezoneRuleSpans {
+		previous := span[0]
+		previousOffset := utcOffset(previous, a)
+		for t := previous; !t.After(span[1]); t = t.Add(24 * time.Hour) {
+			offset := utcOffset(t, a)
+			if offset != utcOffset(t, b) {
+				return false
+			}
+			if offset != previousOffset && !offsetChange(previous, t, a).Equal(offsetChange(previous, t, b)) {
+				return false
+			}
+			previous, previousOffset = t, offset
+		}
+	}
+	return true
+}
+
+func utcOffset(t time.Time, location *time.Location) int {
+	_, offset := t.In(location).Zone()
+	return offset
+}
+
+// offsetChange returns the first second in (from, to] at which location's UTC
+// offset differs from its offset at from. The caller guarantees it differs at
+// to.
+func offsetChange(from, to time.Time, location *time.Location) time.Time {
+	before := utcOffset(from, location)
+	for to.Sub(from) > time.Second {
+		middle := from.Add((to.Sub(from) / 2).Truncate(time.Second))
+		if utcOffset(middle, location) == before {
+			from = middle
+		} else {
+			to = middle
+		}
+	}
+	return to
 }

@@ -3,6 +3,7 @@ package gtfs
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"testing"
 	"time"
@@ -162,6 +163,12 @@ func TestCompileSchedulesRejectsUnsafeParserFallbacks(t *testing.T) {
 		{"mixed timezones", func(files map[string]string) {
 			files["agency.txt"] = "agency_id,agency_name,agency_url,agency_timezone\nA,A,https://a.example,UTC\nB,B,https://b.example,America/New_York\n"
 		}},
+		{"same offset today with different rules", func(files map[string]string) {
+			files["agency.txt"] = "agency_id,agency_name,agency_url,agency_timezone\nA,A,https://a.example,America/Phoenix\nB,B,https://b.example,America/Denver\n"
+		}},
+		{"neighboring zone with different historical rules", func(files map[string]string) {
+			files["agency.txt"] = "agency_id,agency_name,agency_url,agency_timezone\nA,A,https://a.example,America/Los_Angeles\nB,B,https://b.example,America/Tijuana\n"
+		}},
 		{"missing endpoint", func(files map[string]string) {
 			files["stop_times.txt"] = "trip_id,arrival_time,departure_time,stop_id,stop_sequence\nT,,08:00:00,S1,1\nT,09:00:00,09:00:00,S2,2\n"
 		}},
@@ -182,6 +189,122 @@ func TestCompileSchedulesRejectsUnsafeParserFallbacks(t *testing.T) {
 			}
 		})
 	}
+}
+
+// San Diego's merged feed declares America/Los_Angeles for three agencies and
+// the backward-compatibility link US/Pacific for the fourth. They are one zone,
+// so the feed must compile, and each agency keeps the name it declared.
+func TestCompileSchedulesAcceptsTimezoneAliases(t *testing.T) {
+	files := basicScheduleFiles("UTC", "10:00:00", "11:00:00")
+	files["agency.txt"] = "agency_id,agency_name,agency_url,agency_timezone\nA,Agency A,https://a.example,America/Los_Angeles\nB,Agency B,https://b.example,US/Pacific\n"
+	files["routes.txt"] = "route_id,agency_id,route_short_name,route_type\nRA,A,A,3\nRB,B,B,3\n"
+	files["trips.txt"] = "route_id,service_id,trip_id\nRA,WK,TA\nRB,WK,TB\n"
+	files["stop_times.txt"] = "trip_id,arrival_time,departure_time,stop_id,stop_sequence\nTA,10:00:00,10:00:00,S1,1\nTA,11:00:00,11:00:00,S2,2\nTB,10:00:00,10:00:00,S1,1\nTB,11:00:00,11:00:00,S2,2\n"
+	server := scheduleServer("", "https://aliases.zip")
+	snapshots, err := compileSchedules(server, []downloadedStaticFeed{{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, files)}})
+	if err != nil {
+		t.Fatalf("compile feed with aliased timezones: %v", err)
+	}
+	for agencyID, want := range map[string]string{"A": "America/Los_Angeles", "B": "US/Pacific"} {
+		snapshot := snapshots[models.ServerKey(server.ObaBaseURL, agencyID)]
+		if snapshot == nil || snapshot.timezoneName != want {
+			t.Fatalf("agency %s snapshot = %+v, want timezone %q", agencyID, snapshot, want)
+		}
+	}
+}
+
+func TestCompileSchedulesAcrossFeedsComparesTimezoneRules(t *testing.T) {
+	compile := func(first, second string) error {
+		server := scheduleServer("A", "https://one.zip", "https://two.zip")
+		_, err := compileSchedules(server, []downloadedStaticFeed{
+			{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, basicScheduleFiles(first, "08:00:00", "09:00:00"))},
+			{url: server.GtfsStaticFeeds[1], data: makeScheduleZip(t, basicScheduleFiles(second, "17:00:00", "18:00:00"))},
+		})
+		return err
+	}
+	if err := compile("America/Los_Angeles", "US/Pacific"); err != nil {
+		t.Fatalf("aliased timezones across feeds must compile: %v", err)
+	}
+	if err := compile("America/Los_Angeles", "America/Tijuana"); err == nil {
+		t.Fatal("different zones across feeds must not compile")
+	}
+}
+
+func TestSameTimezoneRules(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want bool
+	}{
+		{"America/Los_Angeles", "America/Los_Angeles", true},
+		{"America/Los_Angeles", "US/Pacific", true},
+		{"America/New_York", "US/Eastern", true},
+		{"Pacific/Honolulu", "US/Hawaii", true},
+		{"UTC", "Etc/UTC", true},
+		{"Europe/Kyiv", "Europe/Kiev", true},
+		{"UTC", "America/New_York", false},
+		{"America/Phoenix", "America/Denver", false},
+		{"America/Los_Angeles", "America/Tijuana", false},
+		{"America/Los_Angeles", "America/Vancouver", false},
+		{"America/Indiana/Indianapolis", "America/New_York", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.a+"_"+tc.b, func(t *testing.T) {
+			a, err := time.LoadLocation(tc.a)
+			if err != nil {
+				t.Fatalf("load %s: %v", tc.a, err)
+			}
+			b, err := time.LoadLocation(tc.b)
+			if err != nil {
+				t.Fatalf("load %s: %v", tc.b, err)
+			}
+			if got := sameTimezoneRules(a, b); got != tc.want {
+				t.Fatalf("sameTimezoneRules(%s, %s) = %t, want %t", tc.a, tc.b, got, tc.want)
+			}
+			if got := sameTimezoneRules(b, a); got != tc.want {
+				t.Fatalf("sameTimezoneRules(%s, %s) = %t, want %t", tc.b, tc.a, got, tc.want)
+			}
+		})
+	}
+}
+
+// Two zones that change offset on the same day but an hour apart agree at
+// every daily sample, so only the transition-instant comparison tells them
+// apart.
+func TestSameTimezoneRulesComparesTransitionInstants(t *testing.T) {
+	transition := time.Date(2000, 4, 2, 10, 0, 0, 0, time.UTC)
+	ten := syntheticZone(t, "Test/Ten", transition)
+	if !sameTimezoneRules(ten, syntheticZone(t, "Test/TenAgain", transition)) {
+		t.Fatal("zones with identical transitions must compare equal")
+	}
+	if sameTimezoneRules(ten, syntheticZone(t, "Test/Eleven", transition.Add(time.Hour))) {
+		t.Fatal("zones whose transitions differ by an hour must not compare equal")
+	}
+}
+
+// syntheticZone builds a TZif v1 zone that is UTC-8 until transition and
+// UTC-7 afterward.
+func syntheticZone(t *testing.T, name string, transition time.Time) *time.Location {
+	t.Helper()
+	var data bytes.Buffer
+	data.WriteString("TZif")
+	data.Write(make([]byte, 16))
+	// Counts: UT/local indicators, standard/wall indicators, leap seconds,
+	// transitions, local time types, and abbreviation bytes.
+	for _, count := range []uint32{0, 0, 0, 1, 2, 8} {
+		_ = binary.Write(&data, binary.BigEndian, count)
+	}
+	_ = binary.Write(&data, binary.BigEndian, int32(transition.Unix()))
+	data.WriteByte(1)
+	_ = binary.Write(&data, binary.BigEndian, int32(-8*3600))
+	data.Write([]byte{0, 0})
+	_ = binary.Write(&data, binary.BigEndian, int32(-7*3600))
+	data.Write([]byte{1, 4})
+	data.WriteString("PST\x00PDT\x00")
+	location, err := time.LoadLocationFromTZData(name, data.Bytes())
+	if err != nil {
+		t.Fatalf("build synthetic zone %s: %v", name, err)
+	}
+	return location
 }
 
 func TestCompileSchedulesMultipleFeedsAndAtomicAvailability(t *testing.T) {
