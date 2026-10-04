@@ -71,10 +71,10 @@ type unchangedFeedHarness struct {
 func newUnchangedFeedHarness(t *testing.T) *unchangedFeedHarness {
 	t.Helper()
 	body := &atomic.Value{}
-	body.Store(readFixture(t, "gtfs.zip"))
+	body.Store(smallStaticFeed(t))
 	ts := feedServer(t, body)
 	server := models.ObaServer{
-		ServerName: "OBA", AgencyID: "40", AgencyName: "Sound Transit", ObaBaseURL: ts.URL,
+		ServerName: "OBA", AgencyID: "A", AgencyName: "Agency A", ObaBaseURL: ts.URL,
 		GtfsStaticFeeds: []string{ts.URL + "/feed.zip"},
 	}
 	store := NewStaticStore()
@@ -127,7 +127,7 @@ func TestRefreshPublishesWhenFeedContentChanges(t *testing.T) {
 	h.run(t, h.server, StaticRefreshStartup)
 	before := h.published(t)
 
-	h.body.Store(withExtraZipEntry(t, readFixture(t, "gtfs.zip")))
+	h.body.Store(withExtraZipEntry(t, smallStaticFeed(t)))
 	h.run(t, h.server, StaticRefreshDaily)
 
 	if h.published(t) == before {
@@ -238,4 +238,10 @@ func TestDailyRefreshOfUnchangedFeedsRenewsEveryServerScopedAgency(t *testing.T)
 			t.Fatalf("%s: fetch time = %v, want it advanced past %v", key, fetchedAt, stale)
 		}
 	}
+}
+
+// smallStaticFeed is a minimal valid feed for agency A. These tests compare
+// feed hashes, and a full fixture parse takes seconds under -race.
+func smallStaticFeed(t *testing.T) []byte {
+	return makeScheduleZip(t, basicScheduleFiles("UTC", "08:00:00", "09:00:00"))
 }
