@@ -10,10 +10,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	// Embedded zones back time.LoadLocation when the host's tz database lacks
-	// a name, as newer Debian releases do for links like US/Pacific unless
-	// tzdata-legacy is installed.
-	_ "time/tzdata"
 
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/utils"
@@ -278,7 +274,6 @@ type rawScheduleFeed struct {
 
 type rawAgency struct {
 	id       string
-	timezone string
 	location *time.Location
 }
 
@@ -334,21 +329,20 @@ func compileRawSchedules(server models.ObaServer, compiled []rawScheduleFeed) (m
 	}
 
 	type builder struct {
-		timezoneName string
-		timezone     *time.Location
-		services     map[string]*scheduleService
-		feeds        map[string]struct{}
-		maxOffset    time.Duration
+		timezone  *time.Location
+		services  map[string]*scheduleService
+		feeds     map[string]struct{}
+		maxOffset time.Duration
 	}
 	builders := make(map[string]*builder)
 	for feedIndex, feed := range compiled {
 		for agencyID, agency := range feed.agencies {
 			b := builders[agencyID]
 			if b == nil {
-				b = &builder{timezoneName: agency.timezone, timezone: agency.location, services: make(map[string]*scheduleService), feeds: make(map[string]struct{})}
+				b = &builder{timezone: agency.location, services: make(map[string]*scheduleService), feeds: make(map[string]struct{})}
 				builders[agencyID] = b
 			} else if !sameTimezoneRules(b.timezone, agency.location) {
-				return nil, fmt.Errorf("agency %q uses mixed timezones %q and %q", agencyID, b.timezoneName, agency.timezone)
+				return nil, fmt.Errorf("agency %q uses mixed timezones %q and %q", agencyID, b.timezone, agency.location)
 			}
 			b.feeds[utils.SanitizeServerURL(feed.url)] = struct{}{}
 		}
@@ -438,7 +432,7 @@ func compileRawSchedules(server models.ObaServer, compiled []rawScheduleFeed) (m
 			services = append(services, service)
 		}
 		snapshots[models.ServerKey(server.ObaBaseURL, agencyID)] = &ScheduleSnapshot{
-			timezone: b.timezone, timezoneName: b.timezoneName, services: services,
+			timezone: b.timezone, timezoneName: b.timezone.String(), services: services,
 			feedURLs: feeds, maxOvernightOffset: b.maxOffset, complete: true,
 		}
 	}
@@ -476,7 +470,7 @@ func parseRawScheduleFeed(feedURL string, data []byte, server models.ObaServer) 
 		if feedTimezone == nil {
 			feedTimezone = location
 		} else if !sameTimezoneRules(feedTimezone, location) {
-			return result, fmt.Errorf("agency.txt contains mixed timezones %q and %q", feedTimezone, zone)
+			return result, fmt.Errorf("agency.txt contains mixed timezones %q and %q", feedTimezone, location)
 		}
 		effectiveID := id
 		if effectiveID == "" && !server.IsServerScoped() && len(agencyRows.rows) == 1 {
@@ -488,7 +482,7 @@ func parseRawScheduleFeed(feedURL string, data []byte, server models.ObaServer) 
 		if _, duplicate := result.agencies[effectiveID]; duplicate {
 			return result, fmt.Errorf("duplicate agency_id %q", effectiveID)
 		}
-		result.agencies[effectiveID] = rawAgency{id: effectiveID, timezone: zone, location: location}
+		result.agencies[effectiveID] = rawAgency{id: effectiveID, location: location}
 	}
 	if len(result.agencies) == 0 {
 		return result, fmt.Errorf("agency.txt has no rows")

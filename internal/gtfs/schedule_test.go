@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"testing"
 	"time"
+	// The binary embeds tzdata in main; tests embed it too so legacy links
+	// like US/Pacific load on hosts without tzdata-legacy.
+	_ "time/tzdata"
 
 	"watchdog.onebusaway.org/internal/models"
 )
@@ -249,14 +252,7 @@ func TestSameTimezoneRules(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.a+"_"+tc.b, func(t *testing.T) {
-			a, err := time.LoadLocation(tc.a)
-			if err != nil {
-				t.Fatalf("load %s: %v", tc.a, err)
-			}
-			b, err := time.LoadLocation(tc.b)
-			if err != nil {
-				t.Fatalf("load %s: %v", tc.b, err)
-			}
+			a, b := mustLoadLocation(t, tc.a), mustLoadLocation(t, tc.b)
 			if got := sameTimezoneRules(a, b); got != tc.want {
 				t.Fatalf("sameTimezoneRules(%s, %s) = %t, want %t", tc.a, tc.b, got, tc.want)
 			}
@@ -279,6 +275,15 @@ func TestSameTimezoneRulesComparesTransitionInstants(t *testing.T) {
 	if sameTimezoneRules(ten, syntheticZone(t, "Test/Eleven", transition.Add(time.Hour))) {
 		t.Fatal("zones whose transitions differ by an hour must not compare equal")
 	}
+}
+
+func mustLoadLocation(t *testing.T, name string) *time.Location {
+	t.Helper()
+	location, err := time.LoadLocation(name)
+	if err != nil {
+		t.Fatalf("load %s: %v", name, err)
+	}
+	return location
 }
 
 // syntheticZone builds a TZif v1 zone that is UTC-8 until transition and
