@@ -11,6 +11,10 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	// Embedded zones back time.LoadLocation when the host's tz database lacks
+	// an agency_timezone name, as newer Debian releases do for links like
+	// US/Pacific unless tzdata-legacy is installed.
+	_ "time/tzdata"
 
 	"github.com/getsentry/sentry-go"
 	"watchdog.onebusaway.org/internal/app"
