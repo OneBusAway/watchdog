@@ -74,6 +74,12 @@ func (ms *MetricsService) ReportCollectionInterval(interval time.Duration) {
 	}
 }
 
+// ReportConfiguredServers records how many valid servers are currently
+// configured, so "up but monitoring nothing" is distinguishable from healthy.
+func (ms *MetricsService) ReportConfiguredServers(count int) {
+	WatchdogConfiguredServers.Set(float64(count))
+}
+
 func (ms *MetricsService) ReportCollectionCompleted(completedAt time.Time) {
 	WatchdogCollectionLastCompleted.Set(float64(completedAt.UTC().Unix()))
 }

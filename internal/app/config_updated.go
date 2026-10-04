@@ -26,8 +26,9 @@ import (
 // removed every server." Acting on it would discard every parsed GTFS bundle,
 // bounding box and route index, retire the entire /metrics surface (firing
 // absent-series alerts fleet-wide), and then re-download every static bundle
-// on the next refresh. main refuses to start with zero servers for the same
-// reason; a refresh should not do what start-up rejects.
+// on the next refresh. A --config-file start refuses zero servers for the same
+// reason; a --config-url start tolerates it (and waits for the first non-empty
+// refresh), but a refresh should still never discard state on an empty config.
 //
 // The cost of ignoring a genuine "monitor nothing" config is that stale state
 // lingers until the operator adds a server back or the process restarts, which
@@ -41,6 +42,8 @@ func (app *Application) OnConfigUpdated(ctx context.Context, updated []models.Ob
 		})
 		return
 	}
+
+	app.MetricsService.ReportConfiguredServers(len(updated))
 
 	var newcomers []models.ObaServer
 	app.GtfsService.StaticStore.WithRefreshLock(func() {

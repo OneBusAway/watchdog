@@ -81,3 +81,15 @@ func ValidateServer(server models.ObaServer) error {
 func newErrRecovered(server models.ObaServer) error {
 	return fmt.Errorf("server %q recovered: previously invalid configuration", server.ServerName)
 }
+
+// ShouldExitOnStartupLoad reports whether a failed or empty initial load must
+// stop the process. A local --config-file will not change underneath us, so
+// failing fast is right. A remote --config-url can be temporarily empty,
+// unreachable, or invalid; the RefreshConfig loop recovers once it is valid,
+// and exiting instead crash-loops the service into suspension.
+func ShouldExitOnStartupLoad(remote bool, servers []models.ObaServer, err error) bool {
+	if remote {
+		return false
+	}
+	return err != nil || len(servers) == 0
+}

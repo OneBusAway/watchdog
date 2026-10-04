@@ -53,29 +53,43 @@ func (app *Application) StartMetricsCollection(ctx context.Context) {
 				app.Logger.Info("Stopping metrics collection routine")
 				return
 			case <-ticker.C:
-				// Resolve scopes against a consistent static/config view, but
-				// collect outside the refresh lock: collection makes upstream
-				// network calls and must not stall static publication or config
-				// refreshes. A server pruned mid-tick is retired on the next
-				// refresh through KnownServerSet.DepartedURLs.
-				type collectionTarget struct {
-					server models.ObaServer
-					scope  config.Scope
-				}
-				var targets []collectionTarget
-				app.GtfsService.StaticStore.WithRefreshLock(func() {
-					for _, server := range app.ConfigService.Config.GetServers() {
-						scope := config.ResolveScope(server, app.GtfsService.StaticStore, app.GtfsService.RouteAgencyIndex)
-						targets = append(targets, collectionTarget{server: server, scope: scope})
-					}
-				})
-				for _, target := range targets {
-					app.collectForScope(ctx, target.server, target.scope)
-				}
-				app.MetricsService.ReportCollectionCompleted(time.Now())
+				app.collectOnce(ctx)
 			}
 		}
 	}()
+}
+
+// collectOnce runs one collection tick over the currently configured servers.
+//
+// A tick over zero servers (possible with --config-url when the remote config
+// was empty or invalid at boot) collects nothing and deliberately does not
+// advance watchdog_collection_last_completed_timestamp_seconds: a fresh
+// timestamp with up==1 is read as "Watchdog current", and an idle process
+// must not claim that. watchdog_configured_servers reports the zero.
+func (app *Application) collectOnce(ctx context.Context) {
+	// Resolve scopes against a consistent static/config view, but
+	// collect outside the refresh lock: collection makes upstream
+	// network calls and must not stall static publication or config
+	// refreshes. A server pruned mid-tick is retired on the next
+	// refresh through KnownServerSet.DepartedURLs.
+	type collectionTarget struct {
+		server models.ObaServer
+		scope  config.Scope
+	}
+	var targets []collectionTarget
+	app.GtfsService.StaticStore.WithRefreshLock(func() {
+		for _, server := range app.ConfigService.Config.GetServers() {
+			scope := config.ResolveScope(server, app.GtfsService.StaticStore, app.GtfsService.RouteAgencyIndex)
+			targets = append(targets, collectionTarget{server: server, scope: scope})
+		}
+	})
+	if len(targets) == 0 {
+		return
+	}
+	for _, target := range targets {
+		app.collectForScope(ctx, target.server, target.scope)
+	}
+	app.MetricsService.ReportCollectionCompleted(time.Now())
 }
 
 // collectForScope dispatches a single configured ObaServer entry through the

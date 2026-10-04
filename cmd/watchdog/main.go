@@ -22,6 +22,7 @@ import (
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
+	"watchdog.onebusaway.org/internal/utils"
 )
 
 // Application version injected at build time via ldflags.
@@ -124,14 +125,30 @@ func main() {
 		servers, err = config.LoadConfigFromURL(ctx, client, *configURL, configAuthUser, configAuthPass, 20, logger, droppedStore)
 	}
 
-	if err != nil {
-		logger.Error("Error loading configuration", "err", err)
+	remote := *configURL != ""
+	if config.ShouldExitOnStartupLoad(remote, servers, err) {
+		if err != nil {
+			logger.Error("Error loading configuration", "err", err)
+		} else {
+			logger.Error("Error: No servers found in configuration.")
+		}
 		os.Exit(1)
 	}
 
-	if len(servers) == 0 {
-		logger.Error("Error: No servers found in configuration.")
-		os.Exit(1)
+	// A remote config that is empty, unreachable, or entirely invalid at boot
+	// must not take the process down: exiting crash-loops the service into
+	// suspension, and the RefreshConfig loop below recovers on its own once the
+	// config is valid. Keep running with no servers (already reported to Sentry
+	// by the loader) and let watchdog_configured_servers show the zero.
+	if err != nil {
+		logger.Error("Error loading remote configuration; starting with no servers until a refresh succeeds", "err", err)
+		servers = nil
+	} else if len(servers) == 0 {
+		logger.Error("Remote configuration contained no valid servers; starting with no servers until a refresh succeeds")
+		report.ReportErrorWithSentryOptions(fmt.Errorf("initial remote configuration from %s contained no valid servers", *configURL), report.SentryReportOptions{
+			Tags:  utils.MakeMap("config_url", *configURL),
+			Level: sentry.LevelError,
+		})
 	}
 
 	cfg.UpdateConfig(servers)
@@ -149,6 +166,7 @@ func main() {
 	// Report the agencies Watchdog is tracking (those that passed config
 	// validation). This runs once at startup; it is re-triggered only when the
 	// remote config adds or removes an agency, never on the collection tick.
+	app.MetricsService.ReportConfiguredServers(len(servers))
 	app.MetricsService.ReportTrackedAgencies(servers)
 
 	// From here we set up all dependencies and we are ready to start business logic.
