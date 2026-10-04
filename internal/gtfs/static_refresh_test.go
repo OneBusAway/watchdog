@@ -228,7 +228,7 @@ func TestParseRetryAfter(t *testing.T) {
 // campaign for every configured server at once; letting their parses overlap
 // stacked those peaks past Watchdog's memory limit.
 func TestStaticRefreshCampaignsDoNotParseConcurrently(t *testing.T) {
-	bundle := readFixture(t, "gtfs.zip")
+	bundle := makeScheduleZip(t, basicScheduleFiles("UTC", "08:00:00", "09:00:00"))
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(bundle)
 	}))
@@ -237,7 +237,7 @@ func TestStaticRefreshCampaignsDoNotParseConcurrently(t *testing.T) {
 	var servers []models.ObaServer
 	for _, name := range []string{"a", "b", "c", "d"} {
 		servers = append(servers, models.ObaServer{
-			ServerName: name, AgencyID: "40", AgencyName: "Sound Transit", ObaBaseURL: ts.URL + "/" + name,
+			ServerName: name, AgencyID: "A", AgencyName: "Agency A", ObaBaseURL: ts.URL + "/" + name,
 			GtfsStaticFeeds: []string{ts.URL + "/" + name + ".zip"},
 		})
 	}
@@ -283,14 +283,14 @@ func TestStaticRefreshCampaignsDoNotParseConcurrently(t *testing.T) {
 // A daily refresh first probes only the feeds in conservative mode; once the
 // probe succeeds it goes straight on to fetch the rest within the same attempt.
 func TestDailyConservativeProbeContinuesToRemainingFeeds(t *testing.T) {
-	bundle := readFixture(t, "gtfs.zip")
+	bundle := makeScheduleZip(t, basicScheduleFiles("UTC", "08:00:00", "09:00:00"))
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(bundle)
 	}))
 	defer ts.Close()
 
 	server := models.ObaServer{
-		ServerName: "OBA", AgencyID: "40", AgencyName: "Sound Transit", ObaBaseURL: ts.URL,
+		ServerName: "OBA", AgencyID: "A", AgencyName: "Agency A", ObaBaseURL: ts.URL,
 		GtfsStaticFeeds: []string{ts.URL + "/probed.zip", ts.URL + "/rest.zip"},
 	}
 	store := NewStaticStore()
@@ -318,7 +318,7 @@ func TestDailyConservativeProbeContinuesToRemainingFeeds(t *testing.T) {
 // unreachable feed host must not hold up other servers' campaigns, so waiting
 // on the network can never count against the one-at-a-time parse limit.
 func TestStaticRefreshCampaignStuckDownloadDoesNotBlockOthers(t *testing.T) {
-	bundle := readFixture(t, "gtfs.zip")
+	bundle := makeScheduleZip(t, basicScheduleFiles("UTC", "08:00:00", "09:00:00"))
 	release := make(chan struct{})
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/stuck.zip" {
@@ -333,8 +333,8 @@ func TestStaticRefreshCampaignStuckDownloadDoesNotBlockOthers(t *testing.T) {
 	defer ts.Close()
 	defer close(release)
 
-	stuck := models.ObaServer{ServerName: "stuck", AgencyID: "40", ObaBaseURL: ts.URL + "/stuck", GtfsStaticFeeds: []string{ts.URL + "/stuck.zip"}}
-	healthy := models.ObaServer{ServerName: "healthy", AgencyID: "40", ObaBaseURL: ts.URL + "/healthy", GtfsStaticFeeds: []string{ts.URL + "/healthy.zip"}}
+	stuck := models.ObaServer{ServerName: "stuck", AgencyID: "A", ObaBaseURL: ts.URL + "/stuck", GtfsStaticFeeds: []string{ts.URL + "/stuck.zip"}}
+	healthy := models.ObaServer{ServerName: "healthy", AgencyID: "A", ObaBaseURL: ts.URL + "/healthy", GtfsStaticFeeds: []string{ts.URL + "/healthy.zip"}}
 	store := NewStaticStore()
 	store.SetConfiguredServers([]models.ObaServer{stuck, healthy})
 	service := NewGtfsService(store, NewRealtimeStore(), geo.NewBoundingBoxStore(), NewRouteAgencyIndex(), slog.New(slog.NewTextHandler(io.Discard, nil)), ts.Client())
