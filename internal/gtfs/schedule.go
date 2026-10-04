@@ -892,10 +892,15 @@ var timezoneRuleSpans = [][2]time.Time{
 // across timezoneRuleSpans, and wherever it changes, both zones must change at
 // the same second. Zones that share an offset today but not their rules
 // (America/Phoenix and America/Denver, or America/Los_Angeles and
-// America/Tijuana) differ within that span. Both locations come from the same
-// tz database, so a link compares equal to its target whichever database the
-// host provides. The daily sampling assumes no zone changes its offset twice
-// within one day; no zone in the tz database does between 1970 and 2100.
+// America/Tijuana) differ within that span. The two locations need not come
+// from the same tz database: on a host without tzdata-legacy, a target such as
+// America/Los_Angeles loads from the system while its link US/Pacific falls
+// back to the tzdata embedded in the binary. If those releases disagree about
+// the zone's rules (say, a DST change the host's newer tzdata already
+// carries), a link and its target compare unequal and the feed is rejected;
+// keeping the Go toolchain current keeps the embedded copy close to the host's.
+// The daily sampling assumes no zone changes its offset twice within one day;
+// no zone in the tz database does between 1970 and 2100.
 //
 // Time.ZoneBounds would avoid the sampling, but in years governed by a zone's
 // final rule it reports stale period ends around the year boundary.
