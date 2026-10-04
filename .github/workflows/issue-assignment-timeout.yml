@@ -37,8 +37,6 @@ jobs:
               );
             }
 
-            const { getOctokit } = require("@actions/github");
-            const orgGithub = getOctokit(membershipToken);
             const membershipCache = new Map();
 
             async function isOneBusAwayMember(username) {
@@ -47,20 +45,31 @@ jobs:
                 return membershipCache.get(normalizedUsername);
               }
 
-              try {
-                await orgGithub.rest.orgs.checkMembershipForUser({
-                  org: "OneBusAway",
-                  username
-                });
+              const response = await fetch(
+                `https://api.github.com/orgs/OneBusAway/members/${encodeURIComponent(username)}`,
+                {
+                  headers: {
+                    Accept: "application/vnd.github+json",
+                    Authorization: `Bearer ${membershipToken}`,
+                    "X-GitHub-Api-Version": "2022-11-28"
+                  },
+                  redirect: "manual"
+                }
+              );
+
+              if (response.status === 204) {
                 membershipCache.set(normalizedUsername, true);
                 return true;
-              } catch (error) {
-                if (error.status === 404) {
-                  membershipCache.set(normalizedUsername, false);
-                  return false;
-                }
-                throw error;
               }
+
+              if (response.status === 404) {
+                membershipCache.set(normalizedUsername, false);
+                return false;
+              }
+
+              throw new Error(
+                `Membership check for @${username} failed with HTTP ${response.status}.`
+              );
             }
 
             const issues = await github.paginate(
