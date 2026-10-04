@@ -842,6 +842,20 @@ func downloadGTFSBundle(ctx context.Context, client *http.Client, url, agencyID 
 }
 
 func downloadGTFSBundleData(ctx context.Context, client *http.Client, url, agencyID string, maxRetries int) (*remoteGtfs.Static, []byte, error) {
+	data, err := fetchGTFSBundleData(ctx, client, url, agencyID, maxRetries)
+	if err != nil {
+		return nil, nil, err
+	}
+	staticBundle, err := parseDownloadedGTFSBundle(parseStaticBundleData, data, url, agencyID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return staticBundle, data, nil
+}
+
+// fetchGTFSBundleData downloads a feed's bytes, retrying with backoff, without
+// parsing them.
+func fetchGTFSBundleData(ctx context.Context, client *http.Client, url, agencyID string, maxRetries int) ([]byte, error) {
 	sanitizedURL := utils.SanitizeServerURL(url)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -852,7 +866,7 @@ func downloadGTFSBundleData(ctx context.Context, client *http.Client, url, agenc
 				"url": sanitizedURL,
 			},
 		})
-		return nil, nil, err
+		return nil, err
 	}
 
 	resp, err := utils.DoWithBackoff(ctx, client, req, maxRetries)
@@ -864,7 +878,7 @@ func downloadGTFSBundleData(ctx context.Context, client *http.Client, url, agenc
 				"url": sanitizedURL,
 			},
 		})
-		return nil, nil, err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
@@ -877,36 +891,48 @@ func downloadGTFSBundleData(ctx context.Context, client *http.Client, url, agenc
 				"status": resp.Status,
 			},
 		})
-		return nil, nil, err
+		return nil, err
 	}
 
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxStaticFeedDownloadSize+1))
 	if err != nil {
 		err = &StaticFeedError{Stage: StaticFailureDownload, Reason: StaticReasonConnection, Err: fmt.Errorf("failed to read GTFS bundle response body from %s: %w", url, err)}
 		report.ReportError(err)
-		return nil, nil, err
+		return nil, err
 	}
 	if int64(len(data)) > maxStaticFeedDownloadSize {
 		err = &StaticFeedError{Stage: StaticFailureDownload, Reason: StaticReasonResponseTooLarge, Err: fmt.Errorf("GTFS bundle from %s exceeds the %d-byte download limit", url, maxStaticFeedDownloadSize)}
 		report.ReportError(err)
-		return nil, nil, err
+		return nil, err
 	}
 
-	staticBundle, err := parseStaticBundleData(data, url, agencyID)
+	return data, nil
+}
+
+// parseDownloadedGTFSBundle parses a downloaded feed with parse, reporting a
+// failure to Sentry.
+func parseDownloadedGTFSBundle(parse func(data []byte, url, agencyID string) (*remoteGtfs.Static, error), data []byte, url, agencyID string) (*remoteGtfs.Static, error) {
+	staticBundle, err := parse(data, url, agencyID)
 	if err != nil {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: utils.MakeMap("agency_id", agencyID),
 			ExtraContext: map[string]interface{}{
-				"url": sanitizedURL,
+				"url": utils.SanitizeServerURL(url),
 			},
 		})
-		return nil, nil, err
+		return nil, err
 	}
-	return staticBundle, data, nil
+	return staticBundle, nil
 }
 
 func parseStaticBundleData(data []byte, url, agencyID string) (*remoteGtfs.Static, error) {
-	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
+	// Watchdog never reads shapes, and from stop_times.txt needs only which
+	// stops each trip serves (agency mode keeps those stops). Skipping the rest
+	// cuts Seattle's merged feed from ~580 MB to ~110 MB of peak heap.
+	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{
+		SkipShapes: true,
+		StopTimes:  remoteGtfs.StopTimesStopsOnly,
+	})
 	if err != nil {
 		sum := sha256.Sum256(data)
 		return nil, &StaticFeedError{Stage: StaticFailureArchive, Reason: StaticReasonInvalidZIP, ContentHash: hex.EncodeToString(sum[:]), Err: fmt.Errorf("failed to parse GTFS static data from %s: %w", url, err)}

@@ -181,6 +181,18 @@ func TestCompileSchedulesRejectsUnsafeParserFallbacks(t *testing.T) {
 		{"unsupported extreme overnight", func(files map[string]string) {
 			files["stop_times.txt"] = "trip_id,arrival_time,departure_time,stop_id,stop_sequence\nT,08:00:00,08:00:00,S1,1\nT,200:00:00,200:00:00,S2,2\n"
 		}},
+		{"empty stop_times", func(files map[string]string) {
+			files["stop_times.txt"] = ""
+		}},
+		{"malformed stop_times row after valid rows", func(files map[string]string) {
+			files["stop_times.txt"] = "trip_id,arrival_time,departure_time,stop_id,stop_sequence\nT,08:00:00,08:00:00,S1,1\nT,09:00:00,\"09:00:00,S2,2\n"
+		}},
+		{"stop_times references unknown trip", func(files map[string]string) {
+			files["stop_times.txt"] = "trip_id,arrival_time,departure_time,stop_id,stop_sequence\nT,08:00:00,08:00:00,S1,1\nNOPE,09:00:00,09:00:00,S2,2\n"
+		}},
+		{"duplicate stop_sequence", func(files map[string]string) {
+			files["stop_times.txt"] = "trip_id,arrival_time,departure_time,stop_id,stop_sequence\nT,08:00:00,08:00:00,S1,1\nT,09:00:00,09:00:00,S2,1\n"
+		}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
