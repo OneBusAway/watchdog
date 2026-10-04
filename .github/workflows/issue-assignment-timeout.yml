@@ -18,9 +18,50 @@ jobs:
     steps:
       - name: Remove expired issue assignments
         uses: actions/github-script@v8
+        env:
+          ORG_MEMBERSHIP_TOKEN: ${{ secrets.ORG_MEMBERSHIP_TOKEN }}
         with:
           script: |
             const MAX_DAYS = 14;
+            const EXEMPT_USERS = new Set([
+              "0xaboomar",
+              "aaronbrethorst",
+              "ahmedhossamdev",
+              "amrhossamdev"
+            ]);
+            const membershipToken = process.env.ORG_MEMBERSHIP_TOKEN;
+
+            if (!membershipToken) {
+              throw new Error(
+                "Set the ORG_MEMBERSHIP_TOKEN repository secret to check OneBusAway membership."
+              );
+            }
+
+            const { getOctokit } = require("@actions/github");
+            const orgGithub = getOctokit(membershipToken);
+            const membershipCache = new Map();
+
+            async function isOneBusAwayMember(username) {
+              const normalizedUsername = username.toLowerCase();
+              if (membershipCache.has(normalizedUsername)) {
+                return membershipCache.get(normalizedUsername);
+              }
+
+              try {
+                await orgGithub.rest.orgs.checkMembershipForUser({
+                  org: "OneBusAway",
+                  username
+                });
+                membershipCache.set(normalizedUsername, true);
+                return true;
+              } catch (error) {
+                if (error.status === 404) {
+                  membershipCache.set(normalizedUsername, false);
+                  return false;
+                }
+                throw error;
+              }
+            }
 
             const issues = await github.paginate(
               github.rest.issues.listForRepo,
@@ -38,6 +79,15 @@ jobs:
 
               if (!issue.assignees?.length) continue;
 
+              const assigneesToCheck = [];
+              for (const assignee of issue.assignees) {
+                const login = assignee.login.toLowerCase();
+                if (EXEMPT_USERS.has(login)) continue;
+                if (await isOneBusAwayMember(assignee.login)) continue;
+                assigneesToCheck.push(assignee);
+              }
+              if (assigneesToCheck.length === 0) continue;
+
               const events = await github.paginate(
                 github.rest.issues.listEventsForTimeline,
                 {
@@ -50,7 +100,7 @@ jobs:
 
               const expiredAssignees = [];
 
-              for (const assignee of issue.assignees) {
+              for (const assignee of assigneesToCheck) {
                 // Find the latest assignment event for this user
                 const assignment = events
                   .filter(
