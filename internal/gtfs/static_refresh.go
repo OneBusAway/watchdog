@@ -56,6 +56,14 @@ type staticFeedFailureHistory struct {
 	lastReason        StaticFailureReason
 }
 
+// publishedStaticContent is what a server's last successful publish was built
+// from: its static configuration and the SHA-256 of each feed zip, in
+// configured order.
+type publishedStaticContent struct {
+	fingerprint string
+	hashes      []string
+}
+
 type activeStaticCampaign struct {
 	fingerprint string
 	generation  uint64
@@ -66,6 +74,7 @@ type staticRefreshCoordinator struct {
 	mu             sync.Mutex
 	active         map[string]activeStaticCampaign
 	histories      map[string]*staticFeedFailureHistory
+	published      map[string]publishedStaticContent
 	policy         staticRefreshRetryPolicy
 	nextGeneration uint64
 }
@@ -74,6 +83,7 @@ func newStaticRefreshCoordinator() *staticRefreshCoordinator {
 	return &staticRefreshCoordinator{
 		active:    make(map[string]activeStaticCampaign),
 		histories: make(map[string]*staticFeedFailureHistory),
+		published: make(map[string]publishedStaticContent),
 		policy:    dailyStaticRefreshRetryPolicy,
 	}
 }
@@ -136,11 +146,52 @@ func (c *staticRefreshCoordinator) reconcile(servers []models.ObaServer) {
 			delete(c.active, key)
 		}
 	}
+	for key, content := range c.published {
+		if configured[key] != content.fingerprint {
+			delete(c.published, key)
+		}
+	}
 	for key := range c.histories {
 		if _, ok := configuredFeeds[key]; !ok {
 			delete(c.histories, key)
 		}
 	}
+}
+
+// unchanged reports whether hashes and the server's static configuration
+// match its last successful publish.
+func (c *staticRefreshCoordinator) unchanged(server models.ObaServer, hashes []string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	content, ok := c.published[server.ServerKey()]
+	if !ok || content.fingerprint != staticConfigFingerprint(server) || len(content.hashes) != len(hashes) {
+		return false
+	}
+	for i := range hashes {
+		if hashes[i] == "" || content.hashes[i] != hashes[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *staticRefreshCoordinator) recordPublished(ctx context.Context, server models.ObaServer, hashes []string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ctx.Err() != nil {
+		return false
+	}
+	c.published[server.ServerKey()] = publishedStaticContent{fingerprint: staticConfigFingerprint(server), hashes: hashes}
+	return true
+}
+
+// forgetPublished makes the server's next successful download publish even if
+// its bytes match, because the published snapshot can no longer be trusted
+// (its schedule was marked unavailable, or a publish failed).
+func (c *staticRefreshCoordinator) forgetPublished(server models.ObaServer) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.published, server.ServerKey())
 }
 
 func (c *staticRefreshCoordinator) isConservative(server models.ObaServer, feedURL string) bool {
@@ -375,11 +426,12 @@ func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server mode
 		}
 
 		if len(pending) == 0 {
-			var err error
-			if !gs.withStaticParseSlot(ctx, func() { err = gs.publishStaticCampaign(ctx, server, cache) }) {
-				return
+			hashes := make([]string, len(server.GtfsStaticFeeds))
+			for i, feedURL := range server.GtfsStaticFeeds {
+				artifact, _ := cache.Get(feedURL)
+				hashes[i] = artifact.hash
 			}
-			if err == nil {
+			reportSuccess := func() {
 				for _, feedURL := range server.GtfsStaticFeeds {
 					if !gs.refreshCoordinator.recordCampaignSuccess(ctx, server, feedURL) {
 						return
@@ -388,8 +440,25 @@ func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server mode
 					gs.reportStaticFeedRefresh(server, feedURL, StaticFeedRefreshObservation{AttemptedAt: attemptedAt, Success: true, ContentHash: artifact.hash})
 				}
 				gs.reportStaticRefresh(server, StaticRefreshObservation{AttemptedAt: attemptedAt, Success: true})
+			}
+			// Byte-identical feeds under an unchanged configuration would
+			// parse to the snapshot already published, so confirm it as
+			// current instead of paying for a full parse and store swap.
+			if gs.refreshCoordinator.unchanged(server, hashes) && gs.confirmUnchangedStaticSnapshot(ctx, server) {
+				reportSuccess()
+				return
+			}
+			var err error
+			if !gs.withStaticParseSlot(ctx, func() { err = gs.publishStaticCampaign(ctx, server, cache) }) {
+				return
+			}
+			if err == nil {
+				if gs.refreshCoordinator.recordPublished(ctx, server, hashes) {
+					reportSuccess()
+				}
 				return
 			} else {
+				gs.refreshCoordinator.forgetPublished(server)
 				if ctx.Err() != nil || errors.Is(err, errStaticServerUnconfigured) {
 					return
 				}
@@ -479,6 +548,7 @@ func (gs *GtfsService) finishFailedStaticCampaign(ctx context.Context, server mo
 			Stage: history.lastStage, Reason: history.lastReason, Conservative: history.conservative,
 		})
 	}
+	gs.refreshCoordinator.forgetPublished(server)
 	gs.StaticStore.WithRefreshLock(func() {
 		if gs.StaticStore.IsConfigured(server) {
 			gs.StaticStore.ScheduleStore().MarkUnavailable(server)
@@ -486,6 +556,20 @@ func (gs *GtfsService) finishFailedStaticCampaign(ctx context.Context, server mo
 	})
 	gs.reportStaticRefresh(server, StaticRefreshObservation{AttemptedAt: attemptedAt, GaveUp: true})
 	gs.Logger.Error("GTFS static refresh campaign failed; preserving prior complete snapshot", "server_name", server.ServerName, "agency_id", server.AgencyID, "failed_feeds", failedFeeds, "failures", failures)
+}
+
+// confirmUnchangedStaticSnapshot renews the fetch time of the snapshot the
+// server already holds. It reports false when there is nothing to confirm (the
+// entry is unconfigured or holds no snapshot), so the caller publishes.
+func (gs *GtfsService) confirmUnchangedStaticSnapshot(ctx context.Context, server models.ObaServer) bool {
+	confirmed := false
+	gs.StaticStore.WithRefreshLock(func() {
+		if ctx.Err() != nil || !gs.StaticStore.IsConfigured(server) {
+			return
+		}
+		confirmed = gs.StaticStore.TouchServerSnapshot(server, time.Now().UTC())
+	})
+	return confirmed
 }
 
 func (gs *GtfsService) publishStaticCampaign(ctx context.Context, server models.ObaServer, cache *staticArtifactCache) error {
