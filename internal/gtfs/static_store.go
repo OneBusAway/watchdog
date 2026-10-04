@@ -150,7 +150,7 @@ func (s *StaticStore) ReplaceServerSnapshot(server models.ObaServer, snapshots m
 	var removed []string
 	if server.IsServerScoped() {
 		for key := range s.data {
-			if server.OwnsServerKey(key) && !s.configuredAgencyEntryLocked(key) {
+			if s.ownsSnapshotKeyLocked(server, key) {
 				if _, retained := snapshots[key]; !retained {
 					removed = append(removed, key)
 					delete(s.data, key)
@@ -173,18 +173,24 @@ func (s *StaticStore) ReplaceServerSnapshot(server models.ObaServer, snapshots m
 func (s *StaticStore) TouchServerSnapshot(server models.ObaServer, fetchedAt time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.lastFetched == nil {
+		s.lastFetched = make(map[string]time.Time)
+	}
 	touched := false
 	for key := range s.data {
-		if !server.OwnsServerKey(key) || (server.IsServerScoped() && s.configuredAgencyEntryLocked(key)) {
-			continue
+		if s.ownsSnapshotKeyLocked(server, key) {
+			s.lastFetched[key] = fetchedAt
+			touched = true
 		}
-		if s.lastFetched == nil {
-			s.lastFetched = make(map[string]time.Time)
-		}
-		s.lastFetched[key] = fetchedAt
-		touched = true
 	}
 	return touched
+}
+
+// ownsSnapshotKeyLocked reports whether key holds a snapshot published by
+// server. A server-scoped entry owns every key under its base URL except those
+// a separately configured agency-scoped entry publishes.
+func (s *StaticStore) ownsSnapshotKeyLocked(server models.ObaServer, key string) bool {
+	return server.OwnsServerKey(key) && !(server.IsServerScoped() && s.configuredAgencyEntryLocked(key))
 }
 
 // Set stores the given GTFS static data for the specified server key.
