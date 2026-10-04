@@ -1,5 +1,5 @@
-github.com/OneBusAway/go-gtfs v1.1.2-0.20261004042919-cf95ea29cffa h1:uYw+2WS5Izygez8ET1qEnRiLDoTbLT3LhqcxiYFbPOk=
-github.com/OneBusAway/go-gtfs v1.1.2-0.20261004042919-cf95ea29cffa/go.mod h1:MJqNyFOJs+iE1R6uerTyfBY6g3/sxvTvVdRhDeN1bu8=
+github.com/OneBusAway/go-gtfs v1.2.0 h1:JL9bn607sPgeqdvij7gs9pU6lEqRrDCMNuMWSYe+FXk=
+github.com/OneBusAway/go-gtfs v1.2.0/go.mod h1:MJqNyFOJs+iE1R6uerTyfBY6g3/sxvTvVdRhDeN1bu8=
 github.com/OneBusAway/go-sdk v0.1.0-alpha.13 h1:xQdZjREPJTON4XKoQpUf9YTm8KCVsLJyOW9LkldyquY=
 github.com/OneBusAway/go-sdk v0.1.0-alpha.13/go.mod h1:h1TnOvie6gN5gi0no/0w6nPg1jbidz2D+Osyq72R60Q=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=

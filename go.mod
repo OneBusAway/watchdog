@@ -3,7 +3,7 @@ module watchdog.onebusaway.org
 go 1.25.0
 
 require (
-	github.com/OneBusAway/go-gtfs v1.1.2-0.20261004042919-cf95ea29cffa
+	github.com/OneBusAway/go-gtfs v1.2.0
 	github.com/OneBusAway/go-sdk v0.1.0-alpha.13
 	github.com/getsentry/sentry-go v0.33.0
 	github.com/golang/geo v0.0.0-20250707181242-c5087ca84cf4
