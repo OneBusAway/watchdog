@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/csv"
 	"fmt"
+	"io"
 	"sort"
 	"strconv"
 	"strings"
@@ -555,6 +556,9 @@ func parseRawScheduleFeed(feedURL string, data []byte, server models.ObaServer) 
 type csvTable struct {
 	index map[string]int
 	rows  [][]string
+	// file is set for a streamed table: rows stays nil and eachRow decodes
+	// the zip entry one row at a time.
+	file *zip.File
 }
 
 // scheduleTables are the only GTFS files the schedule compiler reads. Large
@@ -564,6 +568,11 @@ var scheduleTables = map[string]struct{}{
 	"agency.txt": {}, "routes.txt": {}, "stops.txt": {}, "trips.txt": {},
 	"stop_times.txt": {}, "calendar.txt": {}, "calendar_dates.txt": {}, "frequencies.txt": {},
 }
+
+// streamedScheduleTables are read row by row instead of decoded whole.
+// stop_times.txt runs past 100 MB in production merged feeds, and holding it
+// as [][]string costs several times that on the heap.
+var streamedScheduleTables = map[string]struct{}{"stop_times.txt": {}}
 
 func scheduleCSVFiles(data []byte) (map[string]csvTable, error) {
 	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
@@ -576,32 +585,97 @@ func scheduleCSVFiles(data []byte) (map[string]csvTable, error) {
 		if _, needed := scheduleTables[name]; !needed {
 			continue
 		}
-		body, err := file.Open()
+		_, streamed := streamedScheduleTables[name]
+		table, err := readCSVTable(file, name, !streamed)
 		if err != nil {
 			return nil, err
 		}
-		reader := csv.NewReader(body)
-		// Rows shorter than the header read as blank cells (see cell), rather
-		// than rejecting the whole feed.
-		reader.FieldsPerRecord = -1
-		records, readErr := reader.ReadAll()
-		closeErr := body.Close()
-		if readErr != nil {
-			return nil, fmt.Errorf("read %s: %w", name, readErr)
-		}
-		if closeErr != nil {
-			return nil, closeErr
-		}
-		if len(records) == 0 {
-			return nil, fmt.Errorf("%s is empty", name)
-		}
-		index := make(map[string]int, len(records[0]))
-		for i, column := range records[0] {
-			index[strings.TrimPrefix(strings.TrimSpace(column), "\ufeff")] = i
-		}
-		files[name] = csvTable{index: index, rows: records[1:]}
+		files[name] = table
 	}
 	return files, nil
+}
+
+// readCSVTable reads a table's header and, when materialize is set, its rows.
+// A table that is not materialized keeps its zip entry for eachRow.
+func readCSVTable(file *zip.File, name string, materialize bool) (csvTable, error) {
+	body, err := file.Open()
+	if err != nil {
+		return csvTable{}, err
+	}
+	reader := newScheduleCSVReader(body)
+	var records [][]string
+	if materialize {
+		records, err = reader.ReadAll()
+	} else {
+		var header []string
+		header, err = reader.Read()
+		if err == io.EOF {
+			err = nil
+		} else if err == nil {
+			records = [][]string{header}
+		}
+	}
+	closeErr := body.Close()
+	if err != nil {
+		return csvTable{}, fmt.Errorf("read %s: %w", name, err)
+	}
+	if closeErr != nil {
+		return csvTable{}, closeErr
+	}
+	if len(records) == 0 {
+		return csvTable{}, fmt.Errorf("%s is empty", name)
+	}
+	index := make(map[string]int, len(records[0]))
+	for i, column := range records[0] {
+		index[strings.TrimPrefix(strings.TrimSpace(column), "\ufeff")] = i
+	}
+	if !materialize {
+		return csvTable{index: index, file: file}, nil
+	}
+	return csvTable{index: index, rows: records[1:]}, nil
+}
+
+func newScheduleCSVReader(body io.Reader) *csv.Reader {
+	reader := csv.NewReader(body)
+	// Rows shorter than the header read as blank cells (see cell), rather
+	// than rejecting the whole feed.
+	reader.FieldsPerRecord = -1
+	return reader
+}
+
+// eachRow calls fn for every data row. For a streamed table the row slice is
+// reused between calls, so fn must not retain it.
+func (t csvTable) eachRow(fn func(row []string) error) error {
+	if t.file == nil {
+		for _, row := range t.rows {
+			if err := fn(row); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	body, err := t.file.Open()
+	if err != nil {
+		return err
+	}
+	defer body.Close()
+	reader := newScheduleCSVReader(body)
+	reader.ReuseRecord = true
+	if _, err := reader.Read(); err != nil {
+		return fmt.Errorf("read %s: %w", t.file.Name, err)
+	}
+	for {
+		row, err := reader.Read()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("read %s: %w", t.file.Name, err)
+		}
+		if err := fn(row); err != nil {
+			return err
+		}
+	}
 }
 
 func requiredTable(files map[string]csvTable, name string, required ...string) (csvTable, error) {
@@ -720,7 +794,7 @@ func parseRawStopTimes(files map[string]csvTable, result *rawScheduleFeed) error
 	if table.index["arrival_time"] < 0 || table.index["departure_time"] < 0 {
 		return fmt.Errorf("stop_times.txt requires arrival_time and departure_time for endpoint validation")
 	}
-	for _, row := range table.rows {
+	return table.eachRow(func(row []string) error {
 		tripID := cell(row, table.index["trip_id"])
 		trip := result.trips[tripID]
 		if trip == nil {
@@ -753,8 +827,8 @@ func parseRawStopTimes(files map[string]csvTable, result *rawScheduleFeed) error
 			trip.last = endpoint
 		}
 		trip.hasStops = true
-	}
-	return nil
+		return nil
+	})
 }
 
 func parseRawFrequencies(files map[string]csvTable, result *rawScheduleFeed) error {
