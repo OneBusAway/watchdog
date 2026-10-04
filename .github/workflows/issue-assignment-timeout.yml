@@ -89,14 +89,14 @@ jobs:
                 expiredAssignees.length === 1
                   ? `${mentions[0]} has been automatically unassigned because this project limits issue assignments to ${MAX_DAYS} days.
 
-If you need more time, please mention a maintainer and ask to be assigned again.
+            If you need more time, please mention a maintainer and ask to be assigned again.
 
-If anyone else would like to work on this issue, please mention a maintainer to request assignment.`
+            If anyone else would like to work on this issue, please mention a maintainer to request assignment.`
                   : `${mentions.join(", ")} have been automatically unassigned because this project limits issue assignments to ${MAX_DAYS} days.
 
-If you need more time, please mention a maintainer and ask to be assigned again.
+            If you need more time, please mention a maintainer and ask to be assigned again.
 
-If anyone else would like to work on this issue, please mention a maintainer to request assignment.`;
+            If anyone else would like to work on this issue, please mention a maintainer to request assignment.`;
 
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
