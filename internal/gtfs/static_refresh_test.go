@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	remoteGtfs "github.com/OneBusAway/go-gtfs"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/models"
 )
@@ -222,15 +223,13 @@ func TestParseRetryAfter(t *testing.T) {
 	}
 }
 
-// Every campaign downloads and fully parses its feeds, and a production merged
-// feed costs hundreds of MB of heap to parse. Startup and the daily refresh
-// start a campaign for every configured server at once; letting them overlap
-// stacked those peaks past Watchdog's memory limit. Attempts must run one at a
-// time, from first download through publish.
-func TestStaticRefreshCampaignsDoNotOverlap(t *testing.T) {
+// Every campaign fully parses its feeds, and a production merged feed costs
+// hundreds of MB of heap to parse. Startup and the daily refresh start a
+// campaign for every configured server at once; letting their parses overlap
+// stacked those peaks past Watchdog's memory limit.
+func TestStaticRefreshCampaignsDoNotParseConcurrently(t *testing.T) {
 	bundle := readFixture(t, "gtfs.zip")
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(20 * time.Millisecond)
 		_, _ = w.Write(bundle)
 	}))
 	defer ts.Close()
@@ -246,41 +245,38 @@ func TestStaticRefreshCampaignsDoNotOverlap(t *testing.T) {
 	store.SetConfiguredServers(servers)
 	service := NewGtfsService(store, NewRealtimeStore(), geo.NewBoundingBoxStore(), NewRouteAgencyIndex(), slog.New(slog.NewTextHandler(io.Discard, nil)), ts.Client())
 
-	var active, maxActive, finished atomic.Int32
-	service.SetStaticRefreshObserver(func(_ models.ObaServer, observation StaticRefreshObservation) {
-		switch {
-		case observation.Retrying:
-			now := active.Add(1)
-			for {
-				seen := maxActive.Load()
-				if now <= seen || maxActive.CompareAndSwap(seen, now) {
-					break
-				}
+	var parsing, maxParsing atomic.Int32
+	service.parseStatic = func(data []byte, url, agencyID string) (*remoteGtfs.Static, error) {
+		now := parsing.Add(1)
+		defer parsing.Add(-1)
+		for {
+			seen := maxParsing.Load()
+			if now <= seen || maxParsing.CompareAndSwap(seen, now) {
+				break
 			}
-		case observation.Success, observation.GaveUp:
-			active.Add(-1)
-			finished.Add(1)
 		}
-	})
+		time.Sleep(20 * time.Millisecond)
+		return parseStaticBundleData(data, url, agencyID)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	service.StartStaticRefreshCampaigns(ctx, servers, StaticRefreshStartup, 1)
 
 	deadline := time.Now().Add(10 * time.Second)
-	for finished.Load() < int32(len(servers)) {
-		if time.Now().After(deadline) {
-			t.Fatalf("only %d of %d campaigns finished", finished.Load(), len(servers))
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if got := maxActive.Load(); got != 1 {
-		t.Fatalf("%d campaign attempts ran concurrently, want 1", got)
-	}
 	for _, server := range servers {
-		if _, ok := store.GetFetchTime(server.ServerKey()); !ok {
-			t.Fatalf("campaign for %s did not publish", server.ServerName)
+		for {
+			if _, ok := store.GetFetchTime(server.ServerKey()); ok {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("campaign for %s did not publish", server.ServerName)
+			}
+			time.Sleep(5 * time.Millisecond)
 		}
+	}
+	if got := maxParsing.Load(); got != 1 {
+		t.Fatalf("%d feeds were parsed concurrently, want 1", got)
 	}
 }
 
@@ -315,5 +311,48 @@ func TestDailyConservativeProbeContinuesToRemainingFeeds(t *testing.T) {
 	}
 	if _, ok := store.GetFetchTime(server.ServerKey()); !ok {
 		t.Fatal("campaign did not publish after its conservative probe succeeded")
+	}
+}
+
+// Startup retries a failing download for many minutes. A campaign stuck on an
+// unreachable feed host must not hold up other servers' campaigns, so waiting
+// on the network can never count against the one-at-a-time parse limit.
+func TestStaticRefreshCampaignStuckDownloadDoesNotBlockOthers(t *testing.T) {
+	bundle := readFixture(t, "gtfs.zip")
+	release := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/stuck.zip" {
+			select {
+			case <-release:
+			case <-r.Context().Done():
+			}
+			return
+		}
+		_, _ = w.Write(bundle)
+	}))
+	defer ts.Close()
+	defer close(release)
+
+	stuck := models.ObaServer{ServerName: "stuck", AgencyID: "40", ObaBaseURL: ts.URL + "/stuck", GtfsStaticFeeds: []string{ts.URL + "/stuck.zip"}}
+	healthy := models.ObaServer{ServerName: "healthy", AgencyID: "40", ObaBaseURL: ts.URL + "/healthy", GtfsStaticFeeds: []string{ts.URL + "/healthy.zip"}}
+	store := NewStaticStore()
+	store.SetConfiguredServers([]models.ObaServer{stuck, healthy})
+	service := NewGtfsService(store, NewRealtimeStore(), geo.NewBoundingBoxStore(), NewRouteAgencyIndex(), slog.New(slog.NewTextHandler(io.Discard, nil)), ts.Client())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	service.StartStaticRefreshCampaigns(ctx, []models.ObaServer{stuck}, StaticRefreshStartup, 1)
+	time.Sleep(50 * time.Millisecond) // let the stuck campaign reach its download
+	service.StartStaticRefreshCampaigns(ctx, []models.ObaServer{healthy}, StaticRefreshStartup, 1)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, ok := store.GetFetchTime(healthy.ServerKey()); ok {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a campaign stuck downloading blocked another server's campaign")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

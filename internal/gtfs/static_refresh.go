@@ -307,14 +307,6 @@ func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server mode
 	deadline := started.Add(policy.budget)
 	delay := time.Duration(0)
 	lastFailures := make(map[string]*StaticFeedError)
-	holdingSlot := false
-	releaseSlot := func() {
-		if holdingSlot {
-			<-gs.staticAttemptSlot
-			holdingSlot = false
-		}
-	}
-	defer releaseSlot()
 	for {
 		if delay > 0 {
 			timer := time.NewTimer(delay)
@@ -325,22 +317,20 @@ func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server mode
 			case <-timer.C:
 			}
 		}
-		// The conservative probe continues into a full fetch without
-		// releasing, so the slot may already be held here.
-		if !holdingSlot {
-			select {
-			case <-ctx.Done():
-				return
-			case gs.staticAttemptSlot <- struct{}{}:
-				holdingSlot = true
-			}
-		}
 		attemptedAt := time.Now().UTC()
 		gs.reportStaticRefresh(server, StaticRefreshObservation{AttemptedAt: attemptedAt, Retrying: true})
 		feedURLs := sortedPendingFeeds(pending)
 		maxRetryAfter := time.Duration(0)
 		for _, feedURL := range feedURLs {
-			_, data, downloadErr := downloadGTFSBundleData(ctx, gs.Client, feedURL, server.AgencyID, maxRetries)
+			data, downloadErr := fetchGTFSBundleData(ctx, gs.Client, feedURL, server.AgencyID, maxRetries)
+			if downloadErr == nil {
+				admitted := gs.withStaticParseSlot(ctx, func() {
+					_, downloadErr = parseDownloadedGTFSBundle(gs.parseStatic, data, feedURL, server.AgencyID)
+				})
+				if !admitted {
+					return
+				}
+			}
 			if ctx.Err() != nil {
 				return
 			}
@@ -385,7 +375,11 @@ func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server mode
 		}
 
 		if len(pending) == 0 {
-			if err := gs.publishStaticCampaign(ctx, server, cache); err == nil {
+			var err error
+			if !gs.withStaticParseSlot(ctx, func() { err = gs.publishStaticCampaign(ctx, server, cache) }) {
+				return
+			}
+			if err == nil {
 				for _, feedURL := range server.GtfsStaticFeeds {
 					if !gs.refreshCoordinator.recordCampaignSuccess(ctx, server, feedURL) {
 						return
@@ -422,9 +416,6 @@ func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server mode
 			}
 		}
 
-		// Free the slot before backing off so a failing feed never holds up
-		// other servers' campaigns while it waits to retry.
-		releaseSlot()
 		if delay == 0 {
 			delay = policy.initialDelay
 		} else {
@@ -438,6 +429,21 @@ func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server mode
 			return
 		}
 	}
+}
+
+// withStaticParseSlot runs fn once no other campaign is parsing or
+// publishing, and reports false without running it if ctx ends first. Only the
+// memory-heavy work takes the slot: a download can spend many minutes in
+// retries, and holding the slot through that would stall every other server.
+func (gs *GtfsService) withStaticParseSlot(ctx context.Context, fn func()) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case gs.staticParseSlot <- struct{}{}:
+	}
+	defer func() { <-gs.staticParseSlot }()
+	fn()
+	return true
 }
 
 func sortedPendingFeeds(pending map[string]struct{}) []string {
@@ -494,7 +500,7 @@ func (gs *GtfsService) publishStaticCampaign(ctx context.Context, server models.
 		if err != nil {
 			return &StaticFeedError{Stage: StaticFailureCompleteValidate, Reason: StaticReasonUnknown, Err: err}
 		}
-		bundle, err := parseStaticBundleData(data, feedURL, server.AgencyID)
+		bundle, err := gs.parseStatic(data, feedURL, server.AgencyID)
 		if err != nil {
 			return err
 		}
