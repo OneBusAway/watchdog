@@ -926,7 +926,13 @@ func parseDownloadedGTFSBundle(parse func(data []byte, url, agencyID string) (*r
 }
 
 func parseStaticBundleData(data []byte, url, agencyID string) (*remoteGtfs.Static, error) {
-	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
+	// Watchdog never reads shapes, and from stop_times.txt needs only which
+	// stops each trip serves (agency mode keeps those stops). Skipping the rest
+	// cuts Seattle's merged feed from ~580 MB to ~110 MB of peak heap.
+	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{
+		SkipShapes: true,
+		StopTimes:  remoteGtfs.StopTimesStopsOnly,
+	})
 	if err != nil {
 		sum := sha256.Sum256(data)
 		return nil, &StaticFeedError{Stage: StaticFailureArchive, Reason: StaticReasonInvalidZIP, ContentHash: hex.EncodeToString(sum[:]), Err: fmt.Errorf("failed to parse GTFS static data from %s: %w", url, err)}

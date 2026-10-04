@@ -68,8 +68,8 @@ func buildAgencyStaticSnapshot(server models.ObaServer, bundles []*remoteGtfs.St
 					selectedServices = append(selectedServices, trip.Service)
 				}
 			}
-			for i := range trip.StopTimes {
-				addStopAndParents(trip.StopTimes[i].Stop, &selectedStops, seenStops)
+			for _, stop := range trip.Stops {
+				addStopAndParents(stop, &selectedStops, seenStops)
 			}
 		}
 	}

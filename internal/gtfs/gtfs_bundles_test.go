@@ -320,7 +320,7 @@ func TestStopsParsing(t *testing.T) {
 func TestStoreGTFSBundleRecordsFetchTime(t *testing.T) {
 	server := models.ObaServer{ServerName: "test", AgencyID: "40", AgencyName: "Sound Transit", ObaBaseURL: "https://test.example.com"}
 	data := readFixture(t, "gtfs.zip")
-	staticBundle, err := remoteGtfs.ParseStatic(data, remoteGtfs.ParseStaticOptions{})
+	staticBundle, err := parseStaticBundleData(data, "https://test.example.com/gtfs.zip", server.AgencyID)
 	if err != nil {
 		t.Fatal("failed to parse gtfs static data")
 	}

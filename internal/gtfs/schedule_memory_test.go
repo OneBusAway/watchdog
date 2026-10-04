@@ -102,3 +102,30 @@ func TestParseRawScheduleFeedDoesNotMaterializeStopTimes(t *testing.T) {
 			stopTimesSize>>20, growth>>20)
 	}
 }
+
+// The parsed bundle stays live through publish. Watchdog never reads shapes or
+// stop times' clock values from it, only which stops each trip serves, so the
+// bundle must not keep a full stop-time record per stop_times.txt row.
+func TestParseStaticBundleDataRetainsCompactStopTimes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("allocates a large synthetic feed")
+	}
+	const trips, stopsPerTrip = 4000, 100
+	feed, _ := largeStopTimesFeed(t, trips, stopsPerTrip)
+
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	bundle, err := parseStaticBundleData(feed, "https://large.zip", "")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	runtime.KeepAlive(bundle)
+
+	perRow := float64(after.HeapAlloc-before.HeapAlloc) / float64(trips*stopsPerTrip)
+	if perRow > 32 {
+		t.Fatalf("parsed bundle retains %.0f bytes per stop_times row; want at most 32", perRow)
+	}
+}

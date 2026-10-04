@@ -47,7 +47,8 @@ func newTestApplication(t *testing.T) *Application {
 	if err != nil {
 		t.Fatalf("Failed to read GTFS fixture: %v", err)
 	}
-	staticBundle, err := remoteGtfs.ParseStatic(fileBytes, remoteGtfs.ParseStaticOptions{})
+	// Parse with the options production uses (gtfs.parseStaticBundleData).
+	staticBundle, err := remoteGtfs.ParseStatic(fileBytes, remoteGtfs.ParseStaticOptions{SkipShapes: true, StopTimes: remoteGtfs.StopTimesStopsOnly})
 	if err != nil {
 		t.Fatalf("Failed to parse GTFS data: %v", err)
 	}
