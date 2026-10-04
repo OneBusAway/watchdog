@@ -307,6 +307,14 @@ func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server mode
 	deadline := started.Add(policy.budget)
 	delay := time.Duration(0)
 	lastFailures := make(map[string]*StaticFeedError)
+	holdingSlot := false
+	releaseSlot := func() {
+		if holdingSlot {
+			<-gs.staticAttemptSlot
+			holdingSlot = false
+		}
+	}
+	defer releaseSlot()
 	for {
 		if delay > 0 {
 			timer := time.NewTimer(delay)
@@ -315,6 +323,16 @@ func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server mode
 				timer.Stop()
 				return
 			case <-timer.C:
+			}
+		}
+		// The conservative probe continues into a full fetch without
+		// releasing, so the slot may already be held here.
+		if !holdingSlot {
+			select {
+			case <-ctx.Done():
+				return
+			case gs.staticAttemptSlot <- struct{}{}:
+				holdingSlot = true
 			}
 		}
 		attemptedAt := time.Now().UTC()
@@ -404,6 +422,9 @@ func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server mode
 			}
 		}
 
+		// Free the slot before backing off so a failing feed never holds up
+		// other servers' campaigns while it waits to retry.
+		releaseSlot()
 		if delay == 0 {
 			delay = policy.initialDelay
 		} else {

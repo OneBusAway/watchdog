@@ -23,6 +23,11 @@ type GtfsService struct {
 	RefreshObserver    StaticRefreshObserver
 	FeedObserver       StaticFeedRefreshObserver
 	refreshCoordinator *staticRefreshCoordinator
+	// staticAttemptSlot admits one static refresh attempt at a time. Each
+	// attempt downloads and fully parses its feeds, and a production merged
+	// feed costs hundreds of MB of heap to parse, so concurrent campaigns
+	// (every server starts one at boot) stack past the memory limit.
+	staticAttemptSlot chan struct{}
 }
 
 type StaticRefreshObservation struct {
@@ -55,6 +60,7 @@ func NewGtfsService(staticStore *StaticStore, realtimeStore *RealtimeStore, boun
 		Logger:             logger,
 		Client:             client,
 		refreshCoordinator: newStaticRefreshCoordinator(),
+		staticAttemptSlot:  make(chan struct{}, 1),
 	}
 }
 
