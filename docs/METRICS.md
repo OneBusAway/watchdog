@@ -17,7 +17,8 @@ See [FRESHNESS.md](FRESHNESS.md) for the normative client contract. A recent Pro
 | Metric Name | Type | Labels | Unit | Description |
 | --- | --- | --- | --- | --- |
 | `watchdog_collection_interval_seconds` | Gauge | none | seconds | Configured realtime collection interval. |
-| `watchdog_collection_last_completed_timestamp_seconds` | Gauge | none | unix_timestamp | When the sequential collection loop last completed a full cycle over the current server configuration. |
+| `watchdog_collection_last_completed_timestamp_seconds` | Gauge | none | unix_timestamp | When the sequential collection loop last completed a full cycle over the current server configuration. Not advanced while no servers are configured. |
+| `watchdog_configured_servers` | Gauge | none | count | Number of valid servers currently configured. `0` means Watchdog is up but monitoring nothing (for example, a `--config-url` source that was empty or invalid at boot). |
 
 Clients define the current-value window as `clamp(3 * interval, 60, 300)` seconds and require the completion timestamp to be within that window. `up == 1` without a recent completion means the metrics HTTP endpoint is reachable while collection is stalled.
 

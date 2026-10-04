@@ -13,7 +13,12 @@ var (
 
 	WatchdogCollectionLastCompleted = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "watchdog_collection_last_completed_timestamp_seconds",
-		Help: "Unix timestamp when Watchdog last completed a full realtime collection cycle",
+		Help: "Unix timestamp when Watchdog last completed a full realtime collection cycle over at least one configured server",
+	})
+
+	WatchdogConfiguredServers = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "watchdog_configured_servers",
+		Help: "Number of valid servers Watchdog currently has configured; 0 means it is up but monitoring nothing",
 	})
 )
 
