@@ -166,6 +166,27 @@ func (s *StaticStore) ReplaceServerSnapshot(server models.ObaServer, snapshots m
 	return removed
 }
 
+// TouchServerSnapshot records a fresh fetch time for every snapshot the
+// server already holds, without replacing them. A refresh that downloads
+// byte-identical feeds uses it to confirm the bundle is current. It reports
+// false when the server holds no snapshot, so the caller publishes instead.
+func (s *StaticStore) TouchServerSnapshot(server models.ObaServer, fetchedAt time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	touched := false
+	for key := range s.data {
+		if !server.OwnsServerKey(key) || (server.IsServerScoped() && s.configuredAgencyEntryLocked(key)) {
+			continue
+		}
+		if s.lastFetched == nil {
+			s.lastFetched = make(map[string]time.Time)
+		}
+		s.lastFetched[key] = fetchedAt
+		touched = true
+	}
+	return touched
+}
+
 // Set stores the given GTFS static data for the specified server key.
 // If the internal map is not initialized, it creates it.
 // This method is thread-safe and uses a write lock.
