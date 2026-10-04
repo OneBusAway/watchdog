@@ -1,0 +1,107 @@
+name: Issue assignment timeout
+
+on:
+  schedule:
+    # Run once every day
+    - cron: "0 9 * * *"
+
+  # Allows manual testing from the Actions tab
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  check-assignments:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Remove expired issue assignments
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const MAX_DAYS = 14;
+
+            const issues = await github.paginate(
+              github.rest.issues.listForRepo,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: "open",
+                per_page: 100
+              }
+            );
+
+            for (const issue of issues) {
+              // Skip pull requests
+              if (issue.pull_request) continue;
+
+              if (!issue.assignees?.length) continue;
+
+              const events = await github.paginate(
+                github.rest.issues.listEventsForTimeline,
+                {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  per_page: 100
+                }
+              );
+
+              const expiredAssignees = [];
+
+              for (const assignee of issue.assignees) {
+                // Find the latest assignment event for this user
+                const assignment = events
+                  .filter(
+                    event =>
+                      event.event === "assigned" &&
+                      event.assignee?.login === assignee.login
+                  )
+                  .sort(
+                    (a, b) =>
+                      new Date(b.created_at) - new Date(a.created_at)
+                  )[0];
+
+                if (!assignment) continue;
+
+                const assignedAt = new Date(assignment.created_at);
+                const age =
+                  (Date.now() - assignedAt.getTime()) /
+                  (1000 * 60 * 60 * 24);
+
+                if (age < MAX_DAYS) continue;
+
+                expiredAssignees.push(assignee.login);
+              }
+
+              if (expiredAssignees.length === 0) continue;
+
+              await github.rest.issues.removeAssignees({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                assignees: expiredAssignees
+              });
+
+              const mentions = expiredAssignees.map(login => `@${login}`);
+              const comment =
+                expiredAssignees.length === 1
+                  ? `${mentions[0]} has been automatically unassigned because this project limits issue assignments to ${MAX_DAYS} days.
+
+If you need more time, please mention a maintainer and ask to be assigned again.
+
+If anyone else would like to work on this issue, please mention a maintainer to request assignment.`
+                  : `${mentions.join(", ")} have been automatically unassigned because this project limits issue assignments to ${MAX_DAYS} days.
+
+If you need more time, please mention a maintainer and ask to be assigned again.
+
+If anyone else would like to work on this issue, please mention a maintainer to request assignment.`;
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: comment
+              });
+            }
