@@ -22,6 +22,14 @@ var (
 	})
 )
 
+// WatchdogServerInfo exposes optional configuration-source identity for each
+// monitored server. server_url is the stable join key shared by Watchdog's
+// server metrics; the remaining labels are supplied as opaque metadata.
+var WatchdogServerInfo = tracked(promauto.NewGaugeVec(prometheus.GaugeOpts{
+	Name: "watchdog_server_info",
+	Help: "Configuration-source identity for a monitored server (always 1)",
+}, []string{"server_url", "service_slug", "environment", "organization"}))
+
 // ObaApiStatus tracks the reachability of an OBA server's /current-time.json
 // endpoint. The ping is server-wide (the endpoint takes no agency parameter),
 // so the metric is labeled with server identity only — agency_id / agency_name

@@ -84,6 +84,22 @@ func (ms *MetricsService) ReportCollectionCompleted(completedAt time.Time) {
 	WatchdogCollectionLastCompleted.Set(float64(completedAt.UTC().Unix()))
 }
 
+// ReportServerInfo refreshes the optional identity series for the current
+// configuration. Older config documents omit these fields; those servers keep
+// all existing metrics but do not get an incomplete info series.
+func (ms *MetricsService) ReportServerInfo(servers []models.ObaServer) {
+	for _, server := range servers {
+		serverURL := utils.SanitizeServerURL(server.ObaBaseURL)
+		WatchdogServerInfo.DeletePartialMatch(prometheus.Labels{"server_url": serverURL})
+
+		if serverURL == "" || server.ServiceSlug == "" || server.Environment == "" || server.Organization == "" {
+			continue
+		}
+
+		WatchdogServerInfo.WithLabelValues(serverURL, server.ServiceSlug, server.Environment, server.Organization).Set(1)
+	}
+}
+
 func (ms *MetricsService) StaticFeedMappingObserver() gtfs.StaticFeedMappingObserver {
 	return ms.StaticFeedMappings.Observe
 }

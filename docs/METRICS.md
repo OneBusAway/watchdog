@@ -22,6 +22,14 @@ See [FRESHNESS.md](FRESHNESS.md) for the normative client contract. A recent Pro
 
 Clients define the current-value window as `clamp(3 * interval, 60, 300)` seconds and require the completion timestamp to be within that window. `up == 1` without a recent completion means the metrics HTTP endpoint is reachable while collection is stalled.
 
+## 0.1. Configured Server Identity
+
+| Metric Name | Type | Labels | Unit | Description |
+| --- | --- | --- | --- | --- |
+| `watchdog_server_info` | Gauge | `server_url`, `service_slug`, `environment`, `organization` | presence | Configuration-source identity for a monitored server. The value is always `1`; labels are emitted only when all identity fields are configured. |
+
+`service_slug` is a short, machine-readable identifier for the monitored service, supplied by the source of Watchdog's configuration. For example, `metro-transit-api` could identify a transit service. Watchdog treats the value as opaque: it does not parse it or depend on a particular hosting platform's naming rules. `environment` and `organization` are also supplied metadata. Existing configurations may omit all three fields; Watchdog continues monitoring those servers and simply omits their `watchdog_server_info` series.
+
 ---
 
 ## 1. API Availability
