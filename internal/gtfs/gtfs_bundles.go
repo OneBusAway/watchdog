@@ -295,9 +295,10 @@ func classifyStaticFeedMappings(server models.ObaServer, feeds []downloadedStati
 // publishes them under its configured server key; server-mode publishes them
 // under the empty-agency server key.
 //
-// Server-mode bounding boxes are computed from the original source bundles
-// before their stops are merged and duplicate IDs are removed. Agency-mode
-// computes its box from the retained scoped stops.
+// Bounding boxes are computed from the original source bundles before their
+// stops are merged and duplicate IDs are removed. In agency-mode, a single
+// blank-ID feed is associated with the configured agency; in server-mode it
+// contributes only to the server-wide union.
 //
 // observer, if non-nil, is invoked once per retained (server, agency) tuple.
 // A nil bundle retires an agency removed by a complete server-scoped refresh.
@@ -305,6 +306,7 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 	if !server.IsServerScoped() {
 		result := buildAgencyStaticSnapshot(server, bundles, logger)
 		serverKey := server.ServerKey()
+		computedBoxes := computeBoundingBoxes(bundles, server.AgencyID)
 		if len(result.data.Routes) == 0 {
 			// Usually the configured agency_id does not match agency.txt/routes.txt.
 			// The snapshot is still stored (filtering is intentional), but the
@@ -319,9 +321,13 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 		staticStore.ReplaceServerSnapshot(server, map[string]*models.StaticData{serverKey: result.data}, time.Now().UTC())
 		routeAgencyIndex.ReplaceCandidates(serverKey, result.routeIDs, result.tripIDs, result.agencyNames)
 
-		if bbox, err := geo.ComputeBoundingBox(result.data.Stops); err == nil {
+		if bbox, ok := computedBoxes.byAgency[server.AgencyID]; ok {
 			boundingBoxStore.Set(serverKey, bbox)
 		} else {
+			err := computedBoxes.errorsByAgency[server.AgencyID]
+			if err == nil {
+				err = fmt.Errorf("no stops associated with configured agency_id %q", server.AgencyID)
+			}
 			// A successful refresh with no scoped coordinates must not leave a
 			// broad box from an older snapshot in place.
 			boundingBoxStore.Delete(serverKey)
@@ -341,7 +347,7 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 	}
 
 	mergedbundle, declaredAgencies := mergeStaticAndDiscoverAgencies(bundles)
-	computedBoxes := computeBoundingBoxes(bundles)
+	computedBoxes := computeBoundingBoxes(bundles, "")
 
 	storageAgencies := declaredAgencies
 	if len(declaredAgencies) == 0 {
@@ -539,8 +545,10 @@ type computedBoundingBoxes struct {
 // computeBoundingBoxes calculates all agency and server-wide bounds while the
 // source feeds are still separate. For each feed it first collects the agency
 // IDs declared by that feed. It then adds every stop once to the union
-// accumulator and once to each of those agency accumulators. A feed with no
-// non-empty agency_id contributes only to the union.
+// accumulator and once to each of those agency accumulators. If fallbackAgencyID
+// is set, a feed with exactly one blank agency row is also added to that agency's
+// accumulator. Without a fallback (server-mode), such a feed contributes only to
+// the union.
 //
 // This feed provenance provides the desired scoping without a persistent
 // stop-to-agency index. Separate single-agency feeds naturally produce distinct
@@ -552,7 +560,7 @@ type computedBoundingBoxes struct {
 // Once the walk finishes, each accumulator is finalized into either a
 // geo.BoundingBox or an error. storeStaticForServer stores successful agency
 // boxes and uses union as the fallback for agencies without usable bounds.
-func computeBoundingBoxes(bundles []*remoteGtfs.Static) computedBoundingBoxes {
+func computeBoundingBoxes(bundles []*remoteGtfs.Static, fallbackAgencyID string) computedBoundingBoxes {
 	union := &boundingBoxAccumulator{}
 	byAgency := make(map[string]*boundingBoxAccumulator)
 	for _, bundle := range bundles {
@@ -568,6 +576,12 @@ func computeBoundingBoxes(bundles []*remoteGtfs.Static) computedBoundingBoxes {
 			agencyIDs[agency.Id] = struct{}{}
 			if byAgency[agency.Id] == nil {
 				byAgency[agency.Id] = &boundingBoxAccumulator{}
+			}
+		}
+		if len(bundle.Agencies) == 1 && len(agencyIDs) == 0 && fallbackAgencyID != "" {
+			agencyIDs[fallbackAgencyID] = struct{}{}
+			if byAgency[fallbackAgencyID] == nil {
+				byAgency[fallbackAgencyID] = &boundingBoxAccumulator{}
 			}
 		}
 

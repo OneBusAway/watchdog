@@ -1001,7 +1001,7 @@ func TestComputeBoundingBoxesForMultiAgencyFeedUsesSharedStops(t *testing.T) {
 	})
 	bundle.Agencies = append(bundle.Agencies, remoteGtfs.Agency{Id: "agency-B", Name: "Agency B", Url: "https://b.example"})
 
-	computed := computeBoundingBoxes([]*remoteGtfs.Static{bundle})
+	computed := computeBoundingBoxes([]*remoteGtfs.Static{bundle}, "")
 	want := geo.BoundingBox{MinLat: 1, MaxLat: 3, MinLon: 2, MaxLon: 4}
 	for _, agencyID := range []string{"agency-A", "agency-B"} {
 		if got := computed.byAgency[agencyID]; got != want {
@@ -1246,7 +1246,7 @@ func TestStoreStaticForServerObservesBundleWithoutUsableCoordinates(t *testing.T
 
 func TestComputeAgencyBoundingBoxesReportsCoordinateErrors(t *testing.T) {
 	bundle := makeSyntheticBundle(t, "agency-A", "Agency A", "https://a.example", []remoteGtfs.Stop{{Id: "S1"}})
-	computed := computeBoundingBoxes([]*remoteGtfs.Static{bundle})
+	computed := computeBoundingBoxes([]*remoteGtfs.Static{bundle}, "")
 	if _, ok := computed.byAgency["agency-A"]; ok {
 		t.Fatal("expected no bounding box for stops without coordinates")
 	}
@@ -1277,6 +1277,37 @@ func TestStoreStaticForServerBoundingBoxesIncludeStopCollisions(t *testing.T) {
 	}
 }
 
+func TestAgencyModeBoundingBoxIncludesMatchingAndBlankSiblingFeeds(t *testing.T) {
+	declaring := makeSyntheticBundle(t, "agency-A", "Agency A", "https://a.example", []remoteGtfs.Stop{
+		{Id: "A1", Latitude: floatPtr(10), Longitude: floatPtr(10)},
+		{Id: "A2", Latitude: floatPtr(11), Longitude: floatPtr(11)},
+	})
+	blank := makeSyntheticBundle(t, "", "", "", []remoteGtfs.Stop{
+		{Id: "B1", Latitude: floatPtr(50), Longitude: floatPtr(50)},
+		{Id: "B2", Latitude: floatPtr(51), Longitude: floatPtr(51)},
+	})
+	foreign := makeSyntheticBundle(t, "agency-B", "Agency B", "https://b.example", []remoteGtfs.Stop{
+		{Id: "C1", Latitude: floatPtr(80), Longitude: floatPtr(80)},
+		{Id: "C2", Latitude: floatPtr(81), Longitude: floatPtr(81)},
+	})
+	server := models.ObaServer{
+		ServerName: "agency-mode",
+		ObaBaseURL: "https://agency-mode.example",
+		AgencyID:   "agency-A",
+		AgencyName: "Agency A",
+	}
+	bounds := geo.NewBoundingBoxStore()
+
+	if err := storeStaticForServer(server, []*remoteGtfs.Static{declaring, blank, foreign}, NewStaticStore(), bounds, NewRouteAgencyIndex(), nil, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
+		t.Fatalf("storeStaticForServer: %v", err)
+	}
+
+	want := geo.BoundingBox{MinLat: 10, MaxLat: 51, MinLon: 10, MaxLon: 51}
+	if got, ok := bounds.Get(server.ServerKey()); !ok || got != want {
+		t.Fatalf("agency bounding box = %+v (present=%t), want matching and blank feeds only: %+v", got, ok, want)
+	}
+}
+
 func TestStoreStaticForServerUnionBoxIncludesBlankAgencyFeed(t *testing.T) {
 	// One normal feed (declares agency-A) plus a second feed whose agency.txt
 	// ships a blank agency_id. The blank feed's stops must still contribute to
@@ -1301,13 +1332,15 @@ func TestStoreStaticForServerUnionBoxIncludesBlankAgencyFeed(t *testing.T) {
 	if got, ok := bounds.Get(server.ServerKey()); !ok || got != want {
 		t.Fatalf("expected union bbox covering blank feed %+v, got %+v (present=%t)", want, got, ok)
 	}
-	// agency-A's own box must not have absorbed the blank feed's coverage.
+	// agency-A's box must contain only the agency-A feed's stops. The blank
+	// feed cannot be assigned to an agency in server mode.
 	agencyA, ok := bounds.Get(models.ServerKey(server.ObaBaseURL, "agency-A"))
 	if !ok {
 		t.Fatal("expected agency-A bounding box")
 	}
-	if agencyA == want {
-		t.Fatalf("agency-A box should not include blank feed coverage, got %+v", agencyA)
+	wantAgencyA := geo.BoundingBox{MinLat: 1, MaxLat: 2, MinLon: 2, MaxLon: 3}
+	if agencyA != wantAgencyA {
+		t.Fatalf("agency-A box should include only explicitly attributable stops: got %+v, want %+v", agencyA, wantAgencyA)
 	}
 }
 
