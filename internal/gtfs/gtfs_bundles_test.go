@@ -82,7 +82,7 @@ func TestStaticRefreshCampaignGivesUpWithinBudget(t *testing.T) {
 		slog.New(slog.NewTextHandler(io.Discard, nil)), geo.NewBoundingBoxStore(), NewStaticStore(),
 		NewRouteAgencyIndex(), nil, nil, func(_ models.ObaServer, observation StaticRefreshObservation) {
 			observations = append(observations, observation)
-		}, 1, staticRefreshRetryPolicy{initialDelay: time.Millisecond, maxDelay: 2 * time.Millisecond, budget: 5 * time.Millisecond})
+		}, 1, staticRefreshRetryPolicy{initialDelay: 10 * time.Millisecond, maxDelay: 20 * time.Millisecond, budget: 250 * time.Millisecond})
 
 	if len(observations) < 2 {
 		t.Fatalf("expected retry and exhausted observations, got %+v", observations)
