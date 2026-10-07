@@ -237,6 +237,13 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 			server.ServerName,
 			utils.SanitizeServerURL(server.ObaBaseURL),
 		).Set(float64(time.Now().UTC().Unix()))
+	} else {
+		metrics.GtfsRtLastSuccessfulFetch.DeleteLabelValues(
+			"",
+			"",
+			server.ServerName,
+			utils.SanitizeServerURL(server.ObaBaseURL),
+		)
 	}
 
 	// Per-agency metric loop. Each iteration runs only the agency-scoped
@@ -295,6 +302,13 @@ func (app *Application) CollectMetricsForServer(ctx context.Context, server mode
 			server.ServerName,
 			utils.SanitizeServerURL(server.ObaBaseURL),
 		).Set(float64(time.Now().UTC().Unix()))
+	} else {
+		metrics.GtfsRtLastSuccessfulFetch.DeleteLabelValues(
+			server.AgencyID,
+			server.AgencyName,
+			server.ServerName,
+			utils.SanitizeServerURL(server.ObaBaseURL),
+		)
 	}
 
 	// nil agencies: the fetch has already filtered the store to vehicles

@@ -437,6 +437,135 @@ func TestServerScopeGtfsRtFreshnessNotSetWithoutFeeds(t *testing.T) {
 	}
 }
 
+// Removing all GTFS-RT feeds should retire the existing freshness series.
+func TestAgencyScopeGtfsRtFreshnessRemovedWhenFeedsRemoved(t *testing.T) {
+	rtData := readTestFixture(t, "../../testdata/gtfs_rt_feed_vehicles.pb")
+	obasServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/vehicles.pb":
+			w.Header().Set("Content-Type", "application/octet-stream")
+			_, _ = w.Write(rtData)
+		case "/api/where/metrics.json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"code":200,"version":2,"data":{"entry":{"agencyIDs":["agency-a"]}}}`))
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"code":200,"data":{"list":[],"entry":{"readableTime":"now"}}}`))
+		}
+	}))
+	t.Cleanup(obasServer.Close)
+	t.Cleanup(http.DefaultClient.CloseIdleConnections)
+
+	app := newTestApplication(t)
+
+	server := models.ObaServer{
+		ServerName:  "agency-a",
+		AgencyID:    "agency-a",
+		AgencyName:  "Agency A",
+		ObaBaseURL:  obasServer.URL,
+		ObaApiKey:   "test-key",
+		GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: obasServer.URL + "/vehicles.pb"}},
+	}
+
+	key := server.ServerKey()
+	app.GtfsService.StaticStore.Set(key, &models.StaticData{})
+	app.GtfsService.BoundingBoxStore.Set(key, geo.BoundingBox{
+		MinLat: -90, MaxLat: 90, MinLon: -180, MaxLon: 180,
+	})
+
+	scope := config.ResolveScope(server, app.GtfsService.StaticStore, app.GtfsService.RouteAgencyIndex)
+	if _, ok := scope.(config.AgencyScope); !ok {
+		t.Fatalf("expected an AgencyScope, got %T", scope)
+	}
+
+	app.collectForScope(context.Background(), server, scope)
+
+	serverURL := utils.SanitizeServerURL(obasServer.URL)
+	labels := map[string]string{
+		"agency_id":   "agency-a",
+		"agency_name": "Agency A",
+		"server_name": "agency-a",
+		"server_url":  serverURL,
+	}
+
+	if _, found := gaugeValueFor(metrics.GtfsRtLastSuccessfulFetch, labels); !found {
+		t.Fatal("expected freshness series after successful GTFS-RT fetch")
+	}
+
+	server.GtfsRTFeeds = nil
+	app.collectForScope(context.Background(), server, scope)
+
+	if _, found := gaugeValueFor(metrics.GtfsRtLastSuccessfulFetch, labels); found {
+		t.Fatal("expected freshness series to be removed after GTFS-RT feeds were removed")
+	}
+}
+
+// Removing all GTFS-RT feeds should retire the existing server-scoped freshness series.
+func TestServerScopeGtfsRtFreshnessRemovedWhenFeedsRemoved(t *testing.T) {
+	rtData := readTestFixture(t, "../../testdata/gtfs_rt_feed_vehicles.pb")
+	obasServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/vehicles.pb":
+			w.Header().Set("Content-Type", "application/octet-stream")
+			_, _ = w.Write(rtData)
+		case "/api/where/metrics.json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"code":200,"version":2,"data":{"entry":{"agencyIDs":["agency-a"]}}}`))
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"code":200,"data":{"list":[],"entry":{"readableTime":"now"}}}`))
+		}
+	}))
+	t.Cleanup(obasServer.Close)
+	t.Cleanup(http.DefaultClient.CloseIdleConnections)
+
+	app := newTestApplication(t)
+
+	server := models.ObaServer{
+		ServerName:  "server-scope",
+		ObaBaseURL:  obasServer.URL,
+		ObaApiKey:   "test-key",
+		GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: obasServer.URL + "/vehicles.pb"}},
+	}
+
+	wholeWorld := geo.BoundingBox{
+		MinLat: -90, MaxLat: 90, MinLon: -180, MaxLon: 180,
+	}
+	key := models.ServerKey(obasServer.URL, "agency-a")
+	app.GtfsService.StaticStore.Set(key, &models.StaticData{})
+	app.GtfsService.BoundingBoxStore.Set(key, wholeWorld)
+	app.GtfsService.BoundingBoxStore.Set(server.ServerKey(), wholeWorld)
+	app.GtfsService.RouteAgencyIndex.Replace(server.ServerKey(), map[string]string{
+		"route-a": "agency-a",
+	}, nil, nil)
+
+	scope := config.ResolveScope(server, app.GtfsService.StaticStore, app.GtfsService.RouteAgencyIndex)
+	if _, ok := scope.(config.ServerScope); !ok {
+		t.Fatalf("expected a ServerScope, got %T", scope)
+	}
+
+	app.collectForScope(context.Background(), server, scope)
+
+	serverURL := utils.SanitizeServerURL(obasServer.URL)
+	labels := map[string]string{
+		"agency_id":   "",
+		"agency_name": "",
+		"server_name": "server-scope",
+		"server_url":  serverURL,
+	}
+
+	if _, found := gaugeValueFor(metrics.GtfsRtLastSuccessfulFetch, labels); !found {
+		t.Fatal("expected freshness series after successful GTFS-RT fetch")
+	}
+
+	server.GtfsRTFeeds = nil
+	app.collectForScope(context.Background(), server, scope)
+
+	if _, found := gaugeValueFor(metrics.GtfsRtLastSuccessfulFetch, labels); found {
+		t.Fatal("expected freshness series to be removed after GTFS-RT feeds were removed")
+	}
+}
+
 func TestServerScopeRetiresVehicleStateWhenNoAgencyIsReported(t *testing.T) {
 	var rtCalls atomic.Int32
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
