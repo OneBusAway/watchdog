@@ -63,8 +63,8 @@ var (
 var (
 	GtfsRtLastSuccessfulFetch = tracked(promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "gtfs_rt_last_successful_fetch_timestamp_seconds",
-		Help: "Unix timestamp of the last successful fetch and parse of all configured GTFS-RT vehicle feeds for the server",
-	}, []string{"server_name", "server_url"}))
+		Help: "Unix timestamp of the last successful fetch and parse of all configured GTFS-RT vehicle feeds for the server/agency scope",
+	}, []string{"agency_id", "agency_name", "server_name", "server_url"}))
 
 	GtfsScheduleAvailable = tracked(promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "gtfs_schedule_available",

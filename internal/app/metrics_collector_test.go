@@ -62,6 +62,39 @@ func TestCollectMetricsForServer(t *testing.T) {
 	getMetricsForTesting(t, metrics.ObaApiStatus)
 }
 
+// A freshness timestamp should not be emitted when no GTFS-RT feeds are configured.
+func TestAgencyScopeGtfsRtFreshnessNotSetWithoutFeeds(t *testing.T) {
+	app := newTestApplication(t)
+
+	obaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "current-time") {
+			_, _ = w.Write([]byte(`{"code":200,"currentTime":1234567890000,"text":"OK","version":2,"data":{"entry":{"readableTime":"Test Time"}}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"code":200,"version":2,"data":{"entry":{"agencyIDs":[]}}}`))
+	}))
+	defer obaServer.Close()
+
+	server := models.ObaServer{
+		ServerName: "empty-feeds",
+		AgencyName: "Empty Feeds",
+		AgencyID:   "agency-empty-feeds",
+		ObaBaseURL: obaServer.URL,
+		ObaApiKey:  "test-key",
+	}
+
+	app.CollectMetricsForServer(context.Background(), server)
+
+	serverURL := utils.SanitizeServerURL(obaServer.URL)
+	if got := seriesCount(metrics.GtfsRtLastSuccessfulFetch, prometheus.Labels{
+		"agency_id":  server.AgencyID,
+		"server_url": serverURL,
+	}); got != 0 {
+		t.Fatalf("expected no GTFS-RT freshness series for a server with no feeds, got %d", got)
+	}
+}
+
 func TestCollectVehicleMetricsIsStandalone(t *testing.T) {
 	// collectVehicleMetrics should be safe to invoke independently of the
 	// pre-RT steps (server-ping, FetchObaAPIMetrics, etc.). This is the
@@ -124,6 +157,150 @@ func TestAgencyScopeFetchesRealtimeFeed(t *testing.T) {
 	}
 	if app.GtfsService.RealtimeStore.Get(server.ServerKey()) == nil {
 		t.Fatalf("expected realtime data to be stored under %s", server.ServerKey())
+	}
+}
+
+// Agency-scoped freshness must be tracked independently when multiple
+// agencies share the same OBA server URL.
+func TestAgencyScopeGtfsRtFreshnessIsPerAgency(t *testing.T) {
+	app := newTestApplication(t)
+
+	rtData := readTestFixture(t, "../../testdata/gtfs_rt_feed_vehicles.pb")
+	rtServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(rtData)
+	}))
+	defer rtServer.Close()
+
+	obaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "current-time") {
+			_, _ = w.Write([]byte(`{"code":200,"currentTime":1234567890000,"text":"OK","version":2,"data":{"entry":{"readableTime":"Test Time"}}}`))
+			return
+		}
+
+		_, _ = w.Write([]byte(`{"code":200,"version":2,"data":{"entry":{"agencyIDs":[]}}}`))
+	}))
+	defer obaServer.Close()
+
+	servers := []models.ObaServer{
+		{
+			ServerName: "multi",
+			AgencyName: "Agency A",
+			AgencyID:   "agency-a",
+			ObaBaseURL: obaServer.URL,
+			GtfsRTFeeds: []models.GtfsRTFeed{
+				{VehiclePositionURL: rtServer.URL},
+			},
+		},
+		{
+			ServerName: "multi",
+			AgencyName: "Agency B",
+			AgencyID:   "agency-b",
+			ObaBaseURL: obaServer.URL,
+			GtfsRTFeeds: []models.GtfsRTFeed{
+				{VehiclePositionURL: rtServer.URL},
+			},
+		},
+	}
+
+	for _, server := range servers {
+		app.CollectMetricsForServer(context.Background(), server)
+	}
+
+	serverURL := utils.SanitizeServerURL(obaServer.URL)
+
+	if got := seriesCount(metrics.GtfsRtLastSuccessfulFetch, prometheus.Labels{
+		"server_url": serverURL,
+	}); got != 2 {
+		t.Fatalf("expected 2 GTFS-RT freshness series, got %d", got)
+	}
+
+	for _, agency := range servers {
+		if _, found := gaugeValueFor(metrics.GtfsRtLastSuccessfulFetch, map[string]string{
+			"agency_id":   agency.AgencyID,
+			"agency_name": agency.AgencyName,
+			"server_name": agency.ServerName,
+			"server_url":  serverURL,
+		}); !found {
+			t.Fatalf("missing GTFS-RT freshness series for %s", agency.AgencyID)
+		}
+	}
+}
+
+// A successful fetch for one agency must not refresh freshness for another
+// agency sharing the same OBA server URL.
+func TestAgencyScopeGtfsRtFreshnessNotRefreshedByAnotherAgency(t *testing.T) {
+	app := newTestApplication(t)
+
+	rtData := readTestFixture(t, "../../testdata/gtfs_rt_feed_vehicles.pb")
+
+	var rtCalls atomic.Int32
+	rtServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if rtCalls.Add(1) == 1 {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(rtData)
+			return
+		}
+
+		http.Error(w, "GTFS-RT fetch failed", http.StatusInternalServerError)
+	}))
+	defer rtServer.Close()
+
+	obaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if strings.Contains(r.URL.Path, "current-time") {
+			_, _ = w.Write([]byte(`{"code":200,"currentTime":1234567890000,"text":"OK","version":2,"data":{"entry":{"readableTime":"Test Time"}}}`))
+			return
+		}
+
+		_, _ = w.Write([]byte(`{"code":200,"version":2,"data":{"entry":{"agencyIDs":[]}}}`))
+	}))
+	defer obaServer.Close()
+
+	servers := []models.ObaServer{
+		{
+			ServerName: "multi",
+			AgencyName: "Agency A",
+			AgencyID:   "agency-a",
+			ObaBaseURL: obaServer.URL,
+			GtfsRTFeeds: []models.GtfsRTFeed{
+				{VehiclePositionURL: rtServer.URL},
+			},
+		},
+		{
+			ServerName: "multi",
+			AgencyName: "Agency B",
+			AgencyID:   "agency-b",
+			ObaBaseURL: obaServer.URL,
+			GtfsRTFeeds: []models.GtfsRTFeed{
+				{VehiclePositionURL: rtServer.URL},
+			},
+		},
+	}
+
+	for _, server := range servers {
+		app.CollectMetricsForServer(context.Background(), server)
+	}
+
+	serverURL := utils.SanitizeServerURL(obaServer.URL)
+
+	if _, found := gaugeValueFor(metrics.GtfsRtLastSuccessfulFetch, map[string]string{
+		"agency_id":   "agency-a",
+		"agency_name": "Agency A",
+		"server_name": "multi",
+		"server_url":  serverURL,
+	}); !found {
+		t.Fatal("expected freshness series for successfully fetched agency")
+	}
+
+	if _, found := gaugeValueFor(metrics.GtfsRtLastSuccessfulFetch, map[string]string{
+		"agency_id":   "agency-b",
+		"agency_name": "Agency B",
+		"server_name": "multi",
+		"server_url":  serverURL,
+	}); found {
+		t.Fatal("expected no freshness series for failed agency fetch")
 	}
 }
 
@@ -211,6 +388,52 @@ func TestServerScopeFetchesMetricsOncePerTick(t *testing.T) {
 		if value != want {
 			t.Fatalf("%s: expected %v from the threaded response, got %v", agencyID, want, value)
 		}
+	}
+}
+
+func TestServerScopeGtfsRtFreshnessNotSetWithoutFeeds(t *testing.T) {
+	app := newTestApplication(t)
+
+	obasServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if strings.Contains(r.URL.Path, "metrics.json") {
+			_, _ = w.Write([]byte(`{"code":200,"version":2,"data":{"entry":{"agencyIDs":["agency-a"]}}}`))
+			return
+		}
+		if strings.Contains(r.URL.Path, "current-time") {
+			_, _ = w.Write([]byte(`{"code":200,"currentTime":1234567890000,"text":"OK","version":2,"data":{"entry":{"readableTime":"Test Time"}}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"code":200,"version":2,"data":{"entry":{"agencyIDs":["agency-a"]}}}`))
+	}))
+	defer obasServer.Close()
+
+	server := models.ObaServer{
+		ServerName: "empty-feeds",
+		ObaBaseURL: obasServer.URL,
+		ObaApiKey:  "test-key",
+	}
+
+	key := models.ServerKey(server.ObaBaseURL, "agency-a")
+
+	app.GtfsService.StaticStore.Set(key, &models.StaticData{})
+	app.GtfsService.RouteAgencyIndex.Replace(models.ServerKey(server.ObaBaseURL, ""), nil, nil, map[string]string{"agency-a": "Agency A"})
+
+	scope := config.ResolveScope(server, app.GtfsService.StaticStore, app.GtfsService.RouteAgencyIndex)
+	if _, ok := scope.(config.ServerScope); !ok {
+		t.Fatalf("expected a ServerScope for an entry without agency_id, got %T", scope)
+	}
+
+	app.collectForScope(context.Background(), server, scope)
+
+	serverURL := utils.SanitizeServerURL(obasServer.URL)
+
+	if got := seriesCount(metrics.GtfsRtLastSuccessfulFetch, prometheus.Labels{
+		"agency_id":  "",
+		"server_url": serverURL,
+	}); got != 0 {
+		t.Fatalf("expected no GTFS-RT freshness series for a server with no feeds, got %d", got)
 	}
 }
 
