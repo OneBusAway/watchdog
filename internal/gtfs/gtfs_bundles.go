@@ -532,9 +532,10 @@ func (a *boundingBoxAccumulator) result() (geo.BoundingBox, error) {
 // agencies that had stops but no usable coordinates. unionErr reports the
 // corresponding server-wide failure.
 //
-// When one pre-merged feed declares several agencies, each server-mode agency
-// correctly receives the same box as union because every agency shares that
-// feed's stop pool. Only the resulting four extrema are retained per agency.
+// For a multi-agency feed, an agency's box contains only stops directly served
+// by its trips and route ownership. Parent stations and stops without a
+// route/trip owner remain in the union only. Only the resulting four extrema
+// are retained per agency.
 type computedBoundingBoxes struct {
 	union          geo.BoundingBox
 	unionErr       error
@@ -543,12 +544,13 @@ type computedBoundingBoxes struct {
 }
 
 // computeBoundingBoxes calculates all agency and server-wide bounds while the
-// source feeds are still separate. For each feed it first collects the agency
-// IDs declared by that feed. It then adds every stop once to the union
-// accumulator and once to each of those agency accumulators. If fallbackAgencyID
-// is set, a feed with exactly one blank agency row is also added to that agency's
-// accumulator. Without a fallback (server-mode), such a feed contributes only to
-// the union.
+// source feeds are still separate. Every stop contributes to the server-wide
+// union. A single-agency feed contributes all of its stops to that agency. In
+// a multi-agency feed, each trip's directly served stops contribute only to the
+// agency that owns the trip's route. Parent stations are not added to agency
+// boxes. A feed with exactly one blank agency row uses fallbackAgencyID when
+// provided; without a fallback (server-mode), its stops contribute only to the
+// union.
 //
 // This feed provenance provides the desired scoping without a persistent
 // stop-to-agency index. Separate single-agency feeds naturally produce distinct
@@ -587,8 +589,31 @@ func computeBoundingBoxes(bundles []*remoteGtfs.Static, fallbackAgencyID string)
 
 		for _, stop := range bundle.Stops {
 			union.add(stop)
+		}
+		switch len(agencyIDs) {
+		case 1:
 			for agencyID := range agencyIDs {
-				byAgency[agencyID].add(stop)
+				for i := range bundle.Stops {
+					byAgency[agencyID].add(bundle.Stops[i])
+				}
+			}
+		default:
+			if len(agencyIDs) > 1 {
+				for i := range bundle.Trips {
+					trip := &bundle.Trips[i]
+					if trip.Route == nil || trip.Route.Agency == nil {
+						continue
+					}
+					accumulator, ok := byAgency[trip.Route.Agency.Id]
+					if !ok {
+						continue
+					}
+					for _, stop := range trip.Stops {
+						if stop != nil {
+							accumulator.add(*stop)
+						}
+					}
+				}
 			}
 		}
 	}

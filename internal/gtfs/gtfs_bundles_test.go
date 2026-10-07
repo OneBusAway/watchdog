@@ -994,22 +994,46 @@ func TestMergeStaticStopsLocationCollisionKeepsFirstOccurrence(t *testing.T) {
 	}
 }
 
-func TestComputeBoundingBoxesForMultiAgencyFeedUsesSharedStops(t *testing.T) {
-	bundle := makeSyntheticBundle(t, "agency-A", "Agency A", "https://a.example", []remoteGtfs.Stop{
-		{Id: "A", Latitude: floatPtr(1), Longitude: floatPtr(2)},
-		{Id: "B", Latitude: floatPtr(3), Longitude: floatPtr(4)},
-	})
-	bundle.Agencies = append(bundle.Agencies, remoteGtfs.Agency{Id: "agency-B", Name: "Agency B", Url: "https://b.example"})
+// TestComputeBoundingBoxesForMultiAgencyFeedUsesTripOwnership ensures stops
+// from a shared feed affect only agencies whose trips serve them, excludes
+// parent-station coordinates, and preserves every source stop in the union.
+func TestComputeBoundingBoxesForMultiAgencyFeedUsesTripOwnership(t *testing.T) {
+	agencies := []remoteGtfs.Agency{
+		{Id: "agency-A", Name: "Agency A"},
+		{Id: "agency-B", Name: "Agency B"},
+	}
+	parent := remoteGtfs.Stop{Id: "station-A", Type: 1, Latitude: floatPtr(0), Longitude: floatPtr(1)}
+	bundle := &remoteGtfs.Static{
+		Agencies: agencies,
+		Routes: []remoteGtfs.Route{
+			{Id: "route-A", Agency: &agencies[0]},
+			{Id: "route-B", Agency: &agencies[1]},
+		},
+		Stops: []remoteGtfs.Stop{
+			{Id: "stop-A", Type: 0, Parent: &parent, Latitude: floatPtr(1), Longitude: floatPtr(2)},
+			parent,
+			{Id: "stop-B", Type: 0, Latitude: floatPtr(3), Longitude: floatPtr(4)},
+			{Id: "stop-shared", Type: 0, Latitude: floatPtr(5), Longitude: floatPtr(6)},
+			{Id: "stop-unserved", Type: 0, Latitude: floatPtr(80), Longitude: floatPtr(90)},
+		},
+	}
+	bundle.Trips = []remoteGtfs.ScheduledTrip{
+		{ID: "trip-A", Route: &bundle.Routes[0], Stops: []*remoteGtfs.Stop{&bundle.Stops[0], &bundle.Stops[3]}},
+		{ID: "trip-B", Route: &bundle.Routes[1], Stops: []*remoteGtfs.Stop{&bundle.Stops[2], &bundle.Stops[3]}},
+	}
 
 	computed := computeBoundingBoxes([]*remoteGtfs.Static{bundle}, "")
-	want := geo.BoundingBox{MinLat: 1, MaxLat: 3, MinLon: 2, MaxLon: 4}
-	for _, agencyID := range []string{"agency-A", "agency-B"} {
-		if got := computed.byAgency[agencyID]; got != want {
-			t.Fatalf("expected shared bounds for %s to be %+v, got %+v", agencyID, want, got)
-		}
+	wantA := geo.BoundingBox{MinLat: 1, MaxLat: 5, MinLon: 2, MaxLon: 6}
+	wantB := geo.BoundingBox{MinLat: 3, MaxLat: 5, MinLon: 4, MaxLon: 6}
+	wantUnion := geo.BoundingBox{MinLat: 0, MaxLat: 80, MinLon: 1, MaxLon: 90}
+	if got := computed.byAgency["agency-A"]; got != wantA {
+		t.Fatalf("agency-A bounds = %+v, want only directly served stops: %+v", got, wantA)
 	}
-	if computed.unionErr != nil || computed.union != want {
-		t.Fatalf("expected union bounds %+v, got %+v (error=%v)", want, computed.union, computed.unionErr)
+	if got := computed.byAgency["agency-B"]; got != wantB {
+		t.Fatalf("agency-B bounds = %+v, want its served stops: %+v", got, wantB)
+	}
+	if computed.unionErr != nil || computed.union != wantUnion {
+		t.Fatalf("server union bounds = %+v, error=%v; want %+v", computed.union, computed.unionErr, wantUnion)
 	}
 }
 
@@ -1139,6 +1163,8 @@ func TestStoreStaticForServerStoresServerScopedBoundingBox(t *testing.T) {
 	}
 }
 
+// TestStoreStaticForServerComputesBoundingBoxPerAgency verifies that separate
+// single-agency feeds produce independent agency boxes and a combined union.
 func TestStoreStaticForServerComputesBoundingBoxPerAgency(t *testing.T) {
 	bundleA := makeSyntheticBundle(t, "agency-A", "Agency A", "https://a.example", []remoteGtfs.Stop{
 		{Id: "A1", Latitude: floatPtr(47.60), Longitude: floatPtr(-122.30)},
@@ -1196,6 +1222,8 @@ func TestStoreStaticForServerComputesBoundingBoxPerAgency(t *testing.T) {
 	}
 }
 
+// TestStoreStaticForServerFallsBackToUnionBoundingBox checks that an agency
+// with no usable stops receives the server-wide box as a fallback.
 func TestStoreStaticForServerFallsBackToUnionBoundingBox(t *testing.T) {
 	bundleA := makeSyntheticBundle(t, "agency-A", "Agency A", "https://a.example", []remoteGtfs.Stop{
 		{Id: "S1", Latitude: floatPtr(47.60), Longitude: floatPtr(-122.30)},
@@ -1223,6 +1251,8 @@ func TestStoreStaticForServerFallsBackToUnionBoundingBox(t *testing.T) {
 	}
 }
 
+// TestStoreStaticForServerObservesBundleWithoutUsableCoordinates ensures a
+// failed bounds calculation does not prevent the static-bundle observer call.
 func TestStoreStaticForServerObservesBundleWithoutUsableCoordinates(t *testing.T) {
 	bundle := makeSyntheticBundle(t, "declared-agency", "Declared Agency", "https://a.example", []remoteGtfs.Stop{{Id: "S1"}})
 	server := models.ObaServer{ServerName: "invalid", ObaBaseURL: "https://invalid.example", AgencyID: "configured-agency"}
@@ -1244,6 +1274,8 @@ func TestStoreStaticForServerObservesBundleWithoutUsableCoordinates(t *testing.T
 	}
 }
 
+// TestComputeAgencyBoundingBoxesReportsCoordinateErrors ensures stops without
+// valid coordinates produce an agency-specific bounds error.
 func TestComputeAgencyBoundingBoxesReportsCoordinateErrors(t *testing.T) {
 	bundle := makeSyntheticBundle(t, "agency-A", "Agency A", "https://a.example", []remoteGtfs.Stop{{Id: "S1"}})
 	computed := computeBoundingBoxes([]*remoteGtfs.Static{bundle}, "")
@@ -1255,6 +1287,8 @@ func TestComputeAgencyBoundingBoxesReportsCoordinateErrors(t *testing.T) {
 	}
 }
 
+// TestStoreStaticForServerBoundingBoxesIncludeStopCollisions verifies that
+// duplicate stop IDs at different locations both contribute to the bounds.
 func TestStoreStaticForServerBoundingBoxesIncludeStopCollisions(t *testing.T) {
 	bundleA := makeSyntheticBundle(t, "agency-A", "Agency A", "https://a.example", []remoteGtfs.Stop{
 		{Id: "shared", Latitude: floatPtr(1), Longitude: floatPtr(2)},
@@ -1277,6 +1311,8 @@ func TestStoreStaticForServerBoundingBoxesIncludeStopCollisions(t *testing.T) {
 	}
 }
 
+// TestAgencyModeBoundingBoxIncludesMatchingAndBlankSiblingFeeds ensures an
+// agency box includes matching and single-blank-ID feeds but not foreign feeds.
 func TestAgencyModeBoundingBoxIncludesMatchingAndBlankSiblingFeeds(t *testing.T) {
 	declaring := makeSyntheticBundle(t, "agency-A", "Agency A", "https://a.example", []remoteGtfs.Stop{
 		{Id: "A1", Latitude: floatPtr(10), Longitude: floatPtr(10)},
@@ -1308,6 +1344,8 @@ func TestAgencyModeBoundingBoxIncludesMatchingAndBlankSiblingFeeds(t *testing.T)
 	}
 }
 
+// TestStoreStaticForServerUnionBoxIncludesBlankAgencyFeed ensures blank-ID
+// stops expand the server union without being assigned to a discovered agency.
 func TestStoreStaticForServerUnionBoxIncludesBlankAgencyFeed(t *testing.T) {
 	// One normal feed (declares agency-A) plus a second feed whose agency.txt
 	// ships a blank agency_id. The blank feed's stops must still contribute to
