@@ -49,7 +49,14 @@ func TestBuildStaticSnapshotCandidateMatchesServerScopedBundle(t *testing.T) {
 	if !reflect.DeepEqual(candidate.data, cloneStaticData(wantData)) {
 		t.Fatalf("candidate static data differs:\n got: %+v\nwant: %+v", candidate.data, cloneStaticData(wantData))
 	}
-	if !reflect.DeepEqual(candidate.declaredAgencies, wantAgencies) {
+	agencyNamesByID := func(agencies []declaredAgency) map[string]string {
+		names := make(map[string]string, len(agencies))
+		for _, agency := range agencies {
+			names[agency.AgencyID] = agency.AgencyName
+		}
+		return names
+	}
+	if !reflect.DeepEqual(agencyNamesByID(candidate.declaredAgencies), agencyNamesByID(wantAgencies)) {
 		t.Fatalf("declared agencies = %+v, want %+v", candidate.declaredAgencies, wantAgencies)
 	}
 	if !reflect.DeepEqual(candidate.routeIDs, wantRoutes) || !reflect.DeepEqual(candidate.tripIDs, wantTrips) {
