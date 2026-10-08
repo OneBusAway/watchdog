@@ -29,7 +29,7 @@ func TestReduceStaticFeedAgencyModeKeepsOnlyOwnedData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile expected schedule: %v", err)
 	}
-	contribution, err := reduceStaticFeed(server, feedURL, zipData, bundle, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	contribution, err := buildStaticFeedContribution(server, feedURL, zipData, bundle, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("reduce feed: %v", err)
 	}
@@ -49,8 +49,8 @@ func TestReduceStaticFeedAgencyModeKeepsOnlyOwnedData(t *testing.T) {
 	if !reflect.DeepEqual(contribution.agencyMapping, wantMappings.Results[0]) {
 		t.Fatalf("feed mapping = %+v, want %+v", contribution.agencyMapping, wantMappings.Results[0])
 	}
-	if !reflect.DeepEqual(contribution.scheduleSnapshots, wantSchedules) {
-		t.Fatalf("schedule contribution = %+v, want %+v", contribution.scheduleSnapshots, wantSchedules)
+	if !reflect.DeepEqual(contribution.feedSchedules, wantSchedules) {
+		t.Fatalf("feed schedules = %+v, want %+v", contribution.feedSchedules, wantSchedules)
 	}
 	if contribution.url != feedURL || contribution.contentHash == "" {
 		t.Fatalf("feed identity/hash not retained: %+v", contribution)
@@ -97,7 +97,7 @@ func TestReduceStaticFeedServerModeKeepsMergedDataAndOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile expected schedule: %v", err)
 	}
-	contribution, err := reduceStaticFeed(server, feedURL, zipData, bundle, nil)
+	contribution, err := buildStaticFeedContribution(server, feedURL, zipData, bundle, nil)
 	if err != nil {
 		t.Fatalf("reduce feed: %v", err)
 	}
@@ -122,8 +122,8 @@ func TestReduceStaticFeedServerModeKeepsMergedDataAndOwnership(t *testing.T) {
 			t.Errorf("agency %q name = %q, want %q", agency.AgencyID, contribution.agencyNames[agency.AgencyID], agency.AgencyName)
 		}
 	}
-	if !reflect.DeepEqual(contribution.scheduleSnapshots, wantSchedules) {
-		t.Fatalf("schedule contribution = %+v, want %+v", contribution.scheduleSnapshots, wantSchedules)
+	if !reflect.DeepEqual(contribution.feedSchedules, wantSchedules) {
+		t.Fatalf("feed schedules = %+v, want %+v", contribution.feedSchedules, wantSchedules)
 	}
 
 	for i := range contribution.data.Routes {
@@ -157,7 +157,7 @@ func TestReduceStaticFeedRejectsInvalidSchedule(t *testing.T) {
 		t.Fatalf("parse static tables: %v", err)
 	}
 
-	contribution, err := reduceStaticFeed(server, feedURL, zipData, bundle, nil)
+	contribution, err := buildStaticFeedContribution(server, feedURL, zipData, bundle, nil)
 	if err == nil || contribution != nil {
 		t.Fatalf("invalid schedule produced a contribution: contribution=%+v err=%v", contribution, err)
 	}

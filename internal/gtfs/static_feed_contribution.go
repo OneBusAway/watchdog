@@ -17,20 +17,20 @@ import (
 // Contributions are not published independently. A refresh campaign can hold
 // them while other feeds are retried, then combine them in configured order.
 type staticFeedContribution struct {
-	url                 string
-	contentHash         string
-	data                *models.StaticData
-	routeIDs            map[string][]string
-	tripIDs             map[string][]string
-	agencyNames         map[string]string
-	boundingBoxes       computedBoundingBoxes
-	scheduleSnapshots   map[string]*ScheduleSnapshot
-	agencyMapping       StaticFeedMappingResult
-	sourceAgency        *remoteGtfs.Agency
-	sourceAgencyPresent bool
+	url             string
+	contentHash     string
+	data            *models.StaticData
+	routeIDs        map[string][]string
+	tripIDs         map[string][]string
+	agencyNames     map[string]string
+	boundingBoxes   computedBoundingBoxes
+	feedSchedules   map[string]*ScheduleSnapshot
+	agencyMapping   StaticFeedMappingResult
+	sourceAgency    *remoteGtfs.Agency
+	hasSourceAgency bool
 }
 
-// reduceStaticFeed validates one feed and turns it into a self-contained
+// buildStaticFeedContribution validates one feed and turns it into a self-contained
 // contribution for a future complete static snapshot. It prepares the reduced
 // static data, schedule, bounds, attribution, and feed-mapping results that
 // Watchdog needs, plus the feed URL and content hash that identify the source.
@@ -40,7 +40,7 @@ type staticFeedContribution struct {
 // configured feed is ready and the combined candidate passes cross-feed
 // validation. The ZIP bytes and parsed bundle are inputs only; the returned
 // contribution does not retain either one or the full parser graph.
-func reduceStaticFeed(server models.ObaServer, feedURL string, zipData []byte, bundle *remoteGtfs.Static, logger *slog.Logger) (*staticFeedContribution, error) {
+func buildStaticFeedContribution(server models.ObaServer, feedURL string, zipData []byte, bundle *remoteGtfs.Static, logger *slog.Logger) (*staticFeedContribution, error) {
 	sum := sha256.Sum256(zipData)
 	contentHash := hex.EncodeToString(sum[:])
 	if reason := validateStaticAgencyDiscovery(server, bundle); reason != "" {
@@ -75,10 +75,10 @@ func reduceStaticFeed(server models.ObaServer, feedURL string, zipData []byte, b
 	}
 
 	contribution := &staticFeedContribution{
-		url:               feedURL,
-		contentHash:       contentHash,
-		boundingBoxes:     computeBoundingBoxes([]*remoteGtfs.Static{bundle}, server.AgencyID),
-		scheduleSnapshots: schedules,
+		url:           feedURL,
+		contentHash:   contentHash,
+		boundingBoxes: computeBoundingBoxes([]*remoteGtfs.Static{bundle}, server.AgencyID),
+		feedSchedules: schedules,
 	}
 
 	if server.IsServerScoped() {
@@ -99,7 +99,7 @@ func reduceStaticFeed(server models.ObaServer, feedURL string, zipData []byte, b
 			agency := bundle.Agencies[i]
 			if agency.Id == server.AgencyID || (len(bundle.Agencies) == 1 && agency.Id == "") {
 				contribution.sourceAgency = &agency
-				contribution.sourceAgencyPresent = true
+				contribution.hasSourceAgency = true
 				break
 			}
 		}

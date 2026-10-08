@@ -31,9 +31,9 @@ type GtfsService struct {
 	// parseStatic parses a downloaded feed. Injected so tests can observe
 	// when campaigns parse.
 	parseStatic func(data []byte, url, agencyID string) (*remoteGtfs.Static, error)
-	// reduceStatic builds the campaign's self-contained contribution from one
+	// buildStaticContribution builds the campaign's self-contained contribution from one
 	// parsed feed. Injected so tests can verify successful feeds are reduced once.
-	reduceStatic func(server models.ObaServer, feedURL string, zipData []byte, bundle *remoteGtfs.Static, logger *slog.Logger) (*staticFeedContribution, error)
+	buildStaticContribution func(server models.ObaServer, feedURL string, zipData []byte, bundle *remoteGtfs.Static, logger *slog.Logger) (*staticFeedContribution, error)
 }
 
 type StaticRefreshObservation struct {
@@ -59,16 +59,16 @@ type StaticFeedRefreshObserver func(server models.ObaServer, feedURL string, obs
 
 func NewGtfsService(staticStore *StaticStore, realtimeStore *RealtimeStore, boundingBoxStore *geo.BoundingBoxStore, routeAgencyIndex *RouteAgencyIndex, logger *slog.Logger, client *http.Client) *GtfsService {
 	return &GtfsService{
-		StaticStore:        staticStore,
-		RealtimeStore:      realtimeStore,
-		BoundingBoxStore:   boundingBoxStore,
-		RouteAgencyIndex:   routeAgencyIndex,
-		Logger:             logger,
-		Client:             client,
-		refreshCoordinator: newStaticRefreshCoordinator(),
-		staticParseSlot:    make(chan struct{}, 1),
-		parseStatic:        parseStaticBundleData,
-		reduceStatic:       reduceStaticFeed,
+		StaticStore:             staticStore,
+		RealtimeStore:           realtimeStore,
+		BoundingBoxStore:        boundingBoxStore,
+		RouteAgencyIndex:        routeAgencyIndex,
+		Logger:                  logger,
+		Client:                  client,
+		refreshCoordinator:      newStaticRefreshCoordinator(),
+		staticParseSlot:         make(chan struct{}, 1),
+		parseStatic:             parseStaticBundleData,
+		buildStaticContribution: buildStaticFeedContribution,
 	}
 }
 

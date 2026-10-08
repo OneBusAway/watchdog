@@ -15,52 +15,6 @@ import (
 	"watchdog.onebusaway.org/internal/models"
 )
 
-func TestStaticArtifactCacheRoundTripAndCleanup(t *testing.T) {
-	cache, err := newStaticArtifactCache(1024)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dir := cache.dir
-	artifact, err := cache.Put("https://example.com/feed.zip", []byte("zip data"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if artifact.hash == "" || artifact.size != 8 {
-		t.Fatalf("unexpected artifact metadata: %+v", artifact)
-	}
-	data, err := cache.Read("https://example.com/feed.zip")
-	if err != nil || string(data) != "zip data" {
-		t.Fatalf("cache read = %q, %v", data, err)
-	}
-	if err := cache.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := cache.Read("https://example.com/feed.zip"); err == nil {
-		t.Fatal("cache read succeeded after cleanup")
-	}
-	if dir == "" {
-		t.Fatal("cache did not use a private temporary directory")
-	}
-}
-
-func TestStaticArtifactCacheKeepsIdenticalFeedsIndependent(t *testing.T) {
-	cache, err := newStaticArtifactCache(1024)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cache.Close()
-	if _, err := cache.Put("https://example.com/a.zip", []byte("same")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := cache.Put("https://example.com/b.zip", []byte("same")); err != nil {
-		t.Fatal(err)
-	}
-	cache.Delete("https://example.com/a.zip")
-	if data, err := cache.Read("https://example.com/b.zip"); err != nil || string(data) != "same" {
-		t.Fatalf("second identical artifact = %q, %v", data, err)
-	}
-}
-
 func TestStaticRefreshCampaignReusesSuccessfulFeed(t *testing.T) {
 	bundle := readFixture(t, "gtfs.zip")
 	var goodRequests atomic.Int32
@@ -92,15 +46,15 @@ func TestStaticRefreshCampaignReusesSuccessfulFeed(t *testing.T) {
 	service := NewGtfsService(store, NewRealtimeStore(), geo.NewBoundingBoxStore(), NewRouteAgencyIndex(), slog.New(slog.NewTextHandler(io.Discard, nil)), ts.Client())
 	var goodReductions atomic.Int32
 	var flakyReductions atomic.Int32
-	reduce := service.reduceStatic
-	service.reduceStatic = func(server models.ObaServer, feedURL string, zipData []byte, bundle *remoteGtfs.Static, logger *slog.Logger) (*staticFeedContribution, error) {
+	buildContribution := service.buildStaticContribution
+	service.buildStaticContribution = func(server models.ObaServer, feedURL string, zipData []byte, bundle *remoteGtfs.Static, logger *slog.Logger) (*staticFeedContribution, error) {
 		switch feedURL {
 		case goodURL:
 			goodReductions.Add(1)
 		case flakyURL:
 			flakyReductions.Add(1)
 		}
-		return reduce(server, feedURL, zipData, bundle, logger)
+		return buildContribution(server, feedURL, zipData, bundle, logger)
 	}
 	service.runStaticRefreshCampaign(context.Background(), server, StaticRefreshStartup, 1, staticRefreshRetryPolicy{
 		initialDelay: time.Millisecond,
