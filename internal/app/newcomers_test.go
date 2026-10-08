@@ -39,7 +39,9 @@ func assertServerKeys(t *testing.T, got []models.ObaServer, want ...string) {
 // the config changed, so a server whose bundle download keeps failing (or a
 // server-scoped entry whose feeds declare no agency, which stores nothing at
 // all) must not be re-reported as a newcomer on every tick — that spawned a
-// fresh DownloadGTFSBundles goroutine every minute with no in-flight guard.
+// new static refresh campaign for it on every successful config poll. The
+// campaign coordinator prevents overlapping duplicates, but repeated newcomer
+// reports would still restart a failed campaign after it gives up.
 func TestNewlyAddedServersIgnoresServersAlreadyInConfig(t *testing.T) {
 	app := newTestApplication(t)
 

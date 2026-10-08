@@ -114,6 +114,12 @@ func (gs *GtfsService) reportStaticRefresh(server models.ObaServer, observation 
 	})
 }
 
+// DownloadGTFSBundles runs one blocking static download-and-publish pass for
+// each server. It is kept for integration tests that need to exercise parsing,
+// merging, and storage without waiting through managed campaign retries.
+// maxRetries applies to individual feed requests; this method does not retry
+// incomplete server entries in later campaign attempts. Production startup and
+// periodic refreshes use StartStaticRefreshCampaigns and RefreshGTFSBundles.
 func (gs *GtfsService) DownloadGTFSBundles(ctx context.Context, servers []models.ObaServer, maxRetries int) {
 	for _, result := range downloadGTFSBundles(ctx, gs.Client, servers, gs.Logger, gs.BoundingBoxStore, gs.StaticStore, gs.RouteAgencyIndex, gs.Observer, gs.MappingObserver, maxRetries) {
 		gs.reportStaticRefresh(result.Server, StaticRefreshObservation{AttemptedAt: result.AttemptedAt, Success: result.Err == nil})
