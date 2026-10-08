@@ -86,9 +86,22 @@ func TestStaticRefreshCampaignReusesSuccessfulFeed(t *testing.T) {
 		ServerName: "OBA", AgencyID: "40", AgencyName: "Sound Transit", ObaBaseURL: ts.URL,
 		GtfsStaticFeeds: []string{ts.URL + "/good.zip", ts.URL + "/flaky.zip"},
 	}
+	goodURL, flakyURL := server.GtfsStaticFeeds[0], server.GtfsStaticFeeds[1]
 	store := NewStaticStore()
 	store.SetConfiguredServers([]models.ObaServer{server})
 	service := NewGtfsService(store, NewRealtimeStore(), geo.NewBoundingBoxStore(), NewRouteAgencyIndex(), slog.New(slog.NewTextHandler(io.Discard, nil)), ts.Client())
+	var goodReductions atomic.Int32
+	var flakyReductions atomic.Int32
+	reduce := service.reduceStatic
+	service.reduceStatic = func(server models.ObaServer, feedURL string, zipData []byte, bundle *remoteGtfs.Static, logger *slog.Logger) (*staticFeedContribution, error) {
+		switch feedURL {
+		case goodURL:
+			goodReductions.Add(1)
+		case flakyURL:
+			flakyReductions.Add(1)
+		}
+		return reduce(server, feedURL, zipData, bundle, logger)
+	}
 	service.runStaticRefreshCampaign(context.Background(), server, StaticRefreshStartup, 1, staticRefreshRetryPolicy{
 		initialDelay: time.Millisecond,
 		maxDelay:     time.Millisecond,
@@ -100,6 +113,12 @@ func TestStaticRefreshCampaignReusesSuccessfulFeed(t *testing.T) {
 	}
 	if got := flakyRequests.Load(); got != 2 {
 		t.Fatalf("flaky feed requests = %d, want 2", got)
+	}
+	if got := goodReductions.Load(); got != 1 {
+		t.Fatalf("successful feed reductions = %d, want 1", got)
+	}
+	if got := flakyReductions.Load(); got != 1 {
+		t.Fatalf("flaky feed reductions = %d, want 1 after its successful download", got)
 	}
 	if _, ok := store.GetFetchTime(server.ServerKey()); !ok {
 		t.Fatal("complete campaign did not publish the static snapshot")

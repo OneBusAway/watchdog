@@ -31,6 +31,9 @@ type GtfsService struct {
 	// parseStatic parses a downloaded feed. Injected so tests can observe
 	// when campaigns parse.
 	parseStatic func(data []byte, url, agencyID string) (*remoteGtfs.Static, error)
+	// reduceStatic builds the campaign's self-contained contribution from one
+	// parsed feed. Injected so tests can verify successful feeds are reduced once.
+	reduceStatic func(server models.ObaServer, feedURL string, zipData []byte, bundle *remoteGtfs.Static, logger *slog.Logger) (*staticFeedContribution, error)
 }
 
 type StaticRefreshObservation struct {
@@ -65,6 +68,7 @@ func NewGtfsService(staticStore *StaticStore, realtimeStore *RealtimeStore, boun
 		refreshCoordinator: newStaticRefreshCoordinator(),
 		staticParseSlot:    make(chan struct{}, 1),
 		parseStatic:        parseStaticBundleData,
+		reduceStatic:       reduceStaticFeed,
 	}
 }
 

@@ -358,6 +358,7 @@ func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server mode
 	deadline := started.Add(policy.budget)
 	delay := time.Duration(0)
 	lastFailures := make(map[string]*StaticFeedError)
+	contributions := make(map[string]*staticFeedContribution, len(server.GtfsStaticFeeds))
 	for {
 		if delay > 0 {
 			timer := time.NewTimer(delay)
@@ -374,9 +375,14 @@ func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server mode
 		maxRetryAfter := time.Duration(0)
 		for _, feedURL := range feedURLs {
 			data, downloadErr := fetchGTFSBundleData(ctx, gs.Client, feedURL, server.AgencyID, maxRetries)
+			var contribution *staticFeedContribution
 			if downloadErr == nil {
 				admitted := gs.withStaticParseSlot(ctx, func() {
-					_, downloadErr = parseDownloadedGTFSBundle(gs.parseStatic, data, feedURL, server.AgencyID)
+					var bundle *remoteGtfs.Static
+					bundle, downloadErr = parseDownloadedGTFSBundle(gs.parseStatic, data, feedURL, server.AgencyID)
+					if downloadErr == nil {
+						contribution, downloadErr = gs.reduceStatic(server, feedURL, data, bundle, gs.Logger)
+					}
 				})
 				if !admitted {
 					return
@@ -390,6 +396,7 @@ func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server mode
 				if cacheErr != nil {
 					downloadErr = &StaticFeedError{Stage: StaticFailureDownload, Reason: StaticReasonResponseTooLarge, Err: cacheErr}
 				} else {
+					contributions[feedURL] = contribution
 					delete(pending, feedURL)
 					delete(lastFailures, feedURL)
 					history, _ := gs.refreshCoordinator.history(server, feedURL)
@@ -415,7 +422,7 @@ func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server mode
 				return
 			}
 			for _, feedURL := range server.GtfsStaticFeeds {
-				if _, cached := cache.Get(feedURL); !cached {
+				if _, cached := contributions[feedURL]; !cached {
 					pending[feedURL] = struct{}{}
 				}
 			}
@@ -426,18 +433,29 @@ func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server mode
 		}
 
 		if len(pending) == 0 {
+			// A feed is ready only after its reduced contribution has been
+			// built. Keep this as the gate even though the ZIP artifact remains
+			// available for the current publication path until the next phase.
+			for _, feedURL := range server.GtfsStaticFeeds {
+				if _, ready := contributions[feedURL]; !ready {
+					pending[feedURL] = struct{}{}
+				}
+			}
+			if len(pending) > 0 {
+				continue
+			}
+
 			hashes := make([]string, len(server.GtfsStaticFeeds))
 			for i, feedURL := range server.GtfsStaticFeeds {
-				artifact, _ := cache.Get(feedURL)
-				hashes[i] = artifact.hash
+				hashes[i] = contributions[feedURL].contentHash
 			}
 			reportSuccess := func() {
 				for _, feedURL := range server.GtfsStaticFeeds {
 					if !gs.refreshCoordinator.recordCampaignSuccess(ctx, server, feedURL) {
 						return
 					}
-					artifact, _ := cache.Get(feedURL)
-					gs.reportStaticFeedRefresh(server, feedURL, StaticFeedRefreshObservation{AttemptedAt: attemptedAt, Success: true, ContentHash: artifact.hash})
+					contribution := contributions[feedURL]
+					gs.reportStaticFeedRefresh(server, feedURL, StaticFeedRefreshObservation{AttemptedAt: attemptedAt, Success: true, ContentHash: contribution.contentHash})
 				}
 				gs.reportStaticRefresh(server, StaticRefreshObservation{AttemptedAt: attemptedAt, Success: true})
 			}
@@ -480,6 +498,7 @@ func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server mode
 					gs.reportStaticFeedRefresh(server, feedURL, StaticFeedRefreshObservation{AttemptedAt: attemptedAt, FailureSince: history.failureSince, Stage: feedFailure.Stage, Reason: feedFailure.Reason, Conservative: history.conservative})
 					lastFailures[feedURL] = &feedFailure
 					cache.Delete(feedURL)
+					delete(contributions, feedURL)
 					pending[feedURL] = struct{}{}
 				}
 			}
