@@ -24,7 +24,7 @@ type DroppedServersStore struct {
 // NewDroppedServersStore creates an empty DroppedServersStore.
 func NewDroppedServersStore() *DroppedServersStore {
 	return &DroppedServersStore{
-		reported:         make(map[string]map[string]string),
+		reported:           make(map[string]map[string]string),
 		reportedDuplicates: make(map[string]struct{}),
 	}
 }
@@ -59,7 +59,7 @@ func (s *DroppedServersStore) Reconcile(rawEntries []json.RawMessage, logger *sl
 	duplicated := make(map[string]struct{})
 	invalidThisCycle := make(map[string]struct{})
 	previouslyReported := make(map[string]map[string]string, len(s.reported))
-	for identity , tags := range s.reported {
+	for identity, tags := range s.reported {
 		previouslyReported[identity] = tags
 	}
 	type recovery struct {
@@ -111,7 +111,7 @@ func (s *DroppedServersStore) Reconcile(rawEntries []json.RawMessage, logger *sl
 		}
 		seen[identity] = struct{}{}
 
-		if originalTags , wasReported := previouslyReported[identity]; wasReported {
+		if originalTags, wasReported := previouslyReported[identity]; wasReported {
 			pendingRecoveries[identity] = recovery{server: server, tags: originalTags}
 		}
 		valid = append(valid, server)
