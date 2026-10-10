@@ -1049,6 +1049,11 @@ func TestSameStopLocation(t *testing.T) {
 		{"left lat nil", nil, floatPtr(lon), floatPtr(lat), floatPtr(lon), false},
 		{"right lat nil", floatPtr(lat), floatPtr(lon), nil, floatPtr(lon), false},
 		{"both nils with lon nil both sides", nil, nil, nil, nil, true},
+		{"precision increase (~0.15 m)", floatPtr(30.1234), floatPtr(31.5678), floatPtr(30.123401), floatPtr(31.567799), true},
+		{"rounded to 5 decimals (~0.5 m)", floatPtr(30.123456), floatPtr(31.567891), floatPtr(30.12346), floatPtr(31.56789), true},
+		{"7.99 m apart", floatPtr(30.1234), floatPtr(31.5678), floatPtr(30.123471856), floatPtr(31.5678), true},
+		{"8.01 m apart", floatPtr(30.1234), floatPtr(31.5678), floatPtr(30.123472035), floatPtr(31.5678), false},
+		{"15 m apart", floatPtr(30.1234), floatPtr(31.5678), floatPtr(30.123534898), floatPtr(31.5678), false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
