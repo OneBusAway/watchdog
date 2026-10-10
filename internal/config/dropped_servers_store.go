@@ -17,14 +17,14 @@ import (
 // cycle.
 type DroppedServersStore struct {
 	mu                 sync.Mutex
-	reported           map[string]struct{}
+	reported           map[string]map[string]string
 	reportedDuplicates map[string]struct{}
 }
 
 // NewDroppedServersStore creates an empty DroppedServersStore.
 func NewDroppedServersStore() *DroppedServersStore {
 	return &DroppedServersStore{
-		reported:           make(map[string]struct{}),
+		reported:           make(map[string]map[string]string),
 		reportedDuplicates: make(map[string]struct{}),
 	}
 }
@@ -58,9 +58,9 @@ func (s *DroppedServersStore) Reconcile(rawEntries []json.RawMessage, logger *sl
 	seen := make(map[string]struct{}, len(rawEntries))
 	duplicated := make(map[string]struct{})
 	invalidThisCycle := make(map[string]struct{})
-	previouslyReported := make(map[string]struct{}, len(s.reported))
-	for identity := range s.reported {
-		previouslyReported[identity] = struct{}{}
+	previouslyReported := make(map[string]map[string]string, len(s.reported))
+	for identity, tags := range s.reported {
+		previouslyReported[identity] = tags
 	}
 	type recovery struct {
 		server models.ObaServer
@@ -69,7 +69,7 @@ func (s *DroppedServersStore) Reconcile(rawEntries []json.RawMessage, logger *sl
 	pendingRecoveries := make(map[string]recovery)
 
 	for _, raw := range rawEntries {
-		identity, tags, extra, _ := serverIdentityFromRaw(raw)
+		identity, tags, extra := serverIdentityFromRaw(raw)
 		present[identity] = struct{}{}
 
 		// Decode first so that a malformed entry never claims the identity
@@ -78,7 +78,7 @@ func (s *DroppedServersStore) Reconcile(rawEntries []json.RawMessage, logger *sl
 		if err != nil {
 			invalidThisCycle[identity] = struct{}{}
 			if _, alreadyReported := s.reported[identity]; !alreadyReported {
-				s.reported[identity] = struct{}{}
+				s.reported[identity] = tags
 				report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 					Tags:         tags,
 					ExtraContext: extra,
@@ -111,8 +111,8 @@ func (s *DroppedServersStore) Reconcile(rawEntries []json.RawMessage, logger *sl
 		}
 		seen[identity] = struct{}{}
 
-		if _, wasReported := previouslyReported[identity]; wasReported {
-			pendingRecoveries[identity] = recovery{server: server, tags: tags}
+		if originalTags, wasReported := previouslyReported[identity]; wasReported {
+			pendingRecoveries[identity] = recovery{server: server, tags: originalTags}
 		}
 		valid = append(valid, server)
 	}
@@ -149,7 +149,7 @@ func (s *DroppedServersStore) Reconcile(rawEntries []json.RawMessage, logger *sl
 // serverIdentityFromRaw extracts a stable identity before validation. Entries
 // missing oba_base_url cannot share the normal composite key, so their raw JSON
 // is used to keep unrelated malformed entries from suppressing each other.
-func serverIdentityFromRaw(raw json.RawMessage) (identity string, tags map[string]string, extra map[string]interface{}, duplicateEligible bool) {
+func serverIdentityFromRaw(raw json.RawMessage) (identity string, tags map[string]string, extra map[string]interface{}) {
 	var fields struct {
 		ServerName string `json:"server_name"`
 		LegacyName string `json:"name"`
@@ -158,7 +158,7 @@ func serverIdentityFromRaw(raw json.RawMessage) (identity string, tags map[strin
 		ObaBaseURL string `json:"oba_base_url"`
 	}
 	if err := json.Unmarshal(raw, &fields); err != nil {
-		return "raw:" + string(raw), nil, nil, false
+		return "raw:" + string(raw), nil, nil
 	}
 	if fields.AgencyName == "" {
 		fields.AgencyName = fields.LegacyName
@@ -175,7 +175,7 @@ func serverIdentityFromRaw(raw json.RawMessage) (identity string, tags map[strin
 	}
 	extra = map[string]interface{}{"oba_base_url": fields.ObaBaseURL}
 	if fields.ObaBaseURL == "" {
-		return "raw:" + string(raw), tags, extra, false
+		return "raw:" + string(raw), tags, extra
 	}
-	return models.ServerKey(fields.ObaBaseURL, fields.AgencyID), tags, extra, true
+	return models.ServerKey(fields.ObaBaseURL, fields.AgencyID), tags, extra
 }
