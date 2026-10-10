@@ -1,6 +1,10 @@
 package gtfs
 
-import "fmt"
+import (
+	"fmt"
+
+	"watchdog.onebusaway.org/internal/geo"
+)
 
 // This file holds the collision-detection helpers used by
 // mergeStaticAndDiscoverAgencies to deduplicate stops and agencies across
@@ -29,10 +33,21 @@ type agencyIdentity struct {
 	Url  string
 }
 
+// sameStopLocationThresholdMeters is the maximum great-circle distance at which
+// two coordinate pairs declared for the same stop_id are treated as the same
+// physical stop.
+//
+// GTFS Schedule Best Practices allow each stop position to be up to 4 m from the real stop
+// https://gtfs.org/documentation/schedule/schedule-best-practices/
+// Two feeds can each be off by 4 m in opposite directions, so the same stop can
+// appear up to 4 + 4 = 8 m apart.
+const sameStopLocationThresholdMeters = 8.0
+
 // sameStopLocation reports whether two (lat, lon) pairs refer to the same
-// physical location. nil/nil is treated as "same" (both feeds omitted the
-// location); any nil on one side is treated as "different" (one feed has
-// a location and the other doesn't, which is itself suspicious).
+// physical location, i.e. are within sameStopLocationThresholdMeters of each
+// other. nil/nil is treated as "same" (both feeds omitted the location); any
+// nil on one side is treated as "different" (one feed has a location and the
+// other doesn't, which is itself suspicious).
 func sameStopLocation(lat1, lon1, lat2, lon2 *float64) bool {
 	if lat1 == nil && lat2 == nil && lon1 == nil && lon2 == nil {
 		return true
@@ -40,7 +55,7 @@ func sameStopLocation(lat1, lon1, lat2, lon2 *float64) bool {
 	if lat1 == nil || lat2 == nil || lon1 == nil || lon2 == nil {
 		return false
 	}
-	return *lat1 == *lat2 && *lon1 == *lon2
+	return geo.HaversineDistance(*lat1, *lon1, *lat2, *lon2) <= sameStopLocationThresholdMeters
 }
 
 // formatLatLon renders a *float64 for inclusion in error messages. nil
