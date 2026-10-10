@@ -134,7 +134,7 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: http_outgoing_request_duration_seconds\nQuestion answered: \"Are external dependencies becoming slow?\"",
+      "description": "Metrics: http_outgoing_request_duration_seconds\nQuestion answered: \"Are external dependencies becoming slow?\"\n\nVisualization: Heatmap\nRationale: Latency is best viewed as a distribution. A heatmap reveals not just average slowness, but specifically if a subset of requests (e.g. 99th percentile) are stalling out.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -144,15 +144,26 @@
       "id": 102,
       "targets": [
         {
-          "expr": "http_outgoing_request_duration_seconds_sum",
+          "expr": "sum(rate(http_outgoing_request_duration_seconds_bucket{url=~\".*\", server_url=~\"$server_url\"}[5m])) by (le)",
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
-          }
+          },
+          "format": "heatmap"
         }
       ],
       "title": "1.2 Dependency Latency",
-      "type": "timeseries"
+      "type": "heatmap",
+      "options": {
+        "color": {
+          "mode": "scheme",
+          "scheme": "Oranges"
+        },
+        "yAxis": {
+          "axisPlacement": "left",
+          "reverse": false
+        }
+      }
     },
     {
       "collapsed": false,
@@ -171,7 +182,7 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: gtfs_bundle_days_until_earliest_expiration, gtfs_bundle_days_until_latest_expiration\nQuestion answered: \"Are GTFS bundles approaching expiration?\"",
+      "description": "Metrics: gtfs_bundle_days_until_earliest_expiration, gtfs_bundle_days_until_latest_expiration\nQuestion answered: \"Are GTFS bundles approaching expiration?\"\n\nVisualization: Bar Gauge\nRationale: This metric is a countdown. Rendering it as a horizontal bar gauge allows operators to stack multiple feeds side-by-side. The bars act as a visual timer that shifts from green to warning red as the days until expiration drop below the critical threshold.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -181,14 +192,14 @@
       "id": 201,
       "targets": [
         {
-          "expr": "gtfs_bundle_days_until_earliest_expiration{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}",
+          "expr": "(gtfs_bundle_days_until_earliest_expiration{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}) * 86400",
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
           }
         },
         {
-          "expr": "gtfs_bundle_days_until_latest_expiration{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}",
+          "expr": "(gtfs_bundle_days_until_latest_expiration{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}) * 86400",
           "refId": "B",
           "datasource": {
             "name": "Prometheus"
@@ -196,7 +207,37 @@
         }
       ],
       "title": "2.1 Feed Expiration",
-      "type": "timeseries"
+      "type": "bargauge",
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "showUnfilled": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dtdurations",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 604800
+              },
+              {
+                "color": "green",
+                "value": 2592000
+              }
+            ]
+          }
+        }
+      }
     },
     {
       "datasource": {
@@ -295,7 +336,7 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: realtime_vehicle_positions_count_gtfs_rt, oba_agency_active_vehicles_count, gtfs_rt_tracked_vehicles_count, gtfs_rt_unattributed_vehicles_count, gtfs_rt_unattributed_vehicles_by_reason_count, gtfs_rt_unattributed_vehicle_potential_agency_associations_count, gtfs_schedule_available, gtfs_scheduled_service_active\nQuestion answered: \"Is zero realtime coverage expected, and why were vehicles not assigned?\" Outside service is only schedule available=1 and active=0. Unexpected Zero uses the dynamic collection freshness window. Potential agency associations are possible owners, not assignments: one ambiguous vehicle may appear under multiple potential agencies, so do not sum them as a distinct vehicle total. No alert is installed by default.",
+      "description": "Metrics: realtime_vehicle_positions_count_gtfs_rt, oba_agency_active_vehicles_count, gtfs_rt_tracked_vehicles_count\nQuestion answered: \"Is realtime coverage dropping?\"\n\nVisualization: Time Series\nRationale: Vehicle volume naturally ebbs and flows with the daily transit schedule. Overlaying the GTFS-RT feed count directly against the API output count on a time series line chart allows operators to immediately spot ingestion drops or system divergence from the historical daily baseline.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -375,13 +416,23 @@
         }
       ],
       "title": "3.1 Vehicle Volume",
-      "type": "timeseries"
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 15,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2
+          }
+        }
+      }
     },
     {
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: gtfs_rt_feed_source_timestamp_seconds, gtfs_rt_feed_payload_last_changed_timestamp_seconds\nQuestion answered: \"Is each successfully fetched source and payload fresh?\"",
+      "description": "Metrics: gtfs_rt_feed_source_timestamp_seconds, gtfs_rt_feed_payload_last_changed_timestamp_seconds\nQuestion answered: \"How stale is realtime data?\"\n\nVisualization: Bar Gauge\nRationale: Freshness requires an immediate live status check. A vertical bar gauge per agency immediately catches the eye. As realtime updates lag, the bars fill up and hit red thresholds, quickly highlighting exactly which agency's data pipeline is hung.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -406,13 +457,43 @@
         }
       ],
       "title": "3.2 Feed Freshness",
-      "type": "timeseries"
+      "type": "bargauge",
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "showUnfilled": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 300
+              },
+              {
+                "color": "red",
+                "value": 600
+              }
+            ]
+          }
+        }
+      }
     },
     {
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: gtfs_rt_vehicle_source_timestamp_advances_total, gtfs_rt_vehicle_state_changes_total\nQuestion answered: \"Are source clocks and semantic vehicle states advancing?\"",
+      "description": "Metrics: gtfs_rt_vehicle_source_timestamp_advances_total, gtfs_rt_vehicle_state_changes_total\nQuestion answered: \"Are realtime updates continuously flowing?\"\n\nVisualization: Time Series (with rate)\nRationale: Because this metric is a continuously accumulating counter, visualizing the raw number is unhelpful. Applying a Prometheus rate() function and plotting it on a time-series chart is the only way to monitor the live flow rate and capture sudden velocity drops.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -437,7 +518,17 @@
         }
       ],
       "title": "3.3 Update Throughput",
-      "type": "timeseries"
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 15,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2
+          }
+        }
+      }
     },
     {
       "collapsed": false,
@@ -456,7 +547,7 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: oba_realtime_records_count, oba_realtime_trips_matched_count, oba_realtime_trips_unmatched_count, oba_realtime_trip_match_ratio\nQuestion answered: \"How much realtime trip data is usable?\"",
+      "description": "Metrics: oba_realtime_records_count, oba_realtime_trips_matched_count, oba_realtime_trips_unmatched_count, oba_realtime_trip_match_ratio\nQuestion answered: \"How much realtime trip data is usable?\"\n\nVisualization: Time Series (Stacked Area)\nRationale: Stacking matched over unmatched trips as filled areas reveals total realtime volume while simultaneously indicating the match proportion. The unmatched area growing is an early warning of schedule drift. The match ratio is overlaid as a line on the right y-axis for precise reading.",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -495,13 +586,80 @@
         }
       ],
       "title": "4.1 Trip Matching",
-      "type": "timeseries"
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 50,
+            "gradientMode": "opacity",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*ratio.*"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.stacking",
+                "value": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 3
+              },
+              {
+                "id": "unit",
+                "value": "percentunit"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*records_count.*"
+            },
+            "properties": [
+              {
+                "id": "custom.stacking.mode",
+                "value": "none"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: oba_stops_matched_count, oba_stops_unmatched_count, oba_stop_match_ratio\nQuestion answered: \"Are stop mappings degrading?\"",
+      "description": "Metrics: oba_stops_matched_count, oba_stops_unmatched_count, oba_stop_match_ratio\nQuestion answered: \"Are stop mappings degrading?\"\n\nVisualization: Bar Gauge\nRationale: A ranking bar gauge sorted by worst agencies first allows operators to immediately triage the most problematic feeds. The gradient color (green to red) makes it visually obvious which stops need attention.",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -533,13 +691,59 @@
         }
       ],
       "title": "4.2 Stop Matching",
-      "type": "timeseries"
+      "type": "bargauge",
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "showUnfilled": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*ratio.*"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 0.5
+                    },
+                    {
+                      "color": "green",
+                      "value": 0.8
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "unit",
+                "value": "percentunit"
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: oba_scheduled_trips_count\nQuestion answered: \"What is the overall realtime coverage footprint?\"",
+      "description": "Metrics: oba_scheduled_trips_count\nQuestion answered: \"What is the overall realtime coverage footprint?\"\n\nVisualization: Stat\nRationale: This panel conveys the headline numbers for a transit deployment: total scheduled trips. A stat panel with a large-font single-value callout provides instant situational awareness as an executive KPI.",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -549,15 +753,30 @@
       "id": 403,
       "targets": [
         {
-          "expr": "oba_scheduled_trips_count{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}",
+          "expr": "sum(oba_scheduled_trips_count{agency_id=~\"$agency_id\",server_url=~\"$server_url\"})",
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
           }
+        },
+        {
+          "expr": "watchdog_agency_coverage{server_url=~\"$server_url\", agency_id=~\"$agency_id\"}",
+          "legendFormat": "Agencies with Coverage",
+          "refId": "B"
         }
       ],
       "title": "4.3 Coverage Summary",
-      "type": "timeseries"
+      "type": "stat",
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      }
     },
     {
       "collapsed": false,
@@ -576,7 +795,7 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: gtfs_rt_vehicle_computed_speed, gtfs_rt_vehicle_speed_discrepancy_ratio, gtfs_rt_vehicle_speed_last_computed_timestamp_seconds\nQuestion answered: \"Are vehicles reporting unrealistic speeds, and how old is each retained calculation?\"",
+      "description": "Metrics: gtfs_rt_vehicle_computed_speed, gtfs_rt_vehicle_speed_discrepancy_ratio, gtfs_rt_vehicle_speed_last_computed_timestamp_seconds\nQuestion answered: \"Are vehicles reporting unrealistic speeds, and how old is each retained calculation?\"\n\nVisualization: Histogram\nRationale: A histogram buckets computed speeds into ranges, making it trivial to spot an anomalous right-tail (speeds > 100 km/h for a city bus). This is far more effective than a time series for isolating the fraction of vehicles reporting physically impossible speeds.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -593,13 +812,6 @@
           }
         },
         {
-          "expr": "gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}",
-          "refId": "B",
-          "datasource": {
-            "name": "Prometheus"
-          }
-        },
-        {
           "expr": "time() - gtfs_rt_vehicle_speed_last_computed_timestamp_seconds{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}",
           "legendFormat": "Speed age {{vehicle_id}}",
           "refId": "C",
@@ -609,13 +821,17 @@
         }
       ],
       "title": "5.1 Speed Validation",
-      "type": "timeseries"
+      "type": "histogram",
+      "options": {
+        "bucketSize": 10,
+        "combine": false
+      }
     },
     {
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: gtfs_rt_invalid_vehicle_coordinates, gtfs_rt_stopped_out_of_bounds_vehicles\nQuestion answered: \"Are vehicle coordinates geographically valid?\"",
+      "description": "Metrics: gtfs_rt_invalid_vehicle_coordinates, gtfs_rt_stopped_out_of_bounds_vehicles\nQuestion answered: \"Are vehicle coordinates geographically valid?\"\n\nVisualization: Bar Gauge\nRationale: Grouping by server using a bar gauge instantly surfaces which specific data pipeline is emitting the most malformed coordinates. Color thresholds (green=0, yellow>=1, red>=5) provide immediate visual alerting.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -640,7 +856,36 @@
         }
       ],
       "title": "5.2 Spatial Validation",
-      "type": "timeseries"
+      "type": "bargauge",
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "showUnfilled": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        }
+      }
     },
     {
       "collapsed": false,
@@ -659,7 +904,7 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: oba_unmatched_stop_cluster_count\nQuestion answered: \"Where are failures concentrated?\"",
+      "description": "Metrics: oba_unmatched_stop_cluster_count\nQuestion answered: \"Where are failures concentrated?\"\n\nVisualization: Geomap\nRationale: Stop cluster mismatches are geographical problems. Rendering them on a Geomap instantly reveals spatial patterns (e.g. an entire transit corridor failing to match due to bad GTFS data).",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -676,7 +921,38 @@
       },
       "id": 601,
       "options": {
-        "showHeader": true
+        "basemap": {
+          "name": "Layer 0",
+          "type": "default"
+        },
+        "controls": {
+          "mouseWheelZoom": true,
+          "showAttribution": true,
+          "showZoom": true,
+          "showDebug": false,
+          "showScale": false
+        },
+        "layers": [
+          {
+            "location": {
+              "lookup": "cluster_lat, cluster_lon",
+              "mode": "coords",
+              "latitude": "cluster_lat",
+              "longitude": "cluster_lon"
+            },
+            "name": "Layer 1",
+            "type": "markers"
+          }
+        ],
+        "tooltip": {
+          "mode": "details"
+        },
+        "view": {
+          "id": "zero",
+          "lat": 0,
+          "lon": 0,
+          "zoom": 1
+        }
       },
       "targets": [
         {
@@ -690,7 +966,35 @@
         }
       ],
       "title": "6.1 Unmatched Stop Clusters (by station and S2 cell)",
-      "type": "table"
+      "type": "geomap"
+    },
+    {
+      "id": 503,
+      "title": "5.3 Speed Validation Aux Metrics",
+      "type": "stat",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 45
+      },
+      "targets": [
+        {
+          "expr": "gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}",
+          "refId": "B",
+          "datasource": {
+            "name": "Prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      }
     }
   ],
   "schemaVersion": 39,
