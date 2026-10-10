@@ -31,6 +31,9 @@ type GtfsService struct {
 	// parseStatic parses a downloaded feed. Injected so tests can observe
 	// when campaigns parse.
 	parseStatic func(data []byte, url, agencyID string) (*remoteGtfs.Static, error)
+	// buildStaticContribution builds the campaign's self-contained contribution from one
+	// parsed feed. Injected so tests can verify successful feeds are reduced once.
+	buildStaticContribution func(server models.ObaServer, feedURL string, zipData []byte, bundle *remoteGtfs.Static, logger *slog.Logger) (*staticFeedContribution, error)
 }
 
 type StaticRefreshObservation struct {
@@ -56,15 +59,16 @@ type StaticFeedRefreshObserver func(server models.ObaServer, feedURL string, obs
 
 func NewGtfsService(staticStore *StaticStore, realtimeStore *RealtimeStore, boundingBoxStore *geo.BoundingBoxStore, routeAgencyIndex *RouteAgencyIndex, logger *slog.Logger, client *http.Client) *GtfsService {
 	return &GtfsService{
-		StaticStore:        staticStore,
-		RealtimeStore:      realtimeStore,
-		BoundingBoxStore:   boundingBoxStore,
-		RouteAgencyIndex:   routeAgencyIndex,
-		Logger:             logger,
-		Client:             client,
-		refreshCoordinator: newStaticRefreshCoordinator(),
-		staticParseSlot:    make(chan struct{}, 1),
-		parseStatic:        parseStaticBundleData,
+		StaticStore:             staticStore,
+		RealtimeStore:           realtimeStore,
+		BoundingBoxStore:        boundingBoxStore,
+		RouteAgencyIndex:        routeAgencyIndex,
+		Logger:                  logger,
+		Client:                  client,
+		refreshCoordinator:      newStaticRefreshCoordinator(),
+		staticParseSlot:         make(chan struct{}, 1),
+		parseStatic:             parseStaticBundleData,
+		buildStaticContribution: buildStaticFeedContribution,
 	}
 }
 
@@ -110,6 +114,12 @@ func (gs *GtfsService) reportStaticRefresh(server models.ObaServer, observation 
 	})
 }
 
+// DownloadGTFSBundles runs one blocking static download-and-publish pass for
+// each server. It is kept for integration tests that need to exercise parsing,
+// merging, and storage without waiting through managed campaign retries.
+// maxRetries applies to individual feed requests; this method does not retry
+// incomplete server entries in later campaign attempts. Production startup and
+// periodic refreshes use StartStaticRefreshCampaigns and RefreshGTFSBundles.
 func (gs *GtfsService) DownloadGTFSBundles(ctx context.Context, servers []models.ObaServer, maxRetries int) {
 	for _, result := range downloadGTFSBundles(ctx, gs.Client, servers, gs.Logger, gs.BoundingBoxStore, gs.StaticStore, gs.RouteAgencyIndex, gs.Observer, gs.MappingObserver, maxRetries) {
 		gs.reportStaticRefresh(result.Server, StaticRefreshObservation{AttemptedAt: result.AttemptedAt, Success: result.Err == nil})

@@ -52,10 +52,10 @@ type scheduleState struct {
 	available bool
 }
 
-// ScheduleStore holds per-agency compiled schedules. A failed refresh leaves
-// the last good immutable snapshot in place but marks it unavailable, ensuring
-// stale or incomplete data cannot confidently classify an agency as outside
-// service.
+// ScheduleStore holds per-agency compiled schedules. Refresh paths can keep a
+// previous complete snapshot active while a candidate is being downloaded, or
+// call MarkUnavailable when their policy requires the current status to be
+// invalidated without discarding the retained snapshot.
 type ScheduleStore struct {
 	mu   sync.RWMutex
 	data map[string]scheduleState

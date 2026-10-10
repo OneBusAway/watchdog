@@ -166,13 +166,13 @@ func TestRefreshPublishesWhenServerConfigurationChanges(t *testing.T) {
 	}
 }
 
-// A campaign that gives up marks the schedule unavailable, so the next
-// successful download must publish even when its bytes match the last
-// published content.
-func TestRefreshPublishesAfterAFailedCampaignEvenWhenUnchanged(t *testing.T) {
+// A campaign that gives up leaves the last complete schedule active, so the
+// next successful download can confirm the unchanged snapshot without replacing it.
+func TestRefreshConfirmsUnchangedAfterFailedCampaign(t *testing.T) {
 	h := newUnchangedFeedHarness(t)
 	h.run(t, h.server, StaticRefreshStartup)
 	before := h.published(t)
+	scheduleBefore := h.store.ScheduleStore().data[h.server.ServerKey()].snapshot
 
 	feed := h.body.Load().([]byte)
 	h.body.Store([]byte{})
@@ -180,12 +180,18 @@ func TestRefreshPublishesAfterAFailedCampaignEvenWhenUnchanged(t *testing.T) {
 	if state, _ := h.store.GetRefreshState(h.server); !state.GaveUp {
 		t.Fatalf("setup: failing campaign did not give up: %+v", state)
 	}
+	if available, _ := h.store.ScheduleStore().Evaluate(h.server.ServerKey(), time.Date(2026, time.June, 1, 8, 30, 0, 0, time.UTC)); !available {
+		t.Fatal("failed refresh made the last complete schedule unavailable")
+	}
 
 	h.body.Store(feed)
 	h.run(t, h.server, StaticRefreshStartup)
 
-	if h.published(t) == before {
-		t.Fatal("identical feeds were not re-published after a failed campaign")
+	if h.published(t) != before {
+		t.Fatal("unchanged feeds replaced the last complete snapshot after recovery")
+	}
+	if h.store.ScheduleStore().data[h.server.ServerKey()].snapshot != scheduleBefore {
+		t.Fatal("unchanged feeds replaced the last complete schedule after recovery")
 	}
 }
 

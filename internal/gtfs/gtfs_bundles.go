@@ -295,9 +295,10 @@ func classifyStaticFeedMappings(server models.ObaServer, feeds []downloadedStati
 // publishes them under its configured server key; server-mode publishes them
 // under the empty-agency server key.
 //
-// Server-mode bounding boxes are computed from the original source bundles
-// before their stops are merged and duplicate IDs are removed. Agency-mode
-// computes its box from the retained scoped stops.
+// Bounding boxes are computed from the original source bundles before their
+// stops are merged and duplicate IDs are removed. In agency-mode, a single
+// blank-ID feed is associated with the configured agency; in server-mode it
+// contributes only to the server-wide union.
 //
 // observer, if non-nil, is invoked once per retained (server, agency) tuple.
 // A nil bundle retires an agency removed by a complete server-scoped refresh.
@@ -305,6 +306,7 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 	if !server.IsServerScoped() {
 		result := buildAgencyStaticSnapshot(server, bundles, logger)
 		serverKey := server.ServerKey()
+		computedBoxes := computeBoundingBoxes(bundles, server.AgencyID)
 		if len(result.data.Routes) == 0 {
 			// Usually the configured agency_id does not match agency.txt/routes.txt.
 			// The snapshot is still stored (filtering is intentional), but the
@@ -319,9 +321,13 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 		staticStore.ReplaceServerSnapshot(server, map[string]*models.StaticData{serverKey: result.data}, time.Now().UTC())
 		routeAgencyIndex.ReplaceCandidates(serverKey, result.routeIDs, result.tripIDs, result.agencyNames)
 
-		if bbox, err := geo.ComputeBoundingBox(result.data.Stops); err == nil {
+		if bbox, ok := computedBoxes.byAgency[server.AgencyID]; ok {
 			boundingBoxStore.Set(serverKey, bbox)
 		} else {
+			err := computedBoxes.errorsByAgency[server.AgencyID]
+			if err == nil {
+				err = fmt.Errorf("no stops associated with configured agency_id %q", server.AgencyID)
+			}
 			// A successful refresh with no scoped coordinates must not leave a
 			// broad box from an older snapshot in place.
 			boundingBoxStore.Delete(serverKey)
@@ -341,7 +347,7 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 	}
 
 	mergedbundle, declaredAgencies := mergeStaticAndDiscoverAgencies(bundles)
-	computedBoxes := computeBoundingBoxes(bundles)
+	computedBoxes := computeBoundingBoxes(bundles, "")
 
 	storageAgencies := declaredAgencies
 	if len(declaredAgencies) == 0 {
@@ -526,9 +532,10 @@ func (a *boundingBoxAccumulator) result() (geo.BoundingBox, error) {
 // agencies that had stops but no usable coordinates. unionErr reports the
 // corresponding server-wide failure.
 //
-// When one pre-merged feed declares several agencies, each server-mode agency
-// correctly receives the same box as union because every agency shares that
-// feed's stop pool. Only the resulting four extrema are retained per agency.
+// For a multi-agency feed, an agency's box contains only stops directly served
+// by its trips and route ownership. Parent stations and stops without a
+// route/trip owner remain in the union only. Only the resulting four extrema
+// are retained per agency.
 type computedBoundingBoxes struct {
 	union          geo.BoundingBox
 	unionErr       error
@@ -537,10 +544,13 @@ type computedBoundingBoxes struct {
 }
 
 // computeBoundingBoxes calculates all agency and server-wide bounds while the
-// source feeds are still separate. For each feed it first collects the agency
-// IDs declared by that feed. It then adds every stop once to the union
-// accumulator and once to each of those agency accumulators. A feed with no
-// non-empty agency_id contributes only to the union.
+// source feeds are still separate. Every stop contributes to the server-wide
+// union. A single-agency feed contributes all of its stops to that agency. In
+// a multi-agency feed, each trip's directly served stops contribute only to the
+// agency that owns the trip's route. Parent stations are not added to agency
+// boxes. A feed with exactly one blank agency row uses fallbackAgencyID when
+// provided; without a fallback (server-mode), its stops contribute only to the
+// union.
 //
 // This feed provenance provides the desired scoping without a persistent
 // stop-to-agency index. Separate single-agency feeds naturally produce distinct
@@ -552,7 +562,7 @@ type computedBoundingBoxes struct {
 // Once the walk finishes, each accumulator is finalized into either a
 // geo.BoundingBox or an error. storeStaticForServer stores successful agency
 // boxes and uses union as the fallback for agencies without usable bounds.
-func computeBoundingBoxes(bundles []*remoteGtfs.Static) computedBoundingBoxes {
+func computeBoundingBoxes(bundles []*remoteGtfs.Static, fallbackAgencyID string) computedBoundingBoxes {
 	union := &boundingBoxAccumulator{}
 	byAgency := make(map[string]*boundingBoxAccumulator)
 	for _, bundle := range bundles {
@@ -570,11 +580,40 @@ func computeBoundingBoxes(bundles []*remoteGtfs.Static) computedBoundingBoxes {
 				byAgency[agency.Id] = &boundingBoxAccumulator{}
 			}
 		}
+		if len(bundle.Agencies) == 1 && len(agencyIDs) == 0 && fallbackAgencyID != "" {
+			agencyIDs[fallbackAgencyID] = struct{}{}
+			if byAgency[fallbackAgencyID] == nil {
+				byAgency[fallbackAgencyID] = &boundingBoxAccumulator{}
+			}
+		}
 
 		for _, stop := range bundle.Stops {
 			union.add(stop)
+		}
+		switch len(agencyIDs) {
+		case 1:
 			for agencyID := range agencyIDs {
-				byAgency[agencyID].add(stop)
+				for i := range bundle.Stops {
+					byAgency[agencyID].add(bundle.Stops[i])
+				}
+			}
+		default:
+			if len(agencyIDs) > 1 {
+				for i := range bundle.Trips {
+					trip := &bundle.Trips[i]
+					if trip.Route == nil || trip.Route.Agency == nil {
+						continue
+					}
+					accumulator, ok := byAgency[trip.Route.Agency.Id]
+					if !ok {
+						continue
+					}
+					for _, stop := range trip.Stops {
+						if stop != nil {
+							accumulator.add(*stop)
+						}
+					}
+				}
 			}
 		}
 	}

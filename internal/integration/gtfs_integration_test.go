@@ -18,11 +18,11 @@ import (
 // TestDownloadGTFSBundles verifies that every configured server's GTFS static
 // bundle can be downloaded, parsed, and stored.
 //
-// It drives DownloadGTFSBundles -- the same entry point main.go and the 24h
-// refresh use -- rather than the single-feed DownloadGTFSBundle, because the
-// interesting work is downstream of the fetch: multi-feed merging, agency
-// discovery from agency.txt, per-agency key fan-out, bounding-box computation,
-// and the route -> agency index the vehicle pass attributes through.
+// It uses the one-shot DownloadGTFSBundles path rather than starting a managed
+// refresh campaign. The integration test needs to exercise multi-feed merging,
+// agency discovery, per-agency storage, bounding boxes, and route attribution;
+// it does not need to wait through the production campaign retry schedule.
+// Production startup and daily refreshes use managed static refresh campaigns.
 //
 // That code path reports failures through the logger and Sentry rather than
 // returning them, so the test installs a recording logger and fails on any
