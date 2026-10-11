@@ -122,8 +122,13 @@ func (s *DroppedServersStore) Reconcile(rawEntries []json.RawMessage, logger *sl
 			continue
 		}
 		delete(s.reported, identity)
+
+		name := recovered.tags["server_name"]
+		if name == "" {
+			name = identity
+		}
 		report.ReportErrorWithSentryOptions(
-			newErrRecovered(recovered.server),
+			fmt.Errorf("server %q recovered", name),
 			report.SentryReportOptions{
 				Tags:         recovered.tags,
 				ExtraContext: map[string]interface{}{"oba_base_url": recovered.server.ObaBaseURL},
