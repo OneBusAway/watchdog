@@ -91,7 +91,7 @@ func TestRecordLastSeenUpdatesLabelsOnRename(t *testing.T) {
 	ObaUnmatchedStopInfo.WithLabelValues(agencyID, "Rename Agency", "test-server", "https://rename.example.com", stopID, "New Name", "1.100000", "2.200000").Set(1)
 	tracker.RecordLastSeen(agencyID, agencyID, "Rename Agency", "test-server", "https://rename.example.com", stopID, "New Name", "1.100000", "2.200000")
 
-	entry := tracker.Entries[agencyID][stopKey{StopID: stopID, StopName: "New Name", Lat: "1.100000", Lon: "2.200000"}]
+	entry := tracker.Entries[agencyID][stopID]
 	if entry.StopName != "New Name" || entry.Lat != "1.100000" || entry.Lon != "2.200000" {
 		t.Fatalf("tracker froze first-seen labels, got %+v", entry)
 	}
@@ -118,10 +118,9 @@ func TestClearStopsPrunesRenamedStopOnStale(t *testing.T) {
 	ObaUnmatchedStopInfo.WithLabelValues(agencyID, "Rename Clear Agency", "test-server", "https://clear.example.com", stopID, "Latest Name", "9.900000", "8.800000").Set(1)
 	tracker.RecordLastSeen(agencyID, agencyID, "Rename Clear Agency", "test-server", "https://clear.example.com", stopID, "Latest Name", "9.900000", "8.800000")
 
-	key := stopKey{StopID: stopID, StopName: "Latest Name", Lat: "9.900000", Lon: "8.800000"}
-	entry := tracker.Entries[agencyID][key]
+	entry := tracker.Entries[agencyID][stopID]
 	entry.LastSeen = time.Now().UTC().Add(-48 * time.Hour)
-	tracker.Entries[agencyID][key] = entry
+	tracker.Entries[agencyID][stopID] = entry
 
 	tracker.clear(24 * time.Hour)
 
