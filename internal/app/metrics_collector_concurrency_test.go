@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	dto "github.com/prometheus/client_model/go"
 	"watchdog.onebusaway.org/internal/config"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/metrics"
@@ -214,11 +215,31 @@ func TestCycleDeadlineCancelsStalledWork(t *testing.T) {
 }
 
 // TestCollectionCyclesDoNotOverlap verifies a new cycle never overlaps
-// unfinished work: while the lock is held, collectOnce skips immediately.
+// unfinished work: while the lock is held, collectOnce must skip without
+// issuing any upstream request. A reachable entry is configured deliberately:
+// with zero servers the test would pass even if the guard were removed.
 func TestCollectionCyclesDoNotOverlap(t *testing.T) {
+	rtBody := buildVehicleFeedProtobuf(t, "shared-vehicle")
+	var hits atomic.Int32
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if r.URL.Path == "/vehicles.pb" {
+			w.Header().Set("Content-Type", "application/octet-stream")
+			// #nosec G104
+			w.Write(rtBody)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		// #nosec G104
+		w.Write([]byte(`{"code":200,"version":2,"data":{"list":[],"entry":{"readableTime":"now","agencyIDs":["fast-agency"]}}}`))
+	}))
+	t.Cleanup(stub.Close)
+
 	app := newTestApplication(t)
 	app.ConfigService.Config.FetchInterval = 30
-	app.ConfigService.Config.UpdateConfig([]models.ObaServer{})
+	fast := agencyEntry("fast-server", "fast-agency", "Fast Agency", stub.URL, stub.URL+"/vehicles.pb")
+	app.ConfigService.Config.UpdateConfig([]models.ObaServer{fast})
+	app.GtfsService.RouteAgencyIndex.Replace(fast.ServerKey(), nil, nil, map[string]string{fast.AgencyID: fast.AgencyName})
 
 	app.collectMu.Lock()
 	defer app.collectMu.Unlock()
@@ -227,6 +248,9 @@ func TestCollectionCyclesDoNotOverlap(t *testing.T) {
 	app.collectOnce(context.Background())
 	if elapsed := time.Since(start); elapsed >= 500*time.Millisecond {
 		t.Fatalf("overlapping cycle was not skipped: took %v", elapsed)
+	}
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("overlapping cycle issued %d upstream requests despite held lock", got)
 	}
 }
 
@@ -390,4 +414,204 @@ func TestCanceledServerPingPreservesBackoff(t *testing.T) {
 	}); found {
 		t.Fatal("canceled server ping overwrote availability gauge")
 	}
+}
+
+// TestCollectOnceRespectsConcurrencyBound verifies the top-level fan-out
+// never exceeds maxConcurrentCollections however many entries are
+// configured: more entries than slots must queue, not pile on.
+func TestCollectOnceRespectsConcurrencyBound(t *testing.T) {
+	origLimit := maxConcurrentCollections
+	maxConcurrentCollections = 2
+	defer func() { maxConcurrentCollections = origLimit }()
+
+	rtBody := buildVehicleFeedProtobuf(t, "shared-vehicle")
+	var active atomic.Int32
+	var maxActive atomic.Int32
+	stubFor := func(agencyID string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			cur := active.Add(1)
+			for {
+				m := maxActive.Load()
+				if cur <= m || maxActive.CompareAndSwap(m, cur) {
+					break
+				}
+			}
+			defer active.Add(-1)
+			select {
+			case <-time.After(300 * time.Millisecond):
+			case <-r.Context().Done():
+				return
+			}
+			if r.URL.Path == "/vehicles.pb" {
+				w.Header().Set("Content-Type", "application/octet-stream")
+				// #nosec G104
+				w.Write(rtBody)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			// #nosec G104
+			w.Write([]byte(`{"code":200,"version":2,"data":{"list":[],"entry":{"readableTime":"now","agencyIDs":["` + agencyID + `"]}}}`))
+		}))
+	}
+
+	app := newTestApplication(t)
+	app.ConfigService.Config.FetchInterval = 30
+
+	var servers []models.ObaServer
+	for _, agencyID := range []string{"agency-a", "agency-b", "agency-c", "agency-d"} {
+		stub := stubFor(agencyID)
+		t.Cleanup(stub.Close)
+		s := agencyEntry("server-"+agencyID, agencyID, agencyID, stub.URL, stub.URL+"/vehicles.pb")
+		servers = append(servers, s)
+		app.GtfsService.RouteAgencyIndex.Replace(s.ServerKey(), nil, nil, map[string]string{s.AgencyID: s.AgencyName})
+	}
+	t.Cleanup(http.DefaultClient.CloseIdleConnections)
+	app.ConfigService.Config.UpdateConfig(servers)
+
+	app.collectOnce(context.Background())
+
+	if got := maxActive.Load(); got > 2 {
+		t.Fatalf("top-level fan-out exceeded its bound: peak %d, want <=2", got)
+	}
+	for _, s := range servers {
+		if app.GtfsService.RealtimeStore.Get(s.ServerKey()) == nil {
+			t.Fatalf("entry %s never collected (bound must queue, not drop)", s.ServerName)
+		}
+	}
+}
+
+// TestServerScopeRespectsAgencyConcurrencyBound verifies the per-agency
+// fan-out never exceeds maxConcurrentAgencyChecks while still running
+// checks together and fetching the RT feed exactly once.
+func TestServerScopeRespectsAgencyConcurrencyBound(t *testing.T) {
+	origLimit := maxConcurrentAgencyChecks
+	maxConcurrentAgencyChecks = 2
+	defer func() { maxConcurrentAgencyChecks = origLimit }()
+
+	rtBody := buildVehicleFeedProtobuf(t, "shared-vehicle")
+	var rtCalls atomic.Int32
+	var active atomic.Int32
+	var maxActive atomic.Int32
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/vehicles.pb":
+			rtCalls.Add(1)
+			w.Header().Set("Content-Type", "application/octet-stream")
+			// #nosec G104
+			w.Write(rtBody)
+			return
+		case "/api/where/metrics.json":
+			w.Header().Set("Content-Type", "application/json")
+			// #nosec G104
+			w.Write([]byte(`{"code":200,"data":{"entry":{"agencyIDs":["agency-a","agency-b","agency-c","agency-d"]}}}`))
+			return
+		default:
+			cur := active.Add(1)
+			for {
+				m := maxActive.Load()
+				if cur <= m || maxActive.CompareAndSwap(m, cur) {
+					break
+				}
+			}
+			defer active.Add(-1)
+			select {
+			case <-time.After(300 * time.Millisecond):
+			case <-r.Context().Done():
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			// #nosec G104
+			w.Write([]byte(`{"code":200,"data":{"list":[],"entry":{"readableTime":"now"}}}`))
+		}
+	}))
+	t.Cleanup(ts.Close)
+	t.Cleanup(http.DefaultClient.CloseIdleConnections)
+
+	app := newTestApplication(t)
+	baseURL := ts.URL
+	server := models.ObaServer{
+		ServerName:  "multi",
+		ObaBaseURL:  baseURL,
+		ObaApiKey:   "test-key",
+		GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: baseURL + "/vehicles.pb"}},
+	}
+
+	wholeWorld := geo.BoundingBox{MinLat: -90, MaxLat: 90, MinLon: -180, MaxLon: 180}
+	for _, agencyID := range []string{"agency-a", "agency-b", "agency-c", "agency-d"} {
+		key := models.ServerKey(baseURL, agencyID)
+		app.GtfsService.StaticStore.Set(key, &models.StaticData{})
+		app.GtfsService.BoundingBoxStore.Set(key, wholeWorld)
+	}
+	app.GtfsService.BoundingBoxStore.Set(server.ServerKey(), wholeWorld)
+	app.GtfsService.RouteAgencyIndex.Replace(models.ServerKey(baseURL, ""), map[string]string{
+		"route-a": "agency-a",
+		"route-b": "agency-b",
+		"route-c": "agency-c",
+		"route-d": "agency-d",
+	}, nil, map[string]string{"agency-a": "a", "agency-b": "b", "agency-c": "c", "agency-d": "d"})
+
+	scope := config.ResolveScope(server, app.GtfsService.StaticStore, app.GtfsService.RouteAgencyIndex)
+	serverScope, ok := scope.(config.ServerScope)
+	if !ok {
+		t.Fatalf("expected ServerScope, got %T", scope)
+	}
+
+	app.collectForServerScope(context.Background(), server, serverScope)
+
+	if got := rtCalls.Load(); got != 1 {
+		t.Fatalf("expected exactly 1 RT fetch, got %d", got)
+	}
+	if got := maxActive.Load(); got > 2 {
+		t.Fatalf("per-agency fan-out exceeded its bound: peak %d, want <=2", got)
+	}
+	if got := maxActive.Load(); got < 2 {
+		t.Fatalf("expected concurrent agency checks (peak %d, want >=2)", got)
+	}
+}
+
+// TestCanceledCycleLeavesCompletionGaugeUnchanged verifies the freshness
+// rule: a cycle cut short by its deadline must not advance
+// WatchdogCollectionLastCompleted, while a successful cycle does.
+func TestCanceledCycleLeavesCompletionGaugeUnchanged(t *testing.T) {
+	const seed = 12345.0
+	metrics.WatchdogCollectionLastCompleted.Set(seed)
+
+	rtBody := buildVehicleFeedProtobuf(t, "shared-vehicle")
+	slowStub := stubAgencyServer(t, "slow-agency", "Slow Agency", 3*time.Second, rtBody)
+	t.Cleanup(slowStub.Close)
+	fastStub := stubAgencyServer(t, "fast-agency", "Fast Agency", 0, rtBody)
+	t.Cleanup(fastStub.Close)
+
+	app := newTestApplication(t)
+	app.ConfigService.Config.FetchInterval = 1 // deadline fires mid-cycle
+
+	slow := agencyEntry("slow-server", "slow-agency", "Slow Agency", slowStub.URL, slowStub.URL+"/vehicles.pb")
+	app.ConfigService.Config.UpdateConfig([]models.ObaServer{slow})
+	app.GtfsService.RouteAgencyIndex.Replace(slow.ServerKey(), nil, nil, map[string]string{slow.AgencyID: slow.AgencyName})
+
+	app.collectOnce(context.Background())
+	if got := completionGaugeValue(t); got != seed {
+		t.Fatalf("canceled cycle moved completion gauge: got %v, want %v", got, seed)
+	}
+
+	// A healthy cycle must still advance the gauge past the seed.
+	app.ConfigService.Config.FetchInterval = 30
+	fast := agencyEntry("fast-server", "fast-agency", "Fast Agency", fastStub.URL, fastStub.URL+"/vehicles.pb")
+	app.ConfigService.Config.UpdateConfig([]models.ObaServer{fast})
+	app.GtfsService.RouteAgencyIndex.Replace(fast.ServerKey(), nil, nil, map[string]string{fast.AgencyID: fast.AgencyName})
+
+	app.collectOnce(context.Background())
+	if got := completionGaugeValue(t); got <= seed {
+		t.Fatalf("successful cycle did not advance completion gauge: got %v, want > %v", got, seed)
+	}
+}
+
+func completionGaugeValue(t *testing.T) float64 {
+	t.Helper()
+	m := &dto.Metric{}
+	if err := metrics.WatchdogCollectionLastCompleted.Write(m); err != nil {
+		t.Fatalf("failed to read completion gauge: %v", err)
+	}
+	return m.GetGauge().GetValue()
 }

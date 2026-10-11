@@ -44,6 +44,7 @@ import (
 //     alerts.
 //   - Monitor reliability and correctness of OBA and GTFS-RT server
 //     integrations.
+//
 // Bounded concurrency for collection. These caps keep goroutine and
 // connection growth under control as the number of monitored agencies grows.
 // They fit within the pooled HTTP transport limits
@@ -144,6 +145,12 @@ launch:
 		select {
 		case sem <- struct{}{}:
 		case <-cycleCtx.Done():
+			break launch
+		}
+		if cycleCtx.Err() != nil {
+			// Lost the race between a freed slot and the deadline: do not
+			// start a worker that is already canceled.
+			<-sem
 			break launch
 		}
 		wg.Add(1)
@@ -335,17 +342,30 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 	// prefetchedMetrics is read-only after probeReportedAgencies returns, so
 	// sharing it across workers is safe. reportedAgencyEntries is fixed
 	// before fan-out and each worker receives its own struct copy.
+	// Admission rotates across calls for the same anti-starvation reason as
+	// the top-level targets.
 	agencyLimit := maxConcurrentAgencyChecks
 	if agencyLimit <= 0 {
 		agencyLimit = 1
 	}
 	agencySem := make(chan struct{}, agencyLimit)
 	var agencyWg sync.WaitGroup
+	agencyStart := 0
+	if n := len(reportedAgencyEntries); n > 0 {
+		agencyStart = int((app.agencyStart.Add(1) - 1) % uint64(n))
+	}
 agencyLaunch:
-	for _, agencyServer := range reportedAgencyEntries {
+	for i := range reportedAgencyEntries {
+		agencyServer := reportedAgencyEntries[(agencyStart+i)%len(reportedAgencyEntries)]
 		select {
 		case agencySem <- struct{}{}:
 		case <-ctx.Done():
+			break agencyLaunch
+		}
+		if ctx.Err() != nil {
+			// Lost the race between a freed slot and cancellation: do not
+			// start a worker that is already canceled.
+			<-agencySem
 			break agencyLaunch
 		}
 		agencyWg.Add(1)

@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"watchdog.onebusaway.org/internal/config"
@@ -37,6 +38,11 @@ type Application struct {
 	// entries that sort later in configuration order. Only touched while
 	// holding collectMu.
 	collectStart uint64
+	// agencyStart is the round-robin start offset into a server's reported
+	// agencies, serving the same anti-starvation purpose for the per-agency
+	// fan-out. Unlike collectStart it is touched by concurrent server
+	// workers, so it must stay atomic.
+	agencyStart atomic.Uint64
 }
 
 // New creates and wires all dependencies for the Application.
