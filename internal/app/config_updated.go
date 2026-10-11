@@ -42,6 +42,7 @@ func (app *Application) OnConfigUpdated(ctx context.Context, updated []models.Ob
 		})
 		return
 	}
+	app.MetricsService.ReportServerInfo(updated)
 
 	app.MetricsService.ReportConfiguredServers(len(updated))
 

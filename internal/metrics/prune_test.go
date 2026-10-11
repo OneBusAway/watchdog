@@ -20,11 +20,12 @@ func TestDeleteSeriesForServerRetiresEverySeries(t *testing.T) {
 
 	RealtimeVehiclePositions.WithLabelValues("agency-a", "Agency A", "gone", goneURL).Set(7)
 	ObaApiStatus.WithLabelValues("gone", goneURL).Set(1)
+	WatchdogServerInfo.WithLabelValues(goneURL, "gone-service", "test", "Gone Org").Set(1)
 	GtfsRtVehicleStateChanges.WithLabelValues("agency-a", "Agency A", "gone", goneURL, "0").Inc()
 	RealtimeVehiclePositions.WithLabelValues("agency-b", "Agency B", "kept", keptURL).Set(3)
 
-	if deleted := DeleteSeriesForServer(goneURL); deleted < 3 {
-		t.Fatalf("expected at least the 3 seeded series to be deleted, got %d", deleted)
+	if deleted := DeleteSeriesForServer(goneURL); deleted < 4 {
+		t.Fatalf("expected at least the 4 seeded series to be deleted, got %d", deleted)
 	}
 
 	for _, tc := range []struct {
@@ -34,6 +35,7 @@ func TestDeleteSeriesForServerRetiresEverySeries(t *testing.T) {
 	}{
 		{"realtime positions", RealtimeVehiclePositions, prometheus.Labels{"agency_id": "agency-a", "agency_name": "Agency A", "server_name": "gone", "server_url": goneURL}},
 		{"api status", ObaApiStatus, prometheus.Labels{"server_name": "gone", "server_url": goneURL}},
+		{"server info", WatchdogServerInfo, prometheus.Labels{"server_url": goneURL, "service_slug": "gone-service", "environment": "test", "organization": "Gone Org"}},
 		{"state changes", GtfsRtVehicleStateChanges, prometheus.Labels{"agency_id": "agency-a", "agency_name": "Agency A", "server_name": "gone", "server_url": goneURL, "feed": "0"}},
 	} {
 		if seriesExists(tc.vec, tc.labels) {

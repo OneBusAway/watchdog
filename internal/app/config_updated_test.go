@@ -41,7 +41,10 @@ func TestOnConfigUpdatedPrunesAndDetectsOnANonEmptyConfig(t *testing.T) {
 	const goneURL = "https://departing.example.com"
 	const keptURL = "https://arriving.example.com"
 	gone := models.ObaServer{ServerName: "gone", AgencyID: "agency-x", ObaBaseURL: goneURL}
-	kept := models.ObaServer{ServerName: "kept", AgencyID: "agency-y", ObaBaseURL: keptURL}
+	kept := models.ObaServer{
+		ServerName: "kept", AgencyID: "agency-y", ObaBaseURL: keptURL,
+		ServiceSlug: "kept-service", Environment: "test", Organization: "Kept Org",
+	}
 
 	app.GtfsService.StaticStore.Set(gone.ServerKey(), &models.StaticData{})
 	metrics.RealtimeVehiclePositions.WithLabelValues("agency-x", "Agency X", "gone", goneURL).Set(9)
@@ -53,6 +56,14 @@ func TestOnConfigUpdatedPrunesAndDetectsOnANonEmptyConfig(t *testing.T) {
 	}
 	if seriesCount(metrics.RealtimeVehiclePositions, prometheus.Labels{"server_url": goneURL}) != 0 {
 		t.Error("expected the departed server's series to be retired")
+	}
+	if seriesCount(metrics.WatchdogServerInfo, prometheus.Labels{"server_url": goneURL}) != 0 {
+		t.Error("expected the departed server's info series to be retired")
+	}
+	if seriesCount(metrics.WatchdogServerInfo, prometheus.Labels{
+		"server_url": keptURL, "service_slug": "kept-service", "environment": "test", "organization": "Kept Org",
+	}) != 1 {
+		t.Error("expected the configured server identity to be exposed")
 	}
 	// The newcomer was reported exactly once; a second identical refresh must
 	// not re-report it, or every refresh re-downloads its bundles.

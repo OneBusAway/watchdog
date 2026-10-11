@@ -52,6 +52,7 @@ func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version s
 	gtfsService := gtfs.NewGtfsService(staticStore, realtimeStore, boundingBoxStore, routeAgencyIndex, logger, client)
 	metricsService := metrics.NewMetricsService(staticStore, realtimeStore, boundingBoxStore, routeAgencyIndex, vehicleLastSeen, unmatchedStopTracker, logger, client, obaSDKClientCache.For)
 	metricsService.ReportCollectionInterval(time.Duration(cfg.FetchInterval) * time.Second)
+	metricsService.ReportServerInfo(cfg.GetServers())
 
 	// Wire the per-agency introspection gauge emission through a callback so
 	// the metrics package doesn't need to import gtfs (and vice versa).

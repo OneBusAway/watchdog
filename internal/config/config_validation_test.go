@@ -126,6 +126,41 @@ func TestValidateServer(t *testing.T) {
 	})
 }
 
+func TestDecodeServerIdentityMetadataIsOptional(t *testing.T) {
+	legacyJSON := json.RawMessage(`{
+		"server_name": "Legacy Server",
+		"oba_base_url": "https://legacy.example.com",
+		"oba_api_key": "key",
+		"gtfs_static_feeds": ["https://gtfs.example.com"],
+		"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle.example.com"}]
+	}`)
+	legacyServer, err := decodeServerEntry(legacyJSON)
+	if err != nil {
+		t.Fatalf("expected config without identity metadata to remain valid, got %v", err)
+	}
+	if legacyServer.ServiceSlug != "" || legacyServer.Environment != "" || legacyServer.Organization != "" {
+		t.Fatalf("expected omitted identity fields to remain empty, got %+v", legacyServer)
+	}
+
+	identityJSON := json.RawMessage(`{
+		"server_name": "Current Server",
+		"service_slug": "metro-transit-api",
+		"environment": "production",
+		"organization": "Metro Transit",
+		"oba_base_url": "https://current.example.com",
+		"oba_api_key": "key",
+		"gtfs_static_feeds": ["https://gtfs.example.com"],
+		"gtfs_rt_feeds": [{"vehicle_position_url": "https://vehicle.example.com"}]
+	}`)
+	currentServer, err := decodeServerEntry(identityJSON)
+	if err != nil {
+		t.Fatalf("expected config with identity metadata to be valid, got %v", err)
+	}
+	if currentServer.ServiceSlug != "metro-transit-api" || currentServer.Environment != "production" || currentServer.Organization != "Metro Transit" {
+		t.Fatalf("identity fields were not decoded: %+v", currentServer)
+	}
+}
+
 // loadConfigFromFile must drop servers that fail validation (e.g. the
 // production config where every feed URL was null) while keeping the valid
 // ones, so one bad entry can't take down monitoring for the whole fleet.

@@ -1,6 +1,9 @@
 [
   {
     "server_name": "Agency Example",
+    "service_slug": "metro-transit-api",
+    "environment": "production",
+    "organization": "Metro Transit",
     "agency_name": "Test Agency 1",
     "agency_id": "agency-1",
     "oba_base_url": "https://test1.example.com",

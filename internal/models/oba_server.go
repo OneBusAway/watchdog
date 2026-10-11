@@ -53,7 +53,13 @@ func ParseServerKey(key string) (baseURL, agencyID string, ok bool) {
 // Watchdog refuses to guess agency ownership from a feed whose agency.txt is
 // empty or ambiguous (it logs to Sentry and skips the feed's pipeline).
 type ObaServer struct {
-	ServerName      string       `json:"server_name"`
+	ServerName string `json:"server_name"`
+	// ServiceSlug is an opaque, machine-readable identifier for this service,
+	// supplied by the configuration source. For example: "metro-transit-api".
+	// Watchdog preserves it as a metric label but does not interpret it.
+	ServiceSlug     string       `json:"service_slug,omitempty"`
+	Environment     string       `json:"environment,omitempty"`
+	Organization    string       `json:"organization,omitempty"`
 	AgencyName      string       `json:"agency_name,omitempty"`
 	AgencyID        string       `json:"agency_id,omitempty"`
 	ObaBaseURL      string       `json:"oba_base_url"`
