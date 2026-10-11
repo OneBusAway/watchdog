@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/getsentry/sentry-go"
@@ -43,6 +44,27 @@ import (
 //     alerts.
 //   - Monitor reliability and correctness of OBA and GTFS-RT server
 //     integrations.
+// Bounded concurrency for collection. These caps keep goroutine and
+// connection growth under control as the number of monitored agencies grows.
+// They fit within the pooled HTTP transport limits
+// (MaxIdleConnsPerHost 10) so concurrency does not exhaust keep-alive slots.
+// Declared as vars so tests can lower them without changing production code.
+var (
+	maxConcurrentCollections  = 8
+	maxConcurrentAgencyChecks = 8
+)
+
+// cycleTimeout derives the per-cycle deadline from the configured fetch
+// interval so stalled work is canceled instead of accumulating into later
+// cycles. A non-positive interval falls back to the 30s default.
+func (app *Application) cycleTimeout() time.Duration {
+	interval := app.ConfigService.Config.FetchInterval
+	if interval <= 0 {
+		return 30 * time.Second
+	}
+	return time.Duration(interval) * time.Second
+}
+
 func (app *Application) StartMetricsCollection(ctx context.Context) {
 	ticker := time.NewTicker(time.Duration(app.ConfigService.Config.FetchInterval) * time.Second)
 	go func() {
@@ -67,6 +89,15 @@ func (app *Application) StartMetricsCollection(ctx context.Context) {
 // timestamp with up==1 is read as "Watchdog current", and an idle process
 // must not claim that. watchdog_configured_servers reports the zero.
 func (app *Application) collectOnce(ctx context.Context) {
+	// Never overlap cycles: the ticker goroutine is sequential, and this
+	// TryLock also protects against concurrent manual callers. A skipped
+	// tick simply waits for the next interval.
+	if !app.collectMu.TryLock() {
+		app.Logger.Warn("Skipping collection tick: previous cycle still running")
+		return
+	}
+	defer app.collectMu.Unlock()
+
 	// Resolve scopes against a consistent static/config view, but
 	// collect outside the refresh lock: collection makes upstream
 	// network calls and must not stall static publication or config
@@ -86,10 +117,40 @@ func (app *Application) collectOnce(ctx context.Context) {
 	if len(targets) == 0 {
 		return
 	}
-	for _, target := range targets {
-		app.collectForScope(ctx, target.server, target.scope)
+	// Bound the whole cycle so stalled endpoints cannot accumulate into
+	// later ticks. Shutdown (ctx) cancels through the derived context.
+	cycleCtx, cancel := context.WithTimeout(ctx, app.cycleTimeout())
+	defer cancel()
+
+	// Bounded fan-out: acquire the slot before spawning the goroutine so
+	// the number of live workers never exceeds the cap.
+	limit := maxConcurrentCollections
+	if limit <= 0 {
+		limit = 1
 	}
-	app.MetricsService.ReportCollectionCompleted(time.Now())
+	sem := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+launch:
+	for _, target := range targets {
+		select {
+		case sem <- struct{}{}:
+		case <-cycleCtx.Done():
+			break launch
+		}
+		wg.Add(1)
+		go func(t collectionTarget) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			app.collectForScope(cycleCtx, t.server, t.scope)
+		}(target)
+	}
+	wg.Wait()
+	// Only advance the completion gauge when the cycle ran to completion.
+	// A deadline-exceeded or canceled cycle leaves some agencies stale, so
+	// it must not claim freshness.
+	if cycleCtx.Err() == nil {
+		app.MetricsService.ReportCollectionCompleted(time.Now())
+	}
 }
 
 // collectForScope dispatches a single configured ObaServer entry through the
@@ -246,16 +307,37 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 		)
 	}
 
-	// Per-agency metric loop. Each iteration runs only the agency-scoped
-	// checks (CheckBundleExpiration, FetchObaAPIMetrics,
+	// Per-agency metric loop, run concurrently. Each worker runs only the
+	// agency-scoped checks (CheckBundleExpiration, FetchObaAPIMetrics,
 	// CountActiveVehiclesForAgency, ServerPing) — the GTFS-RT vehicle pass
 	// runs once for the whole server after this loop. ServerPing is
 	// intentionally called once per agency here because the gauge is
 	// server-scoped — the per-agency call is cheap (one HTTP probe) and keeps
 	// the metric series up-to-date even if a single agency's checks bail out.
-	for _, agencyServer := range reportedAgencyEntries {
-		app.collectAgencyChecks(ctx, agencyServer, prefetchedMetrics)
+	// prefetchedMetrics is read-only after probeReportedAgencies returns, so
+	// sharing it across workers is safe. reportedAgencyEntries is fixed
+	// before fan-out and each worker receives its own struct copy.
+	agencyLimit := maxConcurrentAgencyChecks
+	if agencyLimit <= 0 {
+		agencyLimit = 1
 	}
+	agencySem := make(chan struct{}, agencyLimit)
+	var agencyWg sync.WaitGroup
+agencyLaunch:
+	for _, agencyServer := range reportedAgencyEntries {
+		select {
+		case agencySem <- struct{}{}:
+		case <-ctx.Done():
+			break agencyLaunch
+		}
+		agencyWg.Add(1)
+		go func(s models.ObaServer) {
+			defer agencyWg.Done()
+			defer func() { <-agencySem }()
+			app.collectAgencyChecks(ctx, s, prefetchedMetrics)
+		}(agencyServer)
+	}
+	agencyWg.Wait()
 
 	// One GTFS-RT vehicle pass for the whole server. Running it inside the
 	// loop above would re-walk the same merged feed once per agency, which

@@ -3,6 +3,7 @@ package app
 import (
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"watchdog.onebusaway.org/internal/config"
@@ -26,6 +27,10 @@ type Application struct {
 	KnownServers *KnownServerSet
 	Logger       *slog.Logger
 	Version      string
+	// collectMu serializes collection cycles so a new tick never overlaps
+	// unfinished work from the previous tick. collectOnce takes it with
+	// TryLock and skips the tick when it is already held.
+	collectMu sync.Mutex
 }
 
 // New creates and wires all dependencies for the Application.

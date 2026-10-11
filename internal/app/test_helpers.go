@@ -17,7 +17,7 @@ import (
 	"watchdog.onebusaway.org/internal/models"
 )
 
-func newTestApplication(t *testing.T) *Application {
+func newTestApplication(t testing.TB) *Application {
 	t.Helper()
 
 	obaServer := models.NewObaServer(
