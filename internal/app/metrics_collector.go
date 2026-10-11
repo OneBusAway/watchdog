@@ -230,10 +230,20 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 			},
 			Level: sentry.LevelError,
 		})
-	} else {
+	} else if len(server.GtfsRTFeeds) > 0 {
 		metrics.GtfsRtLastSuccessfulFetch.WithLabelValues(
-			server.ServerName, utils.SanitizeServerURL(server.ObaBaseURL),
+			"",
+			"",
+			server.ServerName,
+			utils.SanitizeServerURL(server.ObaBaseURL),
 		).Set(float64(time.Now().UTC().Unix()))
+	} else {
+		metrics.GtfsRtLastSuccessfulFetch.DeleteLabelValues(
+			"",
+			"",
+			server.ServerName,
+			utils.SanitizeServerURL(server.ObaBaseURL),
+		)
 	}
 
 	// Per-agency metric loop. Each iteration runs only the agency-scoped
@@ -285,9 +295,21 @@ func (app *Application) CollectMetricsForServer(ctx context.Context, server mode
 		})
 		return
 	}
-	metrics.GtfsRtLastSuccessfulFetch.WithLabelValues(
-		server.ServerName, utils.SanitizeServerURL(server.ObaBaseURL),
-	).Set(float64(time.Now().UTC().Unix()))
+	if len(server.GtfsRTFeeds) > 0 {
+		metrics.GtfsRtLastSuccessfulFetch.WithLabelValues(
+			server.AgencyID,
+			server.AgencyName,
+			server.ServerName,
+			utils.SanitizeServerURL(server.ObaBaseURL),
+		).Set(float64(time.Now().UTC().Unix()))
+	} else {
+		metrics.GtfsRtLastSuccessfulFetch.DeleteLabelValues(
+			server.AgencyID,
+			server.AgencyName,
+			server.ServerName,
+			utils.SanitizeServerURL(server.ObaBaseURL),
+		)
+	}
 
 	// nil agencies: the fetch has already filtered the store to vehicles
 	// resolved to this configured agency.
