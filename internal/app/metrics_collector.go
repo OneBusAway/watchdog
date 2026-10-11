@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/getsentry/sentry-go"
@@ -195,6 +196,44 @@ func (app *Application) collectForScope(ctx context.Context, server models.ObaSe
 	}
 }
 
+// agencyOffsetFor returns the round-robin start offset into this server's
+// reported agencies for the per-agency fan-out, advancing the server's own
+// counter. Rotation is per server (keyed by the server-scoped ServerKey) so
+// one server's cadence never shifts another's, and a re-added server starts
+// from zero because PruneStaleServers drops its counter with its other
+// per-server state.
+func (app *Application) agencyOffsetFor(server models.ObaServer, n int) int {
+	if n <= 0 {
+		return 0
+	}
+	key := server.ServerKey()
+	app.agencyStartsMu.Lock()
+	ctr, ok := app.agencyStarts[key]
+	if !ok {
+		ctr = &atomic.Uint64{}
+		if app.agencyStarts == nil {
+			app.agencyStarts = make(map[string]*atomic.Uint64)
+		}
+		app.agencyStarts[key] = ctr
+	}
+	app.agencyStartsMu.Unlock()
+	return int((ctr.Add(1) - 1) % uint64(n))
+}
+
+// pruneAgencyOffsets drops rotation state for servers that left the
+// configuration, using the same keep predicate as the other per-server
+// stores. Rotation counters carry no signal worth keeping: a re-added
+// server simply restarts its rotation.
+func (app *Application) pruneAgencyOffsets(keep func(serverKey string) bool) {
+	app.agencyStartsMu.Lock()
+	defer app.agencyStartsMu.Unlock()
+	for key := range app.agencyStarts {
+		if !keep(key) {
+			delete(app.agencyStarts, key)
+		}
+	}
+}
+
 // collectForServerScope runs the per-agency pipeline for every agency declared
 // in the static store under this server's oba_base_url, gated on whether OBA
 // reports the agency in its loaded static coverage.
@@ -343,17 +382,15 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 	// sharing it across workers is safe. reportedAgencyEntries is fixed
 	// before fan-out and each worker receives its own struct copy.
 	// Admission rotates across calls for the same anti-starvation reason as
-	// the top-level targets.
+	// the top-level targets, tracked per server so servers cannot shift
+	// each other's rotation.
 	agencyLimit := maxConcurrentAgencyChecks
 	if agencyLimit <= 0 {
 		agencyLimit = 1
 	}
 	agencySem := make(chan struct{}, agencyLimit)
 	var agencyWg sync.WaitGroup
-	agencyStart := 0
-	if n := len(reportedAgencyEntries); n > 0 {
-		agencyStart = int((app.agencyStart.Add(1) - 1) % uint64(n))
-	}
+	agencyStart := app.agencyOffsetFor(server, len(reportedAgencyEntries))
 agencyLaunch:
 	for i := range reportedAgencyEntries {
 		agencyServer := reportedAgencyEntries[(agencyStart+i)%len(reportedAgencyEntries)]

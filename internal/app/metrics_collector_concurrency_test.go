@@ -615,3 +615,36 @@ func completionGaugeValue(t *testing.T) float64 {
 	}
 	return m.GetGauge().GetValue()
 }
+
+// TestAgencyOffsetsRotatePerServer verifies each server rotates its own
+// agency admission order independently: one server's cadence never shifts
+// another's, and a server restarts from zero once its state is pruned.
+func TestAgencyOffsetsRotatePerServer(t *testing.T) {
+	app := newTestApplication(t)
+	a := models.ObaServer{ServerName: "a", ObaBaseURL: "http://a.example.com", ObaApiKey: "k"}
+	b := models.ObaServer{ServerName: "b", ObaBaseURL: "http://b.example.com", ObaApiKey: "k"}
+
+	for _, want := range []int{0, 1, 2, 0} {
+		if got := app.agencyOffsetFor(a, 3); got != want {
+			t.Fatalf("server a offset = %d, want %d", got, want)
+		}
+	}
+	// Server b is unaffected by a's calls.
+	if got := app.agencyOffsetFor(b, 3); got != 0 {
+		t.Fatalf("server b offset = %d, want 0 (independent rotation)", got)
+	}
+	if got := app.agencyOffsetFor(a, 3); got != 1 {
+		t.Fatalf("server a offset = %d, want 1 (unshifted by b)", got)
+	}
+	if got := app.agencyOffsetFor(a, 0); got != 0 {
+		t.Fatalf("non-positive agency count offset = %d, want 0", got)
+	}
+
+	// Pruning a departed server drops its counter; re-adding restarts it.
+	app.pruneAgencyOffsets(func(serverKey string) bool {
+		return serverKey != a.ServerKey()
+	})
+	if got := app.agencyOffsetFor(a, 3); got != 0 {
+		t.Fatalf("re-added server a offset = %d, want 0", got)
+	}
+}

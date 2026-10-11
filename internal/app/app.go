@@ -38,11 +38,15 @@ type Application struct {
 	// entries that sort later in configuration order. Only touched while
 	// holding collectMu.
 	collectStart uint64
-	// agencyStart is the round-robin start offset into a server's reported
-	// agencies, serving the same anti-starvation purpose for the per-agency
-	// fan-out. Unlike collectStart it is touched by concurrent server
-	// workers, so it must stay atomic.
-	agencyStart atomic.Uint64
+	// agencyStarts holds a per-server round-robin offset for agency
+	// admission order. Each server rotates independently so one server's
+	// cadence can never shift another's: the offset advances only when that
+	// server runs its per-agency fan-out. Entries are pruned alongside the
+	// other per-server stores when servers leave the configuration.
+	// Counters are atomic because concurrent server workers advance their
+	// own; the map itself is guarded by agencyStartsMu.
+	agencyStartsMu sync.Mutex
+	agencyStarts   map[string]*atomic.Uint64
 }
 
 // New creates and wires all dependencies for the Application.

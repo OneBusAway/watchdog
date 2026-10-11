@@ -80,6 +80,11 @@ func (app *Application) PruneStaleServers(servers []models.ObaServer) {
 		return false
 	})
 
+	// Rotation counters are per-server state like the rest: a departed
+	// server's counter goes with it, so a re-added server restarts its
+	// agency rotation instead of resuming a stale offset.
+	app.pruneAgencyOffsets(keep)
+
 	// Retire the metric series. A server that left entirely loses everything
 	// under its server_url; an agency that left a server which is still
 	// configured loses only its own agency-labelled series, so the server's
