@@ -11,7 +11,9 @@ import (
 
 	"watchdog.onebusaway.org/internal/config"
 	"watchdog.onebusaway.org/internal/geo"
+	"watchdog.onebusaway.org/internal/metrics"
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/utils"
 )
 
 // stubAgencyServer stands up an httptest OBA server for one agency-scoped
@@ -268,4 +270,124 @@ func TestCollectionShutdownCancelsActiveWork(t *testing.T) {
 	app.collectMu.Unlock()
 
 	var _ = runtime.NumGoroutine
+}
+
+// TestCollectOnceRotatesAdmissionOrder verifies a shared cycle deadline
+// cannot persistently starve later targets: admission starts from a
+// round-robin offset that advances every cycle, so an entry skipped when the
+// deadline fires is admitted first on a later cycle.
+func TestCollectOnceRotatesAdmissionOrder(t *testing.T) {
+	origLimit := maxConcurrentCollections
+	maxConcurrentCollections = 1
+	defer func() { maxConcurrentCollections = origLimit }()
+
+	rtBody := buildVehicleFeedProtobuf(t, "shared-vehicle")
+	slowStub := stubAgencyServer(t, "slow-agency", "Slow Agency", 3*time.Second, rtBody)
+	t.Cleanup(slowStub.Close)
+	fastStub := stubAgencyServer(t, "fast-agency", "Fast Agency", 0, rtBody)
+	t.Cleanup(fastStub.Close)
+
+	app := newTestApplication(t)
+	app.ConfigService.Config.FetchInterval = 1 // 1s shared deadline, 1 slot
+
+	slow := agencyEntry("slow-server", "slow-agency", "Slow Agency", slowStub.URL, slowStub.URL+"/vehicles.pb")
+	fast := agencyEntry("fast-server", "fast-agency", "Fast Agency", fastStub.URL, fastStub.URL+"/vehicles.pb")
+	app.ConfigService.Config.UpdateConfig([]models.ObaServer{slow, fast})
+	for _, s := range []models.ObaServer{slow, fast} {
+		app.GtfsService.RouteAgencyIndex.Replace(s.ServerKey(), nil, nil, map[string]string{s.AgencyID: s.AgencyName})
+	}
+
+	// Cycle 1 admits the slow entry first; the deadline fires while it
+	// occupies the only slot, so the healthy entry is never admitted.
+	app.collectOnce(context.Background())
+	if app.GtfsService.RealtimeStore.Get(fast.ServerKey()) != nil {
+		t.Fatal("expected healthy entry to miss cycle 1 under a 1s deadline with 1 slot")
+	}
+
+	// Cycle 2 must admit the previously starved healthy entry first.
+	app.collectOnce(context.Background())
+	if app.GtfsService.RealtimeStore.Get(fast.ServerKey()) == nil {
+		t.Fatal("rotation did not admit the starved healthy entry on cycle 2")
+	}
+}
+
+// TestCanceledPingPreservesBackoffAndAvailability verifies a ping canceled by
+// the cycle deadline is treated as incomplete collection, not a server
+// outage: no backoff is grown and ObaApiStatus is left untouched.
+func TestCanceledPingPreservesBackoffAndAvailability(t *testing.T) {
+	rtBody := buildVehicleFeedProtobuf(t, "shared-vehicle")
+	stub := stubAgencyServer(t, "slow-agency", "Slow Agency", 3*time.Second, rtBody)
+	t.Cleanup(stub.Close)
+
+	app := newTestApplication(t)
+	app.ConfigService.Config.FetchInterval = 1 // deadline fires mid-ping
+
+	slow := agencyEntry("cancel-ping-server", "slow-agency", "Slow Agency", stub.URL, stub.URL+"/vehicles.pb")
+	app.ConfigService.Config.UpdateConfig([]models.ObaServer{slow})
+	app.GtfsService.RouteAgencyIndex.Replace(slow.ServerKey(), nil, nil, map[string]string{slow.AgencyID: slow.AgencyName})
+
+	app.collectOnce(context.Background())
+
+	if _, exists := app.ConfigService.BackoffStore.NextRetryAt(slow.ServerKey()); exists {
+		t.Fatal("canceled ping grew backoff state")
+	}
+	serverURL := utils.SanitizeServerURL(stub.URL)
+	if _, found := gaugeValueFor(metrics.ObaApiStatus, map[string]string{
+		"server_name": "cancel-ping-server",
+		"server_url":  serverURL,
+	}); found {
+		t.Fatal("canceled ping overwrote availability gauge")
+	}
+}
+
+// TestCanceledServerPingPreservesBackoff verifies the server-wide ping in
+// server scope is likewise treated as incomplete (not an outage) when the
+// context is canceled mid-ping.
+func TestCanceledServerPingPreservesBackoff(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(3 * time.Second):
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		// #nosec G104
+		w.Write([]byte(`{"code":200,"data":{"list":[],"entry":{"readableTime":"now"}}}`))
+	}))
+	t.Cleanup(ts.Close)
+
+	app := newTestApplication(t)
+	server := models.ObaServer{
+		ServerName:  "cancel-ping-multi",
+		ObaBaseURL:  ts.URL,
+		ObaApiKey:   "test-key",
+		GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: ts.URL + "/vehicles.pb"}},
+	}
+	wholeWorld := geo.BoundingBox{MinLat: -90, MaxLat: 90, MinLon: -180, MaxLon: 180}
+	agencyKey := models.ServerKey(ts.URL, "agency-a")
+	app.GtfsService.StaticStore.Set(agencyKey, &models.StaticData{})
+	app.GtfsService.BoundingBoxStore.Set(agencyKey, wholeWorld)
+	app.GtfsService.BoundingBoxStore.Set(server.ServerKey(), wholeWorld)
+	app.GtfsService.RouteAgencyIndex.Replace(models.ServerKey(ts.URL, ""), map[string]string{"route-a": "agency-a"}, nil, map[string]string{"agency-a": "a"})
+
+	scope := config.ResolveScope(server, app.GtfsService.StaticStore, app.GtfsService.RouteAgencyIndex)
+	serverScope, ok := scope.(config.ServerScope)
+	if !ok {
+		t.Fatalf("expected ServerScope, got %T", scope)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	app.collectForServerScope(ctx, server, serverScope)
+
+	if _, exists := app.ConfigService.BackoffStore.NextRetryAt(server.ServerKey()); exists {
+		t.Fatal("canceled server ping grew backoff state")
+	}
+	serverURL := utils.SanitizeServerURL(ts.URL)
+	if _, found := gaugeValueFor(metrics.ObaApiStatus, map[string]string{
+		"server_name": "cancel-ping-multi",
+		"server_url":  serverURL,
+	}); found {
+		t.Fatal("canceled server ping overwrote availability gauge")
+	}
 }

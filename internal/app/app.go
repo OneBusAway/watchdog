@@ -31,6 +31,12 @@ type Application struct {
 	// unfinished work from the previous tick. collectOnce takes it with
 	// TryLock and skips the tick when it is already held.
 	collectMu sync.Mutex
+	// collectStart is the round-robin start offset into the collection
+	// targets. Each cycle admits targets starting from this offset and then
+	// advances it, so a shared cycle deadline cannot persistently starve
+	// entries that sort later in configuration order. Only touched while
+	// holding collectMu.
+	collectStart uint64
 }
 
 // New creates and wires all dependencies for the Application.

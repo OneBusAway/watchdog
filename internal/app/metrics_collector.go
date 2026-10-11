@@ -124,14 +124,23 @@ func (app *Application) collectOnce(ctx context.Context) {
 
 	// Bounded fan-out: acquire the slot before spawning the goroutine so
 	// the number of live workers never exceeds the cap.
+	//
+	// Admission starts from a round-robin offset that advances every cycle,
+	// so entries that sort late in configuration order cannot be starved
+	// indefinitely when the shared cycle deadline cuts a cycle short: each
+	// entry reaches the front of the admission order within len(targets)
+	// cycles.
 	limit := maxConcurrentCollections
 	if limit <= 0 {
 		limit = 1
 	}
 	sem := make(chan struct{}, limit)
 	var wg sync.WaitGroup
+	start := int(app.collectStart % uint64(len(targets)))
+	app.collectStart++
 launch:
-	for _, target := range targets {
+	for i := range targets {
+		target := targets[(start+i)%len(targets)]
 		select {
 		case sem <- struct{}{}:
 		case <-cycleCtx.Done():
@@ -209,6 +218,15 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 	// ObaApiStatus gauge is server-scoped, not agency-scoped).
 	ok := app.MetricsService.ServerPing(ctx, server)
 	if !ok {
+		if ctx.Err() != nil {
+			// The ping was canceled by the cycle deadline or shutdown:
+			// incomplete collection, not a server outage. Preserve the
+			// availability gauge written by earlier successful ticks and
+			// the backoff state.
+			app.Logger.Info("Skipping server-scope collection due to canceled ping",
+				"server_name", server.ServerName, "oba_base_url", server.ObaBaseURL)
+			return
+		}
 		app.ConfigService.BackoffStore.UpdateBackoff(server.ServerKey())
 		app.Logger.Info("Skipping server-scope collection due to ping failure",
 			"server_name", server.ServerName, "oba_base_url", server.ObaBaseURL)
@@ -433,6 +451,14 @@ func (app *Application) collectAgencyChecks(ctx context.Context, server models.O
 
 	ok := app.MetricsService.ServerPing(ctx, server)
 	if !ok {
+		if ctx.Err() != nil {
+			// The ping was canceled by the cycle deadline or shutdown:
+			// incomplete collection, not a server outage. Preserve the
+			// availability gauge and backoff state.
+			app.Logger.Info("Skipping metrics collection due to canceled ping",
+				"agency_id", server.AgencyID, "server_name", server.ServerName)
+			return false
+		}
 		app.Logger.Error("Server ping failed",
 			"agency_id", server.AgencyID, "agency_name", server.AgencyName, "server_name", server.ServerName)
 		report.ReportErrorWithSentryOptions(fmt.Errorf("server ping failed for %s", server.ObaBaseURL), report.SentryReportOptions{
