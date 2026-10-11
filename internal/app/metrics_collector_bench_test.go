@@ -136,10 +136,14 @@ func BenchmarkLargeServerCollection(b *testing.B) {
 		(memAfter.Mallocs-allocsBefore)/uint64(b.N), rtCalls.Load())
 }
 
+// twoDigits formats an agency index as a zero-padded two-digit string for
+// benchmark fixture identities.
 func twoDigits(i int) string {
 	return fmt.Sprintf("%02d", i)
 }
 
+// buildVehicleFeedProtobufB builds a single-vehicle GTFS-RT feed for
+// benchmarks, which take *testing.B rather than *testing.T.
 func buildVehicleFeedProtobufB(b *testing.B, vehicleID string) []byte {
 	b.Helper()
 	feed := &gtfsrt.FeedMessage{

@@ -17,6 +17,9 @@ import (
 	"watchdog.onebusaway.org/internal/models"
 )
 
+// newTestApplication builds an Application wired with fixture GTFS static
+// and realtime data for collection tests. It accepts testing.TB so both
+// tests and benchmarks can use it.
 func newTestApplication(t testing.TB) *Application {
 	t.Helper()
 

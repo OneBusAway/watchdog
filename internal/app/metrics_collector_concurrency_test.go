@@ -46,6 +46,8 @@ func stubAgencyServer(t *testing.T, agencyID, agencyName string, delay time.Dura
 	}))
 }
 
+// agencyEntry builds an agency-scoped ObaServer entry pointing at the given
+// stub base URL and RT feed URL for concurrency tests.
 func agencyEntry(serverName, agencyID, agencyName, baseURL, rtURL string) models.ObaServer {
 	return models.ObaServer{
 		ServerName:      serverName,
@@ -607,6 +609,8 @@ func TestCanceledCycleLeavesCompletionGaugeUnchanged(t *testing.T) {
 	}
 }
 
+// completionGaugeValue reads WatchdogCollectionLastCompleted for freshness
+// assertions.
 func completionGaugeValue(t *testing.T) float64 {
 	t.Helper()
 	m := &dto.Metric{}
