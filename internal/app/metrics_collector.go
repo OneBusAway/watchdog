@@ -299,6 +299,13 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 	// Probe /metrics.json for OBA's loaded static agency set.
 	reportedAgencies, prefetchedMetrics, err := app.probeReportedAgencies(ctx, server)
 	if err != nil {
+		if ctx.Err() != nil {
+			// Canceled by the cycle deadline or shutdown: incomplete
+			// collection, not a coverage outage.
+			app.Logger.Info("Skipping server-scope collection due to canceled coverage probe",
+				"server_name", server.ServerName)
+			return
+		}
 		// Coverage is unknown, not empty. Preserve the last successful vehicle
 		// state rather than destructively retiring agencies on a probe failure.
 		app.Logger.Warn("Failed to probe /metrics.json; preserving prior agency state for this tick",
@@ -577,30 +584,44 @@ func (app *Application) collectAgencyChecks(ctx context.Context, server models.O
 
 	err = app.MetricsService.FetchObaAPIMetrics(ctx, server.AgencyID, server.AgencyName, server.ServerName, server.ObaBaseURL, server.ObaApiKey, prefetchedMetrics)
 	if err != nil {
-		app.Logger.Error("Failed to fetch OBA API metrics", "error", err)
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{
-				"agency_id":   server.AgencyID,
-				"agency_name": server.AgencyName,
-				"server_name": server.ServerName,
-			},
-			ExtraContext: map[string]interface{}{
-				"oba_base_url": server.ObaBaseURL,
-			},
-			Level: sentry.LevelError,
-		})
+		if ctx.Err() != nil {
+			// Canceled by the cycle deadline or shutdown: incomplete
+			// collection, not an upstream failure.
+			app.Logger.Info("Skipping OBA API metrics due to canceled context",
+				"agency_id", server.AgencyID, "server_name", server.ServerName)
+		} else {
+			app.Logger.Error("Failed to fetch OBA API metrics", "error", err)
+			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+				Tags: map[string]string{
+					"agency_id":   server.AgencyID,
+					"agency_name": server.AgencyName,
+					"server_name": server.ServerName,
+				},
+				ExtraContext: map[string]interface{}{
+					"oba_base_url": server.ObaBaseURL,
+				},
+				Level: sentry.LevelError,
+			})
+		}
 	}
 
 	err = app.MetricsService.CountActiveVehiclesForAgency(ctx, server)
 	if err != nil {
-		app.Logger.Error("Failed to count vehicles from VehiclesForAgency API", "error", err)
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{
-				"agency_id":   server.AgencyID,
-				"server_name": server.ServerName,
-			},
-			Level: sentry.LevelError,
-		})
+		if ctx.Err() != nil {
+			// Canceled by the cycle deadline or shutdown: incomplete
+			// collection, not an upstream failure.
+			app.Logger.Info("Skipping vehicles-for-agency count due to canceled context",
+				"agency_id", server.AgencyID, "server_name", server.ServerName)
+		} else {
+			app.Logger.Error("Failed to count vehicles from VehiclesForAgency API", "error", err)
+			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+				Tags: map[string]string{
+					"agency_id":   server.AgencyID,
+					"server_name": server.ServerName,
+				},
+				Level: sentry.LevelError,
+			})
+		}
 	}
 
 	return true

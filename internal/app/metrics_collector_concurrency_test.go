@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getsentry/sentry-go"
 	dto "github.com/prometheus/client_model/go"
 	"watchdog.onebusaway.org/internal/config"
 	"watchdog.onebusaway.org/internal/geo"
@@ -277,6 +278,7 @@ func TestCollectionShutdownCancelsActiveWork(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
+	baseGoroutines := runtime.NumGoroutine()
 	start := time.Now()
 	go func() {
 		defer close(done)
@@ -299,7 +301,18 @@ func TestCollectionShutdownCancelsActiveWork(t *testing.T) {
 	}
 	app.collectMu.Unlock()
 
-	var _ = runtime.NumGoroutine
+	// The collection worker must have exited: allow transient runtime and
+	// test-server goroutines a moment to settle, then require a return to
+	// (near) the pre-collection count.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if got := runtime.NumGoroutine(); got <= baseGoroutines+3 {
+			break
+		} else if time.Now().After(deadline) {
+			t.Fatalf("goroutines leaked after cancel: have %d, want <= %d", got, baseGoroutines+3)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // TestCollectOnceRotatesAdmissionOrder verifies a shared cycle deadline
@@ -393,6 +406,125 @@ func TestCanceledRTFetchIsNotAnOutage(t *testing.T) {
 	}); found {
 		t.Fatal("canceled RT fetch advanced last-successful-fetch gauge")
 	}
+}
+
+// sentryErrorValues returns the exception values of error-level Sentry
+// events captured during a test.
+func sentryErrorValues(t *testing.T, rec *report.RecordingTransport) []string {
+	t.Helper()
+	var out []string
+	for _, event := range rec.Events() {
+		if event.Level != sentry.LevelError {
+			continue
+		}
+		if len(event.Exception) == 0 {
+			if event.Message != "" {
+				out = append(out, event.Message)
+			}
+			continue
+		}
+		for _, ex := range event.Exception {
+			out = append(out, ex.Value)
+		}
+	}
+	return out
+}
+
+// assertOnlyBundleSentryErrors asserts the recording transport captured at
+// least one error (proving capture is live — the fixture-less bundle check
+// always errors) and that every error-level event is that expected bundle
+// error: a canceled step must stay silent.
+func assertOnlyBundleSentryErrors(t *testing.T, rec *report.RecordingTransport) {
+	t.Helper()
+	values := sentryErrorValues(t, rec)
+	if len(values) == 0 {
+		t.Fatal("expected the bundle-expiration error event (capture looks dead)")
+	}
+	for _, value := range values {
+		if !strings.Contains(value, "bundle") {
+			t.Fatalf("unexpected Sentry error event (canceled step reported?): %s", value)
+		}
+	}
+}
+
+// TestCanceledObaMetricsIsNotAnOutage verifies an OBA API metrics fetch
+// canceled by the cycle deadline stays silent in Sentry at both layers.
+func TestCanceledObaMetricsIsNotAnOutage(t *testing.T) {
+	rec := report.CaptureSentry(t)
+	rtBody := buildVehicleFeedProtobuf(t, "shared-vehicle")
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "metrics.json") {
+			// Hang until the cycle deadline cancels the request.
+			<-r.Context().Done()
+			return
+		}
+		if r.URL.Path == "/vehicles.pb" {
+			w.Header().Set("Content-Type", "application/octet-stream")
+			// #nosec G104
+			w.Write(rtBody)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		// #nosec G104
+		w.Write([]byte(`{"code":200,"version":2,"data":{"list":[],"entry":{"readableTime":"now"}}}`))
+	}))
+	t.Cleanup(ts.Close)
+	t.Cleanup(http.DefaultClient.CloseIdleConnections)
+
+	app := newTestApplication(t)
+	app.ConfigService.Config.FetchInterval = 1 // 2s cycle deadline with headroom
+
+	slow := agencyEntry("oba-metrics-cancel-server", "oba-metrics-cancel-agency", "Cancel Agency", ts.URL, ts.URL+"/vehicles.pb")
+	app.ConfigService.Config.UpdateConfig([]models.ObaServer{slow})
+	app.GtfsService.RouteAgencyIndex.Replace(slow.ServerKey(), nil, nil, map[string]string{slow.AgencyID: slow.AgencyName})
+
+	app.collectOnce(context.Background())
+
+	assertOnlyBundleSentryErrors(t, rec)
+}
+
+// TestCanceledVehiclesForAgencyIsNotAnOutage verifies a vehicles-for-agency
+// call canceled by the cycle deadline stays silent in Sentry at both layers.
+func TestCanceledVehiclesForAgencyIsNotAnOutage(t *testing.T) {
+	rec := report.CaptureSentry(t)
+	rtBody := buildVehicleFeedProtobuf(t, "shared-vehicle")
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "vehicles-for-agency"):
+			// Hang until the cycle deadline cancels the request.
+			<-r.Context().Done()
+			return
+		case r.URL.Path == "/vehicles.pb":
+			w.Header().Set("Content-Type", "application/octet-stream")
+			// #nosec G104
+			w.Write(rtBody)
+			return
+		case strings.HasSuffix(r.URL.Path, "metrics.json"):
+			w.Header().Set("Content-Type", "application/json")
+			// #nosec G104
+			w.Write([]byte(`{"code":200,"version":2,"data":{"entry":{"agencyIDs":["vfa-cancel-agency"]}}}`))
+			return
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			// #nosec G104
+			w.Write([]byte(`{"code":200,"data":{"list":[],"entry":{"readableTime":"now"}}}`))
+		}
+	}))
+	t.Cleanup(ts.Close)
+	t.Cleanup(http.DefaultClient.CloseIdleConnections)
+
+	app := newTestApplication(t)
+	app.ConfigService.Config.FetchInterval = 1 // 2s cycle deadline with headroom
+
+	slow := agencyEntry("vfa-cancel-server", "vfa-cancel-agency", "Cancel Agency", ts.URL, ts.URL+"/vehicles.pb")
+	app.ConfigService.Config.UpdateConfig([]models.ObaServer{slow})
+	app.GtfsService.RouteAgencyIndex.Replace(slow.ServerKey(), nil, nil, map[string]string{slow.AgencyID: slow.AgencyName})
+
+	app.collectOnce(context.Background())
+
+	assertOnlyBundleSentryErrors(t, rec)
 }
 
 // TestCanceledPingPreservesBackoffAndAvailability verifies a ping canceled by
