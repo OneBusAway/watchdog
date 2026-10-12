@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/metrics"
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/report"
 	"watchdog.onebusaway.org/internal/utils"
 )
 
@@ -194,14 +196,16 @@ func TestServerScopeAgencyChecksRunConcurrently(t *testing.T) {
 }
 
 // TestCycleDeadlineCancelsStalledWork verifies work exceeding the fetch
-// interval is canceled instead of accumulating into later cycles.
+// interval is canceled instead of accumulating into later cycles. The cycle
+// deadline carries one interval of headroom (2x FetchInterval), so with a 1s
+// interval the 12s slow chain below is cut at ~2s.
 func TestCycleDeadlineCancelsStalledWork(t *testing.T) {
 	rtBody := buildVehicleFeedProtobuf(t, "shared-vehicle")
 	stub := stubAgencyServer(t, "slow-agency", "Slow Agency", 3*time.Second, rtBody)
 	t.Cleanup(stub.Close)
 
 	app := newTestApplication(t)
-	app.ConfigService.Config.FetchInterval = 1 // 1s cycle deadline
+	app.ConfigService.Config.FetchInterval = 1 // 2s cycle deadline with headroom
 
 	slow := agencyEntry("slow-server", "slow-agency", "Slow Agency", stub.URL, stub.URL+"/vehicles.pb")
 	app.ConfigService.Config.UpdateConfig([]models.ObaServer{slow})
@@ -211,7 +215,7 @@ func TestCycleDeadlineCancelsStalledWork(t *testing.T) {
 	app.collectOnce(context.Background())
 	elapsed := time.Since(start)
 
-	if elapsed >= 2500*time.Millisecond {
+	if elapsed >= 6*time.Second {
 		t.Fatalf("cycle deadline did not cancel stalled work: took %v", elapsed)
 	}
 }
@@ -334,6 +338,60 @@ func TestCollectOnceRotatesAdmissionOrder(t *testing.T) {
 	app.collectOnce(context.Background())
 	if app.GtfsService.RealtimeStore.Get(fast.ServerKey()) == nil {
 		t.Fatal("rotation did not admit the starved healthy entry on cycle 2")
+	}
+}
+
+// TestCanceledRTFetchIsNotAnOutage verifies a GTFS-RT fetch canceled by the
+// cycle deadline is treated as incomplete collection, not a feed outage: no
+// Sentry error mentioning the feed, nothing published to the realtime store
+// (so the vehicle pass stays gated), and the last-successful-fetch gauge
+// untouched.
+func TestCanceledRTFetchIsNotAnOutage(t *testing.T) {
+	rec := report.CaptureSentry(t)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/vehicles.pb" {
+			// Hang until the cycle deadline cancels the request.
+			<-r.Context().Done()
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		// #nosec G104
+		w.Write([]byte(`{"code":200,"version":2,"data":{"list":[],"entry":{"readableTime":"now","agencyIDs":["rt-cancel-agency"]}}}`))
+	}))
+	t.Cleanup(ts.Close)
+	t.Cleanup(http.DefaultClient.CloseIdleConnections)
+
+	app := newTestApplication(t)
+	app.ConfigService.Config.FetchInterval = 1 // 2s cycle deadline with headroom
+
+	slow := agencyEntry("rt-cancel-server", "rt-cancel-agency", "RT Cancel Agency", ts.URL, ts.URL+"/vehicles.pb")
+	app.ConfigService.Config.UpdateConfig([]models.ObaServer{slow})
+	app.GtfsService.RouteAgencyIndex.Replace(slow.ServerKey(), nil, nil, map[string]string{slow.AgencyID: slow.AgencyName})
+
+	app.collectOnce(context.Background())
+
+	for _, event := range rec.Events() {
+		if strings.Contains(event.Message, "GTFS-RT") {
+			t.Fatalf("canceled RT fetch reported to Sentry: %s", event.Message)
+		}
+		for _, ex := range event.Exception {
+			if strings.Contains(ex.Value, "GTFS-RT") {
+				t.Fatalf("canceled RT fetch reported to Sentry: %s", ex.Value)
+			}
+		}
+	}
+	if app.GtfsService.RealtimeStore.Get(slow.ServerKey()) != nil {
+		t.Fatal("canceled RT fetch published a snapshot; vehicle pass must stay gated")
+	}
+	serverURL := utils.SanitizeServerURL(ts.URL)
+	if _, found := gaugeValueFor(metrics.GtfsRtLastSuccessfulFetch, map[string]string{
+		"agency_id":   slow.AgencyID,
+		"agency_name": slow.AgencyName,
+		"server_name": slow.ServerName,
+		"server_url":  serverURL,
+	}); found {
+		t.Fatal("canceled RT fetch advanced last-successful-fetch gauge")
 	}
 }
 
@@ -618,6 +676,35 @@ func completionGaugeValue(t *testing.T) float64 {
 		t.Fatalf("failed to read completion gauge: %v", err)
 	}
 	return m.GetGauge().GetValue()
+}
+
+// TestDegradedEntryWithinHeadroomAdvancesGauge verifies the headroom rule: a
+// degraded but bounded entry (~1.2s serial chain against a 2s deadline) still
+// completes, so its cycle advances the freshness gauge instead of tripping
+// WatchdogCollectionStalled while Watchdog itself is healthy.
+func TestDegradedEntryWithinHeadroomAdvancesGauge(t *testing.T) {
+	const seed = 12345.0
+	metrics.WatchdogCollectionLastCompleted.Set(seed)
+
+	rtBody := buildVehicleFeedProtobuf(t, "shared-vehicle")
+	stub := stubAgencyServer(t, "slowish-agency", "Slowish Agency", 300*time.Millisecond, rtBody)
+	t.Cleanup(stub.Close)
+
+	app := newTestApplication(t)
+	app.ConfigService.Config.FetchInterval = 1 // 2s cycle deadline with headroom
+
+	slowish := agencyEntry("slowish-server", "slowish-agency", "Slowish Agency", stub.URL, stub.URL+"/vehicles.pb")
+	app.ConfigService.Config.UpdateConfig([]models.ObaServer{slowish})
+	app.GtfsService.RouteAgencyIndex.Replace(slowish.ServerKey(), nil, nil, map[string]string{slowish.AgencyID: slowish.AgencyName})
+
+	app.collectOnce(context.Background())
+
+	if app.GtfsService.RealtimeStore.Get(slowish.ServerKey()) == nil {
+		t.Fatal("degraded entry within headroom never completed collection")
+	}
+	if got := completionGaugeValue(t); got <= seed {
+		t.Fatalf("degraded entry within headroom did not advance completion gauge: got %v, want > %v", got, seed)
+	}
 }
 
 // TestAgencyOffsetsRotatePerServer verifies each server rotates its own

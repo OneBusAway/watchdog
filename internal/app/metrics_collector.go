@@ -56,15 +56,23 @@ var (
 	maxConcurrentAgencyChecks = 8
 )
 
-// cycleTimeout derives the per-cycle deadline from the configured fetch
-// interval so stalled work is canceled instead of accumulating into later
-// cycles. A non-positive interval falls back to the 30s default.
+// cycleTimeout derives the per-cycle deadline: one full fetch interval of
+// headroom over the interval itself.
+//
+// Every collection step is already capped by the pooled client's per-request
+// timeout, so a single degraded entry's serial chain (ping, OBA API,
+// vehicles-for-agency, RT fetch) still fits inside the headroom: its cycle
+// completes and advances the freshness gauge instead of tripping
+// WatchdogCollectionStalled while Watchdog itself is healthy. Persistent
+// overrun still cancels cleanly — the next tick skips on the cycle lock —
+// and the 3x-interval stalled alert fires only when the loop truly cannot
+// complete a pass.
 func (app *Application) cycleTimeout() time.Duration {
 	interval := app.ConfigService.Config.FetchInterval
 	if interval <= 0 {
-		return 30 * time.Second
+		interval = 30
 	}
-	return time.Duration(interval) * time.Second
+	return 2 * time.Duration(interval) * time.Second
 }
 
 func (app *Application) StartMetricsCollection(ctx context.Context) {
@@ -347,14 +355,22 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 	rtFetchSucceeded := true
 	if err := app.GtfsService.FetchAndStoreGTFSRTFeed(ctx, server); err != nil {
 		rtFetchSucceeded = false
-		app.Logger.Error("Failed to fetch and store GTFS-RT feed",
-			"server_name", server.ServerName, "error", err)
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{
-				"server_name": server.ServerName,
-			},
-			Level: sentry.LevelError,
-		})
+		if ctx.Err() != nil {
+			// Canceled by the cycle deadline or shutdown: incomplete
+			// collection, not a feed outage. The pass below stays gated
+			// and no failure is reported.
+			app.Logger.Info("Skipping GTFS-RT vehicle pass due to canceled fetch",
+				"server_name", server.ServerName)
+		} else {
+			app.Logger.Error("Failed to fetch and store GTFS-RT feed",
+				"server_name", server.ServerName, "error", err)
+			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+				Tags: map[string]string{
+					"server_name": server.ServerName,
+				},
+				Level: sentry.LevelError,
+			})
+		}
 	} else if len(server.GtfsRTFeeds) > 0 {
 		metrics.GtfsRtLastSuccessfulFetch.WithLabelValues(
 			"",
@@ -441,6 +457,14 @@ func (app *Application) CollectMetricsForServer(ctx context.Context, server mode
 	}
 
 	if err := app.GtfsService.FetchAndStoreGTFSRTFeed(ctx, server); err != nil {
+		if ctx.Err() != nil {
+			// Canceled by the cycle deadline or shutdown: incomplete
+			// collection, not a feed outage. The vehicle pass stays gated
+			// and no failure is reported.
+			app.Logger.Info("Skipping GTFS-RT vehicle pass due to canceled fetch",
+				"agency_id", server.AgencyID, "server_name", server.ServerName)
+			return
+		}
 		app.Logger.Error("Failed to fetch and store GTFS-RT feed", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{

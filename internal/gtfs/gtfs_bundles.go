@@ -1019,15 +1019,21 @@ func fetchAndStoreGTFSRTFeed(ctx context.Context, server models.ObaServer, realt
 		realtimeStore.Observe(server, observation)
 	}
 	if err != nil {
-		for feedIdx, feed := range server.GtfsRTFeeds {
-			feedID := fmt.Sprintf("%d", feedIdx)
-			if !succeeded[feedID] {
-				realtimeStore.Observe(server, FeedObservation{
-					FeedID: feedID, FeedURL: utils.SanitizeServerURL(feed.VehiclePositionURL),
-					Success: false, ObservedAt: observedAt,
-				})
+		if ctx.Err() == nil {
+			for feedIdx, feed := range server.GtfsRTFeeds {
+				feedID := fmt.Sprintf("%d", feedIdx)
+				if !succeeded[feedID] {
+					realtimeStore.Observe(server, FeedObservation{
+						FeedID: feedID, FeedURL: utils.SanitizeServerURL(feed.VehiclePositionURL),
+						Success: false, ObservedAt: observedAt,
+					})
+				}
 			}
 		}
+		// On cancellation the unfinished feeds must not be recorded as
+		// failed observations: a canceled fetch is incomplete collection,
+		// not a feed outage. Feeds that genuinely succeeded above keep
+		// their observations either way.
 		return err
 	}
 	if merged == nil {
@@ -1083,13 +1089,23 @@ func fetchAndStoreGTFSRTFeed(ctx context.Context, server models.ObaServer, realt
 func parseGTFSRTFeeds(ctx context.Context, server models.ObaServer, client *http.Client, observedAt time.Time) (*models.RealtimeData, []FeedObservation, error) {
 	merged := &models.RealtimeData{ObservationAt: observedAt}
 	observations := make([]FeedObservation, 0, len(server.GtfsRTFeeds))
+	// reportFetchErr silences failures caused by cycle-deadline or shutdown
+	// cancellation: an interrupted fetch is incomplete collection, not a
+	// feed failure, and must neither page Sentry nor (via the caller) mark
+	// the feed down.
+	reportFetchErr := func(err error, opts report.SentryReportOptions) {
+		if ctx.Err() != nil {
+			return
+		}
+		report.ReportErrorWithSentryOptions(err, opts)
+	}
 	for feedIdx, feed := range server.GtfsRTFeeds {
 		feedID := fmt.Sprintf("%d", feedIdx)
 		sanitizedURL := utils.SanitizeServerURL(feed.VehiclePositionURL)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, feed.VehiclePositionURL, nil)
 		if err != nil {
 			err = fmt.Errorf("create GTFS-RT request: %w", err)
-			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			reportFetchErr(err, report.SentryReportOptions{
 				Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
 				ExtraContext: map[string]interface{}{
 					"vehicle_position_url": sanitizedURL,
@@ -1103,7 +1119,7 @@ func parseGTFSRTFeeds(ctx context.Context, server models.ObaServer, client *http
 		resp, err := client.Do(req)
 		if err != nil {
 			err = fmt.Errorf("fetch GTFS-RT feed %s: %w", feed.VehiclePositionURL, err)
-			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			reportFetchErr(err, report.SentryReportOptions{
 				Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
 				ExtraContext: map[string]interface{}{
 					"vehicle_position_url": sanitizedURL,
@@ -1115,7 +1131,7 @@ func parseGTFSRTFeeds(ctx context.Context, server models.ObaServer, client *http
 		resp.Body.Close()
 		if readErr != nil {
 			err = fmt.Errorf("read GTFS-RT feed %s: %w", feed.VehiclePositionURL, readErr)
-			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			reportFetchErr(err, report.SentryReportOptions{
 				Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
 				ExtraContext: map[string]interface{}{
 					"vehicle_position_url": sanitizedURL,
@@ -1125,7 +1141,7 @@ func parseGTFSRTFeeds(ctx context.Context, server models.ObaServer, client *http
 		}
 		if resp.StatusCode != http.StatusOK {
 			err = fmt.Errorf("GTFS-RT feed %s returned %s", feed.VehiclePositionURL, resp.Status)
-			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			reportFetchErr(err, report.SentryReportOptions{
 				Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
 				ExtraContext: map[string]interface{}{
 					"vehicle_position_url": sanitizedURL,
@@ -1137,7 +1153,7 @@ func parseGTFSRTFeeds(ctx context.Context, server models.ObaServer, client *http
 		parsed, err := remoteGtfs.ParseRealtime(data, &remoteGtfs.ParseRealtimeOptions{})
 		if err != nil {
 			err = fmt.Errorf("parse GTFS-RT feed %s: %w", feed.VehiclePositionURL, err)
-			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			reportFetchErr(err, report.SentryReportOptions{
 				Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
 				ExtraContext: map[string]interface{}{
 					"vehicle_position_url": sanitizedURL,
