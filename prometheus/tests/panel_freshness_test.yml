@@ -1,0 +1,366 @@
+rule_files:
+evaluation_interval: 1m
+tests:
+  # -------------------------------------------------------------------------
+  # Scenario 1: Fresh success shows the value
+  # -------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'realtime_vehicle_positions_count_gtfs_rt{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '10'
+      - series: 'oba_agency_active_vehicles_count{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '12'
+      - series: 'gtfs_rt_tracked_vehicles_count{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '8'
+      - series: 'gtfs_rt_vehicle_computed_speed{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="0",vehicle_id="v1"}'
+        values: '45.5'
+      - series: 'gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="0",vehicle_id="v1"}'
+        values: '0.12'
+      - series: 'gtfs_rt_feed_fetch_success{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="0",feed_url="http://f1"}'
+        values: '1'
+      - series: 'gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="0",feed_url="http://f1"}'
+        values: '100'
+      - series: 'oba_vehicles_fetch_success{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '1'
+      - series: 'oba_vehicles_last_successful_fetch_timestamp_seconds{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '100'
+      - series: 'watchdog_collection_interval_seconds'
+        values: '30'
+      - series: 'watchdog_collection_last_completed_timestamp_seconds'
+        values: '100'
+    promql_expr_test:
+      - expr: '((realtime_vehicle_positions_count_gtfs_rt{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url) ((min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id!=""}) == 1) and ((time() - min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) or (realtime_vehicle_positions_count_gtfs_rt{agency_id="",server_url=~".*"} and on (server_name, server_url) ((min by (server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id=""}) == 1) and ((time() - min by (server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 110s
+        exp_samples:
+          - labels: 'realtime_vehicle_positions_count_gtfs_rt{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+            value: 10
+      - expr: 'oba_agency_active_vehicles_count{agency_id=~".*",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url) (oba_vehicles_fetch_success{agency_id=~".*",server_url=~".*"} == 1) and on (agency_id, agency_name, server_name, server_url) ((time() - oba_vehicles_last_successful_fetch_timestamp_seconds{agency_id=~".*",server_url=~".*"}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 110s
+        exp_samples:
+          - labels: 'oba_agency_active_vehicles_count{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+            value: 12
+      - expr: '((gtfs_rt_tracked_vehicles_count{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url) ((min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id!=""}) == 1) and ((time() - min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) or (gtfs_rt_tracked_vehicles_count{agency_id="",server_url=~".*"} and on (server_name, server_url) ((min by (server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id=""}) == 1) and ((time() - min by (server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 110s
+        exp_samples:
+          - labels: 'gtfs_rt_tracked_vehicles_count{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+            value: 8
+      - expr: '((gtfs_rt_vehicle_computed_speed{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id!=""} == 1) and on (agency_id, agency_name, server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))) or (gtfs_rt_vehicle_computed_speed{agency_id="",server_url=~".*"} and on (server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id=""} == 1) and on (server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 110s
+        exp_samples:
+          - labels: 'gtfs_rt_vehicle_computed_speed{agency_id="agency1",agency_name="Agency 1",feed="0",server_name="s1",server_url="http://s1",vehicle_id="v1"}'
+            value: 45.5
+      - expr: '((gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id!=""} == 1) and on (agency_id, agency_name, server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))) or (gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id="",server_url=~".*"} and on (server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id=""} == 1) and on (server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 110s
+        exp_samples:
+          - labels: 'gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id="agency1",agency_name="Agency 1",feed="0",server_name="s1",server_url="http://s1",vehicle_id="v1"}'
+            value: 0.12
+
+  # -------------------------------------------------------------------------
+  # Scenario 2: Fresh success with zero vehicles shows 0
+  # -------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'realtime_vehicle_positions_count_gtfs_rt{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '0'
+      - series: 'oba_agency_active_vehicles_count{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '0'
+      - series: 'gtfs_rt_tracked_vehicles_count{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '0'
+      - series: 'gtfs_rt_vehicle_computed_speed{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="0",vehicle_id="v1"}'
+        values: '0'
+      - series: 'gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="0",vehicle_id="v1"}'
+        values: '0'
+      - series: 'gtfs_rt_feed_fetch_success{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="0",feed_url="http://f1"}'
+        values: '1'
+      - series: 'gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="0",feed_url="http://f1"}'
+        values: '100'
+      - series: 'oba_vehicles_fetch_success{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '1'
+      - series: 'oba_vehicles_last_successful_fetch_timestamp_seconds{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '100'
+      - series: 'watchdog_collection_interval_seconds'
+        values: '30'
+      - series: 'watchdog_collection_last_completed_timestamp_seconds'
+        values: '100'
+    promql_expr_test:
+      - expr: '((realtime_vehicle_positions_count_gtfs_rt{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url) ((min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id!=""}) == 1) and ((time() - min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) or (realtime_vehicle_positions_count_gtfs_rt{agency_id="",server_url=~".*"} and on (server_name, server_url) ((min by (server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id=""}) == 1) and ((time() - min by (server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 110s
+        exp_samples:
+          - labels: 'realtime_vehicle_positions_count_gtfs_rt{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+            value: 0
+      - expr: 'oba_agency_active_vehicles_count{agency_id=~".*",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url) (oba_vehicles_fetch_success{agency_id=~".*",server_url=~".*"} == 1) and on (agency_id, agency_name, server_name, server_url) ((time() - oba_vehicles_last_successful_fetch_timestamp_seconds{agency_id=~".*",server_url=~".*"}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 110s
+        exp_samples:
+          - labels: 'oba_agency_active_vehicles_count{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+            value: 0
+      - expr: '((gtfs_rt_tracked_vehicles_count{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url) ((min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id!=""}) == 1) and ((time() - min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) or (gtfs_rt_tracked_vehicles_count{agency_id="",server_url=~".*"} and on (server_name, server_url) ((min by (server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id=""}) == 1) and ((time() - min by (server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 110s
+        exp_samples:
+          - labels: 'gtfs_rt_tracked_vehicles_count{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+            value: 0
+      - expr: '((gtfs_rt_vehicle_computed_speed{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id!=""} == 1) and on (agency_id, agency_name, server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))) or (gtfs_rt_vehicle_computed_speed{agency_id="",server_url=~".*"} and on (server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id=""} == 1) and on (server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 110s
+        exp_samples:
+          - labels: 'gtfs_rt_vehicle_computed_speed{agency_id="agency1",agency_name="Agency 1",feed="0",server_name="s1",server_url="http://s1",vehicle_id="v1"}'
+            value: 0
+      - expr: '((gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id!=""} == 1) and on (agency_id, agency_name, server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))) or (gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id="",server_url=~".*"} and on (server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id=""} == 1) and on (server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 110s
+        exp_samples:
+          - labels: 'gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id="agency1",agency_name="Agency 1",feed="0",server_name="s1",server_url="http://s1",vehicle_id="v1"}'
+            value: 0
+
+  # -------------------------------------------------------------------------
+  # Scenario 3: fetch_success=0 gives no data
+  # -------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'realtime_vehicle_positions_count_gtfs_rt{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '10'
+      - series: 'oba_agency_active_vehicles_count{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '12'
+      - series: 'gtfs_rt_tracked_vehicles_count{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '8'
+      - series: 'gtfs_rt_vehicle_computed_speed{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="0",vehicle_id="v1"}'
+        values: '45.5'
+      - series: 'gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="0",vehicle_id="v1"}'
+        values: '0.12'
+      - series: 'gtfs_rt_feed_fetch_success{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="0",feed_url="http://f1"}'
+        values: '0'
+      - series: 'gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="0",feed_url="http://f1"}'
+        values: '100'
+      - series: 'oba_vehicles_fetch_success{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '0'
+      - series: 'oba_vehicles_last_successful_fetch_timestamp_seconds{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '100'
+      - series: 'watchdog_collection_interval_seconds'
+        values: '30'
+      - series: 'watchdog_collection_last_completed_timestamp_seconds'
+        values: '100'
+    promql_expr_test:
+      - expr: '((realtime_vehicle_positions_count_gtfs_rt{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url) ((min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id!=""}) == 1) and ((time() - min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) or (realtime_vehicle_positions_count_gtfs_rt{agency_id="",server_url=~".*"} and on (server_name, server_url) ((min by (server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id=""}) == 1) and ((time() - min by (server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 110s
+        exp_samples: []
+      - expr: 'oba_agency_active_vehicles_count{agency_id=~".*",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url) (oba_vehicles_fetch_success{agency_id=~".*",server_url=~".*"} == 1) and on (agency_id, agency_name, server_name, server_url) ((time() - oba_vehicles_last_successful_fetch_timestamp_seconds{agency_id=~".*",server_url=~".*"}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 110s
+        exp_samples: []
+      - expr: '((gtfs_rt_tracked_vehicles_count{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url) ((min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id!=""}) == 1) and ((time() - min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) or (gtfs_rt_tracked_vehicles_count{agency_id="",server_url=~".*"} and on (server_name, server_url) ((min by (server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id=""}) == 1) and ((time() - min by (server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 110s
+        exp_samples: []
+      - expr: '((gtfs_rt_vehicle_computed_speed{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id!=""} == 1) and on (agency_id, agency_name, server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))) or (gtfs_rt_vehicle_computed_speed{agency_id="",server_url=~".*"} and on (server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id=""} == 1) and on (server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 110s
+        exp_samples: []
+      - expr: '((gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id!=""} == 1) and on (agency_id, agency_name, server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))) or (gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id="",server_url=~".*"} and on (server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id=""} == 1) and on (server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 110s
+        exp_samples: []
+
+  # -------------------------------------------------------------------------
+  # Scenario 4: Stale last-success timestamp gives no data
+  # -------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'realtime_vehicle_positions_count_gtfs_rt{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '10'
+      - series: 'oba_agency_active_vehicles_count{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '12'
+      - series: 'gtfs_rt_tracked_vehicles_count{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '8'
+      - series: 'gtfs_rt_vehicle_computed_speed{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="0",vehicle_id="v1"}'
+        values: '45.5'
+      - series: 'gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="0",vehicle_id="v1"}'
+        values: '0.12'
+      - series: 'gtfs_rt_feed_fetch_success{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="0",feed_url="http://f1"}'
+        values: '1'
+      - series: 'gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="0",feed_url="http://f1"}'
+        values: '0'
+      - series: 'oba_vehicles_fetch_success{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '1'
+      - series: 'oba_vehicles_last_successful_fetch_timestamp_seconds{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '0'
+      - series: 'watchdog_collection_interval_seconds'
+        values: '30'
+      - series: 'watchdog_collection_last_completed_timestamp_seconds'
+        values: '100'
+    promql_expr_test:
+      - expr: '((realtime_vehicle_positions_count_gtfs_rt{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url) ((min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id!=""}) == 1) and ((time() - min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) or (realtime_vehicle_positions_count_gtfs_rt{agency_id="",server_url=~".*"} and on (server_name, server_url) ((min by (server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id=""}) == 1) and ((time() - min by (server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 100s
+        exp_samples: []
+      - expr: 'oba_agency_active_vehicles_count{agency_id=~".*",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url) (oba_vehicles_fetch_success{agency_id=~".*",server_url=~".*"} == 1) and on (agency_id, agency_name, server_name, server_url) ((time() - oba_vehicles_last_successful_fetch_timestamp_seconds{agency_id=~".*",server_url=~".*"}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 100s
+        exp_samples: []
+      - expr: '((gtfs_rt_tracked_vehicles_count{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url) ((min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id!=""}) == 1) and ((time() - min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) or (gtfs_rt_tracked_vehicles_count{agency_id="",server_url=~".*"} and on (server_name, server_url) ((min by (server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id=""}) == 1) and ((time() - min by (server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 100s
+        exp_samples: []
+      - expr: '((gtfs_rt_vehicle_computed_speed{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id!=""} == 1) and on (agency_id, agency_name, server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))) or (gtfs_rt_vehicle_computed_speed{agency_id="",server_url=~".*"} and on (server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id=""} == 1) and on (server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 100s
+        exp_samples: []
+      - expr: '((gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id!=""} == 1) and on (agency_id, agency_name, server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))) or (gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id="",server_url=~".*"} and on (server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id=""} == 1) and on (server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 100s
+        exp_samples: []
+
+  # -------------------------------------------------------------------------
+  # Scenario 5: One feed failing while another feed of the same agency is fine
+  # -------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'realtime_vehicle_positions_count_gtfs_rt{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '10'
+      - series: 'gtfs_rt_tracked_vehicles_count{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '8'
+      - series: 'gtfs_rt_vehicle_computed_speed{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="0",vehicle_id="v0"}'
+        values: '40'
+      - series: 'gtfs_rt_vehicle_computed_speed{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="1",vehicle_id="v1"}'
+        values: '50'
+      - series: 'gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="0",vehicle_id="v0"}'
+        values: '0.05'
+      - series: 'gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="1",vehicle_id="v1"}'
+        values: '0.2'
+      - series: 'gtfs_rt_feed_fetch_success{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="0",feed_url="http://f0"}'
+        values: '1'
+      - series: 'gtfs_rt_feed_fetch_success{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="1",feed_url="http://f1"}'
+        values: '0'
+      - series: 'gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="0",feed_url="http://f0"}'
+        values: '100'
+      - series: 'gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="1",feed_url="http://f1"}'
+        values: '100'
+      - series: 'oba_agency_active_vehicles_count{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '12'
+      - series: 'oba_agency_active_vehicles_count{agency_id="agency2",agency_name="Agency 2",server_name="s1",server_url="http://s1"}'
+        values: '15'
+      - series: 'oba_vehicles_fetch_success{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '1'
+      - series: 'oba_vehicles_fetch_success{agency_id="agency2",agency_name="Agency 2",server_name="s1",server_url="http://s1"}'
+        values: '0'
+      - series: 'oba_vehicles_last_successful_fetch_timestamp_seconds{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '100'
+      - series: 'oba_vehicles_last_successful_fetch_timestamp_seconds{agency_id="agency2",agency_name="Agency 2",server_name="s1",server_url="http://s1"}'
+        values: '100'
+      - series: 'watchdog_collection_interval_seconds'
+        values: '30'
+      - series: 'watchdog_collection_last_completed_timestamp_seconds'
+        values: '100'
+    promql_expr_test:
+      - expr: '((realtime_vehicle_positions_count_gtfs_rt{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url) ((min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id!=""}) == 1) and ((time() - min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) or (realtime_vehicle_positions_count_gtfs_rt{agency_id="",server_url=~".*"} and on (server_name, server_url) ((min by (server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id=""}) == 1) and ((time() - min by (server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 110s
+        exp_samples: []
+      - expr: '((gtfs_rt_tracked_vehicles_count{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url) ((min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id!=""}) == 1) and ((time() - min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) or (gtfs_rt_tracked_vehicles_count{agency_id="",server_url=~".*"} and on (server_name, server_url) ((min by (server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id=""}) == 1) and ((time() - min by (server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 110s
+        exp_samples: []
+      - expr: 'oba_agency_active_vehicles_count{agency_id=~".*",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url) (oba_vehicles_fetch_success{agency_id=~".*",server_url=~".*"} == 1) and on (agency_id, agency_name, server_name, server_url) ((time() - oba_vehicles_last_successful_fetch_timestamp_seconds{agency_id=~".*",server_url=~".*"}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 110s
+        exp_samples:
+          - labels: 'oba_agency_active_vehicles_count{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+            value: 12
+      - expr: '((gtfs_rt_vehicle_computed_speed{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id!=""} == 1) and on (agency_id, agency_name, server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))) or (gtfs_rt_vehicle_computed_speed{agency_id="",server_url=~".*"} and on (server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id=""} == 1) and on (server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 110s
+        exp_samples:
+          - labels: 'gtfs_rt_vehicle_computed_speed{agency_id="agency1",agency_name="Agency 1",feed="0",server_name="s1",server_url="http://s1",vehicle_id="v0"}'
+            value: 40
+      - expr: '((gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id!=""} == 1) and on (agency_id, agency_name, server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))) or (gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id="",server_url=~".*"} and on (server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id=""} == 1) and on (server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 110s
+        exp_samples:
+          - labels: 'gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id="agency1",agency_name="Agency 1",feed="0",server_name="s1",server_url="http://s1",vehicle_id="v0"}'
+            value: 0.05
+
+  # -------------------------------------------------------------------------
+  # Scenario 6: Agency-scope vs server-scope series
+  # -------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      # Server-scoped series with healthy server feed
+      - series: 'realtime_vehicle_positions_count_gtfs_rt{agency_id="",agency_name="Server Scope",server_name="s1",server_url="http://s1"}'
+        values: '100'
+      - series: 'gtfs_rt_tracked_vehicles_count{agency_id="",agency_name="Server Scope",server_name="s1",server_url="http://s1"}'
+        values: '95'
+      - series: 'gtfs_rt_vehicle_computed_speed{agency_id="",agency_name="Server Scope",server_name="s1",server_url="http://s1",feed="0",vehicle_id="sv1"}'
+        values: '33'
+      - series: 'gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id="",agency_name="Server Scope",server_name="s1",server_url="http://s1",feed="0",vehicle_id="sv1"}'
+        values: '0.02'
+      - series: 'gtfs_rt_feed_fetch_success{agency_id="",agency_name="Server Scope",server_name="s1",server_url="http://s1",feed="0",feed_url="http://f0"}'
+        values: '1'
+      - series: 'gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id="",agency_name="Server Scope",server_name="s1",server_url="http://s1",feed="0",feed_url="http://f0"}'
+        values: '100'
+
+      # Agency-scoped series with failing agency feed
+      # (Must NOT pass through the healthy server feed above!)
+      - series: 'realtime_vehicle_positions_count_gtfs_rt{agency_id="failing-agency",agency_name="Failing",server_name="s1",server_url="http://s1"}'
+        values: '20'
+      - series: 'gtfs_rt_tracked_vehicles_count{agency_id="failing-agency",agency_name="Failing",server_name="s1",server_url="http://s1"}'
+        values: '18'
+      - series: 'gtfs_rt_vehicle_computed_speed{agency_id="failing-agency",agency_name="Failing",server_name="s1",server_url="http://s1",feed="0",vehicle_id="fv1"}'
+        values: '55'
+      - series: 'gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id="failing-agency",agency_name="Failing",server_name="s1",server_url="http://s1",feed="0",vehicle_id="fv1"}'
+        values: '0.5'
+      - series: 'gtfs_rt_feed_fetch_success{agency_id="failing-agency",agency_name="Failing",server_name="s1",server_url="http://s1",feed="0",feed_url="http://f0"}'
+        values: '0'
+      - series: 'gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id="failing-agency",agency_name="Failing",server_name="s1",server_url="http://s1",feed="0",feed_url="http://f0"}'
+        values: '100'
+
+      - series: 'watchdog_collection_interval_seconds'
+        values: '30'
+      - series: 'watchdog_collection_last_completed_timestamp_seconds'
+        values: '100'
+    promql_expr_test:
+      - expr: '((realtime_vehicle_positions_count_gtfs_rt{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url) ((min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id!=""}) == 1) and ((time() - min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) or (realtime_vehicle_positions_count_gtfs_rt{agency_id="",server_url=~".*"} and on (server_name, server_url) ((min by (server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id=""}) == 1) and ((time() - min by (server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 110s
+        exp_samples:
+          - labels: 'realtime_vehicle_positions_count_gtfs_rt{agency_id="",agency_name="Server Scope",server_name="s1",server_url="http://s1"}'
+            value: 100
+      - expr: '((gtfs_rt_tracked_vehicles_count{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url) ((min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id!=""}) == 1) and ((time() - min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) or (gtfs_rt_tracked_vehicles_count{agency_id="",server_url=~".*"} and on (server_name, server_url) ((min by (server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id=""}) == 1) and ((time() - min by (server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 110s
+        exp_samples:
+          - labels: 'gtfs_rt_tracked_vehicles_count{agency_id="",agency_name="Server Scope",server_name="s1",server_url="http://s1"}'
+            value: 95
+      - expr: '((gtfs_rt_vehicle_computed_speed{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id!=""} == 1) and on (agency_id, agency_name, server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))) or (gtfs_rt_vehicle_computed_speed{agency_id="",server_url=~".*"} and on (server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id=""} == 1) and on (server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 110s
+        exp_samples:
+          - labels: 'gtfs_rt_vehicle_computed_speed{agency_id="",agency_name="Server Scope",feed="0",server_name="s1",server_url="http://s1",vehicle_id="sv1"}'
+            value: 33
+      - expr: '((gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id!=""} == 1) and on (agency_id, agency_name, server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))) or (gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id="",server_url=~".*"} and on (server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id=""} == 1) and on (server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 110s
+        exp_samples:
+          - labels: 'gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id="",agency_name="Server Scope",feed="0",server_name="s1",server_url="http://s1",vehicle_id="sv1"}'
+            value: 0.02
+
+  # -------------------------------------------------------------------------
+  # Scenario 7: Stale collection-completed timestamp gives no data
+  # -------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'realtime_vehicle_positions_count_gtfs_rt{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '10'
+      - series: 'oba_agency_active_vehicles_count{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '12'
+      - series: 'gtfs_rt_tracked_vehicles_count{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '8'
+      - series: 'gtfs_rt_vehicle_computed_speed{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="0",vehicle_id="v1"}'
+        values: '45.5'
+      - series: 'gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="0",vehicle_id="v1"}'
+        values: '0.12'
+      - series: 'gtfs_rt_feed_fetch_success{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="0",feed_url="http://f1"}'
+        values: '1'
+      - series: 'gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1",feed="0",feed_url="http://f1"}'
+        values: '100'
+      - series: 'oba_vehicles_fetch_success{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '1'
+      - series: 'oba_vehicles_last_successful_fetch_timestamp_seconds{agency_id="agency1",agency_name="Agency 1",server_name="s1",server_url="http://s1"}'
+        values: '100'
+      - series: 'watchdog_collection_interval_seconds'
+        values: '30'
+      - series: 'watchdog_collection_last_completed_timestamp_seconds'
+        values: '0'
+    promql_expr_test:
+      - expr: '((realtime_vehicle_positions_count_gtfs_rt{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url) ((min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id!=""}) == 1) and ((time() - min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) or (realtime_vehicle_positions_count_gtfs_rt{agency_id="",server_url=~".*"} and on (server_name, server_url) ((min by (server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id=""}) == 1) and ((time() - min by (server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 100s
+        exp_samples: []
+      - expr: 'oba_agency_active_vehicles_count{agency_id=~".*",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url) (oba_vehicles_fetch_success{agency_id=~".*",server_url=~".*"} == 1) and on (agency_id, agency_name, server_name, server_url) ((time() - oba_vehicles_last_successful_fetch_timestamp_seconds{agency_id=~".*",server_url=~".*"}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 100s
+        exp_samples: []
+      - expr: '((gtfs_rt_tracked_vehicles_count{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url) ((min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id!=""}) == 1) and ((time() - min by (agency_id, agency_name, server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) or (gtfs_rt_tracked_vehicles_count{agency_id="",server_url=~".*"} and on (server_name, server_url) ((min by (server_name, server_url) (gtfs_rt_feed_fetch_success{agency_id=""}) == 1) and ((time() - min by (server_name, server_url) (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""})) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 100s
+        exp_samples: []
+      - expr: '((gtfs_rt_vehicle_computed_speed{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id!=""} == 1) and on (agency_id, agency_name, server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))) or (gtfs_rt_vehicle_computed_speed{agency_id="",server_url=~".*"} and on (server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id=""} == 1) and on (server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 100s
+        exp_samples: []
+      - expr: '((gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id=~".*",agency_id!="",server_url=~".*"} and on (agency_id, agency_name, server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id!=""} == 1) and on (agency_id, agency_name, server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))) or (gtfs_rt_vehicle_speed_discrepancy_ratio{agency_id="",server_url=~".*"} and on (server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id=""} == 1) and on (server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""}) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))'
+        eval_time: 100s
+        exp_samples: []

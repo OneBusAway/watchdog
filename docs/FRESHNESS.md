@@ -7,10 +7,10 @@ Watchdog exposes observations through Prometheus. A recent Prometheus sample mea
 Clients must calculate the current-value freshness window from:
 
 ```promql
-clamp_max(clamp_min(watchdog_collection_interval_seconds * 3, 60), 300)
+clamp_min(watchdog_collection_interval_seconds * 3, 60)
 ```
 
-This allows three collection cycles, never less than 60 seconds and never more than five minutes.
+This allows three collection cycles with a 60-second minimum. There is no upper cap: a cap below a long configured interval could make a healthy feed appear stale before its next scheduled collection.
 
 Current-value queries must also require a recent `watchdog_collection_last_completed_timestamp_seconds`. This distinguishes a healthy metrics endpoint from a stalled collection loop.
 
@@ -19,11 +19,12 @@ Source metrics require their authoritative successful-fetch timestamp:
 | Source | Freshness metric |
 | --- | --- |
 | OBA `metrics.json` | `oba_metrics_last_successful_fetch_timestamp_seconds` |
-| OBA vehicles-for-agency | `oba_vehicles_last_successful_fetch_timestamp_seconds` |
+| OBA vehicles-for-agency | `oba_vehicles_fetch_success` and `oba_vehicles_last_successful_fetch_timestamp_seconds` |
 | Complete GTFS-RT feed set | `gtfs_rt_last_successful_fetch_timestamp_seconds` |
 | Individual GTFS-RT feed | `gtfs_rt_feed_last_successful_fetch_timestamp_seconds` and `gtfs_rt_feed_fetch_success` |
 
 A successful zero remains `0`. A failed or old collection must produce an absent result so charts render a gap or `No data`.
+Current-value panels must match each source's latest success status and freshness timestamp, as well as the recent collection-loop completion timestamp. Aggregate GTFS-RT values require every configured feed in that scope to be successful and fresh. Per-feed vehicle values must match the same `agency_id`, `agency_name`, `server_name`, `server_url`, and `feed` labels in both feed metrics. Do not use payload-change age as a freshness gate: a successful fetch with an unchanged payload is still a current observation.
 
 ## Static GTFS
 

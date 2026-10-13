@@ -2,7 +2,7 @@ groups:
   - name: watchdog-meta
     rules:
       - record: watchdog:collection_freshness_window_seconds
-        expr: clamp_max(clamp_min(watchdog_collection_interval_seconds * 3, 60), 300)
+        expr: clamp_min(watchdog_collection_interval_seconds * 3, 60)
 
       - alert: WatchdogDown
         expr: (up{job="watchdog"} == 0) or absent(up{job="watchdog"})
