@@ -19,33 +19,6 @@ import (
 	"watchdog.onebusaway.org/internal/utils"
 )
 
-// StartMetricsCollection begins a background goroutine that continuously
-// collects metrics from all configured OBA servers at a regular interval.
-//
-// It uses a time.Ticker based on the FetchInterval from the configuration. The
-// ticker triggers every FetchInterval seconds, allowing the application to
-// periodically collect and update metrics related to OBA servers listed in
-// the config.
-//
-// Server-scope behavior (added with the redesign):
-//   - For each configured entry, ResolveScope returns either an AgencyScope
-//     (one agency) or a ServerScope (potentially many agencies). The collector
-//     fans out into the per-agency pipeline once per agency reported by OBA.
-//   - In server-mode, /api/where/metrics.json is probed every tick to discover
-//     which configured agencies are present in OBA's loaded static coverage. Static feed-to-agency
-//     mappings are emitted separately when each source feed is parsed.
-//
-// The collection routine gracefully shuts down when the provided context is
-// canceled, allowing the application to cleanly exit or restart.
-//
-// Purpose:
-//   - Ensure consistent collection of operational, transit, and health-related
-//     metrics.
-//   - Drive metrics exposed on Prometheus endpoints, used in dashboards and
-//     alerts.
-//   - Monitor reliability and correctness of OBA and GTFS-RT server
-//     integrations.
-//
 // Bounded concurrency for collection. These caps keep goroutine and
 // connection growth under control as the number of monitored agencies grows.
 // They fit within the pooled HTTP transport limits
@@ -81,6 +54,32 @@ func (app *Application) cycleTimeout() time.Duration {
 	return 2 * time.Duration(interval) * time.Second
 }
 
+// StartMetricsCollection begins a background goroutine that continuously
+// collects metrics from all configured OBA servers at a regular interval.
+//
+// It uses a time.Ticker based on the FetchInterval from the configuration. The
+// ticker triggers every FetchInterval seconds, allowing the application to
+// periodically collect and update metrics related to OBA servers listed in
+// the config.
+//
+// Server-scope behavior (added with the redesign):
+//   - For each configured entry, ResolveScope returns either an AgencyScope
+//     (one agency) or a ServerScope (potentially many agencies). The collector
+//     fans out into the per-agency pipeline once per agency reported by OBA.
+//   - In server-mode, /api/where/metrics.json is probed every tick to discover
+//     which configured agencies are present in OBA's loaded static coverage. Static feed-to-agency
+//     mappings are emitted separately when each source feed is parsed.
+//
+// The collection routine gracefully shuts down when the provided context is
+// canceled, allowing the application to cleanly exit or restart.
+//
+// Purpose:
+//   - Ensure consistent collection of operational, transit, and health-related
+//     metrics.
+//   - Drive metrics exposed on Prometheus endpoints, used in dashboards and
+//     alerts.
+//   - Monitor reliability and correctness of OBA and GTFS-RT server
+//     integrations.
 func (app *Application) StartMetricsCollection(ctx context.Context) {
 	ticker := time.NewTicker(time.Duration(app.ConfigService.Config.FetchInterval) * time.Second)
 	go func() {
