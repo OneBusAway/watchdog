@@ -1,6 +1,6 @@
 module watchdog.onebusaway.org
 
-go 1.25.0
+go 1.27.2
 
 require (
 	github.com/OneBusAway/go-gtfs v1.2.0
