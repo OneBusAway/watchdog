@@ -244,7 +244,7 @@ func TestServerScopeRetiresVehicleStateWhenNoAgencyIsReported(t *testing.T) {
 	metrics.AgencyActiveVehiclesGauge.WithLabelValues(agency.AgencyID, agency.AgencyName, server.ServerName, serverURL).Set(4)
 	metrics.ObaVehiclesLastSuccessfulFetch.WithLabelValues(agency.AgencyID, agency.AgencyName, server.ServerName, serverURL).Set(123)
 	metrics.GtfsRtUnattributedVehicles.WithLabelValues(server.ServerName, serverURL).Set(2)
-	metrics.GtfsRtUnattributedVehiclesByReason.WithLabelValues(server.ServerName, serverURL, string(gtfs.AttributionAmbiguousIdentifier)).Set(2)
+	metrics.GtfsRtUnattributedVehiclesByReason.WithLabelValues(server.ServerName, serverURL, string(gtfs.AttributionUnknownRouteID)).Set(2)
 	metrics.GtfsRtUnattributedVehicleCandidateAssociations.WithLabelValues(agency.AgencyID, agency.AgencyName, server.ServerName, serverURL).Set(2)
 	app.MetricsService.VehicleLastSeen.Set(agency.ServerKey(), "0", "vehicle-a", metrics.LastSeen{
 		VehicleID: "vehicle-a", FeedID: "0", AgencyID: agency.AgencyID, AgencyName: agency.AgencyName,

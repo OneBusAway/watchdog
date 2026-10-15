@@ -8,19 +8,19 @@ import (
 type AttributionFailureReason string
 
 const (
-	AttributionMissingVehicleID       AttributionFailureReason = "missing_vehicle_id"
-	AttributionMissingRouteID         AttributionFailureReason = "missing_route_id"
-	AttributionUnknownRouteID         AttributionFailureReason = "unknown_route_id"
-	AttributionAgencyNotReportedByOBA AttributionFailureReason = "agency_not_reported_by_oba"
-	AttributionAmbiguousIdentifier    AttributionFailureReason = "ambiguous_identifier"
-	AttributionRouteTripConflict      AttributionFailureReason = "route_trip_conflict"
+	AttributionMissingVehicleID    AttributionFailureReason = "missing_vehicle_id"
+	AttributionMissingRouteID      AttributionFailureReason = "missing_route_id"
+	AttributionUnknownRouteID      AttributionFailureReason = "unknown_route_id"
+	AttributionAgencyNotLive       AttributionFailureReason = "agency_not_live"
+	AttributionAmbiguousIdentifier AttributionFailureReason = "ambiguous_identifier"
+	AttributionRouteTripConflict   AttributionFailureReason = "route_trip_conflict"
 )
 
 var AttributionFailureReasons = []AttributionFailureReason{
 	AttributionMissingVehicleID,
 	AttributionMissingRouteID,
 	AttributionUnknownRouteID,
-	AttributionAgencyNotReportedByOBA,
+	AttributionAgencyNotLive,
 	AttributionAmbiguousIdentifier,
 	AttributionRouteTripConflict,
 }
