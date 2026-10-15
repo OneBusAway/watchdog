@@ -56,17 +56,23 @@ var (
 	maxConcurrentAgencyChecks = 8
 )
 
-// cycleTimeout derives the per-cycle deadline: one full fetch interval of
-// headroom over the interval itself.
+// cycleTimeout derives the per-cycle deadline: twice the fetch interval.
 //
-// Every collection step is already capped by the pooled client's per-request
-// timeout, so a single degraded entry's serial chain (ping, OBA API,
-// vehicles-for-agency, RT fetch) still fits inside the headroom: its cycle
-// completes and advances the freshness gauge instead of tripping
-// WatchdogCollectionStalled while Watchdog itself is healthy. Persistent
-// overrun still cancels cleanly — the next tick skips on the cycle lock —
-// and the 3x-interval stalled alert fires only when the loop truly cannot
-// complete a pass.
+// The deadline bounds a cycle so stalled work cannot accumulate into later
+// cycles; it is not a guarantee that every degraded entry finishes inside
+// it. SDK calls (server ping, vehicles-for-agency) are retried by the
+// OneBusAway client (default 2 retries), so one hanging step can take
+// roughly three per-request timeouts, and multi-feed or many-agency chains
+// can still exceed the deadline. When that happens the cycle cancels, the
+// completion gauge holds, and round-robin admission spreads the skipped work
+// fairly across subsequent cycles while the per-entry gauges keep reporting
+// whatever each entry last managed to collect.
+//
+// Overrun never overlaps: the ticker loop calls collectOnce synchronously,
+// so after a long cycle the single pending tick simply starts the next one.
+// The TryLock in collectOnce remains as a backstop against concurrent
+// callers. The stalled alert (3x-interval window) therefore fires only when
+// the loop truly cannot complete a pass, not when a single upstream is slow.
 func (app *Application) cycleTimeout() time.Duration {
 	interval := app.ConfigService.Config.FetchInterval
 	if interval <= 0 {
