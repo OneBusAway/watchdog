@@ -74,7 +74,7 @@ func TestDeleteSeriesForAgencyLeavesServerScopedSeries(t *testing.T) {
 func TestDeleteSeriesForServerScopeRetiresAttributionDiagnostics(t *testing.T) {
 	const url = "https://scope-change.example.com"
 	GtfsRtUnattributedVehicles.WithLabelValues("multi", url).Set(2)
-	GtfsRtUnattributedVehiclesByReason.WithLabelValues("multi", url, "ambiguous_identifier").Set(2)
+	GtfsRtUnattributedVehiclesByReason.WithLabelValues("multi", url, "unknown_route_id").Set(2)
 	GtfsRtUnattributedVehicleCandidateAssociations.WithLabelValues("A", "Agency A", "multi", url).Set(2)
 
 	DeleteSeriesForServerScope(url)

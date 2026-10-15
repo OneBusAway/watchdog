@@ -57,6 +57,11 @@ func agencyIndex(agencies []models.ObaServer) map[string]models.ObaServer {
 // configured entry is returned for each retained vehicle. In server-mode the
 // resolver checks both route_id and trip_id; conflicts and unknown vehicles are
 // unattributed and remain in the existing server-scoped quality paths.
+//
+// Reasons are checked in a fixed priority regardless of what else is wrong: a
+// missing vehicle ID wins even if the route/trip resolved, since an ID-less
+// entity has nowhere to land either way; only then does the resolver's own
+// reason apply, followed by agency_not_live for a resolved-but-inactive agency.
 type vehicleAttribution struct {
 	agency     models.ObaServer
 	candidates []string
@@ -86,9 +91,35 @@ func attributeVehicle(server models.ObaServer, agencyByID map[string]models.ObaS
 	}
 	agency, ok := agencyByID[resolution.AgencyID]
 	if !ok {
-		return vehicleAttribution{candidates: resolution.Candidates, reason: gtfs.AttributionAgencyNotReportedByOBA}
+		return vehicleAttribution{candidates: resolution.Candidates, reason: gtfs.AttributionAgencyNotLive}
 	}
 	return vehicleAttribution{agency: agency, candidates: resolution.Candidates}
+}
+
+// metricUnattributedReasons is the fixed, bounded set of reason values
+// gtfs_rt_unattributed_vehicles_by_reason_count exposes. The resolver can
+// distinguish more failure modes than this (gtfs.AttributionFailureReasons),
+// but the metric's cardinality must not grow with it; see metricReason.
+var metricUnattributedReasons = []gtfs.AttributionFailureReason{
+	gtfs.AttributionMissingVehicleID,
+	gtfs.AttributionMissingRouteID,
+	gtfs.AttributionUnknownRouteID,
+	gtfs.AttributionAgencyNotLive,
+}
+
+// metricReason folds a resolver reason onto one of the four bounded metric
+// reasons. Ambiguous ownership and a route/trip conflict both mean static
+// evidence existed but didn't resolve to exactly one agency, same as an
+// unknown route, so both fold into unknown_route_id. This specific mapping is
+// an implementation choice, not something the issue or maintainer specified;
+// revisit it if that's not the intended bucket for these two cases.
+func metricReason(reason gtfs.AttributionFailureReason) gtfs.AttributionFailureReason {
+	switch reason {
+	case gtfs.AttributionAmbiguousIdentifier, gtfs.AttributionRouteTripConflict:
+		return gtfs.AttributionUnknownRouteID
+	default:
+		return reason
+	}
 }
 
 // countVehiclePositions reports how many GTFS-RT vehicle positions each agency
@@ -243,7 +274,7 @@ func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer,
 	}
 
 	unattributed := 0
-	reasons := make(map[gtfs.AttributionFailureReason]int, len(gtfs.AttributionFailureReasons))
+	reasons := make(map[gtfs.AttributionFailureReason]int, len(metricUnattributedReasons))
 	candidates := make(map[string]int)
 	observedAt := realtimeData.ObservationAt
 	if observedAt.IsZero() {
@@ -260,7 +291,7 @@ func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer,
 				vehicleLastSeen.RemoveVehicleFromOtherAgencies(server, feedID, vehicle.ID.ID, "")
 			}
 			unattributed++
-			reasons[attribution.reason]++
+			reasons[metricReason(attribution.reason)]++
 			for _, agencyID := range attribution.candidates {
 				candidates[agencyID]++
 			}
@@ -461,7 +492,7 @@ func emitTickSummary(server models.ObaServer, agencies []models.ObaServer, vehic
 	GtfsRtUnattributedVehiclesByReason.DeletePartialMatch(serverLabels)
 	GtfsRtUnattributedVehicleCandidateAssociations.DeletePartialMatch(serverLabels)
 	GtfsRtUnattributedVehicles.WithLabelValues(server.ServerName, serverURL).Set(float64(summary.unattributed))
-	for _, reason := range gtfs.AttributionFailureReasons {
+	for _, reason := range metricUnattributedReasons {
 		GtfsRtUnattributedVehiclesByReason.WithLabelValues(server.ServerName, serverURL, string(reason)).Set(float64(summary.reasons[reason]))
 	}
 	if routeAgencyIndex != nil {
