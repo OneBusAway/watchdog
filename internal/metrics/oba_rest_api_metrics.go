@@ -90,6 +90,16 @@ type OBAMetrics struct {
 //   - error: any error encountered during request or decoding. Nil when
 //     prefetchedMetrics is supplied and the per-agency metrics are recorded.
 
+// reportUnlessCanceled reports err to Sentry unless ctx was already
+// canceled. An interrupted request is incomplete collection, not an upstream
+// failure, so cancellation stays silent while genuine failures keep reporting.
+func reportUnlessCanceled(ctx context.Context, err error, opts report.SentryReportOptions) {
+	if ctx.Err() != nil {
+		return
+	}
+	report.ReportErrorWithSentryOptions(err, opts)
+}
+
 func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, serverBaseUrl, apiKey string, client *http.Client, staticStore *gtfs.StaticStore, logger *slog.Logger, unmatchedStopTracker *UnmatchedStopTracker, prefetchedMetrics *OBAMetrics) error {
 	serverKey := models.ServerKey(serverBaseUrl, agencyID)
 	serverURL := utils.SanitizeServerURL(serverBaseUrl)
@@ -118,7 +128,7 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 		resp, err := client.Do(req)
 		if err != nil {
 			err = fmt.Errorf("failed to fetch metrics from %s: %v", sanitizedURL, err)
-			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			reportUnlessCanceled(ctx, err, report.SentryReportOptions{
 				Tags: map[string]string{"agency_id": agencyID, "server_name": serverName},
 				ExtraContext: map[string]interface{}{
 					"url": sanitizedURL,
@@ -148,7 +158,7 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 		var metrics OBAMetrics
 		if err := json.NewDecoder(resp.Body).Decode(&metrics); err != nil {
 			err = fmt.Errorf("failed to decode metrics from %s: %v", sanitizedURL, err)
-			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			reportUnlessCanceled(ctx, err, report.SentryReportOptions{
 				Tags: map[string]string{"agency_id": agencyID, "server_name": serverName},
 				ExtraContext: map[string]interface{}{
 					"url": sanitizedURL,

@@ -584,6 +584,47 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 			t.Error("Expected error when accessing closed server, got nil")
 		}
 	})
+
+	t.Run("Cancellation Case - No Failed Observation", func(t *testing.T) {
+		// The feed hangs until the request context is canceled, simulating
+		// a cycle deadline firing mid-fetch.
+		mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			<-r.Context().Done()
+		}))
+		defer mockServer.Close()
+
+		server := models.ObaServer{
+			AgencyID:    "agency-cancel",
+			GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: mockServer.URL}},
+		}
+		client := &http.Client{
+			Timeout: 5 * time.Second,
+		}
+		realtimeStore := NewRealtimeStore()
+		var mu sync.Mutex
+		var failed int
+		realtimeStore.SetObserver(func(_ models.ObaServer, observation FeedObservation) {
+			mu.Lock()
+			defer mu.Unlock()
+			if !observation.Success {
+				failed++
+			}
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		defer cancel()
+		err := fetchAndStoreGTFSRTFeed(ctx, server, realtimeStore, client, nil)
+		if err == nil {
+			t.Error("Expected cancellation error so the vehicle pass stays gated, got nil")
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if failed != 0 {
+			t.Errorf("Canceled fetch recorded %d failed observations; want none", failed)
+		}
+		if realtimeStore.Get(server.ServerKey()) != nil {
+			t.Error("Canceled fetch published a snapshot; want nil")
+		}
+	})
 }
 
 func TestFetchAndStoreGTFSRTFeedKeepsAgenciesIsolated(t *testing.T) {

@@ -3,6 +3,8 @@ package app
 import (
 	"log/slog"
 	"net/http"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"watchdog.onebusaway.org/internal/config"
@@ -26,6 +28,25 @@ type Application struct {
 	KnownServers *KnownServerSet
 	Logger       *slog.Logger
 	Version      string
+	// collectMu serializes collection cycles so a new tick never overlaps
+	// unfinished work from the previous tick. collectOnce takes it with
+	// TryLock and skips the tick when it is already held.
+	collectMu sync.Mutex
+	// collectStart is the round-robin start offset into the collection
+	// targets. Each cycle admits targets starting from this offset and then
+	// advances it, so a shared cycle deadline cannot persistently starve
+	// entries that sort later in configuration order. Only touched while
+	// holding collectMu.
+	collectStart uint64
+	// agencyStarts holds a per-server round-robin offset for agency
+	// admission order. Each server rotates independently so one server's
+	// cadence can never shift another's: the offset advances only when that
+	// server runs its per-agency fan-out. Entries are pruned alongside the
+	// other per-server stores when servers leave the configuration.
+	// Counters are atomic because concurrent server workers advance their
+	// own; the map itself is guarded by agencyStartsMu.
+	agencyStartsMu sync.Mutex
+	agencyStarts   map[string]*atomic.Uint64
 }
 
 // New creates and wires all dependencies for the Application.
