@@ -20,7 +20,7 @@ See [FRESHNESS.md](FRESHNESS.md) for the normative client contract. A recent Pro
 | `watchdog_collection_last_completed_timestamp_seconds` | Gauge | none | unix_timestamp | When the sequential collection loop last completed a full cycle over the current server configuration. Not advanced while no servers are configured. |
 | `watchdog_configured_servers` | Gauge | none | count | Number of valid servers currently configured. `0` means Watchdog is up but monitoring nothing (for example, a `--config-url` source that was empty or invalid at boot). |
 
-Clients define the current-value window as `clamp(3 * interval, 60, 300)` seconds and require the completion timestamp to be within that window. `up == 1` without a recent completion means the metrics HTTP endpoint is reachable while collection is stalled.
+Clients define the current-value window as `max(3 * interval, 60)` seconds and require the completion timestamp to be within that window. There is no upper cap, so the window remains at least three times the configured collection interval. `up == 1` without a recent completion means the metrics HTTP endpoint is reachable while collection is stalled.
 
 ## 0.1. Configured Server Identity
 
@@ -128,6 +128,7 @@ Clients define the current-value window as `clamp(3 * interval, 60, 300)` second
 | `gtfs_rt_feed_vehicle_timestamp_missing_count` | Gauge | same feed labels | count | Vehicle entities without `VehiclePosition.timestamp` in the latest successful payload. Removed after a failed fetch rather than emitted as zero. |
 | `oba_agency_active_vehicles_count`         | Gauge   | `agency_id`, `agency_name`, `server_name`, `server_url`           | count         | Number of active vehicles reported for the agency by the OBA vehicles-for-agency API. |
 | `oba_vehicles_last_successful_fetch_timestamp_seconds` | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url` | unix_timestamp | When Watchdog last received a successful vehicles-for-agency response. This is Watchdog collection time, not the returned vehicles' source-data timestamp. |
+| `oba_vehicles_fetch_success` | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url` | boolean | Whether the latest vehicles-for-agency request succeeded; `0` immediately gates the retained count after a failed request. |
 | `gtfs_rt_vehicle_source_timestamp_seconds` | Gauge | `vehicle_id`, `feed`, `agency_id`, `agency_name`, `server_name`, `server_url` | unix_timestamp | Optional source-provided vehicle timestamp. No series is emitted when it is missing; Watchdog time is never substituted. |
 | `gtfs_rt_vehicle_state_last_changed_timestamp_seconds` | Gauge | same vehicle labels | unix_timestamp | Watchdog time when semantic vehicle content last changed. The vehicle source timestamp is excluded from state. |
 | `gtfs_rt_vehicle_source_timestamp_advances_total` | Counter | `feed`, `agency_id`, `agency_name`, `server_name`, `server_url` | count | Aggregate count of vehicle source-timestamp advances. It deliberately has no `vehicle_id` label. |
@@ -143,6 +144,7 @@ Clients define the current-value window as `clamp(3 * interval, 60, 300)` second
 | `gtfs_rt_unattributed_vehicle_potential_agency_associations_count` | Gauge | `agency_id`, `agency_name`, `server_name`, `server_url` | count | Server-mode only. Potential agency associations for unattributed vehicles. One vehicle may increment multiple agencies, so this metric is diagnostic and must not be summed as a distinct vehicle count. |
 
 **Interpretation Guide:**
+- Grafana's current-value vehicle panels gate these counts on their matching source status and last-success timestamp, plus a recent collection-loop completion. The window is `max(3 * watchdog_collection_interval_seconds, 60)` seconds. Aggregate GTFS-RT counts require every feed in the agency/server scope to be successful and fresh; per-feed speed values join to their own feed status and timestamp. Payload-change age is context only; unchanged data from a successful fetch remains current.
 - **Schedule-aware zero counts:** Interpret zero vehicles as expected outside service only when `gtfs_static_bundle_usable == 1`, `gtfs_schedule_available == 1`, and `gtfs_scheduled_service_active == 0`. `available == 0` is unknown, never confidently outside service. Treat zero as potentially unexpected only when both schedule gauges equal `1`, static data is usable, every configured RT feed currently reports success, every feed's last-success timestamp is within the dynamic freshness window for the same agency scope, and the collection loop completed recently. No zero-vehicle alert is installed by default because thresholds and expected deadhead/reporting behavior are agency-specific.
 - **Safe unexpected-zero query:**
   ```promql
@@ -156,7 +158,7 @@ Clients define the current-value window as `clamp(3 * interval, 60, 300)` second
       and on (agency_id, server_name, server_url)
         ((time() - min by (agency_id, server_name, server_url)
             (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=""}))
-          < on() group_left clamp_max(clamp_min(watchdog_collection_interval_seconds * 3, 60), 300)))
+          < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))
     or
     ((realtime_vehicle_positions_count_gtfs_rt == 0)
       and on (agency_id, agency_name, server_name, server_url) (gtfs_schedule_available == 1)
@@ -167,11 +169,11 @@ Clients define the current-value window as `clamp(3 * interval, 60, 300)` second
       and on (server_name, server_url)
         ((time() - min by (server_name, server_url)
             (gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=""}))
-          < on() group_left clamp_max(clamp_min(watchdog_collection_interval_seconds * 3, 60), 300)))
+          < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60))))
   )
   and on()
     ((time() - watchdog_collection_last_completed_timestamp_seconds)
-      < on() group_left clamp_max(clamp_min(watchdog_collection_interval_seconds * 3, 60), 300))
+      < scalar(clamp_min(watchdog_collection_interval_seconds * 3, 60)))
   ```
 - **Compilation and freshness semantics:** Compilation happens once while each successfully parsed static feed still has trips, stop times, and frequencies in memory. The retained immutable index contains only agency ownership, timezone, calendar rules and exceptions, compact service windows, sanitized source-feed provenance, maximum overnight offset, and completeness state. It is evaluated on each collection tick without reparsing. All configured feeds must compile before the per-agency snapshots are replaced atomically. A transient download/parse/validation failure preserves the last good snapshot internally but sets schedule availability and bundle current state to `0`; the refresh attempt and retry metrics explain why.
 - **Validation and supported schedule range:** Watchdog validates raw CSV tables in addition to `go-gtfs` output because `go-gtfs` v1.1.1 falls back to UTC for invalid timezones, uses the first agency timezone for calendar parsing, skips malformed calendar/frequency rows, and cannot distinguish invalid or missing endpoint clocks from midnight after interpolation. Watchdog rejects missing calendar sources, bad dates/day flags, duplicate IDs or stop sequences, unresolved agency references, invalid/mixed feed timezones, invalid frequency fields, and missing/invalid first or last arrival/departure times. GTFS clocks above 24:00 are supported through seven service days (maximum `168:00:00`); larger offsets make the schedule unavailable rather than risking unbounded evaluation.
