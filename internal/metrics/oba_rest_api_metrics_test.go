@@ -296,6 +296,37 @@ func TestFetchObaAPIMetricsUsesMergedStop(t *testing.T) {
 	}
 }
 
+func TestFetchObaAPIMetricsDuplicateUnmatchedStopIDs(t *testing.T) {
+	lat, lon := 1.0, 2.0
+	response := `{"code":200,"data":{"entry":{"agencyIDs":["test-agency"],"stopIDsUnmatched":{"test-agency":["stop-1","stop-1"]}}}}`
+	server := setupObaServer(t, response, http.StatusOK)
+	defer server.Close()
+
+	staticStore := gtfs.NewStaticStore()
+	staticStore.Set(models.ServerKey(server.URL, "test-agency"), &models.StaticData{
+		Stops: []remoteGtfs.Stop{{Id: "stop-1", Latitude: &lat, Longitude: &lon, Name: "Stop One"}},
+	})
+	tracker := NewUnmatchedStopTracker()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	if err := fetchObaAPIMetrics(context.Background(), "test-agency", "Test Agency", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil); err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+
+	unresolved, err := getMetricValue(ObaUnmatchedStopUnresolved, map[string]string{
+		"agency_id":   "test-agency",
+		"agency_name": "Test Agency",
+		"server_name": "test-server",
+		"server_url":  utils.SanitizeServerURL(server.URL),
+	})
+	if err != nil {
+		t.Fatalf("failed to read unresolved count: %v", err)
+	}
+	if unresolved != 0 {
+		t.Fatalf("expected duplicate stop ID to not count as unresolved, got unresolved=%v", unresolved)
+	}
+}
+
 func TestFetchObaAPIMetrics_SanitizesServerURLLabel(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.RawQuery == "key=SUPERSECRETOBAKEY" {
