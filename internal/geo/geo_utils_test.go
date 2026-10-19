@@ -102,3 +102,30 @@ func TestBoundingBoxAccumulator(t *testing.T) {
 		t.Fatalf("IsInBoundingBox missing key should fail")
 	}
 }
+
+func TestBoundingBoxAccumulatorInvalidCoordinates(t *testing.T) {
+	acc := &BoundingBoxAccumulator{}
+	acc.Add(remoteGtfs.Stop{Latitude: ptrFloat(0.0), Longitude: ptrFloat(0.0)})
+	acc.Add(remoteGtfs.Stop{Latitude: ptrFloat(math.Inf(1)), Longitude: ptrFloat(1.0)})
+	acc.Add(remoteGtfs.Stop{Latitude: ptrFloat(95.0), Longitude: ptrFloat(1.0)})
+
+	// All 3 stops have invalid coordinates (null island, inf, out-of-range).
+	// StopCount should be 3, but Result should error because no valid lat/lon was added.
+	if acc.StopCount() != 3 {
+		t.Fatalf("expected StopCount 3, got %d", acc.StopCount())
+	}
+	res, err := acc.Result()
+	if err == nil {
+		t.Fatalf("expected error from acc.Result() when all stops have invalid coordinates, got box: %+v", res)
+	}
+
+	// Adding a valid stop initializes the box without being contaminated by previous invalid coordinates.
+	acc.Add(remoteGtfs.Stop{Latitude: ptrFloat(47.6), Longitude: ptrFloat(-122.3)})
+	res, err = acc.Result()
+	if err != nil {
+		t.Fatalf("unexpected error from acc.Result(): %v", err)
+	}
+	if res.MinLat != 47.6 || res.MaxLat != 47.6 || res.MinLon != -122.3 || res.MaxLon != -122.3 {
+		t.Fatalf("expected box to match only the valid stop, got: %+v", res)
+	}
+}
