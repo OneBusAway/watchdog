@@ -97,6 +97,53 @@ func TestCountActiveVehiclesForAgency(t *testing.T) {
 	}
 }
 
+func TestCountActiveVehiclesForAgencyDeletesGaugeOnFetchFailure(t *testing.T) {
+	ts := setupObaServer(t, `{"error":"internal server error"}`, http.StatusInternalServerError)
+	defer ts.Close()
+
+	server := models.ObaServer{
+		AgencyID:   "agency-failure-test",
+		AgencyName: "Agency Failure Test",
+		ServerName: "test-server",
+		ObaBaseURL: ts.URL,
+		ObaApiKey:  "key",
+	}
+
+	labels := []string{
+		server.AgencyID,
+		server.AgencyName,
+		server.ServerName,
+		utils.SanitizeServerURL(server.ObaBaseURL),
+	}
+	labelFilter := map[string]string{
+		"agency_id":   server.AgencyID,
+		"agency_name": server.AgencyName,
+		"server_name": server.ServerName,
+		"server_url":  utils.SanitizeServerURL(server.ObaBaseURL),
+	}
+
+	// Seed a stale, nonzero value as if an earlier fetch had succeeded.
+	AgencyActiveVehiclesGauge.WithLabelValues(labels...).Set(42)
+
+	if got := seriesMatching(AgencyActiveVehiclesGauge, labelFilter); len(got) != 1 {
+		t.Fatalf("expected seeded gauge series, got %d", len(got))
+	}
+
+	client := onebusaway.NewClient(
+		option.WithAPIKey(server.ObaApiKey),
+		option.WithBaseURL(server.ObaBaseURL),
+	)
+
+	_, err := countActiveVehiclesForAgency(context.Background(), client, server)
+	if err == nil {
+		t.Fatal("expected error from failed OBA fetch")
+	}
+
+	if got := seriesMatching(AgencyActiveVehiclesGauge, labelFilter); len(got) != 0 {
+		t.Fatalf("expected active-vehicle gauge series to be deleted after fetch failure, got %d series", len(got))
+	}
+}
+
 func TestTrackInvalidVehiclesUsesAgencyBounds(t *testing.T) {
 	server := models.ObaServer{AgencyID: "agency-a", ObaBaseURL: "https://a.example.com", AgencyName: "Agency A"}
 	missing := models.ObaServer{AgencyID: "missing", ObaBaseURL: "https://missing.example.com", AgencyName: "Missing"}
