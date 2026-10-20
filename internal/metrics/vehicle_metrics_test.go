@@ -3,6 +3,8 @@ package metrics
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -137,14 +139,15 @@ func TestCountActiveVehiclesForAgencyFailureMarksFetchUnsuccessful(t *testing.T)
 func TestCountActiveVehiclesForAgencyDoesNotMarkInFlightRequestFailed(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
-	ts := setupObaServer(t, "", http.StatusOK)
-	ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		close(started)
+	var startedOnce sync.Once
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		startedOnce.Do(func() { close(started) })
 		<-release
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"data":{"list":[]}}`))
-	})
+	}))
+	defer ts.Close()
 	server := models.ObaServer{AgencyID: "agency-inflight", AgencyName: "Agency Inflight", ServerName: "test-server", ObaBaseURL: ts.URL, ObaApiKey: "key"}
 	client := onebusaway.NewClient(
 		option.WithAPIKey(server.ObaApiKey),
@@ -163,7 +166,11 @@ func TestCountActiveVehiclesForAgencyDoesNotMarkInFlightRequestFailed(t *testing
 		_, err := countActiveVehiclesForAgency(context.Background(), client, server)
 		done <- err
 	}()
-	<-started
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for in-flight vehicles-for-agency request to start")
+	}
 	if got, err := getMetricValue(ObaVehiclesFetchSuccess, map[string]string{
 		"agency_id": server.AgencyID, "agency_name": server.AgencyName,
 		"server_name": server.ServerName, "server_url": utils.SanitizeServerURL(ts.URL),
