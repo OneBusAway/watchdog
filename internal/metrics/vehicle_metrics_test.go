@@ -3,12 +3,15 @@ package metrics
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
 	remoteGtfs "github.com/OneBusAway/go-gtfs"
 	onebusaway "github.com/OneBusAway/go-sdk"
 	"github.com/OneBusAway/go-sdk/option"
+	"github.com/prometheus/client_golang/prometheus"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
@@ -89,11 +92,166 @@ func TestCountActiveVehiclesForAgency(t *testing.T) {
 	if err != nil || count != 2 {
 		t.Fatalf("count=%d err=%v", count, err)
 	}
-	if got := seriesMatching(ObaVehiclesLastSuccessfulFetch, map[string]string{
+	labels := map[string]string{
 		"agency_id": "agency-a", "agency_name": "Agency A", "server_name": "test-server",
 		"server_url": utils.SanitizeServerURL(ts.URL),
-	}); len(got) != 1 {
+	}
+	if got := seriesMatching(ObaVehiclesLastSuccessfulFetch, labels); len(got) != 1 {
 		t.Fatalf("expected one vehicles freshness series, got %d", len(got))
+	}
+	if got, err := getMetricValue(ObaVehiclesFetchSuccess, labels); err != nil || got != 1 {
+		t.Fatalf("vehicles fetch success = %v, err = %v; want 1", got, err)
+	}
+}
+
+func TestCountActiveVehiclesForAgencyFailureMarksFetchUnsuccessful(t *testing.T) {
+	ts := setupObaServer(t, `{"code":500}`, http.StatusInternalServerError)
+	defer ts.Close()
+	server := models.ObaServer{AgencyID: "agency-failure", AgencyName: "Agency Failure", ServerName: "test-server", ObaBaseURL: ts.URL, ObaApiKey: "key"}
+	client := onebusaway.NewClient(
+		option.WithAPIKey(server.ObaApiKey),
+		option.WithBaseURL(server.ObaBaseURL),
+	)
+	labels := []string{
+		server.AgencyID,
+		server.AgencyName,
+		server.ServerName,
+		utils.SanitizeServerURL(ts.URL),
+	}
+	AgencyActiveVehiclesGauge.WithLabelValues(labels...).Set(2)
+	ObaVehiclesLastSuccessfulFetch.WithLabelValues(labels...).Set(float64(time.Now().Unix()))
+
+	if _, err := countActiveVehiclesForAgency(context.Background(), client, server); err == nil {
+		t.Fatal("expected vehicles-for-agency request to fail")
+	}
+	labelMap := map[string]string{
+		"agency_id": server.AgencyID, "agency_name": server.AgencyName,
+		"server_name": server.ServerName, "server_url": utils.SanitizeServerURL(ts.URL),
+	}
+	if got, err := getMetricValue(ObaVehiclesFetchSuccess, labelMap); err != nil || got != 0 {
+		t.Fatalf("vehicles fetch success = %v, err = %v; want 0", got, err)
+	}
+	if got, err := getMetricValue(AgencyActiveVehiclesGauge, labelMap); err != nil || got != 2 {
+		t.Fatalf("retained active vehicles = %v, err = %v; want 2 (hidden by the failure gate)", got, err)
+	}
+}
+
+func TestCountActiveVehiclesForAgencyDoesNotMarkInFlightRequestFailed(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startedOnce sync.Once
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		startedOnce.Do(func() { close(started) })
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"list":[]}}`))
+	}))
+	defer ts.Close()
+	server := models.ObaServer{AgencyID: "agency-inflight", AgencyName: "Agency Inflight", ServerName: "test-server", ObaBaseURL: ts.URL, ObaApiKey: "key"}
+	client := onebusaway.NewClient(
+		option.WithAPIKey(server.ObaApiKey),
+		option.WithBaseURL(server.ObaBaseURL),
+	)
+	labels := []string{
+		server.AgencyID,
+		server.AgencyName,
+		server.ServerName,
+		utils.SanitizeServerURL(ts.URL),
+	}
+	ObaVehiclesFetchSuccess.WithLabelValues(labels...).Set(1)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := countActiveVehiclesForAgency(context.Background(), client, server)
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for in-flight vehicles-for-agency request to start")
+	}
+	if got, err := getMetricValue(ObaVehiclesFetchSuccess, map[string]string{
+		"agency_id": server.AgencyID, "agency_name": server.AgencyName,
+		"server_name": server.ServerName, "server_url": utils.SanitizeServerURL(ts.URL),
+	}); err != nil || got != 1 {
+		t.Fatalf("in-flight fetch success = %v, err = %v; want prior success 1", got, err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("vehicles-for-agency request: %v", err)
+	}
+	if got, err := getMetricValue(ObaVehiclesFetchSuccess, map[string]string{
+		"agency_id": server.AgencyID, "agency_name": server.AgencyName,
+		"server_name": server.ServerName, "server_url": utils.SanitizeServerURL(ts.URL),
+	}); err != nil || got != 1 {
+		t.Fatalf("successful fetch success = %v, err = %v; want 1", got, err)
+	}
+}
+
+func TestRecordActiveVehiclesResponseNilMarksFetchUnsuccessful(t *testing.T) {
+	labels := []string{"agency-nil", "Agency Nil", "test-server", "https://nil.example.com"}
+	ObaVehiclesFetchSuccess.WithLabelValues(labels...).Set(1)
+
+	if _, err := recordActiveVehiclesResponse(nil, labels); err == nil {
+		t.Fatal("expected nil vehicles-for-agency response error")
+	}
+	got, err := getMetricValue(ObaVehiclesFetchSuccess, map[string]string{
+		"agency_id": labels[0], "agency_name": labels[1],
+		"server_name": labels[2], "server_url": labels[3],
+	})
+	if err != nil || got != 0 {
+		t.Fatalf("nil response fetch success = %v, err = %v; want 0", got, err)
+	}
+}
+
+func TestCountActiveVehiclesForAgencyFailureMarksFetchUnsuccessfulFromPreviousSuccess(t *testing.T) {
+	ts := setupObaServer(t, `{"code":500}`, http.StatusInternalServerError)
+	defer ts.Close()
+	server := models.ObaServer{AgencyID: "agency-failure-after-success", AgencyName: "Agency Failure", ServerName: "test-server", ObaBaseURL: ts.URL, ObaApiKey: "key"}
+	client := onebusaway.NewClient(
+		option.WithAPIKey(server.ObaApiKey),
+		option.WithBaseURL(server.ObaBaseURL),
+	)
+	labels := prometheus.Labels{
+		"agency_id": server.AgencyID, "agency_name": server.AgencyName,
+		"server_name": server.ServerName, "server_url": utils.SanitizeServerURL(ts.URL),
+	}
+	ObaVehiclesFetchSuccess.WithLabelValues(server.AgencyID, server.AgencyName, server.ServerName, labels["server_url"]).Set(1)
+
+	if _, err := countActiveVehiclesForAgency(context.Background(), client, server); err == nil {
+		t.Fatal("expected vehicles-for-agency request to fail")
+	}
+	if got, err := getMetricValue(ObaVehiclesFetchSuccess, labels); err != nil || got != 0 {
+		t.Fatalf("failed fetch success = %v, err = %v; want 0", got, err)
+	}
+}
+
+func TestCountActiveVehiclesForAgencyZeroVehiclesIsSuccessful(t *testing.T) {
+	ts := setupObaServer(t, `{"data":{"list":[]}}`, http.StatusOK)
+	defer ts.Close()
+	server := models.ObaServer{AgencyID: "agency-zero", AgencyName: "Agency Zero", ServerName: "test-server", ObaBaseURL: ts.URL, ObaApiKey: "key"}
+	client := onebusaway.NewClient(
+		option.WithAPIKey(server.ObaApiKey),
+		option.WithBaseURL(server.ObaBaseURL),
+	)
+
+	count, err := countActiveVehiclesForAgency(context.Background(), client, server)
+	if err != nil || count != 0 {
+		t.Fatalf("count=%d err=%v; want successful zero", count, err)
+	}
+	labels := map[string]string{
+		"agency_id": server.AgencyID, "agency_name": server.AgencyName,
+		"server_name": server.ServerName, "server_url": utils.SanitizeServerURL(ts.URL),
+	}
+	if got, err := getMetricValue(AgencyActiveVehiclesGauge, labels); err != nil || got != 0 {
+		t.Fatalf("active vehicles = %v, err = %v; want 0", got, err)
+	}
+	if got, err := getMetricValue(ObaVehiclesFetchSuccess, labels); err != nil || got != 1 {
+		t.Fatalf("vehicles fetch success = %v, err = %v; want 1", got, err)
+	}
+	if got := seriesMatching(ObaVehiclesLastSuccessfulFetch, labels); len(got) != 1 {
+		t.Fatalf("expected one successful zero freshness series, got %d", len(got))
 	}
 }
 
