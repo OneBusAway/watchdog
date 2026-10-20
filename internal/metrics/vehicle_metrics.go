@@ -170,6 +170,9 @@ func countActiveVehiclesForAgency(ctx context.Context, client *onebusaway.Client
 				"server_name": server.ServerName,
 			},
 		})
+
+		AgencyActiveVehiclesGauge.DeleteLabelValues(server.AgencyID, server.AgencyName, server.ServerName, utils.SanitizeServerURL(server.ObaBaseURL))
+
 		return 0, err
 	}
 
