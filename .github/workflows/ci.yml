@@ -60,6 +60,11 @@ jobs:
       - name: Check go.mod is tidy
         run: go mod tidy -diff
 
+      # internal/db/dbgen is generated from the queries and migrations; a stale
+      # copy would compile but disagree with the schema.
+      - name: Check sqlc output is current
+        run: make sqlc-check
+
       # make vet runs go vet with -tags=integration; see the Makefile for why
       # that tag matters and what would invalidate it.
       - name: Vet
@@ -72,6 +77,24 @@ jobs:
     name: Run Tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # The internal/db tests apply the migrations and check the schema's
+    # constraints against a real PostgreSQL; without this they skip.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: watchdog
+          POSTGRES_PASSWORD: watchdog
+          POSTGRES_DB: watchdog_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U watchdog -d watchdog_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      WATCHDOG_TEST_DATABASE_URL: postgres://watchdog:watchdog@localhost:5432/watchdog_test?sslmode=disable
     steps:
       - uses: actions/checkout@v4
 
