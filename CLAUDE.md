@@ -13,6 +13,9 @@ make test          # go test ./...   (unit tests; same as CI minus coverage)
 make vet           # go vet ./...
 make fmt           # gofmt -w .  (run before committing)
 make compile       # CGO_ENABLED=0 go build -v -o . ./...
+make sqlc          # regenerate internal/db/dbgen from queries + migrations
+make sqlc-check    # fail if internal/db/dbgen is stale (CI runs this)
+make test-db       # PostgreSQL tests; needs WATCHDOG_TEST_DATABASE_URL
 
 go test ./internal/metrics/...                          # single package
 go test -run TestCheckBundleExpiration ./internal/metrics/   # single test
@@ -60,6 +63,8 @@ Series retirement is deliberately *not* edge-triggered on "a store key was remov
 **Metrics are global `promauto` vectors** declared in `internal/metrics/metrics.go` and registered with the default registry at package init. Metric functions look up data from the stores and `.WithLabelValues(...).Set(...)`. Common label keys: `agency_id`, `agency_name`, `server_name`, `server_url`, `vehicle_id`. `/metrics` is served through a caching handler (`middleware.NewCachedPromHandler`, 10s) to limit scrape cost.
 
 **Error reporting goes through `internal/report`** (Sentry wrapper). Collection code logs via the injected `slog.Logger` AND calls `report.ReportErrorWithSentryOptions` with a `server_name` tag — plus `agency_id`/`agency_name` when the step is agency-scoped — so failures are correlated per server and per agency. Match this dual logging when adding collection steps.
+
+**The PostgreSQL investigation store is optional.** `internal/db` owns it: `db.Open` connects and applies the embedded `goose` migrations in `internal/db/migrations` (under an advisory lock), and `sqlc` generates typed queries from `internal/db/queries` into `internal/db/dbgen` (never edit that directory by hand; run `make sqlc`). `main.go` opens it only when `DATABASE_URL` is set and passes the pool to `app.New` as `Application.InvestigationDB`, which is nil when disabled or unreachable at startup. Collection must never depend on it: treat nil as "storage disabled" and keep exporting Prometheus metrics. Schema changes go in a new numbered migration file (never edit an applied one) plus the matching change to `docs/historical-investigation-schema.md`. The tests in `internal/db` skip unless `WATCHDOG_TEST_DATABASE_URL` is set; CI provides one.
 
 **Config** can come from a local file (`--config-file`) or a remote URL (`--config-url`, optionally Basic-Auth'd via `CONFIG_AUTH_USER`/`CONFIG_AUTH_PASS`). Exactly one source is required (`config.ValidateConfigFlags`). A config is a JSON array of `models.ObaServer` objects.
 
