@@ -661,18 +661,13 @@ These records cannot prove that an ID later became matched when the source provi
 
 ## API layer over PostgreSQL
 
-Investigators and OBACloud should access this data through authenticated APIs, not direct database access. The API layer will apply server/agency authorization, filters, pagination, and the status wording described above.
+Investigators and OBACloud read this data through an authenticated, read-only REST API, never through direct database access. The API is designed in [investigation-api.md](investigation-api.md), which covers:
 
-Proposed API operations:
+- the observer scenarios and the questions they raise;
+- the resource catalog (typed collections for unmatched-stop, unmatched-trip and vehicle anomaly episodes, plus their context);
+- filters, cursor pagination, query limits, authentication, caching, and status codes.
 
-- `GET /api/v1/investigations` — list episodes filtered by server, agency, time range, anomaly type, open/closed status, vehicle ID, stop ID, or trip ID; use cursor pagination and a stable time-and-ID ordering.
-- `GET /api/v1/investigations/{episode_id}` — return the episode boundaries, close reason, source endpoint or OBA source, and summary of retained context.
-- `GET /api/v1/investigations/{episode_id}/evidence` — return the opening, meaningful-change, and closing observations in time order, including actual coordinates, timestamps, speeds, schedule result, and bounding-box values where applicable.
-- `GET /api/v1/investigations/summary` — return bounded counts by server, agency, episode type, and status for dashboard summaries; entity IDs remain in paginated investigation results, not Prometheus labels.
-
-An episode response should include its type, server and agency, endpoint or OBA source, entity ID, first and last reported times, current open/closed status, close reason, and links to its evidence. Evidence results should include the actual values saved for that observation. For example, a closed unmatched-stop episode should say `close_reason: "not_reported"`; it must not say `resolved: true` or `matched: true`.
-
-The API distinguishes **closed because no longer reported** from **confirmed matched**. It presents stored facts and source semantics without claiming a cause or a state that the backend did not report.
+The API distinguishes **closed because no longer reported** from **confirmed matched**. A closed unmatched episode returns `close_reason: "not_reported"`, never `resolved: true` or `matched: true`. The API presents stored facts and source semantics without claiming a cause or a state that the backend did not report.
 
 ## Explicit limits and later extensions
 
