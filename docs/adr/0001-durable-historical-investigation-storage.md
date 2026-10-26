@@ -258,7 +258,7 @@ Vehicle-feed absence history and PostgreSQL-outage history are deferred question
 - [ ] Revisit whether vehicle-feed absence history is needed. If selected, persist only complete-snapshot presence-to-absence transitions and consider the bounded aggregate metric described above; absence must not be presented as a vehicle failure.
 - [ ] Keep PostgreSQL availability metrics, outage records, and alerts deferred until a later scope decision; decide whether any future alert should notify PagerDuty.
 - [x] Compare PostgreSQL driver and migration options (selected: `pgx` v5, `goose` v3, `sqlc`; see the decision log). Maglev uses `database/sql` with SQLite drivers and `sqlc` for query-code generation; it embeds `schema.sql` and executes statements split on `-- migrate` at startup. This is a custom SQLite schema runner, not a versioned migration framework. Maglev has no PostgreSQL runtime driver; `pgx` appears only as an indirect dependency in its module graph.
-- [ ] Add an authenticated, filtered, paginated investigation API/view and enforce OBACloud server/agency authorization.
+- [ ] Implement the authenticated, filtered, paginated investigation API. Its contract (resources, filters, pagination, query limits, shared bearer-token authentication with OBACloud enforcing per-user server/agency access) is defined in [investigation-api.md](../investigation-api.md).
 - [ ] Add tests for episode open/close semantics, complete vs differential feed handling, metadata versions, speed rules, and retention. Add PostgreSQL outage tests only if that deferred feature is approved.
 - [ ] If multi-instance Watchdog is planned, write the migration/lease design and update `CLAUDE.md` with a warning before enabling multiple pollers. Include earliest PostgreSQL outage-start reconciliation across replicas.
 - [ ] Revisit retention/partitioning after measuring actual production event volume.
@@ -266,6 +266,7 @@ Vehicle-feed absence history and PostgreSQL-outage history are deferred question
 
 ## References
 
+- [Watchdog investigation REST API design](../investigation-api.md)
 - [Watchdog issue #156: durable historical investigation storage](https://github.com/OneBusAway/watchdog/issues/156)
 - [Watchdog issue #157: retain unmatched-trip observations](https://github.com/OneBusAway/watchdog/issues/157)
 - [Watchdog issue #107: Speed Validation](https://github.com/OneBusAway/watchdog/issues/107)
