@@ -518,6 +518,24 @@ Keep raw vehicle coordinates in evidence even when they are invalid; apply WGS-8
 
 Watchdog compiles the compact per-trip time-window index in memory at startup and after each successfully published static GTFS version. PostgreSQL does not store every trip's complete schedule in the initial design. The evidence row stores the calculated status, evaluated window, trip descriptor, and static version used. If old results later need recalculation under new rules, add versioned trip-schedule tables; the code TODO is in `internal/gtfs/schedule.go`.
 
+#### Expected schedule classification
+
+`expected_schedule_state`, `expected_schedule_reason`, `expected_window_start` and `expected_window_end` are computed from Watchdog's in-memory compiled schedule for the vehicle's agency (D25). Inputs: the realtime trip descriptor's `trip_id`, optional `start_date` (`YYYYMMDD`) and optional `start_time` (`HH:MM:SS`, may exceed 24 hours), and the observation time `T`.
+
+A service date `D` and a GTFS time offset `x` map to the instant `noon(D) − 12h + x`, with noon in the agency time zone, as the GTFS reference defines.
+
+1. If no compiled schedule is available for the agency, all four fields are null.
+2. If `trip_id` is empty: `unknown`, `no_trip_descriptor`, no window.
+3. If `trip_id` is not in the compiled schedule: `unknown`, `trip_not_in_static_gtfs`, no window.
+4. If the trip has frequency windows and `start_time` is absent: `unknown`, `trip_instance_ambiguous`, no window.
+5. Let `duration` = last arrival − first departure, and `s` = `start_time` if given, otherwise the first departure. The window on date `D` is `[ref(D) + s, ref(D) + s + duration]`.
+6. Candidate dates: `start_date` if given; otherwise the local date of `T` and each of the `ceil((s + duration) / 24h)` preceding dates.
+7. Keep the candidates on which the trip's service is active (calendar and calendar-date exceptions). If none remain: `expected_inactive`, `service_not_active_on_date`, no window.
+8. If a remaining candidate's window contains `T`: `expected_active`, `within_scheduled_window`, with that window (the latest-starting one if several contain `T`).
+9. Otherwise, if some remaining window starts after `T`: `expected_inactive`, `before_scheduled_window`, with the earliest such window. Otherwise: `expected_inactive`, `after_scheduled_window`, with the latest window that ended before `T`.
+
+The stored window is in UTC. The classification describes the static schedule; it does not prove whether the vehicle was in service.
+
 **`vehicle_anomaly_type`** has `anomaly_type_id SMALLINT GENERATED ALWAYS AS IDENTITY` primary key, unique `anomaly_code TEXT`, and `description TEXT NOT NULL`. Seed it with `stale_source_timestamp`, `invalid_coordinate`, and `stopped_out_of_bounds`; add `reported_speed_plausibility` only after approving its threshold.
 
 **`vehicle_anomaly_rule_version`** has:
