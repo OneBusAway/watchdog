@@ -23,7 +23,7 @@ func newEmptyApplication(t *testing.T) *Application {
 	cfg := config.NewConfig(4000, "testing", nil)
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	client := &http.Client{Timeout: 5 * time.Second}
-	return New(cfg, logger, client, "test", config.NewDroppedServersStore())
+	return New(cfg, logger, client, "test", config.NewDroppedServersStore(), nil)
 }
 
 // TestEmptyStartPicksUpFirstServersOnRefresh pins the 0 -> N transition: a

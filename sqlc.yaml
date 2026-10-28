@@ -1,0 +1,24 @@
+# sqlc generates typed Go code from the SQL in internal/db/queries, checked
+# against the schema built from the goose migrations. Run `make sqlc` after
+# changing either; CI fails if the generated code is out of date.
+version: "2"
+sql:
+  - engine: postgresql
+    # sqlc reads goose migrations directly and ignores their Down sections.
+    schema: internal/db/migrations
+    queries: internal/db/queries
+    gen:
+      go:
+        package: dbgen
+        out: internal/db/dbgen
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+        overrides:
+          # Use time.Time for timestamps instead of pgtype.Timestamptz.
+          - db_type: timestamptz
+            go_type: time.Time
+          - db_type: timestamptz
+            nullable: true
+            go_type:
+              type: time.Time
+              pointer: true
