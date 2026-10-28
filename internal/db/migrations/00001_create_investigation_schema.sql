@@ -198,13 +198,11 @@ CREATE TABLE stop_cluster_assignment (
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE onebusaway_metrics_response (
-    response_id                   BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    server_id                     BIGINT NOT NULL REFERENCES onebusaway_server (server_id),
-    observed_at                   TIMESTAMPTZ NOT NULL,
-    upstream_current_time         TIMESTAMPTZ,
-    api_version                   INTEGER,
-    source_implementation         TEXT CHECK (source_implementation IN ('java', 'maglev', 'unknown')),
-    source_implementation_version TEXT
+    response_id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    server_id             BIGINT NOT NULL REFERENCES onebusaway_server (server_id),
+    observed_at           TIMESTAMPTZ NOT NULL,
+    upstream_current_time TIMESTAMPTZ,
+    api_version           INTEGER
 );
 
 CREATE TABLE onebusaway_metrics_response_agency (
@@ -364,7 +362,47 @@ CREATE TABLE vehicle_position_evidence (
     expected_window_start        TIMESTAMPTZ,
     expected_window_end          TIMESTAMPTZ,
     gtfs_static_version_id       BIGINT REFERENCES gtfs_static_version (gtfs_static_version_id),
-    bounding_box_version_id      BIGINT REFERENCES bounding_box_version (bounding_box_version_id)
+    bounding_box_version_id      BIGINT REFERENCES bounding_box_version (bounding_box_version_id),
+    -- The reason is present exactly when the position failed validation. Codes
+    -- mirror geo.IsValidLatLon and vehicleLatLon in internal/metrics.
+    CONSTRAINT vehicle_position_evidence_validation_reason CHECK (
+        (position_valid AND position_validation_reason IS NULL)
+        OR (NOT position_valid AND position_validation_reason IS NOT NULL AND position_validation_reason IN (
+            'missing_position',
+            'non_finite_coordinate',
+            'placeholder_zero_coordinate',
+            'latitude_out_of_range',
+            'longitude_out_of_range'
+        ))
+    ),
+    -- Codes are the gtfs.AttributionFailureReason values.
+    CONSTRAINT vehicle_position_evidence_attribution_reason CHECK (attribution_reason IN (
+        'missing_vehicle_id',
+        'missing_route_id',
+        'unknown_route_id',
+        'agency_not_reported_by_oba',
+        'ambiguous_identifier',
+        'route_trip_conflict'
+    )),
+    -- Each schedule state has its own set of reasons; both are null when no
+    -- schedule classification was made. COALESCE turns an unknown result into
+    -- FALSE: comparisons with a NULL state or reason are unknown, and a CHECK
+    -- that evaluates to unknown would otherwise pass.
+    CONSTRAINT vehicle_position_evidence_schedule_reason CHECK (COALESCE(
+        (expected_schedule_state IS NULL AND expected_schedule_reason IS NULL)
+        OR (expected_schedule_state = 'unknown' AND expected_schedule_reason IS NOT NULL AND expected_schedule_reason IN (
+            'no_trip_descriptor',
+            'trip_not_in_static_gtfs',
+            'trip_instance_ambiguous'
+        ))
+        OR (expected_schedule_state = 'expected_inactive' AND expected_schedule_reason IS NOT NULL AND expected_schedule_reason IN (
+            'service_not_active_on_date',
+            'before_scheduled_window',
+            'after_scheduled_window'
+        ))
+        OR (expected_schedule_state = 'expected_active' AND expected_schedule_reason = 'within_scheduled_window'),
+        FALSE
+    ))
 );
 
 -- One evidence row per identified vehicle per feed response.

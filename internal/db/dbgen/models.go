@@ -56,13 +56,11 @@ type GtfsStaticVersionSource struct {
 }
 
 type OnebusawayMetricsResponse struct {
-	ResponseID                  int64
-	ServerID                    int64
-	ObservedAt                  time.Time
-	UpstreamCurrentTime         *time.Time
-	ApiVersion                  *int32
-	SourceImplementation        *string
-	SourceImplementationVersion *string
+	ResponseID          int64
+	ServerID            int64
+	ObservedAt          time.Time
+	UpstreamCurrentTime *time.Time
+	ApiVersion          *int32
 }
 
 type OnebusawayMetricsResponseAgency struct {
