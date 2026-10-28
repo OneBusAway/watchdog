@@ -114,7 +114,6 @@ erDiagram
         timestamptz observed_at
         timestamptz upstream_current_time
         integer api_version
-        text source_implementation
     }
     OBA_METRICS_RESPONSE_AGENCY {
         bigint response_agency_id PK
@@ -306,7 +305,7 @@ erDiagram
 | `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` | First time this endpoint is recorded. |
 | `UNIQUE` |  | `(server_id, normalized_vehicle_position_url)`. |
 
-Do not use the zero-based configuration index as an identity. The same URL on one server maps to the same endpoint row; a changed URL creates a different row. Incidents retain the endpoint row they used. `trip_update_url` is not part of this table because Watchdog currently does not fetch it for vehicle investigation.
+Do not use the zero-based configuration index as an identity. The same URL on one server maps to the same endpoint row; a changed URL creates a different row. The same rule applies to server base URLs and static source URLs: a changed URL is a new identity with a new ID, and identities are never merged (D11 in [investigation-api.md](investigation-api.md#6-implementation-decisions)). Incidents retain the endpoint row they used. `trip_update_url` is not part of this table because Watchdog currently does not fetch it for vehicle investigation.
 
 **`vehicle_entity`**
 
@@ -451,9 +450,9 @@ The scheme is defined in Watchdog code, not edited in the database. Watchdog ins
 - `response_id BIGINT GENERATED ALWAYS AS IDENTITY` primary key;
 - `server_id BIGINT NOT NULL` foreign key;
 - `observed_at TIMESTAMPTZ NOT NULL` and optional `upstream_current_time TIMESTAMPTZ`;
-- optional `api_version INTEGER`, `source_implementation TEXT`, and `source_implementation_version TEXT`.
+- optional `api_version INTEGER`.
 
-`source_implementation` is `java`, `maglev`, or `unknown`; the API version is not assumed to identify the implementation. If Watchdog cannot determine the implementation, store `unknown`.
+Watchdog treats Java OBA and Maglev as one system and does not record which implementation produced a response (D13 in [investigation-api.md](investigation-api.md#6-implementation-decisions)).
 
 **`onebusaway_metrics_response_agency`** has:
 
@@ -496,7 +495,7 @@ Require `close_reason IS NULL` exactly when `closing_response_agency_id IS NULL`
 - `incrementality TEXT NOT NULL`, checked to `FULL_DATASET` or `DIFFERENTIAL`;
 - optional `payload_sha256 CHAR(64)`, a fingerprint only; it cannot retrieve the response body.
 
-Do not store a row for every ordinary vehicle poll. Insert evidence when an anomaly opens, closes, or has a materially meaningful change.
+Do not store a row for every ordinary vehicle poll. Insert evidence when an anomaly opens, when it closes, and, while it is open, when the vehicle's `trip_id` or `trip_start_date` differs from the most recently saved evidence row for that episode (`meaningful_change`). Nothing else creates a `meaningful_change` row (D14).
 
 **`vehicle_position_evidence`** stores the actual values needed to investigate an event:
 
@@ -504,12 +503,12 @@ Do not store a row for every ordinary vehicle poll. Insert evidence when an anom
 - `vehicle_position_response_id BIGINT NOT NULL` foreign key;
 - nullable `vehicle_entity_id BIGINT` foreign key when `VehicleDescriptor.id` is present;
 - nullable `feed_entity_id TEXT` for the GTFS-Realtime entity ID and nullable `agency_id BIGINT` for agency attribution;
-- nullable `attribution_reason TEXT` when the vehicle could not be assigned to an agency;
+- nullable `attribution_reason TEXT` when the vehicle could not be assigned to an agency, checked to the `gtfs.AttributionFailureReason` values `missing_vehicle_id`, `missing_route_id`, `unknown_route_id`, `agency_not_reported_by_oba`, `ambiguous_identifier`, `route_trip_conflict`;
 - nullable `vehicle_source_time TIMESTAMPTZ`, `latitude DOUBLE PRECISION`, and `longitude DOUBLE PRECISION`;
-- `position_valid BOOLEAN NOT NULL` and nullable `position_validation_reason TEXT`;
+- `position_valid BOOLEAN NOT NULL` and `position_validation_reason TEXT`, which is null exactly when the position is valid and otherwise one of `missing_position`, `non_finite_coordinate`, `placeholder_zero_coordinate`, `latitude_out_of_range`, `longitude_out_of_range` (mirroring `geo.IsValidLatLon`);
 - nullable `reported_speed_mps DOUBLE PRECISION`, `computed_speed_mps DOUBLE PRECISION`, `speed_discrepancy_ratio DOUBLE PRECISION`, and `current_status SMALLINT`;
 - nullable `trip_id TEXT`, `route_id TEXT`, `trip_start_date DATE`, `trip_start_time_seconds INTEGER` (seconds after local service-day midnight; may exceed 86,400), and `schedule_relationship TEXT` from the realtime descriptor;
-- nullable `expected_schedule_state TEXT`, checked to `expected_active`, `expected_inactive`, or `unknown`, and nullable `expected_schedule_reason TEXT`;
+- nullable `expected_schedule_state TEXT`, checked to `expected_active`, `expected_inactive`, or `unknown`, and `expected_schedule_reason TEXT`, which is null exactly when the state is null. With `unknown` it is one of `no_trip_descriptor`, `trip_not_in_static_gtfs`, `trip_instance_ambiguous`; with `expected_inactive`, one of `service_not_active_on_date`, `before_scheduled_window`, `after_scheduled_window`; with `expected_active`, `within_scheduled_window` (D15);
 - nullable `expected_window_start TIMESTAMPTZ` and `expected_window_end TIMESTAMPTZ` as absolute UTC instants after applying the agency timezone;
 - nullable `gtfs_static_version_id BIGINT` and `bounding_box_version_id BIGINT` foreign keys.
 
@@ -606,7 +605,7 @@ CREATE UNIQUE INDEX vehicle_anomaly_one_open_per_type
     WHERE closing_response_id IS NULL;
 ```
 
-Keep closed episodes and their evidence for 90 days. Keep open episodes and the context they reference until closure. Purge unreferenced static-context records after their dependent episodes expire. Do not store raw full-feed payloads or normal per-vehicle samples.
+A retention job runs every 24 hours (D16). It deletes closed episodes and their evidence 90 days after `closed_at`. Open episodes are kept until they close, except for servers no longer in the configuration: their open episodes are deleted 90 days after their last observation (`last_reported_at` for unmatched episodes; the newest evidence's response `observed_at` for vehicle episodes). A removed server's history otherwise stays queryable. Static context, responses and identities are deleted once nothing references them. Do not store raw full-feed payloads or normal per-vehicle samples.
 
 The initial schema does not include separate vehicle-feed-absence records or PostgreSQL-outage records. Vehicle absence is informational and does not prove a vehicle problem; PostgreSQL availability recording and alerting remain deferred.
 
@@ -614,12 +613,14 @@ The initial schema does not include separate vehicle-feed-absence records or Pos
 
 An unmatched stop or trip episode means **the named backend included that ID in an unmatched list during the recorded period**. It is not a permanent property of the stop or trip, and closing an episode does not mean that the ID was matched.
 
+The differences between Java OBA and Maglev described below are background for reading reports. They have been reported upstream for alignment, and Watchdog treats both implementations as one system (D13).
+
 - **Java OBA stop classification:** tries to associate a stop-time update with a scheduled stop for that trip using sequence and ID, then falls back to stop ID and scheduled time. A stop can exist in static GTFS but fail the trip-specific match. The internal matched and unmatched stop sets are independent, so one ID can appear in both when different updates classify it differently.
 - **Maglev stop classification:** checks whether the stop ID exists anywhere in its static stop list. It does not check trip, sequence, or time.
 - **Java OBA trip classification:** includes trips that do not resolve to a static trip, but its unmatched set is also populated for processing cases such as missing block or schedule relationship, inactive blocks, invalid locations, and some dynamic trips. It is broader than “trip ID missing from static GTFS.”
 - **Maglev trip classification:** includes a realtime trip ID that is absent from its static trip lookup. Its matched-trip count separately requires an active block/prediction window. A known but inactive trip can therefore be neither in the unmatched-ID list nor counted as matched.
 
-Both APIs return unmatched IDs and aggregate matched counts, not a matched-ID list that can prove a specific ID was fixed. The response-level evidence is therefore the safe basis for episode creation and closure. Close an episode as `not_reported` after a later successful, complete response for that agency omits the ID. Preserve the source implementation as `unknown` when it cannot be determined; an API version number alone does not identify the implementation.
+Both APIs return unmatched IDs and aggregate matched counts, not a matched-ID list that can prove a specific ID was fixed. The response-level evidence is therefore the safe basis for episode creation and closure. Close an episode as `not_reported` after a later successful, complete response for that agency omits the ID.
 
 The code paths reviewed are [Java stop matching](https://github.com/OneBusAway/onebusaway-application-modules/blob/main/onebusaway-transit-data-federation/src/main/java/org/onebusaway/transit_data_federation/impl/realtime/gtfs_realtime/GtfsRealtimeTripLibrary.java#L1125-L1187), [Java trip resolution](https://github.com/OneBusAway/onebusaway-application-modules/blob/main/onebusaway-transit-data-federation/src/main/java/org/onebusaway/transit_data_federation/impl/realtime/gtfs_realtime/GtfsRealtimeTripLibrary.java#L838-L884), [Java unmatched-trip handling](https://github.com/OneBusAway/onebusaway-application-modules/blob/main/onebusaway-transit-data-federation/src/main/java/org/onebusaway/transit_data_federation/impl/realtime/gtfs_realtime/GtfsRealtimeSource.java#L689-L736), and [Maglev classification](https://github.com/OneBusAway/maglev/blob/main/internal/gtfs/metrics.go#L442-L513).
 
@@ -632,7 +633,6 @@ Before durable history, the OBA metrics endpoint showed only its current values 
 - Did the same reported stop or trip ID recur after an earlier episode closed?
 - What stop name, coordinates, parent station, and GTFS static version were available when an unmatched-stop episode was investigated?
 - Was an unmatched stop or trip ID found in Watchdog's static GTFS version; when found, what route, service, block, or stop metadata was associated with it?
-- Which Java or Maglev implementation produced the unmatched classification, when that implementation information is available?
 - Which vehicle incidents occurred, which vehicle-position URL was used, and what source timestamp, position, speed, trip descriptor, and schedule result were recorded as evidence?
 - Which actual bounding-box coordinates were used for a stopped-out-of-bounds finding?
 - Was the trip expected active, expected inactive, or unknown under the in-memory schedule calculation at the incident time, and what calculated time window was saved?
@@ -649,7 +649,6 @@ These records cannot prove that an ID later became matched when the source provi
 | An unmatched stop disappears from OBA metrics | Was it confirmed matched or simply omitted? | The episode closes as `not_reported`; the API must not call this a fix or a match. |
 | An ID reappears after it was no longer reported | Is this a recurrence? | A new episode links to the same reported stop/trip identity, while the earlier closed episode remains queryable. |
 | An unmatched ID has no static GTFS match | Can we still investigate the report? | The reported ID and episode are stored independently of optional static metadata. |
-| Java and Maglev disagree about a stop | Why did one classify it differently? | The episode retains source implementation information when known. The endpoint-specific definitions can be shown alongside the report. |
 | A trip appears unmatched | Was it present in Watchdog's static GTFS, and what route/service/block did it describe? | The reported ID and source semantics are retained. A linked trip metadata version records whether Watchdog found it and, when found, its route, service, and block. The API does not invent a Java or Maglev processing reason that the source did not return. |
 | A vehicle source timestamp becomes stale | What timestamp and threshold were used, and when did Watchdog observe it? | Opening and resolution evidence retain the source timestamp, observation time, rule version, and threshold used. |
 | A vehicle has invalid coordinates | What values were received and why did validation fail? | Evidence stores the raw coordinates, validity flag, and validation reason, including out-of-range values. |

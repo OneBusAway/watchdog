@@ -28,9 +28,9 @@ Each endpoint has a stable identifier (E01–E41). [Section 2](#2-investigation-
 
 | ID | Endpoint | Returns | Use cases |
 |---|---|---|---|
-| E02 | `GET /v1/servers` | Monitored OBA servers | UC-11, UC-15 |
+| E02 | `GET /v1/servers` | Monitored OBA servers; filter `base_url` resolves a server's ID | UC-11, UC-14 |
 | E03 | `GET /v1/servers/{server_id}` | One server | UC-11 |
-| E04 | `GET /v1/servers/{server_id}/agencies` | Agencies seen on a server | UC-10 |
+| E04 | `GET /v1/servers/{server_id}/agencies` | Agencies seen on a server; filter `external_agency_id` resolves an agency's ID | UC-10 |
 | E05 | `GET /v1/agencies/{agency_id}` | One agency | UC-10 |
 | E06 | `GET /v1/servers/{server_id}/vehicle-position-endpoints` | Vehicle-position feed URLs a server has used | UC-08, UC-11 |
 | E07 | `GET /v1/vehicle-position-endpoints/{endpoint_id}` | One feed URL | UC-08, UC-11 |
@@ -39,19 +39,19 @@ Each endpoint has a stable identifier (E01–E41). [Section 2](#2-investigation-
 
 | ID | Endpoint | Returns | Use cases |
 |---|---|---|---|
-| E08 | `GET /v1/reported-stops` | Reported stops, looked up by `agency_id` and `stop_id` | UC-03, UC-14 |
+| E08 | `GET /v1/reported-stops` | Reported stops, looked up by `agency_id` and `stop_id` | UC-03, UC-13 |
 | E09 | `GET /v1/reported-stops/{reported_stop_id}` | One reported stop | UC-03 |
-| E10 | `GET /v1/reported-stops/{reported_stop_id}/unmatched-stop-episodes` | Every unmatched episode for that stop | UC-03, UC-14 |
-| E11 | `GET /v1/reported-trips` | Reported trips, looked up by `agency_id` and `trip_id` | UC-03, UC-14 |
+| E10 | `GET /v1/reported-stops/{reported_stop_id}/unmatched-stop-episodes` | Every unmatched episode for that stop | UC-03, UC-13 |
+| E11 | `GET /v1/reported-trips` | Reported trips, looked up by `agency_id` and `trip_id` | UC-03, UC-13 |
 | E12 | `GET /v1/reported-trips/{reported_trip_id}` | One reported trip | UC-03 |
-| E13 | `GET /v1/reported-trips/{reported_trip_id}/unmatched-trip-episodes` | Every unmatched episode for that trip | UC-03, UC-14 |
-| E14 | `GET /v1/unmatched-stop-episodes` | Unmatched-stop episodes, filtered and paginated | UC-02, UC-12, UC-14, UC-15 |
+| E13 | `GET /v1/reported-trips/{reported_trip_id}/unmatched-trip-episodes` | Every unmatched episode for that trip | UC-03, UC-13 |
+| E14 | `GET /v1/unmatched-stop-episodes` | Unmatched-stop episodes, filtered and paginated | UC-02, UC-13, UC-14 |
 | E15 | `GET /v1/unmatched-stop-episodes/{episode_id}` | One unmatched-stop episode | UC-02, UC-04 |
-| E16 | `GET /v1/unmatched-stop-episodes/{episode_id}/static-contexts` | What Watchdog's static GTFS said about the stop during the episode | UC-02, UC-04, UC-14 |
-| E17 | `GET /v1/unmatched-trip-episodes` | Unmatched-trip episodes, filtered and paginated | UC-01, UC-12, UC-14, UC-15 |
+| E16 | `GET /v1/unmatched-stop-episodes/{episode_id}/static-contexts` | What Watchdog's static GTFS said about the stop during the episode | UC-02, UC-04, UC-13 |
+| E17 | `GET /v1/unmatched-trip-episodes` | Unmatched-trip episodes, filtered and paginated | UC-01, UC-13, UC-14 |
 | E18 | `GET /v1/unmatched-trip-episodes/{episode_id}` | One unmatched-trip episode | UC-01, UC-04 |
 | E19 | `GET /v1/unmatched-trip-episodes/{episode_id}/static-contexts` | What Watchdog's static GTFS said about the trip during the episode | UC-01, UC-04 |
-| E20 | `GET /v1/oba-metrics-responses/{response_id}` | An OBA metrics response that opened or closed an episode | UC-12 |
+| E20 | `GET /v1/oba-metrics-responses/{response_id}` | An OBA metrics response that opened or closed an episode | UC-02 |
 
 **Vehicle anomalies**
 
@@ -59,24 +59,24 @@ Each endpoint has a stable identifier (E01–E41). [Section 2](#2-investigation-
 |---|---|---|---|
 | E21 | `GET /v1/vehicles` | Vehicles, looked up by `vehicle_id` with `endpoint_id` or `server_id` | UC-06 |
 | E22 | `GET /v1/vehicles/{vehicle_entity_id}` | One vehicle | UC-06 |
-| E23 | `GET /v1/vehicles/{vehicle_entity_id}/anomaly-episodes` | Every anomaly episode for that vehicle | UC-06, UC-14 |
-| E24 | `GET /v1/vehicle-anomaly-episodes` | Vehicle anomaly episodes, filtered and paginated | UC-06, UC-07, UC-08, UC-11, UC-15 |
-| E25 | `GET /v1/vehicle-anomaly-episodes/{episode_id}` | One vehicle anomaly episode | UC-06, UC-13 |
-| E26 | `GET /v1/vehicle-anomaly-episodes/{episode_id}/evidence` | Opening, change and resolution evidence for the episode | UC-06, UC-07, UC-13 |
+| E23 | `GET /v1/vehicles/{vehicle_entity_id}/anomaly-episodes` | Every anomaly episode for that vehicle | UC-06, UC-13 |
+| E24 | `GET /v1/vehicle-anomaly-episodes` | Vehicle anomaly episodes, filtered and paginated | UC-06, UC-07, UC-08, UC-11, UC-14 |
+| E25 | `GET /v1/vehicle-anomaly-episodes/{episode_id}` | One vehicle anomaly episode | UC-06, UC-12 |
+| E26 | `GET /v1/vehicle-anomaly-episodes/{episode_id}/evidence` | Opening, change and resolution evidence for the episode | UC-06, UC-07, UC-12 |
 | E27 | `GET /v1/vehicle-position-evidence/{evidence_id}` | One evidence record | UC-07 |
-| E28 | `GET /v1/vehicle-position-responses/{response_id}` | One stored vehicle-position response | UC-08, UC-13 |
+| E28 | `GET /v1/vehicle-position-responses/{response_id}` | One stored vehicle-position response | UC-08, UC-12 |
 | E29 | `GET /v1/bounding-box-versions/{bounding_box_version_id}` | The bounding box applied in a check | UC-07 |
 | E30 | `GET /v1/vehicle-anomaly-types` | Vehicle anomaly types | UC-09 |
 | E31 | `GET /v1/vehicle-anomaly-types/{anomaly_code}` | One anomaly type | UC-09 |
-| E32 | `GET /v1/vehicle-anomaly-types/{anomaly_code}/rule-versions` | Rule history of one anomaly type | UC-09, UC-15 |
+| E32 | `GET /v1/vehicle-anomaly-types/{anomaly_code}/rule-versions` | Rule history of one anomaly type | UC-09, UC-14 |
 | E33 | `GET /v1/vehicle-anomaly-rule-versions/{rule_version_id}` | One rule version | UC-07, UC-09 |
 
 **Static GTFS**
 
 | ID | Endpoint | Returns | Use cases |
 |---|---|---|---|
-| E34 | `GET /v1/gtfs-static-versions` | Static GTFS versions Watchdog published | UC-04, UC-14, UC-15 |
-| E35 | `GET /v1/gtfs-static-versions/{gtfs_static_version_id}` | One static version, with its sources and agencies | UC-04, UC-14 |
+| E34 | `GET /v1/gtfs-static-versions` | Static GTFS versions Watchdog published | UC-04, UC-13, UC-14 |
+| E35 | `GET /v1/gtfs-static-versions/{gtfs_static_version_id}` | One static version, with its sources and agencies | UC-04, UC-13 |
 | E36 | `GET /v1/static-gtfs-sources/{source_id}` | One static GTFS source URL | UC-04 |
 | E37 | `GET /v1/static-gtfs-sources/{source_id}/versions` | That source's content fingerprint in each version | UC-04 |
 
@@ -87,7 +87,7 @@ Each endpoint has a stable identifier (E01–E41). [Section 2](#2-investigation-
 | E38 | `GET /v1/unmatched-stop-clusters` | Open unmatched stops at a given time, grouped by station and S2 cell | UC-05 |
 | E39 | `GET /v1/cluster-schemes` | Stop-clustering rule sets | UC-05 |
 | E40 | `GET /v1/cluster-schemes/{scheme_version}` | One clustering rule set | UC-05 |
-| E41 | `GET /v1/episode-counts` | Episodes opened, closed and still open per type over a period | UC-09, UC-10, UC-15 |
+| E41 | `GET /v1/episode-counts` | Episodes opened, closed and still open per type over a period | UC-09, UC-10, UC-14 |
 
 ---
 
@@ -97,7 +97,7 @@ Each endpoint has a stable identifier (E01–E41). [Section 2](#2-investigation-
 
 Watchdog observes OneBusAway (OBA) servers and their GTFS-Realtime feeds every collection interval, 30 seconds by default. Both sources expose only their current state. OBA's `metrics.json` lists the identifiers that are unmatched now, and a vehicle-position feed lists the vehicles it reports now. When a problem is investigated hours or days later, that state has usually changed. The investigation history stored in PostgreSQL, and this API over it, exist to answer questions about that earlier state.
 
-This section defines the use cases the API must support. Each use case states what prompts the investigation, what the observer wants to learn, which questions the stored data can answer, how to answer them through the API, and what the data cannot establish. The questions are listed with stable identifiers (Q01–Q27) in [Section 2.4](#24-question-catalog), and each use case refers to them.
+This section defines the use cases the API must support. Each use case states what prompts the investigation, what the observer wants to learn, which questions the stored data can answer, how to answer them through the API, and what the data cannot establish. The questions are listed with stable identifiers (Q01–Q25) in [Section 2.4](#24-question-catalog), and each use case refers to them.
 
 | Term | Meaning |
 |---|---|
@@ -128,10 +128,9 @@ This section defines the use cases the API must support. Each use case states wh
 | UC-09 | Assess the effect of a detection rule change | Watchdog maintainer | A detection threshold or rule changed in a deployment |
 | UC-10 | Conduct a periodic data-quality review | Agency data maintainer | A scheduled weekly or monthly review |
 | UC-11 | Separate incidents across a feed URL change | Operations operator | A vehicle-position feed URL changed in the configuration |
-| UC-12 | Compare unmatched reports between OBA implementations | Watchdog maintainer | Java OBA and Maglev classify the same data differently |
-| UC-13 | Determine how a vehicle anomaly ended | Operations operator | A vehicle anomaly is closed and its outcome must be confirmed |
-| UC-14 | Verify the effect of a corrective action | Agency data maintainer | A corrected GTFS or feed fix was published |
-| UC-15 | Prepare an incident timeline | Operations operator | A post-incident review requires a factual timeline |
+| UC-12 | Determine how a vehicle anomaly ended | Operations operator | A vehicle anomaly is closed and its outcome must be confirmed |
+| UC-13 | Verify the effect of a corrective action | Agency data maintainer | A corrected GTFS or feed fix was published |
+| UC-14 | Prepare an incident timeline | Operations operator | A post-incident review requires a factual timeline |
 
 ### 2.3 Use cases
 
@@ -139,7 +138,7 @@ This section defines the use cases the API must support. Each use case states wh
 
 - **Trigger:** Prometheus shows that an agency's trip-match ratio fell during a past period. The current `metrics.json` no longer lists the affected trip IDs.
 - **Objective:** Identify which trip IDs OBA reported as unmatched during that period, and gather the static context needed to direct a fix.
-- **Questions answered:** Q01, Q02, Q03, Q08, Q10.
+- **Questions answered:** Q01, Q02, Q03, Q07, Q09.
 - **Procedure:**
   1. `GET /v1/unmatched-trip-episodes` with `agency_id`, `active_from` and `active_to` set to the degraded period.
   2. For each episode, read `opened_at`, `last_reported_at`, `closed_at` and `duration_seconds`.
@@ -152,11 +151,12 @@ This section defines the use cases the API must support. Each use case states wh
 
 - **Trigger:** An unmatched-stop alert fired outside working hours and cleared before anyone reviewed it.
 - **Objective:** Establish which stops were unmatched, for how long, and how each episode ended.
-- **Questions answered:** Q01, Q02, Q03, Q09.
+- **Questions answered:** Q01, Q02, Q03, Q06, Q08.
 - **Procedure:**
   1. `GET /v1/unmatched-stop-episodes` with `server_id` or `agency_id` and a window covering the alert.
   2. Read each episode's boundaries and `close_reason`.
   3. Follow `links.static_contexts` for the stop name and location.
+  4. Follow `links.opening_response` and `links.closing_response` for the agency's unmatched and matched counts in the responses that opened and closed the episode.
 - **Value to the observer:** Preserves the evidence of a transient condition that is no longer visible upstream, so the alert can be reviewed rather than dismissed.
 - **Limitations:** `close_reason: "not_reported"` means OBA stopped listing the stop. It does not confirm that the stop became matched.
 
@@ -176,7 +176,7 @@ This section defines the use cases the API must support. Each use case states wh
 
 - **Trigger:** An agency data maintainer needs to know whether an unmatched stop or trip exists in static GTFS, and whether a static update changed it.
 - **Objective:** Establish what Watchdog's static GTFS said about the identifier throughout the episode.
-- **Questions answered:** Q08, Q09, Q10, Q11, Q12, Q13.
+- **Questions answered:** Q07, Q08, Q09, Q10, Q11, Q12.
 - **Procedure:**
   1. `GET /v1/unmatched-stop-episodes/{id}/static-contexts` (or the trip equivalent).
   2. Each item states whether the identifier was found, its static attributes, and the period it applies to (`applies_from`, `applies_until`).
@@ -189,7 +189,7 @@ This section defines the use cases the API must support. Each use case states wh
 
 - **Trigger:** Unmatched stops appear to concentrate around a station or area, often after a static GTFS update.
 - **Objective:** Identify the stations and areas with the most unmatched stops at a given time.
-- **Questions answered:** Q14, Q15, Q09.
+- **Questions answered:** Q13, Q14, Q08.
 - **Procedure:**
   1. `GET /v1/unmatched-stop-clusters?server_id=&at=` for the time of interest.
   2. Each item gives the S2 cell, the root station when known, and the number of open episodes, with links to those episodes.
@@ -201,7 +201,7 @@ This section defines the use cases the API must support. Each use case states wh
 
 - **Trigger:** A report states that a vehicle disappeared from, or stopped updating in, rider-facing applications at a known time.
 - **Objective:** Establish what the vehicle-position feed reported for that vehicle around that time and whether the vehicle's trip was scheduled to be in service.
-- **Questions answered:** Q16, Q17, Q18, Q19, Q23, Q24.
+- **Questions answered:** Q15, Q16, Q17, Q18, Q22, Q23.
 - **Procedure:**
   1. `GET /v1/vehicles?server_id=&vehicle_id=` to resolve the vehicle.
   2. Follow `links` to its anomaly episodes, filtered by `anomaly_type=stale_source_timestamp` and a window around the reported time.
@@ -217,7 +217,7 @@ This section defines the use cases the API must support. Each use case states wh
 
 - **Trigger:** Vehicles are displayed at invalid coordinates or outside the agency's service area.
 - **Objective:** Identify the affected vehicles, the exact values received, and the validation rule or boundary that flagged them.
-- **Questions answered:** Q16, Q19, Q20, Q21, Q22.
+- **Questions answered:** Q15, Q18, Q19, Q20, Q21.
 - **Procedure:**
   1. `GET /v1/vehicle-anomaly-episodes` with `anomaly_type=invalid_coordinate` or `anomaly_type=stopped_out_of_bounds` and a window.
   2. Follow `links.evidence` for the raw coordinates and `position_validation_reason`.
@@ -229,7 +229,7 @@ This section defines the use cases the API must support. Each use case states wh
 
 - **Trigger:** Aggregate source-timestamp age metrics show a rise across a feed.
 - **Objective:** Identify which vehicles were affected and which feed URL served them.
-- **Questions answered:** Q16, Q18, Q25, Q26.
+- **Questions answered:** Q15, Q17, Q24, Q25.
 - **Procedure:**
   1. `GET /v1/vehicle-anomaly-episodes?anomaly_type=stale_source_timestamp&endpoint_id=` for the period, or `status=open` during the incident.
   2. Follow `links.endpoint` to confirm the feed URL.
@@ -241,7 +241,7 @@ This section defines the use cases the API must support. Each use case states wh
 
 - **Trigger:** A detection threshold or rule changed in a deployment, and episode volumes changed.
 - **Objective:** Determine which rule version produced each episode and when each version took effect.
-- **Questions answered:** Q22, Q27.
+- **Questions answered:** Q21, Q26.
 - **Procedure:**
   1. `GET /v1/vehicle-anomaly-types/{anomaly_code}/rule-versions` for the version history.
   2. Each episode links to the `rule_version` it was evaluated under.
@@ -253,7 +253,7 @@ This section defines the use cases the API must support. Each use case states wh
 
 - **Trigger:** A scheduled weekly or monthly review of an agency's data quality.
 - **Objective:** Summarize how many episodes of each type opened, how they closed, and how many remain open.
-- **Questions answered:** Q27, Q05, Q25.
+- **Questions answered:** Q26, Q05, Q24.
 - **Procedure:**
   1. `GET /v1/episode-counts?agency_id=&from=&to=` for the review period.
   2. Drill into any type of interest through the matching episode collection.
@@ -264,40 +264,29 @@ This section defines the use cases the API must support. Each use case states wh
 
 - **Trigger:** A vehicle-position feed URL changed in the configuration.
 - **Objective:** Attribute each incident to the URL that actually supplied it.
-- **Questions answered:** Q18, Q16.
+- **Questions answered:** Q17, Q15.
 - **Procedure:**
   1. `GET /v1/servers/{id}/vehicle-position-endpoints` lists every URL the server has used, including ones no longer configured.
   2. Filter `GET /v1/vehicle-anomaly-episodes` by each `endpoint_id`.
 - **Value to the observer:** Prevents incidents from an old feed being attributed to its replacement, which matters when a provider migration is being evaluated.
 - **Limitations:** A changed URL is treated as a different endpoint. Watchdog does not record that two URLs served the same logical feed.
 
-#### UC-12: Compare unmatched reports between OBA implementations
-
-- **Trigger:** Java OBA and Maglev classify the same data differently.
-- **Objective:** Identify which implementation produced each report and the counts it returned.
-- **Questions answered:** Q07, Q06, Q01.
-- **Procedure:**
-  1. Filter unmatched episodes with `source_implementation=java` or `source_implementation=maglev`.
-  2. Follow `links.opening_response` and `links.closing_response` for the implementation, its version, and the per-agency counts.
-- **Value to the observer:** Supports a factual comparison of the two implementations' classifications, using each implementation's documented definition of "unmatched" (see the schema document).
-- **Limitations:** The implementation is recorded only when Watchdog could determine it. Responses are stored only when they open or close an episode.
-
-#### UC-13: Determine how a vehicle anomaly ended
+#### UC-12: Determine how a vehicle anomaly ended
 
 - **Trigger:** A vehicle anomaly episode is closed, and the observer must establish whether the vehicle recovered.
 - **Objective:** Determine the closing condition and the values observed at closure.
-- **Questions answered:** Q17, Q19, Q26.
+- **Questions answered:** Q16, Q18, Q25.
 - **Procedure:**
   1. `GET /v1/vehicle-anomaly-episodes/{id}` and read `close_reason`.
   2. Follow `links.evidence` for the `resolution` evidence.
 - **Value to the observer:** Distinguishes recovery (`fresh_source_timestamp`, `coordinates_valid_again`, `inside_bounding_box`) from removal (`not_present_in_full_dataset`), which may simply mean the vehicle's trip ended.
 - **Limitations:** Close reasons describe the observed condition, not a physical cause.
 
-#### UC-14: Verify the effect of a corrective action
+#### UC-13: Verify the effect of a corrective action
 
 - **Trigger:** An agency published a corrected static GTFS or fixed a realtime feed.
 - **Objective:** Confirm that the related reports stopped after the correction and have not recurred.
-- **Questions answered:** Q05, Q02, Q11, Q04, Q24.
+- **Questions answered:** Q05, Q02, Q10, Q04, Q23.
 - **Procedure:**
   1. `GET /v1/unmatched-stop-episodes?status=open` (or the trip or vehicle equivalent) to confirm no related episodes remain open.
   2. For episodes that closed after the correction, compare `closed_at` with the `published_at` of the new static version linked from their static contexts.
@@ -305,11 +294,11 @@ This section defines the use cases the API must support. Each use case states wh
 - **Value to the observer:** Gives an evidence-based confirmation that a fix was effective, instead of relying on the absence of new alerts.
 - **Limitations:** An episode closing shortly after a correction is consistent with the correction working, but the data alone does not prove causation.
 
-#### UC-15: Prepare an incident timeline
+#### UC-14: Prepare an incident timeline
 
 - **Trigger:** A post-incident review requires a factual sequence of events.
 - **Objective:** Assemble a timeline of the episodes, static GTFS publications and rule changes during the incident.
-- **Questions answered:** Q01, Q02, Q12, Q16, Q17, Q22, Q27.
+- **Questions answered:** Q01, Q02, Q11, Q15, Q16, Q21, Q26.
 - **Procedure:**
   1. List the relevant episode collections for the incident window.
   2. `GET /v1/gtfs-static-versions?server_id=&published_from=&published_to=` for static publications in the same window.
@@ -332,42 +321,41 @@ Each question below can be answered from the stored data. The use cases above re
 | Q04 | How often has the same identifier become unmatched again? | `GET /v1/reported-stops/{id}/unmatched-stop-episodes`, `GET /v1/reported-trips/{id}/unmatched-trip-episodes` |
 | Q05 | Which identifiers are unmatched now? | Episode collections with `status=open` |
 | Q06 | What unmatched and matched counts did the responses that opened or closed an episode contain? | `GET /v1/oba-metrics-responses/{id}` |
-| Q07 | Which OBA implementation produced the report? | `GET /v1/oba-metrics-responses/{id}`; filter `source_implementation` |
 
 **Static GTFS context**
 
 | ID | Question | Resource |
 |---|---|---|
-| Q08 | Was the identifier present in Watchdog's static GTFS? | `…/static-contexts` (`static_stop_found`, `static_trip_found`); filter `static_found` |
-| Q09 | What were the stop's name, coordinates, parent station and location type? | `GET /v1/unmatched-stop-episodes/{id}/static-contexts` |
-| Q10 | What route, service and block did an unmatched trip belong to? | `GET /v1/unmatched-trip-episodes/{id}/static-contexts` |
-| Q11 | Did the static context change while the episode was open, and when? | `…/static-contexts` (items with `applies_from` and `applies_until`) |
-| Q12 | Which static GTFS version was loaded, when was it published, and which sources did it contain? | `GET /v1/gtfs-static-versions/{id}` |
-| Q13 | Did a static source's content change between versions? | `GET /v1/static-gtfs-sources/{id}/versions` |
-| Q14 | Where were unmatched stops concentrated at a given time? | `GET /v1/unmatched-stop-clusters` |
-| Q15 | Which clustering rules produced that grouping? | `GET /v1/cluster-schemes/{scheme_version}` |
+| Q07 | Was the identifier present in Watchdog's static GTFS? | `…/static-contexts` (`static_stop_found`, `static_trip_found`); filter `static_found` |
+| Q08 | What were the stop's name, coordinates, parent station and location type? | `GET /v1/unmatched-stop-episodes/{id}/static-contexts` |
+| Q09 | What route, service and block did an unmatched trip belong to? | `GET /v1/unmatched-trip-episodes/{id}/static-contexts` |
+| Q10 | Did the static context change while the episode was open, and when? | `…/static-contexts` (items with `applies_from` and `applies_until`) |
+| Q11 | Which static GTFS version was loaded, when was it published, and which sources did it contain? | `GET /v1/gtfs-static-versions/{id}` |
+| Q12 | Did a static source's content change between versions? | `GET /v1/static-gtfs-sources/{id}/versions` |
+| Q13 | Where were unmatched stops concentrated at a given time? | `GET /v1/unmatched-stop-clusters` |
+| Q14 | Which clustering rules produced that grouping? | `GET /v1/cluster-schemes/{scheme_version}` |
 
 **Vehicle anomalies**
 
 | ID | Question | Resource |
 |---|---|---|
-| Q16 | Which vehicles had anomalies of a given type during a time range? | `GET /v1/vehicle-anomaly-episodes` with `anomaly_type` and a window |
-| Q17 | When did each anomaly begin and end, and what condition closed it? | Vehicle anomaly episode document |
-| Q18 | Which vehicle-position feed URL reported it? | `GET /v1/vehicle-position-endpoints/{id}` |
-| Q19 | What did the vehicle report when the anomaly opened, changed and closed? | `GET /v1/vehicle-anomaly-episodes/{id}/evidence` |
-| Q20 | Why were the coordinates considered invalid? | Evidence `position_validation_reason` |
-| Q21 | Which bounding box was applied? | `GET /v1/bounding-box-versions/{id}` |
-| Q22 | Which rule and threshold flagged the anomaly, and since when was that rule in effect? | `GET /v1/vehicle-anomaly-rule-versions/{id}` |
-| Q23 | Was the vehicle's trip scheduled to be in service, and in what window? | Evidence `expected_schedule_state`, `expected_schedule_reason`, `expected_window_start`, `expected_window_end` |
-| Q24 | Has the same vehicle had the same anomaly again? | `GET /v1/vehicles/{id}/anomaly-episodes` |
-| Q25 | Which vehicles have an anomaly open now? | `GET /v1/vehicle-anomaly-episodes?status=open` |
-| Q26 | Was the feed response a full snapshot or a differential update? | `GET /v1/vehicle-position-responses/{id}` (`incrementality`) |
+| Q15 | Which vehicles had anomalies of a given type during a time range? | `GET /v1/vehicle-anomaly-episodes` with `anomaly_type` and a window |
+| Q16 | When did each anomaly begin and end, and what condition closed it? | Vehicle anomaly episode document |
+| Q17 | Which vehicle-position feed URL reported it? | `GET /v1/vehicle-position-endpoints/{id}` |
+| Q18 | What did the vehicle report when the anomaly opened, changed and closed? | `GET /v1/vehicle-anomaly-episodes/{id}/evidence` |
+| Q19 | Why were the coordinates considered invalid? | Evidence `position_validation_reason` |
+| Q20 | Which bounding box was applied? | `GET /v1/bounding-box-versions/{id}` |
+| Q21 | Which rule and threshold flagged the anomaly, and since when was that rule in effect? | `GET /v1/vehicle-anomaly-rule-versions/{id}` |
+| Q22 | Was the vehicle's trip scheduled to be in service, and in what window? | Evidence `expected_schedule_state`, `expected_schedule_reason`, `expected_window_start`, `expected_window_end` |
+| Q23 | Has the same vehicle had the same anomaly again? | `GET /v1/vehicles/{id}/anomaly-episodes` |
+| Q24 | Which vehicles have an anomaly open now? | `GET /v1/vehicle-anomaly-episodes?status=open` |
+| Q25 | Was the feed response a full snapshot or a differential update? | `GET /v1/vehicle-position-responses/{id}` (`incrementality`) |
 
 **Summaries**
 
 | ID | Question | Resource |
 |---|---|---|
-| Q27 | How many episodes of each type opened, closed (by reason) and remain open over a period? | `GET /v1/episode-counts` |
+| Q26 | How many episodes of each type opened, closed (by reason) and remain open over a period? | `GET /v1/episode-counts` |
 
 Q06 is limited by design. Watchdog stores an OBA metrics response only when it opens or closes an episode, not on every poll. Continuous count history remains in Prometheus.
 
@@ -409,7 +397,7 @@ The following cannot be established from the stored data. The API must not prese
 
 ### Authentication
 
-- Clients send `Authorization: Bearer <token>`. Watchdog compares the token with the `INVESTIGATION_API_TOKEN` environment variable in constant time.
+- Clients send `Authorization: Bearer <token>`. Watchdog compares the token in constant time with `INVESTIGATION_API_TOKEN` and, when set, `INVESTIGATION_API_TOKEN_NEXT`. Accepting two tokens lets a token be rotated without downtime (D8).
 - When `INVESTIGATION_API_TOKEN` is unset, the investigation routes are not registered, so they return `404`. An open-source deployment exposes no entity history by accident.
 - There is one shared token. OBACloud is the trusted client: it authenticates its own users and checks their server and agency permissions before it calls Watchdog. Watchdog does not know about users, so it never returns `403`.
 - The token is never logged.
@@ -426,7 +414,7 @@ The following cannot be established from the stored data. The API must not prese
 | `405 Method Not Allowed` | Any method other than `GET`, `HEAD`, `OPTIONS`. Includes `Allow`. |
 | `406 Not Acceptable` | The `Accept` header allows neither `application/json` nor `*/*`. |
 | `500 Internal Server Error` | Unexpected failure; reported to Sentry. |
-| `503 Service Unavailable` | The investigation database is disabled or was unavailable at startup (`Application.InvestigationDB` is nil). |
+| `503 Service Unavailable` | The investigation database is disabled or was unavailable at startup (`Application.InvestigationDB` is nil), or the request's queries exceeded the 5-second timeout (D4). |
 
 ### Media types and errors
 
@@ -447,7 +435,7 @@ The following cannot be established from the stored data. The API must not prese
 
 ### Pagination
 
-- Collections use cursor pagination, with `page_size` (default `50`, maximum `200`) and an opaque `cursor`.
+- Collections use cursor pagination, with `page_size` (default `50`, maximum `200`) and an opaque `cursor`. Clients must not decode or build cursors; the format is fixed in D6 for implementers only.
 - Episode collections are ordered by episode ID descending. Episodes are inserted when they open, so this is newest-opened first, and the order stays stable while new episodes arrive.
 - A page has `items` and `links`. `links.next` is present only when another page exists, and clients follow it as is.
 - There is no total count, because counting large filtered sets is expensive. `GET /v1/episode-counts` provides totals.
@@ -481,9 +469,50 @@ The following cannot be established from the stored data. The API must not prese
 Every representation has a `links` object of absolute-path URIs:
 - `self` always.
 - `next` on paged collections.
-- Related resources by name, for example `server`, `agency`, `reported_stop`, `opening_response`, `closing_response`, `static_contexts`, `evidence`, `vehicle`, `endpoint`, `rule_version`, `bounding_box_version`, `gtfs_static_version`.
+- Related resources by name, for example `server`, `agency`, `reported_stop`, `reported_trip`, `opening_response`, `closing_response`, `static_contexts`, `evidence`, `opening_evidence`, `vehicle`, `endpoint`, `rule_version`, `bounding_box_version`, `gtfs_static_version`.
 
 A link is omitted when the target does not exist, such as `closing_response` on an open episode.
+
+### Including related resources
+
+A client often needs a resource together with the resources it links to. For example, investigating an unmatched stop needs the episode, its static contexts, and the responses that opened and closed it. Instead of one request per link, the client can name links in an `include` parameter:
+
+```
+GET /v1/unmatched-stop-episodes/4812?include=static_contexts,opening_response,closing_response
+```
+
+Rules:
+
+- **Include names are link names.** Each name in `include` must be a key of the resource's `links` object.
+- **The content is exactly the linked resource.** `included.<name>` contains the same representation that a `GET` on `links.<name>` returns, without that representation's own `included`.
+- **Embedded data goes in a separate `included` object.** The resource's own fields and `links` never change shape, whatever `include` asks for. Without `include`, there is no `included` key.
+- **Each endpoint has a fixed allow-list** (Section 4). A name outside the list, a repeated name, or an empty name returns `400`.
+- **Depth is one level.** Included resources never contain further included resources.
+- **Absent targets are `null`.** If a link is absent (for example `closing_response` on an open episode), `included.<name>` is `null`.
+- **On collections, each item carries its own `included`** for the names requested.
+- **One transaction, a fixed number of queries.** The server reads the resource and every included resource in the same read-only transaction. It never runs one query per item: on a page of 50 items, each include name costs one batched query (`WHERE id = ANY($1)`).
+
+Response shape:
+
+```json
+{
+  "unmatched_stop_episode_id": 4812,
+  "status": "closed",
+  "links": {
+    "self": "/v1/unmatched-stop-episodes/4812",
+    "static_contexts": "/v1/unmatched-stop-episodes/4812/static-contexts",
+    "opening_response": "/v1/oba-metrics-responses/90211",
+    "closing_response": "/v1/oba-metrics-responses/90689"
+  },
+  "included": {
+    "static_contexts": { "items": [], "links": { "self": "/v1/unmatched-stop-episodes/4812/static-contexts" } },
+    "opening_response": { "response_id": 90211, "observed_at": "2026-10-23T01:00:12Z" },
+    "closing_response": { "response_id": 90689, "observed_at": "2026-10-23T05:00:32Z" }
+  }
+}
+```
+
+(Fields are shortened here; each included object is the full representation.)
 
 ### Wording rules
 
@@ -498,7 +527,7 @@ These carry over from the ADR and the schema document:
 
 ## 4. Endpoint reference
 
-This section describes every endpoint listed in [Section 1](#1-supported-endpoints), using the same identifiers. The **Source tables** column names the tables in `internal/db/migrations/00001_create_investigation_schema.sql`. Collection endpoints accept `page_size` and `cursor` in addition to the filters listed.
+This section describes every endpoint listed in [Section 1](#1-supported-endpoints), using the same identifiers. The **Source tables** column names the tables in `internal/db/migrations/00001_create_investigation_schema.sql`. Collection endpoints accept `page_size` and `cursor` in addition to the filters listed. An endpoint with no **Includes** entry accepts no `include` parameter.
 
 ### 4.1 Entry point
 
@@ -510,12 +539,12 @@ This section describes every endpoint listed in [Section 1](#1-supported-endpoin
 
 | ID | Endpoint | Description | Source tables |
 |---|---|---|---|
-| E02 | `/v1/servers` | Monitored OBA servers. | `onebusaway_server` |
-| E03 | `/v1/servers/{server_id}` | One server: `normalized_base_url`, `display_name`, `created_at`. | `onebusaway_server` |
-| E04 | `/v1/servers/{server_id}/agencies` | Agencies seen on the server. | `agency` |
+| E02 | `/v1/servers` | Monitored OBA servers, each with `configured` (D12). Optional filter `base_url`: returns the server whose `normalized_base_url` equals the normalized value, or an empty list (D10). | `onebusaway_server` |
+| E03 | `/v1/servers/{server_id}` | One server: `normalized_base_url`, `display_name`, `created_at`, `configured` (D12). | `onebusaway_server` |
+| E04 | `/v1/servers/{server_id}/agencies` | Agencies seen on the server. Optional filter `external_agency_id`: returns the matching agency or an empty list (D10). | `agency` |
 | E05 | `/v1/agencies/{agency_id}` | One agency: `external_agency_id`, `current_name`. | `agency` |
-| E06 | `/v1/servers/{server_id}/vehicle-position-endpoints` | Feed URLs used by the server, including ones no longer configured. | `vehicle_position_endpoint` |
-| E07 | `/v1/vehicle-position-endpoints/{endpoint_id}` | One feed URL, with credentials already removed. | `vehicle_position_endpoint` |
+| E06 | `/v1/servers/{server_id}/vehicle-position-endpoints` | Feed URLs used by the server, including ones no longer configured, each with `configured` (D12). | `vehicle_position_endpoint` |
+| E07 | `/v1/vehicle-position-endpoints/{endpoint_id}` | One feed URL, with credentials already removed, and `configured` (D12). | `vehicle_position_endpoint` |
 
 ### 4.3 Unmatched stops and trips
 
@@ -527,18 +556,17 @@ This section describes every endpoint listed in [Section 1](#1-supported-endpoin
 | E11 | `/v1/reported-trips` | Looks up a reported trip. Requires `agency_id` and `trip_id`. | `reported_trip` |
 | E12 | `/v1/reported-trips/{reported_trip_id}` | One reported trip identity. | `reported_trip` |
 | E13 | `/v1/reported-trips/{reported_trip_id}/unmatched-trip-episodes` | Every retained episode for the trip. Accepts `status`, `active_from`, `active_to`. | `unmatched_trip_episode` |
-| E14 | `/v1/unmatched-stop-episodes` | Unmatched-stop episodes. Filters below. | `unmatched_stop_episode`, opening and closing `onebusaway_metrics_response(_agency)` |
-| E15 | `/v1/unmatched-stop-episodes/{episode_id}` | One episode: boundaries, `last_reported_at`, `close_reason`, links. | as E14 |
+| E14 | `/v1/unmatched-stop-episodes` | Unmatched-stop episodes. Filters below. Includes (per item): `static_contexts`. | `unmatched_stop_episode`, opening and closing `onebusaway_metrics_response(_agency)` |
+| E15 | `/v1/unmatched-stop-episodes/{episode_id}` | One episode: boundaries, `last_reported_at`, `close_reason`, links. Includes: `reported_stop`, `static_contexts`, `opening_response`, `closing_response`. | as E14 |
 | E16 | `/v1/unmatched-stop-episodes/{episode_id}/static-contexts` | Static context items in time order: `static_stop_found`, stop name, coordinates, parent station, location type, `applies_from`, `applies_until`. | `unmatched_stop_episode_metadata`, `stop_metadata_version`, `gtfs_static_version` |
-| E17 | `/v1/unmatched-trip-episodes` | Unmatched-trip episodes. Filters below. | `unmatched_trip_episode`, opening and closing `onebusaway_metrics_response(_agency)` |
-| E18 | `/v1/unmatched-trip-episodes/{episode_id}` | One episode. | as E17 |
+| E17 | `/v1/unmatched-trip-episodes` | Unmatched-trip episodes. Filters below. Includes (per item): `static_contexts`. | `unmatched_trip_episode`, opening and closing `onebusaway_metrics_response(_agency)` |
+| E18 | `/v1/unmatched-trip-episodes/{episode_id}` | One episode: boundaries, `last_reported_at`, `close_reason`, links. Includes: `reported_trip`, `static_contexts`, `opening_response`, `closing_response`. | as E17 |
 | E19 | `/v1/unmatched-trip-episodes/{episode_id}/static-contexts` | Static context items in time order: `static_trip_found`, `route_id`, `service_id`, `block_id`, `applies_from`, `applies_until`. | `unmatched_trip_episode_metadata`, `trip_metadata_version`, `gtfs_static_version` |
-| E20 | `/v1/oba-metrics-responses/{response_id}` | A stored OBA metrics response: `observed_at`, `upstream_current_time`, `api_version`, `source_implementation`, `source_implementation_version`, and per-agency rows with `response_complete` and the four counts. | `onebusaway_metrics_response(_agency)` |
+| E20 | `/v1/oba-metrics-responses/{response_id}` | A stored OBA metrics response: `observed_at`, `upstream_current_time`, `api_version`, and per-agency rows with `response_complete` and the four counts. | `onebusaway_metrics_response(_agency)` |
 
 **Filters for E14 and E17:**
 - `server_id`, `agency_id`, `status=open|closed`, `active_from`, `active_to`, `close_reason`.
 - `stop_id` (E14) or `trip_id` (E17), which require `agency_id`.
-- `source_implementation=java|maglev|unknown`, read from the opening response.
 - `static_found=true|false`, matching the episode's latest static context.
 
 **`applies_from` and `applies_until` (E16, E19)** follow the schema document's ordering rule:
@@ -552,9 +580,9 @@ This section describes every endpoint listed in [Section 1](#1-supported-endpoin
 | E21 | `/v1/vehicles` | Looks up a vehicle by its feed vehicle ID. Requires `vehicle_id` and either `endpoint_id` or `server_id`. | `vehicle_entity` |
 | E22 | `/v1/vehicles/{vehicle_entity_id}` | One vehicle identity, linked to its endpoint. | `vehicle_entity` |
 | E23 | `/v1/vehicles/{vehicle_entity_id}/anomaly-episodes` | Every retained anomaly episode for the vehicle. Accepts `anomaly_type`, `status`, `active_from`, `active_to`. | `vehicle_anomaly_episode` |
-| E24 | `/v1/vehicle-anomaly-episodes` | Vehicle anomaly episodes. Filters below. | `vehicle_anomaly_episode`, opening and closing `vehicle_position_response` |
-| E25 | `/v1/vehicle-anomaly-episodes/{episode_id}` | One episode: type, rule version, `opened_at`, `closed_at`, `close_reason`. | as E24 |
-| E26 | `/v1/vehicle-anomaly-episodes/{episode_id}/evidence` | Opening, meaningful-change and resolution evidence in time order, each with its `evidence_role`. | `vehicle_anomaly_episode_evidence`, `vehicle_position_evidence` |
+| E24 | `/v1/vehicle-anomaly-episodes` | Vehicle anomaly episodes. Filters below. Includes: `opening_evidence`. | `vehicle_anomaly_episode`, opening and closing `vehicle_position_response` |
+| E25 | `/v1/vehicle-anomaly-episodes/{episode_id}` | One episode: type, rule version, `opened_at`, `closed_at`, `close_reason`. Includes: `vehicle`, `rule_version`, `opening_response`, `closing_response`, `evidence`. | as E24 |
+| E26 | `/v1/vehicle-anomaly-episodes/{episode_id}/evidence` | Opening, meaningful-change and resolution evidence in time order, each with its `evidence_role`. A `meaningful_change` row exists only where the trip changed (D14). Includes (per item): `bounding_box_version`, `gtfs_static_version`. | `vehicle_anomaly_episode_evidence`, `vehicle_position_evidence` |
 | E27 | `/v1/vehicle-position-evidence/{evidence_id}` | One evidence record with every stored value. | `vehicle_position_evidence` |
 | E28 | `/v1/vehicle-position-responses/{response_id}` | A stored feed response: `observed_at`, `source_header_time`, `incrementality`, `payload_sha256`. | `vehicle_position_response` |
 | E29 | `/v1/bounding-box-versions/{bounding_box_version_id}` | The four limits actually applied, with scope (server-wide or agency) and static version. | `bounding_box_version` |
@@ -617,7 +645,6 @@ All other fields are columns in `00001_create_investigation_schema.sql`. Three f
   "closed_at": "2026-10-23T05:00:32Z",
   "duration_seconds": 14420,
   "close_reason": "not_reported",
-  "source_implementation": "maglev",
   "links": {
     "self": "/v1/unmatched-stop-episodes/4812",
     "reported_stop": "/v1/reported-stops/208",
@@ -630,7 +657,7 @@ All other fields are columns in `00001_create_investigation_schema.sql`. Three f
 }
 ```
 
-`source_implementation` comes from the opening response. The response carries `Cache-Control: private, max-age=86400` and a strong `ETag`, because a closed episode never changes.
+The response carries `Cache-Control: private, max-age=86400` and a strong `ETag`, because a closed episode never changes.
 
 ### Its static contexts (GTFS changed while it was open)
 
@@ -710,6 +737,7 @@ This is the "OBA had not reloaded yet" case: Watchdog's version 13 contained the
     "rule_version": "/v1/vehicle-anomaly-rule-versions/5",
     "opening_response": "/v1/vehicle-position-responses/551203",
     "closing_response": "/v1/vehicle-position-responses/551264",
+    "opening_evidence": "/v1/vehicle-position-evidence/98001",
     "evidence": "/v1/vehicle-anomaly-episodes/311/evidence"
   }
 }
@@ -779,7 +807,40 @@ This is the "OBA had not reloaded yet" case: Watchdog's version 13 contained the
 
 ---
 
-## 6. Schema follow-ups for the API
+## 6. Implementation decisions
+
+These decisions are final. Implementation issues quote them by identifier, and contributors do not need to make further design choices. Changing one requires updating this section first.
+
+### API
+
+| ID | Decision |
+|---|---|
+| D1 | **Related resources** are embedded with `?include=`, following the rules in [Including related resources](#including-related-resources). Allowed includes are listed per endpoint in Section 4. |
+| D2 | **Code layout.** Handlers live in a new package `internal/investigation`, in an `InvestigationService` that follows the Service pattern in `CLAUDE.md`: exported methods are thin and delegate to private functions with explicit parameters. `app.Routes` registers the routes. Handlers are named `get<Resource>` and `list<Resources>`. sqlc queries are named `Get<Resource>` and `List<Resources>` and live in `internal/db/queries/<resource>.sql`. |
+| D3 | **Filters in SQL.** Each list endpoint is one sqlc query whose optional filters use nullable parameters, in the form `(sqlc.narg('agency_id')::bigint IS NULL OR e.agency_id = sqlc.narg('agency_id'))`. No SQL is built by string concatenation. |
+| D4 | **Database access per request.** Each request's reads run in one `REPEATABLE READ READ ONLY` transaction, under a 5-second context timeout. A timeout returns `503` with problem+json `title: "Query timeout"`. |
+| D5 | **Representation.** Fields and query parameters are `snake_case`. Fields whose value is null are present with `null`, never omitted. Times are output in UTC with Go's `time.RFC3339Nano` layout. Input times must be RFC 3339 with an explicit offset or `Z`; otherwise the request returns `400`. Collections return no total count. |
+| D6 | **Cursor.** The cursor is the base64url encoding, without padding, of the JSON object `{"last_id":N}`, where `N` is the primary key of the last item on the page. Items are ordered by primary key descending. A cursor that fails to decode returns `400`. |
+| D7 | **Limits.** `page_size` defaults to 50 and may be at most 200. Window, scope and unknown-parameter rules are those in [Query limits](#query-limits). |
+| D8 | **Authentication.** Clients send `Authorization: Bearer <token>`. Watchdog accepts the value of `INVESTIGATION_API_TOKEN` and, when set, `INVESTIGATION_API_TOKEN_NEXT`, so a token can be rotated without downtime. Tokens are compared with `crypto/subtle.ConstantTimeCompare`. A missing or wrong token returns `401` with `WWW-Authenticate: Bearer realm="watchdog-investigation"`. When `INVESTIGATION_API_TOKEN` is unset, the routes are not registered. Tokens are never logged. The API has no CORS headers and no rate limiting. |
+| D9 | **API metrics.** Watchdog exports `watchdog_investigation_api_requests_total` (counter; labels `route`, `status`) and `watchdog_investigation_api_request_duration_seconds` (histogram, default buckets; label `route`). `route` is the route template, for example `/v1/unmatched-stop-episodes/:episode_id`, never the request path. Both vectors are wrapped in `tracked(...)` as `CLAUDE.md` requires. |
+| D10 | **Resolving names to IDs is the client's job.** A client that knows a server by its base URL and an agency by its OBA agency ID resolves them once with `GET /v1/servers?base_url=` (E02) and `GET /v1/servers/{server_id}/agencies?external_agency_id=` (E04), caches the returned IDs, and uses them afterwards. Other endpoints accept internal IDs only. E02 normalizes `base_url` with the same function Watchdog uses to fill `normalized_base_url`. |
+| D11 | **A changed URL is a new identity.** A changed server base URL, vehicle-position URL or static source URL creates a new identity row with a new ID. History recorded under the old URL stays under the old ID. Identities are never merged. |
+| D12 | **`configured` flag.** Servers (E02, E03) and vehicle-position endpoints (E06, E07) include a derived boolean `configured`: whether Watchdog's current configuration contains that server or URL. |
+
+### Data
+
+| ID | Decision |
+|---|---|
+| D13 | **No backend type.** Java OBA and Maglev are treated as one system. Watchdog does not store or expose which implementation produced a response. |
+| D14 | **Mid-episode evidence.** While a vehicle anomaly episode is open, Watchdog saves a `meaningful_change` evidence row only when the vehicle's `trip_id` or `trip_start_date` differs from the most recently saved evidence row for that episode. Nothing else creates one. |
+| D15 | **Reason codes** are fixed and enforced by `CHECK` constraints. `position_validation_reason` (null exactly when `position_valid`): `missing_position`, `non_finite_coordinate`, `placeholder_zero_coordinate`, `latitude_out_of_range`, `longitude_out_of_range`. `attribution_reason`: the `gtfs.AttributionFailureReason` values `missing_vehicle_id`, `missing_route_id`, `unknown_route_id`, `agency_not_reported_by_oba`, `ambiguous_identifier`, `route_trip_conflict`. `expected_schedule_reason`: with state `unknown`, one of `no_trip_descriptor`, `trip_not_in_static_gtfs`, `trip_instance_ambiguous`; with `expected_inactive`, one of `service_not_active_on_date`, `before_scheduled_window`, `after_scheduled_window`; with `expected_active`, `within_scheduled_window`. |
+| D16 | **Server removal and retention.** A server removed from the configuration keeps its history, which stays queryable. Its open episodes stay open. A retention job runs every 24 hours. It deletes closed episodes 90 days after `closed_at`, and open episodes of servers that are no longer configured 90 days after their last observation (`last_reported_at` for unmatched episodes; the newest evidence's response `observed_at` for vehicle episodes). It then deletes static context, responses and identities that nothing references. |
+| D17 | **Speed anomalies** (`reported_speed_plausibility`) are out of scope until a plausibility threshold is approved. |
+
+---
+
+## 7. Schema follow-ups for the API
 
 The main list queries filter by agency or anomaly type and page by episode ID descending. Migration `00001` does not index those paths, so the implementation adds migration `00002` with:
 
@@ -791,7 +852,7 @@ The time-window filter joins each episode to its opening and closing responses' 
 
 ---
 
-## 7. Out of scope
+## 8. Out of scope
 
 - **Implementation.** Handlers, sqlc queries, auth middleware, route registration and tests come in a later change. Handlers follow the Service and private-function pattern in `CLAUDE.md` and reach the database through `Application.InvestigationDB`.
 - **Per-token scopes and `403`.** Add these only if a client other than OBACloud needs restricted access.
