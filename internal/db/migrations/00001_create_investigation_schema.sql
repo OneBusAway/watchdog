@@ -184,13 +184,18 @@ CREATE TABLE s2_cell (
 );
 
 CREATE TABLE stop_cluster_assignment (
-    stop_metadata_version_id         BIGINT NOT NULL REFERENCES stop_metadata_version (stop_metadata_version_id),
-    scheme_version                   TEXT NOT NULL,
-    cell_id                          TEXT NOT NULL,
-    -- Null means the stop has no station.
-    root_station_metadata_version_id BIGINT REFERENCES stop_metadata_version (stop_metadata_version_id),
+    stop_metadata_version_id BIGINT NOT NULL REFERENCES stop_metadata_version (stop_metadata_version_id),
+    scheme_version           TEXT NOT NULL,
+    cell_id                  TEXT NOT NULL,
+    -- The root of the stop's parent_station chain in Watchdog's static GTFS,
+    -- stored as values: a station is usually not a reported stop, so it has
+    -- no stop_metadata_version row to reference. Both null: no station.
+    root_station_id          TEXT,
+    root_station_name        TEXT,
     PRIMARY KEY (stop_metadata_version_id, scheme_version),
-    FOREIGN KEY (scheme_version, cell_id) REFERENCES s2_cell (scheme_version, cell_id)
+    FOREIGN KEY (scheme_version, cell_id) REFERENCES s2_cell (scheme_version, cell_id),
+    CONSTRAINT stop_cluster_assignment_station_name_needs_id
+        CHECK (root_station_name IS NULL OR root_station_id IS NOT NULL)
 );
 
 -- ---------------------------------------------------------------------------
@@ -566,7 +571,6 @@ CREATE INDEX unmatched_stop_episode_metadata_version ON unmatched_stop_episode_m
 CREATE INDEX unmatched_trip_episode_metadata_version ON unmatched_trip_episode_metadata (trip_metadata_version_id);
 CREATE INDEX stop_metadata_version_reported_stop ON stop_metadata_version (reported_stop_id, gtfs_static_version_id);
 CREATE INDEX trip_metadata_version_reported_trip ON trip_metadata_version (reported_trip_id, gtfs_static_version_id);
-CREATE INDEX stop_cluster_assignment_root_station ON stop_cluster_assignment (root_station_metadata_version_id);
 CREATE INDEX stop_cluster_assignment_cell ON stop_cluster_assignment (scheme_version, cell_id);
 CREATE INDEX vehicle_position_evidence_static_version ON vehicle_position_evidence (gtfs_static_version_id);
 CREATE INDEX vehicle_position_evidence_bounding_box ON vehicle_position_evidence (bounding_box_version_id);

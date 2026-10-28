@@ -213,7 +213,8 @@ erDiagram
         bigint stop_metadata_version_id PK, FK
         text scheme_version PK, FK
         text cell_id PK, FK
-        bigint root_station_metadata_version_id FK
+        text root_station_id
+        text root_station_name
     }
 
     ONEBUSAWAY_SERVER ||--o{ AGENCY : serves
@@ -255,7 +256,6 @@ erDiagram
     BOUNDING_BOX_VERSION ||--o{ VEHICLE_POSITION_EVIDENCE : checked_against
     GTFS_STATIC_VERSION ||--o{ VEHICLE_POSITION_EVIDENCE : schedule_context
     STOP_METADATA_VERSION ||--o{ STOP_CLUSTER_ASSIGNMENT : assigned_to
-    STOP_METADATA_VERSION ||--o{ STOP_CLUSTER_ASSIGNMENT : root_station
     CLUSTER_SCHEME ||--o{ S2_CELL : defines
     S2_CELL ||--o{ STOP_CLUSTER_ASSIGNMENT : contains
     VEHICLE_POSITION_RESPONSE ||--o{ VEHICLE_ANOMALY_EPISODE : opens
@@ -441,7 +441,7 @@ The scheme is defined in Watchdog code, not edited in the database. Watchdog ins
 
 **`s2_cell`** has `scheme_version TEXT NOT NULL`, `cell_id TEXT NOT NULL`, `cell_level SMALLINT NOT NULL`, `center_latitude DOUBLE PRECISION NOT NULL`, and `center_longitude DOUBLE PRECISION NOT NULL`. Its composite primary key is `(scheme_version, cell_id)`. A composite foreign key `(scheme_version, cell_level)` references `cluster_scheme (scheme_version, s2_level)`, so a cell's level must equal its scheme's level. Check center coordinates against WGS-84 ranges.
 
-**`stop_cluster_assignment`** has `stop_metadata_version_id BIGINT NOT NULL`, `scheme_version TEXT NOT NULL`, `cell_id TEXT NOT NULL`, and `root_station_metadata_version_id BIGINT` (null means no station). The primary key is `(stop_metadata_version_id, scheme_version)`. The stop metadata and root station columns reference `stop_metadata_version`; `(scheme_version, cell_id)` references `s2_cell`. The clustering rules live in `cluster_scheme`, so this table has no separate algorithm-version column. Cluster counts are derived from unmatched-stop episodes and are not inserted every poll.
+**`stop_cluster_assignment`** has `stop_metadata_version_id BIGINT NOT NULL`, `scheme_version TEXT NOT NULL`, `cell_id TEXT NOT NULL`, `root_station_id TEXT` and `root_station_name TEXT`. The root station is the top of the stop's `parent_station` chain in Watchdog's static GTFS. It is stored as values rather than a reference, because a station is usually not a reported stop and so has no `stop_metadata_version` row (D20 in [investigation-api.md](investigation-api.md#6-implementation-decisions)). Both are null when the stop has no station, and a name requires an ID. The primary key is `(stop_metadata_version_id, scheme_version)`. `stop_metadata_version_id` references `stop_metadata_version`; `(scheme_version, cell_id)` references `s2_cell`. The clustering rules live in `cluster_scheme`, so this table has no separate algorithm-version column. Cluster counts are derived from unmatched-stop episodes and are not inserted every poll.
 
 ### OBA metrics responses and unmatched episodes
 
