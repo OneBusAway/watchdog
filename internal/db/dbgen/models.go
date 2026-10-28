@@ -108,10 +108,11 @@ type StaticGtfsSource struct {
 }
 
 type StopClusterAssignment struct {
-	StopMetadataVersionID        int64
-	SchemeVersion                string
-	CellID                       string
-	RootStationMetadataVersionID *int64
+	StopMetadataVersionID int64
+	SchemeVersion         string
+	CellID                string
+	RootStationID         *string
+	RootStationName       *string
 }
 
 type StopMetadataVersion struct {
