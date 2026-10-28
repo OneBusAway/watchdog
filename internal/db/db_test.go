@@ -493,3 +493,44 @@ func TestS2CellLevelMustMatchScheme(t *testing.T) {
 	expectCode(t, f.exec(insert, "cell-14", 14), codeForeignKeyViolation)
 	expectOK(t, f.exec(insert, "cell-13", 13))
 }
+
+func TestVehicleEvidenceReasonCodes(t *testing.T) {
+	v := newVehicleFixture(t)
+	response := v.response(v.endpointA, time.Now())
+
+	insert := func(column string, positionValid bool, values ...any) error {
+		cols := "vehicle_position_response_id, position_valid"
+		params := "$1, $2"
+		args := []any{response, positionValid}
+		if column != "" {
+			cols += ", " + column
+			for i, value := range values {
+				params += fmt.Sprintf(", $%d", i+3)
+				args = append(args, value)
+			}
+		}
+		return v.exec("INSERT INTO vehicle_position_evidence ("+cols+") VALUES ("+params+")", args...)
+	}
+
+	t.Run("validation reason is required when the position is invalid", func(t *testing.T) {
+		expectCode(t, insert("", false), codeCheckViolation)
+		expectOK(t, insert("position_validation_reason", false, "latitude_out_of_range"))
+	})
+	t.Run("validation reason is rejected when the position is valid", func(t *testing.T) {
+		expectCode(t, insert("position_validation_reason", true, "latitude_out_of_range"), codeCheckViolation)
+	})
+	t.Run("unknown validation reason is rejected", func(t *testing.T) {
+		expectCode(t, insert("position_validation_reason", false, "bad_gps"), codeCheckViolation)
+	})
+	t.Run("unknown attribution reason is rejected", func(t *testing.T) {
+		expectCode(t, insert("attribution_reason", true, "no_idea"), codeCheckViolation)
+		expectOK(t, insert("attribution_reason", true, "unknown_route_id"))
+	})
+	t.Run("schedule reason must belong to its state", func(t *testing.T) {
+		expectCode(t, insert("expected_schedule_state, expected_schedule_reason", true, "expected_active", "after_scheduled_window"), codeCheckViolation)
+		expectCode(t, insert("expected_schedule_state, expected_schedule_reason", true, "unknown", nil), codeCheckViolation)
+		expectCode(t, insert("expected_schedule_reason", true, "within_scheduled_window"), codeCheckViolation)
+		expectOK(t, insert("expected_schedule_state, expected_schedule_reason", true, "expected_inactive", "after_scheduled_window"))
+		expectOK(t, insert("expected_schedule_state, expected_schedule_reason", true, "expected_active", "within_scheduled_window"))
+	})
+}
