@@ -442,7 +442,7 @@ The following cannot be established from the stored data. The API must not prese
 
 ### Query limits
 
-- **Time window:** `active_from`/`active_to` select episodes whose open period overlaps the window. An open episode counts as active until now.
+- **Time window:** `active_from`/`active_to` select episodes whose open period overlaps the window. An open episode counts as active until now. The default and maximum below do not apply to E10, E13, E23 and E34, which are scoped to one identity or are small (D19).
   - When `status=open`, the window is optional.
   - Otherwise it defaults to the last 24 hours, and `active_to - active_from` may be at most 31 days.
 - **Scoped filters:**
@@ -701,13 +701,54 @@ This is the "OBA had not reloaded yet" case: Watchdog's version 13 contained the
 
 ### A paginated episode list
 
+List items use exactly the same representation as the single-resource endpoint (here E15).
+
 `GET /v1/unmatched-stop-episodes?agency_id=3&active_from=2026-10-23T00:00:00Z&active_to=2026-10-24T00:00:00Z&page_size=2`
 
 ```json
 {
   "items": [
-    { "unmatched_stop_episode_id": 4815, "status": "open", "stop_id": "1_10020", "opened_at": "2026-10-23T22:41:02Z", "last_reported_at": "2026-10-24T09:12:31Z", "closed_at": null, "close_reason": null, "links": { "self": "/v1/unmatched-stop-episodes/4815" } },
-    { "unmatched_stop_episode_id": 4812, "status": "closed", "stop_id": "1_75403", "opened_at": "2026-10-23T01:00:12Z", "last_reported_at": "2026-10-23T05:00:02Z", "closed_at": "2026-10-23T05:00:32Z", "close_reason": "not_reported", "links": { "self": "/v1/unmatched-stop-episodes/4812" } }
+    {
+      "unmatched_stop_episode_id": 4815,
+      "status": "open",
+      "stop_id": "1_10020",
+      "agency": { "agency_id": 3, "external_agency_id": "1", "current_name": "King County Metro" },
+      "server_id": 1,
+      "opened_at": "2026-10-23T22:41:02Z",
+      "last_reported_at": "2026-10-24T09:12:31Z",
+      "closed_at": null,
+      "duration_seconds": null,
+      "close_reason": null,
+      "links": {
+        "self": "/v1/unmatched-stop-episodes/4815",
+        "reported_stop": "/v1/reported-stops/311",
+        "agency": "/v1/agencies/3",
+        "server": "/v1/servers/1",
+        "opening_response": "/v1/oba-metrics-responses/91873",
+        "static_contexts": "/v1/unmatched-stop-episodes/4815/static-contexts"
+      }
+    },
+    {
+      "unmatched_stop_episode_id": 4812,
+      "status": "closed",
+      "stop_id": "1_75403",
+      "agency": { "agency_id": 3, "external_agency_id": "1", "current_name": "King County Metro" },
+      "server_id": 1,
+      "opened_at": "2026-10-23T01:00:12Z",
+      "last_reported_at": "2026-10-23T05:00:02Z",
+      "closed_at": "2026-10-23T05:00:32Z",
+      "duration_seconds": 14420,
+      "close_reason": "not_reported",
+      "links": {
+        "self": "/v1/unmatched-stop-episodes/4812",
+        "reported_stop": "/v1/reported-stops/208",
+        "agency": "/v1/agencies/3",
+        "server": "/v1/servers/1",
+        "opening_response": "/v1/oba-metrics-responses/90211",
+        "closing_response": "/v1/oba-metrics-responses/90689",
+        "static_contexts": "/v1/unmatched-stop-episodes/4812/static-contexts"
+      }
+    }
   ],
   "links": {
     "self": "/v1/unmatched-stop-episodes?agency_id=3&active_from=2026-10-23T00:00:00Z&active_to=2026-10-24T00:00:00Z&page_size=2",
@@ -755,6 +796,7 @@ This is the "OBA had not reloaded yet" case: Watchdog's version 13 contained the
       "incrementality": "FULL_DATASET",
       "feed_entity_id": "veh-4021",
       "agency_id": 3,
+      "attribution_reason": null,
       "vehicle_source_time": "2026-10-24T15:07:55Z",
       "latitude": 47.6062,
       "longitude": -122.3321,
@@ -837,6 +879,9 @@ These decisions are final. Implementation issues quote them by identifier, and c
 | D15 | **Reason codes** are fixed and enforced by `CHECK` constraints. `position_validation_reason` (null exactly when `position_valid`): `missing_position`, `non_finite_coordinate`, `placeholder_zero_coordinate`, `latitude_out_of_range`, `longitude_out_of_range`. `attribution_reason`: the `gtfs.AttributionFailureReason` values `missing_vehicle_id`, `missing_route_id`, `unknown_route_id`, `agency_not_reported_by_oba`, `ambiguous_identifier`, `route_trip_conflict`. `expected_schedule_reason`: with state `unknown`, one of `no_trip_descriptor`, `trip_not_in_static_gtfs`, `trip_instance_ambiguous`; with `expected_inactive`, one of `service_not_active_on_date`, `before_scheduled_window`, `after_scheduled_window`; with `expected_active`, `within_scheduled_window`. |
 | D16 | **Server removal and retention.** A server removed from the configuration keeps its history, which stays queryable. Its open episodes stay open. A retention job runs every 24 hours. It deletes closed episodes 90 days after `closed_at`, and open episodes of servers that are no longer configured 90 days after their last observation (`last_reported_at` for unmatched episodes; the newest evidence's response `observed_at` for vehicle episodes). It then deletes static context, responses and identities that nothing references. |
 | D17 | **Speed anomalies** (`reported_speed_plausibility`) are out of scope until a plausibility threshold is approved. |
+| D18 | **Recording runs synchronously and never blocks collection.** Recording code lives in a new package `internal/history`, in a `HistoryService` that follows the Service pattern in `CLAUDE.md` and is wired through `app.New`. Each collection step writes its history right after it runs, under a 5-second context timeout, only when `Application.InvestigationDB` is not nil. A failed write is logged and reported to Sentry with the step's `server_name` (and `agency_id`/`agency_name` when agency-scoped) tags, following `CLAUDE.md`; collection then continues. Nothing is buffered or retried, so an observation that fails to write is lost. A later change may move writes to a queue for reliability; that is out of scope for the initial implementation. |
+| D19 | **Collections scoped to one identity have no default window.** E10, E13 and E23 return every retained episode of one stop, trip or vehicle, newest first, bounded by retention and pagination. E34 returns every retained static version. On these endpoints `active_from`/`active_to` (or `published_from`/`published_to` on E34) are optional and have no 31-day maximum. |
+| D20 | **Root stations are stored as values.** `stop_cluster_assignment` stores `root_station_id` and `root_station_name` (the top of the stop's `parent_station` chain) as text, both null when the stop has no station. |
 
 ---
 
