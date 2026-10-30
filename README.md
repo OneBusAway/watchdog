@@ -193,6 +193,21 @@ Migrating to v2 is recommended whenever convenient — it's the only way to conf
 
 When `DATABASE_URL` is set, Watchdog connects to PostgreSQL at startup and applies any pending schema migrations. This database will hold durable investigation history ([ADR 0001](docs/adr/0001-durable-historical-investigation-storage.md), [schema](docs/historical-investigation-schema.md)). It is optional: if `DATABASE_URL` is unset, or the database is unreachable at startup, Watchdog logs it and keeps collecting and exporting Prometheus metrics without it. Docker Compose starts a local PostgreSQL and sets `DATABASE_URL` for you.
 
+- **Investigation API token (optional)**
+
+```bash
+    export INVESTIGATION_API_TOKEN="$(openssl rand -hex 32)"
+    export INVESTIGATION_API_TOKEN_NEXT=""   # set only while rotating
+```
+
+The [Investigation API](docs/investigation-api.md) shows which stops, trips and vehicles had problems and when, so every request must send `Authorization: Bearer <token>`. A missing or wrong token gets `401`. Watchdog accepts `INVESTIGATION_API_TOKEN` and, when set, `INVESTIGATION_API_TOKEN_NEXT`. When `INVESTIGATION_API_TOKEN` is unset, the API is disabled: its routes return `404` and Watchdog logs that at startup. Setting only `INVESTIGATION_API_TOKEN_NEXT` also leaves the API disabled and logs an error. Watchdog never logs the tokens.
+
+To rotate the token without downtime:
+
+1. Set `INVESTIGATION_API_TOKEN_NEXT` to the new token and restart Watchdog. Both tokens now work.
+2. Update the client to send the new token.
+3. Move the new token to `INVESTIGATION_API_TOKEN`, clear `INVESTIGATION_API_TOKEN_NEXT`, and restart Watchdog. The old token stops working.
+
 ## Running
 
 It may take a few minutes for Watchdog to start exposing data to Prometheus, since initial setup includes tasks such as downloading the GTFS bundle.
