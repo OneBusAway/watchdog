@@ -106,6 +106,7 @@ Clients define the current-value window as `clamp(3 * interval, 60, 300)` second
   - `oba_tracked_agencies_info` has one series per distinct static agency ID, with the agency name, server name, and server URL.
   - These gauges refresh when configuration changes and after a complete static snapshot is published. Failed refreshes preserve the prior snapshot and inventory.
   - **TODO (#163):** compare this static agency set with the agency IDs reported by OBA's `metrics.json` API and expose alignment/mismatch status. Until then, `gtfs_static_agency_reported_by_oba` remains the separate OBA-side coverage signal.
+  - **Backend coverage semantics:** `agencyIDs` in `/api/where/metrics.json` is the backend's loaded static agency coverage. Java OBA builds it from `getAgenciesWithCoverage()` (agencies in the loaded transit graph) and Maglev from `ListAgencies()` on its static database; it does not reflect realtime activity. In server mode, when this set differs from Watchdog's published static snapshot, Watchdog starts an immediate static refresh campaign instead of waiting for the daily refresh.
 - **Example alert:**
 ```promql
   oba_tracked_agencies_count < 1

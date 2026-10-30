@@ -124,6 +124,29 @@ func (gs *GtfsService) StartStaticRefreshCampaigns(ctx context.Context, servers 
 	}
 }
 
+// RefreshOnAgencyMismatch starts an immediate static refresh campaign when a
+// server-scoped entry's backend static agency coverage differs from Watchdog's
+// published snapshot. An unchanged mismatch starts at most one campaign;
+// converged sets clear the state. Returns true if a campaign was started.
+func (gs *GtfsService) RefreshOnAgencyMismatch(ctx context.Context, server models.ObaServer, backendOnly, localOnly []string, maxRetries int) bool {
+	sig := agencyMismatchSignature(backendOnly, localOnly)
+	if !gs.refreshCoordinator.observeAgencyMismatch(server, sig) {
+		return false
+	}
+	if !gs.StaticStore.IsConfigured(server) ||
+		!gs.refreshCoordinator.start(ctx, gs, server, StaticRefreshAgencyMismatch, maxRetries) {
+		// Nothing was started (entry gone, or an equivalent campaign is already
+		// running). Forget the mismatch so a later tick can retry once that
+		// campaign has finished and the sets still disagree.
+		gs.refreshCoordinator.forgetAgencyMismatch(server)
+		return false
+	}
+	gs.Logger.Info("Backend static agency coverage differs from Watchdog snapshot; starting static refresh",
+		"server_name", server.ServerName,
+		"backend_only", backendOnly,
+		"watchdog_only", localOnly)
+	return true
+}
 func (gs *GtfsService) ReconcileStaticRefreshCampaigns(servers []models.ObaServer) {
 	gs.refreshCoordinator.reconcile(servers)
 }
