@@ -32,7 +32,8 @@ type Application struct {
 	// user must treat nil as "investigation storage disabled".
 	InvestigationDB *pgxpool.Pool
 	// InvestigationService serves the read-only Investigation API over
-	// InvestigationDB. Its routes are not registered in Routes yet.
+	// InvestigationDB. Routes registers its routes only when it is enabled,
+	// which is when INVESTIGATION_API_TOKEN is set.
 	InvestigationService *investigation.InvestigationService
 	Logger               *slog.Logger
 	Version              string
@@ -46,7 +47,10 @@ type Application struct {
 // resolve scopes for both agency-mode and server-mode entries. The
 // gtfs-service constructor receives the route index too so it can populate it
 // during static-bundle parse.
-func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version string, droppedStore *config.DroppedServersStore, investigationDB *pgxpool.Pool) *Application {
+//
+// investigationTokens are the bearer tokens the Investigation API accepts,
+// from investigation.AcceptedTokens. When empty, the API is disabled.
+func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version string, droppedStore *config.DroppedServersStore, investigationDB *pgxpool.Pool, investigationTokens []string) *Application {
 
 	staticStore := gtfs.NewStaticStore()
 	staticStore.SetConfiguredServers(cfg.GetServers())
@@ -71,9 +75,7 @@ func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version s
 	gtfsService.SetStaticRefreshObserver(metricsService.StaticRefreshObserver())
 	gtfsService.SetStaticFeedRefreshObserver(metricsService.StaticFeedRefreshObserver())
 
-	// No tokens yet: until the API reads INVESTIGATION_API_TOKEN, every
-	// investigation request is rejected.
-	investigationService := investigation.NewInvestigationService(investigationDB, cfg.GetServers, nil, logger)
+	investigationService := investigation.NewInvestigationService(investigationDB, cfg.GetServers, investigationTokens, logger)
 
 	return &Application{
 		ConfigService:  configService,
