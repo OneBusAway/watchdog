@@ -19,7 +19,14 @@ const testToken = "test-token"
 func newTestService(t *testing.T) (*InvestigationService, *httprouter.Router) {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	s := NewInvestigationService(nil, func() []models.ObaServer { return nil }, []string{testToken}, logger)
+	return newServiceWithTokens(t, []string{testToken}, logger)
+}
+
+// newServiceWithTokens is newTestService with the accepted tokens and the
+// logger chosen by the test.
+func newServiceWithTokens(t *testing.T, tokens []string, logger *slog.Logger) (*InvestigationService, *httprouter.Router) {
+	t.Helper()
+	s := NewInvestigationService(nil, func() []models.ObaServer { return nil }, tokens, logger)
 	router := httprouter.New()
 	s.Register(router)
 	return s, router

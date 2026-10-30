@@ -2,6 +2,8 @@ package investigation
 
 import (
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"testing"
 
@@ -16,8 +18,10 @@ func okHandler(called *bool) httprouter.Handle {
 	}
 }
 
+// TestRoute_FailsClosed checks that a service with no accepted tokens rejects
+// every request, including one that sends a token.
 func TestRoute_FailsClosed(t *testing.T) {
-	s, router := newTestService(t)
+	s, router := newServiceWithTokens(t, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	called := false
 	s.route(router, "/v1/test", okHandler(&called))
 
@@ -42,7 +46,7 @@ func TestRoute_FailsClosed(t *testing.T) {
 		}
 	}
 	if called {
-		t.Error("handler ran; authenticate must reject every request")
+		t.Error("handler ran; with no tokens authenticate must reject every request")
 	}
 }
 
