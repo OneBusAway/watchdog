@@ -133,7 +133,7 @@ func TestNewlyAddedServersSeededFromBootConfig(t *testing.T) {
 	cfg := config.NewConfig(4000, "testing", []models.ObaServer{booted})
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	app := New(cfg, logger, &http.Client{}, "test", config.NewDroppedServersStore(), nil)
+	app := New(cfg, logger, &http.Client{}, "test", config.NewDroppedServersStore(), nil, nil)
 
 	assertServerKeys(t, app.NewlyAddedServers([]models.ObaServer{booted}))
 
