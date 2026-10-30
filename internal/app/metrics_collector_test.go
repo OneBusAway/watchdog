@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"watchdog.onebusaway.org/internal/config"
@@ -668,5 +669,71 @@ func TestServerScopePreservesVehicleStateWhenCoverageProbeFails(t *testing.T) {
 	}
 	if value, found := gaugeValueFor(metrics.RealtimeVehiclePositions, map[string]string{"agency_id": agency.AgencyID, "server_url": serverURL}); !found || value != 4 {
 		t.Fatalf("failed coverage probe changed vehicle gauge: %v, found=%t", value, found)
+	}
+}
+
+// A failed /metrics.json probe means coverage is unknown, not empty. Treating
+// it as an empty backend set would read every local agency as Watchdog-only and
+// start a static refresh campaign on each probe outage.
+func TestServerScopeFailedCoverageProbeDoesNotRefreshStatic(t *testing.T) {
+	var probeUp atomic.Bool
+	var staticCalls atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/static.zip":
+			staticCalls.Add(1)
+			http.NotFound(w, r)
+		case "/api/where/metrics.json":
+			if !probeUp.Load() {
+				http.Error(w, "unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			_, _ = w.Write([]byte(`{"code":200,"version":2,"data":{"entry":{"agencyIDs":["agency-b"],"realtimeRecordsTotal":{}}}}`))
+		default:
+			_, _ = w.Write([]byte(`{"code":200,"data":{"list":[],"entry":{"readableTime":"now"}}}`))
+		}
+	}))
+	t.Cleanup(ts.Close)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	app := newTestApplication(t)
+	server := models.ObaServer{ServerName: "multi", ObaBaseURL: ts.URL, GtfsStaticFeeds: []string{ts.URL + "/static.zip"}}
+	agency := serverForAgency(server, "agency-a", "Agency A")
+	snapshot := &models.StaticData{}
+	app.GtfsService.StaticStore.Set(agency.ServerKey(), snapshot)
+	app.GtfsService.RouteAgencyIndex.Replace(server.ServerKey(), map[string]string{"route-a": agency.AgencyID}, nil, map[string]string{agency.AgencyID: agency.AgencyName})
+	app.MetricsService.VehicleLastSeen.Set(agency.ServerKey(), "0", "vehicle-a", metrics.LastSeen{VehicleID: "vehicle-a", FeedID: "0"})
+
+	scope := config.ResolveScope(server, app.GtfsService.StaticStore, app.GtfsService.RouteAgencyIndex)
+	app.collectForScope(ctx, server, scope)
+
+	// A started campaign downloads its feed right away; give it a moment.
+	time.Sleep(200 * time.Millisecond)
+	if got := staticCalls.Load(); got != 0 {
+		t.Fatalf("failed coverage probe started a static refresh: %d feed downloads", got)
+	}
+	if got, ok := app.GtfsService.StaticStore.Get(agency.ServerKey()); !ok || got != snapshot {
+		t.Fatal("failed coverage probe changed the agency's static snapshot")
+	}
+	if _, ok := app.GtfsService.StaticStore.GetRefreshState(server); ok {
+		t.Fatal("failed coverage probe recorded a static refresh attempt")
+	}
+	if got := app.MetricsService.VehicleLastSeen.Count(agency.ServerKey()); got != 1 {
+		t.Fatalf("failed coverage probe retired vehicle state: %d", got)
+	}
+
+	// Control: the same setup with a successful, disagreeing probe does start a
+	// refresh, so the assertions above are not vacuous.
+	probeUp.Store(true)
+	app.collectForScope(ctx, server, scope)
+	deadline := time.Now().Add(5 * time.Second)
+	for staticCalls.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("a successful probe reporting a different agency set did not start a static refresh")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

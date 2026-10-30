@@ -465,3 +465,66 @@ func TestObserveAgencyMismatchConcurrent(t *testing.T) {
 		t.Fatalf("expected exactly one trigger, got %d", got)
 	}
 }
+
+// When an equivalent campaign is already running, the mismatch must not stay
+// recorded: otherwise the unchanged mismatch would never trigger again once
+// that campaign ends, even though the sets still disagree.
+func TestRefreshOnAgencyMismatchForgetsMismatchWhenCampaignAlreadyRunning(t *testing.T) {
+	bundle := makeScheduleZip(t, basicScheduleFiles("UTC", "08:00:00", "09:00:00"))
+	release := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		_, _ = w.Write(bundle)
+	}))
+	defer ts.Close()
+
+	server := models.ObaServer{ServerName: "s", ObaBaseURL: ts.URL, GtfsStaticFeeds: []string{ts.URL + "/a.zip"}}
+	store := NewStaticStore()
+	store.SetConfiguredServers([]models.ObaServer{server})
+	service := NewGtfsService(store, NewRealtimeStore(), geo.NewBoundingBoxStore(), NewRouteAgencyIndex(), slog.New(slog.NewTextHandler(io.Discard, nil)), ts.Client())
+	c := service.refreshCoordinator
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	service.StartStaticRefreshCampaigns(ctx, []models.ObaServer{server}, StaticRefreshStartup, 1)
+
+	recorded := func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		_, ok := c.mismatches[server.ServerKey()]
+		return ok
+	}
+	running := func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		_, ok := c.active[server.ServerKey()]
+		return ok
+	}
+
+	if service.RefreshOnAgencyMismatch(ctx, server, []string{"C"}, nil, 1) {
+		t.Fatal("started a campaign while an equivalent one was running")
+	}
+	if recorded() {
+		t.Fatal("mismatch stayed recorded although no campaign was started")
+	}
+
+	close(release)
+	deadline := time.Now().Add(5 * time.Second)
+	for running() {
+		if time.Now().After(deadline) {
+			t.Fatal("running campaign did not finish")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if !service.RefreshOnAgencyMismatch(ctx, server, []string{"C"}, nil, 1) {
+		t.Fatal("unchanged mismatch did not trigger once the running campaign ended")
+	}
+	if !recorded() {
+		t.Fatal("triggered mismatch was not recorded")
+	}
+}

@@ -17,6 +17,10 @@ import (
 	"watchdog.onebusaway.org/internal/utils"
 )
 
+// agencyMismatchRefreshRetries bounds the retries of a refresh campaign started
+// because backend static agency coverage differs from Watchdog's snapshot.
+const agencyMismatchRefreshRetries = 3
+
 // StartMetricsCollection begins a background goroutine that continuously
 // collects metrics from all configured OBA servers at a regular interval.
 //
@@ -43,11 +47,6 @@ import (
 //     alerts.
 //   - Monitor reliability and correctness of OBA and GTFS-RT server
 //     integrations.
-//
-// agencyMismatchRefreshRetries bounds the retries of a refresh campaign started
-// because backend static agency coverage differs from Watchdog's snapshot.
-const agencyMismatchRefreshRetries = 3
-
 func (app *Application) StartMetricsCollection(ctx context.Context) {
 	ticker := time.NewTicker(time.Duration(app.ConfigService.Config.FetchInterval) * time.Second)
 	go func() {
