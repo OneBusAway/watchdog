@@ -22,6 +22,7 @@ import (
 	"watchdog.onebusaway.org/internal/config"
 	"watchdog.onebusaway.org/internal/db"
 	"watchdog.onebusaway.org/internal/gtfs"
+	"watchdog.onebusaway.org/internal/investigation"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
 	"watchdog.onebusaway.org/internal/utils"
@@ -171,7 +172,16 @@ func main() {
 	// and the required dependencies.
 	// this New() function is critical in understanding how we structure the application take a look at it.
 	// and also take a look at service file in each package to see the dependencies and the exposed methods and function.
-	app := app.New(&cfg, logger, client, version, droppedStore, investigationDB)
+	// The Investigation API is enabled only when INVESTIGATION_API_TOKEN is
+	// set. INVESTIGATION_API_TOKEN_NEXT is accepted too, so the token can be
+	// rotated without downtime. The tokens are never logged.
+	investigationTokens := investigation.AcceptedTokens(
+		os.Getenv("INVESTIGATION_API_TOKEN"),
+		os.Getenv("INVESTIGATION_API_TOKEN_NEXT"),
+		logger,
+	)
+
+	app := app.New(&cfg, logger, client, version, droppedStore, investigationDB, investigationTokens)
 
 	// Report the agencies Watchdog is tracking (those that passed config
 	// validation). This runs once at startup; it is re-triggered only when the
