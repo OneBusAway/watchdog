@@ -32,6 +32,9 @@ services:
     container_name: alertmanager
     volumes:
       - ./prometheus/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+      # Silences and the notification log live in /alertmanager; keep them
+      # across container recreation.
+      - alertmanager-data:/alertmanager
     ports:
       - "9093:9093"
     networks:
@@ -56,3 +59,6 @@ services:
 
 networks:
   observability:
+
+volumes:
+  alertmanager-data:
