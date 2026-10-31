@@ -8,5 +8,10 @@ route:
 receivers:
   - name: "webhook"
     webhook_configs:
+      # Placeholder receiver. Nothing in this repository serves this URL, and
+      # host.internal does not resolve on plain Linux Docker Engine, so every
+      # notification sent here fails to deliver. Replace it with a real
+      # receiver (your own webhook, Slack, PagerDuty, email, ...) before
+      # relying on these alerts.
       - url: "http://host.internal/alerts"
         send_resolved: true
