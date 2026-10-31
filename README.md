@@ -188,7 +188,7 @@ Both v1 and v2 configurations accept one static feed and one realtime source per
 - **Environment** → `development` (default), `staging`, `production` (`--env <value>`)
 - **Port** → default `4000` (`--port <number>`)
 
-⚠️ If running with **Docker Compose**, Prometheus runs on `9090` and Grafana on `3000`. Don’t use those ports.
+⚠️ If running with **Docker Compose**, Prometheus runs on `9090`, Alertmanager on `9093`, and Grafana on `3000`. Don’t use those ports.
 
 ### Environment Variables
 
@@ -219,7 +219,7 @@ It may take a few minutes for Watchdog to start exposing data to Prometheus, sin
 
 ### 1. Docker Compose (recommended)
 
-Run Watchdog with **Prometheus + Grafana**:
+Run Watchdog with **Prometheus, Alertmanager, and Grafana**:
 
 ```bash
 docker compose up --build
@@ -229,7 +229,10 @@ Services:
 
 - Watchdog → `4000`
 - Prometheus → `9090`
+- Alertmanager → `9093`
 - Grafana → `3000`
+
+Prometheus loads the alert rules in `prometheus/rules/` and forwards firing alerts to Alertmanager. The receiver in `prometheus/alertmanager.yml` is a placeholder that nothing serves, so replace it with your own webhook, Slack, PagerDuty, or email receiver before relying on notifications. Alertmanager keeps silences and its notification log in the `alertmanager-data` volume, which survives container recreation; `docker compose down -v` removes it.
 
 Stop services:
 
