@@ -220,7 +220,7 @@ docker compose restart
 
 Grafana auto-loads a Go runtime dashboard. Prometheus is pre-configured to scrape Watchdog.
 
-See [Endpoints](#endpoints) to access metrics, health checks, Grafana, and Prometheus.
+See [Endpoints](#endpoints) to access metrics, health checks, Grafana, Prometheus, and Alertmanager.
 
 ### 2. Watchdog Only
 
@@ -281,6 +281,7 @@ During **development** (using `localhost`):
 - Grafana: [http://localhost:3000/login](http://localhost:3000/login) → default user/pass: `admin` / `admin`
 - Prometheus Targets: [http://localhost:9090/targets](http://localhost:9090/targets)
 - Prometheus Query: [http://localhost:9090/query](http://localhost:9090/query)
+- Alertmanager: [http://localhost:9093](http://localhost:9093)
 
 During **production** (replace `<server-ip-or-domain>`):
 
@@ -289,6 +290,7 @@ During **production** (replace `<server-ip-or-domain>`):
 - Grafana: `http://<server-ip-or-domain>:3000/login`
 - Prometheus Targets: `http://<server-ip-or-domain>:9090/targets`
 - Prometheus Query: `http://<server-ip-or-domain>:9090/query`
+- Alertmanager: `http://<server-ip-or-domain>:9093`
 
 ## Testing
 

@@ -9,9 +9,16 @@ receivers:
   - name: "webhook"
     webhook_configs:
       # Placeholder receiver. Nothing in this repository serves this URL, and
-      # host.internal does not resolve on plain Linux Docker Engine, so every
-      # notification sent here fails to deliver. Replace it with a real
-      # receiver (your own webhook, Slack, PagerDuty, email, ...) before
+      # host.internal is not resolvable by default from inside a container,
+      # so every notification sent here fails to deliver. Replace it with a
+      # real receiver (your own webhook, Slack, PagerDuty, email, ...) before
       # relying on these alerts.
+      #
+      # To reach a receiver running on the Docker host, use
+      # host.docker.internal. Docker Desktop resolves it out of the box; with
+      # Docker Engine on Linux, also add this to the alertmanager service in
+      # docker-compose.yml:
+      #   extra_hosts:
+      #     - "host.docker.internal:host-gateway"
       - url: "http://host.internal/alerts"
         send_resolved: true

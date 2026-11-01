@@ -28,10 +28,10 @@ services:
       - alertmanager
 
   alertmanager:
-    image: prom/alertmanager:latest
+    image: prom/alertmanager:v0.34.2
     container_name: alertmanager
     volumes:
-      - ./prometheus/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+      - ./prometheus/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       # Silences and the notification log live in /alertmanager; keep them
       # across container recreation.
       - alertmanager-data:/alertmanager
