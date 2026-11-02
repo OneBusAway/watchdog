@@ -204,7 +204,7 @@ Services:
 - Alertmanager → `9093`
 - Grafana → `3000`
 
-Prometheus loads the alert rules in `prometheus/rules/` and forwards firing alerts to Alertmanager. The receiver in `prometheus/alertmanager.yml` is a placeholder that nothing serves, so replace it with your own webhook, Slack, PagerDuty, or email receiver before relying on notifications. Alertmanager keeps silences and its notification log in the `alertmanager-data` volume, which survives container recreation; `docker compose down -v` removes it.
+Prometheus loads the alert rules in `prometheus/rules/` and forwards firing alerts to Alertmanager. The receiver in `prometheus/alertmanager.yml` is a placeholder that nothing serves, so replace it with your own webhook, Slack, PagerDuty, or email receiver before relying on notifications. Alertmanager keeps silences and its notification log in the `<project>_alertmanager-data` volume. Compose prefixes the project name, which defaults to the directory name, so a checkout in `watchdog/` uses `watchdog_alertmanager-data`. The volume survives container recreation; `docker compose down -v` removes it.
 
 Stop services:
 
