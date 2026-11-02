@@ -627,6 +627,28 @@ A retention job runs every 24 hours (D16). It deletes closed episodes and their 
 
 The initial schema does not include separate vehicle-feed-absence records or PostgreSQL-outage records. Vehicle absence is informational and does not prove a vehicle problem; PostgreSQL availability recording and alerting remain deferred.
 
+### Views for the investigation API
+
+Migration `00002` adds three plain views. The investigation API reads episodes only through them, so every derived field, filter and grouping has one definition ([investigation-api.md](investigation-api.md), D29). They are not materialized: open episodes change every collection interval, and API windows are at most 31 days.
+
+Each view has one row per episode, with the episode's own columns plus:
+
+| Column | `unmatched_stop_episode_view` | `unmatched_trip_episode_view` | `vehicle_anomaly_episode_view` |
+|---|---|---|---|
+| `server_id` | from `agency` | from `agency` | from the vehicle's endpoint |
+| `opened_at`, `closed_at` | opening and closing metrics responses' `observed_at` | same | opening and closing vehicle-position responses' `observed_at` |
+| `opening_response_id`, `closing_response_id` | the server-wide `response_id` of the opening and closing per-agency rows | same | `opening_response_id`, `closing_response_id` |
+| external identifier | `stop_id` (`reported_stop.oba_stop_id`) | `trip_id` (`reported_trip.oba_trip_id`) | `vehicle_id` (`vehicle_entity.external_vehicle_id`), `endpoint_id`, `anomaly_code` |
+| latest static context | `stop_metadata_version_id`, `static_found`, `gtfs_static_version_id` | `trip_metadata_version_id`, `static_found`, `gtfs_static_version_id`, `route_id`, `service_id`, `block_id` | none |
+| opening evidence | none | none | `agency_id`, `attribution_reason`, `position_validation_reason`, `expected_schedule_state`, `route_id`, `gtfs_static_version_id`, `bounding_box_version_id` |
+| recurrence | `previous_episode_count`, `previous_closed_at` | same | same, for the same vehicle and anomaly type |
+
+Rules:
+- **Latest static context** is the episode's metadata row whose static version has the latest `published_at`.
+- **`previous_episode_count`** counts retained episodes of the same identity that opened before this one. **`previous_closed_at`** is the `closed_at` of the most recent of those, or null. Retention deletes old episodes, so the count can fall over time.
+- **`LATERAL` subqueries, not window functions.** The latest static context and the recurrence columns are computed per row with `LATERAL` lookups on the existing `stop_metadata_version_reported_stop`, `trip_metadata_version_reported_trip`, `unmatched_stop_episode_entity`, `unmatched_trip_episode_entity` and `vehicle_anomaly_episode_entity_type` indexes. A window function partitioned by identity would stop PostgreSQL from applying filters such as `agency_id` before computing it.
+- **Clusters are not in the views,** because a cluster depends on the scheme. Queries join `stop_cluster_assignment` with `scheme_version` as a parameter.
+
 ## Meaning of unmatched reports
 
 An unmatched stop or trip episode means **the named backend included that ID in an unmatched list during the recorded period**. It is not a permanent property of the stop or trip, and closing an episode does not mean that the ID was matched.
@@ -682,7 +704,8 @@ Investigators and OBACloud read this data through an authenticated, read-only RE
 
 - the observer scenarios and the questions they raise;
 - the resource catalog (typed collections for unmatched-stop, unmatched-trip and vehicle anomaly episodes, plus their context);
-- filters, cursor pagination, query limits, authentication, caching, and status codes.
+- filters, cursor pagination, query limits, authentication, caching, and status codes;
+- related resources embedded with `include`, grouped episode counts, and the recurrence fields read from the views above.
 
 The API distinguishes **closed because no longer reported** from **confirmed matched**. A closed unmatched episode returns `close_reason: "not_reported"`, never `resolved: true` or `matched: true`. The API presents stored facts and source semantics without claiming a cause or a state that the backend did not report.
 
