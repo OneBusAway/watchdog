@@ -1,6 +1,7 @@
 package geo
 
 import (
+	"math"
 	"testing"
 
 	remoteGtfs "github.com/OneBusAway/go-gtfs"
@@ -249,5 +250,30 @@ func TestGetClusterID_MissingCoordinates(t *testing.T) {
 
 	if _, ok := getClusterID(stop); ok {
 		t.Fatal("expected stop without coordinates to be rejected")
+	}
+}
+
+func TestGetClusterID_InvalidCoordinates(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		lat  float64
+		lon  float64
+	}{
+		{"null_island", 0, 0},
+		{"inf_latitude", math.Inf(1), 0},
+		{"out_of_bounds_lat", 91.0, 0},
+		{"out_of_bounds_lon", 0, 181.0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stop := remoteGtfs.Stop{
+				Id:        "stop-invalid",
+				Type:      remoteGtfs.StopType_Stop,
+				Latitude:  floatPtr(tc.lat),
+				Longitude: floatPtr(tc.lon),
+			}
+			if _, ok := getClusterID(stop); ok {
+				t.Fatalf("expected stop with invalid coordinates (%v, %v) to be rejected", tc.lat, tc.lon)
+			}
+		})
 	}
 }

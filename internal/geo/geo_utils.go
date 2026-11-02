@@ -40,7 +40,7 @@ func NewBoundingBoxAccumulator() *BoundingBoxAccumulator {
 }
 
 // Add incorporates one stop into the running bounds. All stops increment
-// stopCount, but stops with missing or NaN coordinates cannot affect the box.
+// stopCount, but stops with missing or invalid coordinates cannot affect the box.
 // The first valid coordinate initializes all four extrema; every later valid
 // coordinate updates only the minima or maxima it exceeds.
 func (a *BoundingBoxAccumulator) Add(stop remoteGtfs.Stop) {
@@ -49,7 +49,7 @@ func (a *BoundingBoxAccumulator) Add(stop remoteGtfs.Stop) {
 		return
 	}
 	lat, lon := *stop.Latitude, *stop.Longitude
-	if math.IsNaN(lat) || math.IsNaN(lon) {
+	if !isValidLatLon(lat, lon) {
 		return
 	}
 	if !a.initialized {

@@ -139,7 +139,7 @@ func getClusterID(stop remoteGtfs.Stop) (Cluster, bool) {
 		return Cluster{}, false
 	}
 
-	if stop.Latitude == nil || stop.Longitude == nil {
+	if stop.Latitude == nil || stop.Longitude == nil || !isValidLatLon(*stop.Latitude, *stop.Longitude) {
 		return Cluster{}, false
 	}
 
