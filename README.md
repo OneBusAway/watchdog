@@ -168,7 +168,7 @@ Migrating to v2 is recommended whenever convenient — it's the only way to conf
 - **Environment** → `development` (default), `staging`, `production` (`--env <value>`)
 - **Port** → default `4000` (`--port <number>`)
 
-⚠️ If running with **Docker Compose**, Prometheus runs on `9090` and Grafana on `3000`. Don’t use those ports.
+⚠️ If running with **Docker Compose**, Prometheus runs on `9090`, Alertmanager on `9093`, and Grafana on `3000`. Don’t use those ports.
 
 ### Environment Variables
 
@@ -191,7 +191,7 @@ It may take a few minutes for Watchdog to start exposing data to Prometheus, sin
 
 ### 1. Docker Compose (recommended)
 
-Run Watchdog with **Prometheus + Grafana**:
+Run Watchdog with **Prometheus, Alertmanager, and Grafana**:
 
 ```bash
 docker compose up --build
@@ -201,7 +201,10 @@ Services:
 
 - Watchdog → `4000`
 - Prometheus → `9090`
+- Alertmanager → `9093`
 - Grafana → `3000`
+
+Prometheus loads the alert rules in `prometheus/rules/` and forwards firing alerts to Alertmanager. The receiver in `prometheus/alertmanager.yml` is a placeholder that nothing serves, so replace it with your own webhook, Slack, PagerDuty, or email receiver before relying on notifications. Alertmanager keeps silences and its notification log in the `<project>_alertmanager-data` volume. Compose prefixes the project name, which defaults to the directory name, so a checkout in `watchdog/` uses `watchdog_alertmanager-data`. The volume survives container recreation; `docker compose down -v` removes it.
 
 Stop services:
 
@@ -217,7 +220,7 @@ docker compose restart
 
 Grafana auto-loads a Go runtime dashboard. Prometheus is pre-configured to scrape Watchdog.
 
-See [Endpoints](#endpoints) to access metrics, health checks, Grafana, and Prometheus.
+See [Endpoints](#endpoints) to access metrics, health checks, Grafana, Prometheus, and Alertmanager.
 
 ### 2. Watchdog Only
 
@@ -278,6 +281,7 @@ During **development** (using `localhost`):
 - Grafana: [http://localhost:3000/login](http://localhost:3000/login) → default user/pass: `admin` / `admin`
 - Prometheus Targets: [http://localhost:9090/targets](http://localhost:9090/targets)
 - Prometheus Query: [http://localhost:9090/query](http://localhost:9090/query)
+- Alertmanager: [http://localhost:9093](http://localhost:9093)
 
 During **production** (replace `<server-ip-or-domain>`):
 
@@ -286,6 +290,7 @@ During **production** (replace `<server-ip-or-domain>`):
 - Grafana: `http://<server-ip-or-domain>:3000/login`
 - Prometheus Targets: `http://<server-ip-or-domain>:9090/targets`
 - Prometheus Query: `http://<server-ip-or-domain>:9090/query`
+- Alertmanager: `http://<server-ip-or-domain>:9093`
 
 ## Testing
 
