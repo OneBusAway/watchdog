@@ -17,6 +17,10 @@ import (
 	"watchdog.onebusaway.org/internal/utils"
 )
 
+// agencyMismatchRefreshRetries bounds the retries of a refresh campaign started
+// because backend static agency coverage differs from Watchdog's snapshot.
+const agencyMismatchRefreshRetries = 3
+
 // StartMetricsCollection begins a background goroutine that continuously
 // collects metrics from all configured OBA servers at a regular interval.
 //
@@ -176,6 +180,15 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 		})
 		return
 	}
+	// Backend coverage and Watchdog's published snapshot disagree: the backend
+	// may have loaded newer static data. Refresh in the background; this does
+	// not delay the rest of the tick, and the retirement below still runs now.
+	localAgencyIDs := make([]string, 0, len(scope.StaticAgencies))
+	for _, agency := range scope.StaticAgencies {
+		localAgencyIDs = append(localAgencyIDs, agency.AgencyID)
+	}
+	backendOnly, localOnly := gtfs.DiffAgencySets(reportedAgencies, localAgencyIDs)
+	app.GtfsService.RefreshOnAgencyMismatch(ctx, server, backendOnly, localOnly, agencyMismatchRefreshRetries)
 
 	// Resolve the agencies reported by OBA. These entries carry the
 	// labels the vehicle pass emits, and the pass consults the route/trip index
