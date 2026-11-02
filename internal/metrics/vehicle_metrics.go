@@ -170,14 +170,33 @@ func countActiveVehiclesForAgency(ctx context.Context, client *onebusaway.Client
 				"server_name": server.ServerName,
 			},
 		})
+
+		AgencyActiveVehiclesGauge.DeleteLabelValues(server.AgencyID, server.AgencyName, server.ServerName, utils.SanitizeServerURL(server.ObaBaseURL))
+
 		return 0, err
 	}
 
+	// Handle a successful API response containing JSON null.
 	if response == nil {
-		return 0, nil
+		err := fmt.Errorf("OBA API returned a null response for agency %s", server.AgencyID)
+
+		AgencyActiveVehiclesGauge.DeleteLabelValues(
+			server.AgencyID,
+			server.AgencyName,
+			server.ServerName,
+			utils.SanitizeServerURL(server.ObaBaseURL),
+		)
+
+		return 0, err
 	}
 
-	AgencyActiveVehiclesGauge.WithLabelValues(server.AgencyID, server.AgencyName, server.ServerName, utils.SanitizeServerURL(server.ObaBaseURL)).Set(float64(len(response.Data.List)))
+	AgencyActiveVehiclesGauge.WithLabelValues(
+		server.AgencyID,
+		server.AgencyName,
+		server.ServerName,
+		utils.SanitizeServerURL(server.ObaBaseURL),
+	).Set(float64(len(response.Data.List)))
+
 	ObaVehiclesLastSuccessfulFetch.WithLabelValues(
 		server.AgencyID,
 		server.AgencyName,
