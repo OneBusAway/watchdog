@@ -161,9 +161,16 @@ func emitAgencyPositions(server models.ObaServer, agencies []models.ObaServer, p
 //
 // This function fetches live vehicle data from the OBA API using the agency ID.
 func countActiveVehiclesForAgency(ctx context.Context, client *onebusaway.Client, server models.ObaServer) (int, error) {
+	labels := []string{
+		server.AgencyID,
+		server.AgencyName,
+		server.ServerName,
+		utils.SanitizeServerURL(server.ObaBaseURL),
+	}
 	response, err := client.VehiclesForAgency.List(ctx, server.AgencyID, onebusaway.VehiclesForAgencyListParams{})
 
 	if err != nil {
+		ObaVehiclesFetchSuccess.WithLabelValues(labels...).Set(0)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"agency_id":   server.AgencyID,
@@ -173,17 +180,18 @@ func countActiveVehiclesForAgency(ctx context.Context, client *onebusaway.Client
 		return 0, err
 	}
 
+	return recordActiveVehiclesResponse(response, labels)
+}
+
+func recordActiveVehiclesResponse(response *onebusaway.VehiclesForAgencyListResponse, labels []string) (int, error) {
 	if response == nil {
-		return 0, nil
+		ObaVehiclesFetchSuccess.WithLabelValues(labels...).Set(0)
+		return 0, fmt.Errorf("vehicles-for-agency response is nil")
 	}
 
-	AgencyActiveVehiclesGauge.WithLabelValues(server.AgencyID, server.AgencyName, server.ServerName, utils.SanitizeServerURL(server.ObaBaseURL)).Set(float64(len(response.Data.List)))
-	ObaVehiclesLastSuccessfulFetch.WithLabelValues(
-		server.AgencyID,
-		server.AgencyName,
-		server.ServerName,
-		utils.SanitizeServerURL(server.ObaBaseURL),
-	).Set(float64(time.Now().UTC().Unix()))
+	AgencyActiveVehiclesGauge.WithLabelValues(labels...).Set(float64(len(response.Data.List)))
+	ObaVehiclesLastSuccessfulFetch.WithLabelValues(labels...).Set(float64(time.Now().UTC().Unix()))
+	ObaVehiclesFetchSuccess.WithLabelValues(labels...).Set(1)
 
 	return len(response.Data.List), nil
 }

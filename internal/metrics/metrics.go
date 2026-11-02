@@ -306,6 +306,14 @@ var (
 		[]string{"agency_id", "agency_name", "server_name", "server_url"},
 	))
 
+	ObaVehiclesFetchSuccess = tracked(promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "oba_vehicles_fetch_success",
+			Help: "Whether the latest OBA vehicles-for-agency request succeeded",
+		},
+		[]string{"agency_id", "agency_name", "server_name", "server_url"},
+	))
+
 	ObaRealtimeRecords = tracked(promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "oba_realtime_records_count",

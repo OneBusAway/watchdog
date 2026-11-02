@@ -172,6 +172,7 @@ func (ms *MetricsService) RetireInactiveVehicleAgency(server models.ObaServer) {
 	StoppedOutOfBoundsVehiclesGauge.WithLabelValues(labels...).Set(0)
 	AgencyActiveVehiclesGauge.DeleteLabelValues(labels...)
 	ObaVehiclesLastSuccessfulFetch.DeleteLabelValues(labels...)
+	ObaVehiclesFetchSuccess.DeleteLabelValues(labels...)
 }
 
 func (ms *MetricsService) RetireVehicleAttributionDiagnostics(server models.ObaServer) {
