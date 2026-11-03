@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/getsentry/sentry-go"
@@ -16,6 +18,41 @@ import (
 	"watchdog.onebusaway.org/internal/report"
 	"watchdog.onebusaway.org/internal/utils"
 )
+
+// Bounded concurrency for collection. These caps keep goroutine and
+// connection growth under control as the number of monitored agencies grows.
+// They fit within the pooled HTTP transport limits
+// (MaxIdleConnsPerHost 10) so concurrency does not exhaust keep-alive slots.
+// Declared as vars so tests can lower them without changing production code.
+var (
+	maxConcurrentCollections  = 8
+	maxConcurrentAgencyChecks = 8
+)
+
+// cycleTimeout derives the per-cycle deadline: twice the fetch interval.
+//
+// The deadline bounds a cycle so stalled work cannot accumulate into later
+// cycles; it is not a guarantee that every degraded entry finishes inside
+// it. SDK calls (server ping, vehicles-for-agency) are retried by the
+// OneBusAway client (default 2 retries), so one hanging step can take
+// roughly three per-request timeouts, and multi-feed or many-agency chains
+// can still exceed the deadline. When that happens the cycle cancels, the
+// completion gauge holds, and round-robin admission spreads the skipped work
+// fairly across subsequent cycles while the per-entry gauges keep reporting
+// whatever each entry last managed to collect.
+//
+// Overrun never overlaps: the ticker loop calls collectOnce synchronously,
+// so after a long cycle the single pending tick simply starts the next one.
+// The TryLock in collectOnce remains as a backstop against concurrent
+// callers. The stalled alert (3x-interval window) therefore fires only when
+// the loop truly cannot complete a pass, not when a single upstream is slow.
+func (app *Application) cycleTimeout() time.Duration {
+	interval := app.ConfigService.Config.FetchInterval
+	if interval <= 0 {
+		interval = 30
+	}
+	return 2 * time.Duration(interval) * time.Second
+}
 
 // StartMetricsCollection begins a background goroutine that continuously
 // collects metrics from all configured OBA servers at a regular interval.
@@ -67,6 +104,15 @@ func (app *Application) StartMetricsCollection(ctx context.Context) {
 // timestamp with up==1 is read as "Watchdog current", and an idle process
 // must not claim that. watchdog_configured_servers reports the zero.
 func (app *Application) collectOnce(ctx context.Context) {
+	// Never overlap cycles: the ticker goroutine is sequential, and this
+	// TryLock also protects against concurrent manual callers. A skipped
+	// tick simply waits for the next interval.
+	if !app.collectMu.TryLock() {
+		app.Logger.Warn("Skipping collection tick: previous cycle still running")
+		return
+	}
+	defer app.collectMu.Unlock()
+
 	// Resolve scopes against a consistent static/config view, but
 	// collect outside the refresh lock: collection makes upstream
 	// network calls and must not stall static publication or config
@@ -86,10 +132,55 @@ func (app *Application) collectOnce(ctx context.Context) {
 	if len(targets) == 0 {
 		return
 	}
-	for _, target := range targets {
-		app.collectForScope(ctx, target.server, target.scope)
+	// Bound the whole cycle so stalled endpoints cannot accumulate into
+	// later ticks. Shutdown (ctx) cancels through the derived context.
+	cycleCtx, cancel := context.WithTimeout(ctx, app.cycleTimeout())
+	defer cancel()
+
+	// Bounded fan-out: acquire the slot before spawning the goroutine so
+	// the number of live workers never exceeds the cap.
+	//
+	// Admission starts from a round-robin offset that advances every cycle,
+	// so entries that sort late in configuration order cannot be starved
+	// indefinitely when the shared cycle deadline cuts a cycle short: each
+	// entry reaches the front of the admission order within len(targets)
+	// cycles.
+	limit := maxConcurrentCollections
+	if limit <= 0 {
+		limit = 1
 	}
-	app.MetricsService.ReportCollectionCompleted(time.Now())
+	sem := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+	start := int(app.collectStart % uint64(len(targets)))
+	app.collectStart++
+launch:
+	for i := range targets {
+		target := targets[(start+i)%len(targets)]
+		select {
+		case sem <- struct{}{}:
+		case <-cycleCtx.Done():
+			break launch
+		}
+		if cycleCtx.Err() != nil {
+			// Lost the race between a freed slot and the deadline: do not
+			// start a worker that is already canceled.
+			<-sem
+			break launch
+		}
+		wg.Add(1)
+		go func(t collectionTarget) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			app.collectForScope(cycleCtx, t.server, t.scope)
+		}(target)
+	}
+	wg.Wait()
+	// Only advance the completion gauge when the cycle ran to completion.
+	// A deadline-exceeded or canceled cycle leaves some agencies stale, so
+	// it must not claim freshness.
+	if cycleCtx.Err() == nil {
+		app.MetricsService.ReportCollectionCompleted(time.Now())
+	}
 }
 
 // collectForScope dispatches a single configured ObaServer entry through the
@@ -115,6 +206,44 @@ func (app *Application) collectForScope(ctx context.Context, server models.ObaSe
 		app.collectForServerScope(ctx, server, s)
 	default:
 		app.Logger.Error("Unknown scope type", "server_name", server.ServerName)
+	}
+}
+
+// agencyOffsetFor returns the round-robin start offset into this server's
+// reported agencies for the per-agency fan-out, advancing the server's own
+// counter. Rotation is per server (keyed by the server-scoped ServerKey) so
+// one server's cadence never shifts another's, and a re-added server starts
+// from zero because PruneStaleServers drops its counter with its other
+// per-server state.
+func (app *Application) agencyOffsetFor(server models.ObaServer, n int) int {
+	if n <= 0 {
+		return 0
+	}
+	key := server.ServerKey()
+	app.agencyStartsMu.Lock()
+	ctr, ok := app.agencyStarts[key]
+	if !ok {
+		ctr = &atomic.Uint64{}
+		if app.agencyStarts == nil {
+			app.agencyStarts = make(map[string]*atomic.Uint64)
+		}
+		app.agencyStarts[key] = ctr
+	}
+	app.agencyStartsMu.Unlock()
+	return int((ctr.Add(1) - 1) % uint64(n))
+}
+
+// pruneAgencyOffsets drops rotation state for servers that left the
+// configuration, using the same keep predicate as the other per-server
+// stores. Rotation counters carry no signal worth keeping: a re-added
+// server simply restarts its rotation.
+func (app *Application) pruneAgencyOffsets(keep func(serverKey string) bool) {
+	app.agencyStartsMu.Lock()
+	defer app.agencyStartsMu.Unlock()
+	for key := range app.agencyStarts {
+		if !keep(key) {
+			delete(app.agencyStarts, key)
+		}
 	}
 }
 
@@ -148,6 +277,15 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 	// ObaApiStatus gauge is server-scoped, not agency-scoped).
 	ok := app.MetricsService.ServerPing(ctx, server)
 	if !ok {
+		if ctx.Err() != nil {
+			// The ping was canceled by the cycle deadline or shutdown:
+			// incomplete collection, not a server outage. Preserve the
+			// availability gauge written by earlier successful ticks and
+			// the backoff state.
+			app.Logger.Info("Skipping server-scope collection due to canceled ping",
+				"server_name", server.ServerName, "oba_base_url", server.ObaBaseURL)
+			return
+		}
 		app.ConfigService.BackoffStore.UpdateBackoff(server.ServerKey())
 		app.Logger.Info("Skipping server-scope collection due to ping failure",
 			"server_name", server.ServerName, "oba_base_url", server.ObaBaseURL)
@@ -166,6 +304,13 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 	// Probe /metrics.json for OBA's loaded static agency set.
 	reportedAgencies, prefetchedMetrics, err := app.probeReportedAgencies(ctx, server)
 	if err != nil {
+		if ctx.Err() != nil {
+			// Canceled by the cycle deadline or shutdown: incomplete
+			// collection, not a coverage outage.
+			app.Logger.Info("Skipping server-scope collection due to canceled coverage probe",
+				"server_name", server.ServerName)
+			return
+		}
 		// Coverage is unknown, not empty. Preserve the last successful vehicle
 		// state rather than destructively retiring agencies on a probe failure.
 		app.Logger.Warn("Failed to probe /metrics.json; preserving prior agency state for this tick",
@@ -222,14 +367,22 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 	rtFetchSucceeded := true
 	if err := app.GtfsService.FetchAndStoreGTFSRTFeed(ctx, server); err != nil {
 		rtFetchSucceeded = false
-		app.Logger.Error("Failed to fetch and store GTFS-RT feed",
-			"server_name", server.ServerName, "error", err)
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{
-				"server_name": server.ServerName,
-			},
-			Level: sentry.LevelError,
-		})
+		if ctx.Err() != nil {
+			// Canceled by the cycle deadline or shutdown: incomplete
+			// collection, not a feed outage. The pass below stays gated
+			// and no failure is reported.
+			app.Logger.Info("Skipping GTFS-RT vehicle pass due to canceled fetch",
+				"server_name", server.ServerName)
+		} else {
+			app.Logger.Error("Failed to fetch and store GTFS-RT feed",
+				"server_name", server.ServerName, "error", err)
+			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+				Tags: map[string]string{
+					"server_name": server.ServerName,
+				},
+				Level: sentry.LevelError,
+			})
+		}
 	} else if len(server.GtfsRTFeeds) > 0 {
 		metrics.GtfsRtLastSuccessfulFetch.WithLabelValues(
 			"",
@@ -246,16 +399,48 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 		)
 	}
 
-	// Per-agency metric loop. Each iteration runs only the agency-scoped
-	// checks (CheckBundleExpiration, FetchObaAPIMetrics,
+	// Per-agency metric loop, run concurrently. Each worker runs only the
+	// agency-scoped checks (CheckBundleExpiration, FetchObaAPIMetrics,
 	// CountActiveVehiclesForAgency, ServerPing) — the GTFS-RT vehicle pass
 	// runs once for the whole server after this loop. ServerPing is
 	// intentionally called once per agency here because the gauge is
 	// server-scoped — the per-agency call is cheap (one HTTP probe) and keeps
 	// the metric series up-to-date even if a single agency's checks bail out.
-	for _, agencyServer := range reportedAgencyEntries {
-		app.collectAgencyChecks(ctx, agencyServer, prefetchedMetrics)
+	// prefetchedMetrics is read-only after probeReportedAgencies returns, so
+	// sharing it across workers is safe. reportedAgencyEntries is fixed
+	// before fan-out and each worker receives its own struct copy.
+	// Admission rotates across calls for the same anti-starvation reason as
+	// the top-level targets, tracked per server so servers cannot shift
+	// each other's rotation.
+	agencyLimit := maxConcurrentAgencyChecks
+	if agencyLimit <= 0 {
+		agencyLimit = 1
 	}
+	agencySem := make(chan struct{}, agencyLimit)
+	var agencyWg sync.WaitGroup
+	agencyStart := app.agencyOffsetFor(server, len(reportedAgencyEntries))
+agencyLaunch:
+	for i := range reportedAgencyEntries {
+		agencyServer := reportedAgencyEntries[(agencyStart+i)%len(reportedAgencyEntries)]
+		select {
+		case agencySem <- struct{}{}:
+		case <-ctx.Done():
+			break agencyLaunch
+		}
+		if ctx.Err() != nil {
+			// Lost the race between a freed slot and cancellation: do not
+			// start a worker that is already canceled.
+			<-agencySem
+			break agencyLaunch
+		}
+		agencyWg.Add(1)
+		go func(s models.ObaServer) {
+			defer agencyWg.Done()
+			defer func() { <-agencySem }()
+			app.collectAgencyChecks(ctx, s, prefetchedMetrics)
+		}(agencyServer)
+	}
+	agencyWg.Wait()
 
 	// One GTFS-RT vehicle pass for the whole server. Running it inside the
 	// loop above would re-walk the same merged feed once per agency, which
@@ -284,6 +469,14 @@ func (app *Application) CollectMetricsForServer(ctx context.Context, server mode
 	}
 
 	if err := app.GtfsService.FetchAndStoreGTFSRTFeed(ctx, server); err != nil {
+		if ctx.Err() != nil {
+			// Canceled by the cycle deadline or shutdown: incomplete
+			// collection, not a feed outage. The vehicle pass stays gated
+			// and no failure is reported.
+			app.Logger.Info("Skipping GTFS-RT vehicle pass due to canceled fetch",
+				"agency_id", server.AgencyID, "server_name", server.ServerName)
+			return
+		}
 		app.Logger.Error("Failed to fetch and store GTFS-RT feed", "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
@@ -351,6 +544,14 @@ func (app *Application) collectAgencyChecks(ctx context.Context, server models.O
 
 	ok := app.MetricsService.ServerPing(ctx, server)
 	if !ok {
+		if ctx.Err() != nil {
+			// The ping was canceled by the cycle deadline or shutdown:
+			// incomplete collection, not a server outage. Preserve the
+			// availability gauge and backoff state.
+			app.Logger.Info("Skipping metrics collection due to canceled ping",
+				"agency_id", server.AgencyID, "server_name", server.ServerName)
+			return false
+		}
 		app.Logger.Error("Server ping failed",
 			"agency_id", server.AgencyID, "agency_name", server.AgencyName, "server_name", server.ServerName)
 		report.ReportErrorWithSentryOptions(fmt.Errorf("server ping failed for %s", server.ObaBaseURL), report.SentryReportOptions{
@@ -388,30 +589,44 @@ func (app *Application) collectAgencyChecks(ctx context.Context, server models.O
 
 	err = app.MetricsService.FetchObaAPIMetrics(ctx, server.AgencyID, server.AgencyName, server.ServerName, server.ObaBaseURL, server.ObaApiKey, prefetchedMetrics)
 	if err != nil {
-		app.Logger.Error("Failed to fetch OBA API metrics", "error", err)
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{
-				"agency_id":   server.AgencyID,
-				"agency_name": server.AgencyName,
-				"server_name": server.ServerName,
-			},
-			ExtraContext: map[string]interface{}{
-				"oba_base_url": server.ObaBaseURL,
-			},
-			Level: sentry.LevelError,
-		})
+		if ctx.Err() != nil {
+			// Canceled by the cycle deadline or shutdown: incomplete
+			// collection, not an upstream failure.
+			app.Logger.Info("Skipping OBA API metrics due to canceled context",
+				"agency_id", server.AgencyID, "server_name", server.ServerName)
+		} else {
+			app.Logger.Error("Failed to fetch OBA API metrics", "error", err)
+			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+				Tags: map[string]string{
+					"agency_id":   server.AgencyID,
+					"agency_name": server.AgencyName,
+					"server_name": server.ServerName,
+				},
+				ExtraContext: map[string]interface{}{
+					"oba_base_url": server.ObaBaseURL,
+				},
+				Level: sentry.LevelError,
+			})
+		}
 	}
 
 	err = app.MetricsService.CountActiveVehiclesForAgency(ctx, server)
 	if err != nil {
-		app.Logger.Error("Failed to count vehicles from VehiclesForAgency API", "error", err)
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{
-				"agency_id":   server.AgencyID,
-				"server_name": server.ServerName,
-			},
-			Level: sentry.LevelError,
-		})
+		if ctx.Err() != nil {
+			// Canceled by the cycle deadline or shutdown: incomplete
+			// collection, not an upstream failure.
+			app.Logger.Info("Skipping vehicles-for-agency count due to canceled context",
+				"agency_id", server.AgencyID, "server_name", server.ServerName)
+		} else {
+			app.Logger.Error("Failed to count vehicles from VehiclesForAgency API", "error", err)
+			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+				Tags: map[string]string{
+					"agency_id":   server.AgencyID,
+					"server_name": server.ServerName,
+				},
+				Level: sentry.LevelError,
+			})
+		}
 	}
 
 	return true
