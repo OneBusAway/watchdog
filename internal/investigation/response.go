@@ -12,6 +12,22 @@ import (
 	"time"
 )
 
+// How long a client may reuse a response before asking again. After that it
+// revalidates with If-None-Match, which costs only a 304 when nothing changed.
+const (
+	// changingMaxAge is for data that can change on any collection tick: an
+	// open episode's last_reported_at moves forward every poll, and a new
+	// episode can open on any poll. It matches the default --fetch-interval,
+	// so a client is never more than one tick behind. It is the most stale a
+	// client may let such a response get: a longer value would let a
+	// dashboard hide a newly opened episode for that long.
+	changingMaxAge = 30 * time.Second
+	// unchangingMaxAge is for records that never change once written, such as
+	// closed episodes. Staleness cannot happen there, so a day only saves
+	// requests.
+	unchangingMaxAge = 24 * time.Hour
+)
+
 // cachePolicy is how long a client may reuse a response without asking again.
 type cachePolicy struct {
 	control      string
@@ -19,9 +35,9 @@ type cachePolicy struct {
 }
 
 // cacheShort is for anything that can still change: open episodes,
-// collections, clusters and counts. 30 seconds is one collection interval.
+// collections, clusters and counts.
 func cacheShort() cachePolicy {
-	return cachePolicy{control: "private, max-age=30"}
+	return cachePolicy{control: cacheControl(changingMaxAge)}
 }
 
 // cacheImmutable is for records that no longer change: closed episodes, their
@@ -29,7 +45,13 @@ func cacheShort() cachePolicy {
 // and responses. lastModified is the episode's closed_at or the record's own
 // time; pass the zero time to send no Last-Modified header.
 func cacheImmutable(lastModified time.Time) cachePolicy {
-	return cachePolicy{control: "private, max-age=86400", lastModified: lastModified}
+	return cachePolicy{control: cacheControl(unchangingMaxAge), lastModified: lastModified}
+}
+
+// cacheControl is the Cache-Control value for maxAge. private keeps shared
+// caches from storing authenticated data.
+func cacheControl(maxAge time.Duration) string {
+	return "private, max-age=" + strconv.Itoa(int(maxAge.Seconds()))
 }
 
 // writeJSON writes body as the 200 response, or 304 Not Modified when the
