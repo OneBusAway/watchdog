@@ -6,6 +6,7 @@ package investigation
 
 import (
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"watchdog.onebusaway.org/internal/models"
@@ -24,6 +25,9 @@ type InvestigationService struct {
 
 	// tokens are the accepted bearer tokens. They are never logged.
 	tokens [][]byte
+	// now is the clock behind time-window defaults and "not in the future"
+	// checks. Tests replace it to fix "now".
+	now func() time.Time
 }
 
 // NewInvestigationService builds the service. pool may be nil. tokens are the
@@ -40,5 +44,6 @@ func NewInvestigationService(pool *pgxpool.Pool, servers func() []models.ObaServ
 		Servers: servers,
 		Logger:  logger,
 		tokens:  accepted,
+		now:     time.Now,
 	}
 }
