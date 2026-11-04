@@ -113,7 +113,7 @@ func TestRoute_Metrics(t *testing.T) {
 	const route = "/v1/metrics-test/:id"
 	s, router := newTestService(t)
 	called := false
-	s.route(router, route, okHandler(&called))
+	s.get(router, route, okHandler(&called))
 
 	requests := metrics.InvestigationAPIRequests.WithLabelValues(route, "401")
 	before := counterValue(t, requests)
@@ -150,7 +150,7 @@ func TestWithMetrics_DefaultsToOK(t *testing.T) {
 func TestRoute_TokenCheckedBeforeDatabase(t *testing.T) {
 	s, router := newTestService(t) // no pool, and no token check until #197
 	called := false
-	s.route(router, "/v1/test", okHandler(&called))
+	s.get(router, "/v1/test", okHandler(&called))
 
 	rec := doGet(t, router, "/v1/test", map[string]string{"Accept": "text/html"})
 

@@ -1,7 +1,7 @@
 // Package investigation serves the read-only Investigation API described in
 // docs/investigation-api.md. Every route goes through the same request
-// pipeline (see InvestigationService.route), so endpoints only supply a
-// query, a handler and a route line.
+// pipeline (see InvestigationService.get), so endpoints only supply a
+// query, a handler and one s.get line.
 package investigation
 
 import (
