@@ -19,7 +19,7 @@ func okHandler(called *bool) httprouter.Handle {
 func TestRoute_FailsClosed(t *testing.T) {
 	s, router := newTestService(t)
 	called := false
-	s.route(router, "/v1/test", okHandler(&called))
+	s.get(router, "/v1/test", okHandler(&called))
 
 	for _, headers := range []map[string]string{
 		nil,
@@ -49,7 +49,7 @@ func TestRoute_FailsClosed(t *testing.T) {
 func TestRoute_RegistersGetAndHead(t *testing.T) {
 	s, router := newTestService(t)
 	called := false
-	s.route(router, "/v1/test", okHandler(&called))
+	s.get(router, "/v1/test", okHandler(&called))
 
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
 		if h, _, _ := router.Lookup(method, "/v1/test"); h == nil {
