@@ -26,7 +26,9 @@ func (s *InvestigationService) fail(w http.ResponseWriter, r *http.Request, err 
 //
 //   - No rows: 404, because the URI names no resource (for example an episode
 //     removed by retention).
-//   - Query timeout: 503 "Query timeout".
+//   - Query timeout: 503 "Query timeout", logged and reported to Sentry as a
+//     warning: a query that slow usually means a missing index or an
+//     unbounded filter, which is our bug.
 //   - Client went away: 499, with no body and no Sentry report.
 //   - Anything else: 500, logged and reported to Sentry. The error text is
 //     never sent to the client.
@@ -35,6 +37,11 @@ func fail(w http.ResponseWriter, r *http.Request, err error, logger *slog.Logger
 	case errors.Is(err, pgx.ErrNoRows):
 		writeProblem(w, http.StatusNotFound, "Not found", "No resource exists at this URI.", nil)
 	case errors.Is(err, errQueryTimeout):
+		logger.Warn("investigation query timed out", "method", r.Method, "path", r.URL.Path, "error", err)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags:  sentryTags(r),
+			Level: sentry.LevelWarning,
+		})
 		writeProblem(w, http.StatusServiceUnavailable, "Query timeout",
 			"The request's queries took longer than 5 seconds.", nil)
 	case errors.Is(err, errRequestCanceled):
@@ -43,10 +50,15 @@ func fail(w http.ResponseWriter, r *http.Request, err error, logger *slog.Logger
 	default:
 		logger.Error("investigation request failed", "method", r.Method, "path", r.URL.Path, "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags:  map[string]string{"component": "investigation_api", "path": r.URL.Path},
+			Tags:  sentryTags(r),
 			Level: sentry.LevelError,
 		})
 		writeProblem(w, http.StatusInternalServerError, "Internal server error",
 			"An unexpected error occurred.", nil)
 	}
+}
+
+// sentryTags are the tags on every Investigation API report.
+func sentryTags(r *http.Request) map[string]string {
+	return map[string]string{"component": "investigation_api", "path": r.URL.Path}
 }
