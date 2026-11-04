@@ -471,3 +471,22 @@ var (
 		[]string{"url", "method", "status_code"},
 	))
 )
+
+var (
+	InvestigationAPIRequests = tracked(promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "watchdog_investigation_api_requests_total",
+			Help: "Investigation API requests, by route template and response status",
+		},
+		[]string{"route", "status"},
+	))
+
+	InvestigationAPIRequestDuration = tracked(promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "watchdog_investigation_api_request_duration_seconds",
+			Help:    "Time spent serving Investigation API requests, by route template (in seconds)",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"route"},
+	))
+)
