@@ -28,6 +28,8 @@ type InvestigationService struct {
 	// now is the clock behind time-window defaults and "not in the future"
 	// checks. Tests replace it to fix "now".
 	now func() time.Time
+	// loaders hold one loader per includable resource kind; see include.go.
+	loaders map[resourceKind]loader
 }
 
 // NewInvestigationService builds the service. pool may be nil. tokens are the
@@ -45,5 +47,6 @@ func NewInvestigationService(pool *pgxpool.Pool, servers func() []models.ObaServ
 		Logger:  logger,
 		tokens:  accepted,
 		now:     time.Now,
+		loaders: map[resourceKind]loader{},
 	}
 }
