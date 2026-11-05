@@ -3,13 +3,16 @@ package investigation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"watchdog.onebusaway.org/internal/db/dbgen"
 	"watchdog.onebusaway.org/internal/db/dbtest"
 	"watchdog.onebusaway.org/internal/models"
@@ -113,6 +116,51 @@ func TestRead_ClientCanceled(t *testing.T) {
 	}
 	if errors.Is(err, errQueryTimeout) {
 		t.Error("a client cancel was reported as a query timeout")
+	}
+}
+
+// A database that cannot be reached is an outage, not a query bug. This needs
+// no PostgreSQL: nothing listens on port 1.
+func TestRead_DatabaseUnreachable(t *testing.T) {
+	pool, err := pgxpool.New(context.Background(), "postgres://watchdog@127.0.0.1:1/watchdog?connect_timeout=1")
+	if err != nil {
+		t.Fatalf("pgxpool.New: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	err = readTx(context.Background(), pool, queryTimeout, func(context.Context, pgx.Tx) error {
+		t.Error("fn ran without a connection")
+		return nil
+	})
+
+	if !errors.Is(err, errDatabaseUnavailable) {
+		t.Fatalf("err = %v, want errDatabaseUnavailable", err)
+	}
+	if errors.Is(err, errQueryTimeout) || errors.Is(err, errRequestCanceled) {
+		t.Errorf("err = %v was also marked as a timeout or cancel", err)
+	}
+}
+
+func TestDatabaseUnreachable(t *testing.T) {
+	cases := map[string]struct {
+		err  error
+		want bool
+	}{
+		"connection failure": {&pgconn.PgError{Code: "08006"}, true},
+		"admin shutdown":     {&pgconn.PgError{Code: "57P01"}, true},
+		"starting up":        {&pgconn.PgError{Code: "57P03"}, true},
+		"network error":      {fmt.Errorf("read: %w", &net.OpError{Op: "read", Err: errors.New("connection reset")}), true},
+		"undefined table":    {&pgconn.PgError{Code: "42P01"}, false},
+		"read-only write":    {&pgconn.PgError{Code: codeReadOnlyTransaction}, false},
+		"no rows":            {pgx.ErrNoRows, false},
+		"other":              {errors.New("boom"), false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := databaseUnreachable(tc.err); got != tc.want {
+				t.Errorf("databaseUnreachable(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
 	}
 }
 
