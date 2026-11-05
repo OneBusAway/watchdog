@@ -623,6 +623,22 @@ CREATE UNIQUE INDEX vehicle_anomaly_one_open_per_type
     WHERE closing_response_id IS NULL;
 ```
 
+Migration `00002` adds the indexes for the investigation API's list queries, which filter by agency or anomaly type and page by episode ID descending ([investigation-api.md](investigation-api.md#7-schema-follow-ups-for-the-api)). A vehicle episode has no agency column; its agency comes from the opening evidence.
+
+```sql
+CREATE INDEX unmatched_stop_episode_agency_id_desc
+    ON unmatched_stop_episode (agency_id, unmatched_stop_episode_id DESC);
+
+CREATE INDEX unmatched_trip_episode_agency_id_desc
+    ON unmatched_trip_episode (agency_id, unmatched_trip_episode_id DESC);
+
+CREATE INDEX vehicle_anomaly_episode_type_id_desc
+    ON vehicle_anomaly_episode (anomaly_type_id, vehicle_anomaly_episode_id DESC);
+
+CREATE INDEX vehicle_position_evidence_agency_response
+    ON vehicle_position_evidence (agency_id, vehicle_position_response_id);
+```
+
 A retention job runs every 24 hours (D16). It deletes closed episodes and their evidence 90 days after `closed_at`. Open episodes are kept until they close, except for servers no longer in the configuration: their open episodes are deleted 90 days after their last observation (`last_reported_at` for unmatched episodes; the newest evidence's response `observed_at` for vehicle episodes). A removed server's history otherwise stays queryable. Static context, responses and identities are deleted once nothing references them. Do not store raw full-feed payloads or normal per-vehicle samples.
 
 The initial schema does not include separate vehicle-feed-absence records or PostgreSQL-outage records. Vehicle absence is informational and does not prove a vehicle problem; PostgreSQL availability recording and alerting remain deferred.
@@ -644,9 +660,10 @@ Each view has one row per episode, with the episode's own columns plus:
 | recurrence | `previous_episode_count`, `previous_closed_at` | same | same, for the same vehicle and anomaly type |
 
 Rules:
-- **Latest static context** is the episode's metadata row whose static version has the latest `published_at`.
-- **`previous_episode_count`** counts retained episodes of the same identity that opened before this one. **`previous_closed_at`** is the `closed_at` of the most recent of those, or null. Retention deletes old episodes, so the count can fall over time.
-- **`LATERAL` subqueries, not window functions.** The latest static context and the recurrence columns are computed per row with `LATERAL` lookups on the existing `stop_metadata_version_reported_stop`, `trip_metadata_version_reported_trip`, `unmatched_stop_episode_entity`, `unmatched_trip_episode_entity` and `vehicle_anomaly_episode_entity_type` indexes. A window function partitioned by identity would stop PostgreSQL from applying filters such as `agency_id` before computing it.
+- **Latest static context** is the episode's metadata row whose static version has the latest `published_at`; if two versions share it, the one with the higher `gtfs_static_version_id`. The columns are null while the episode has no metadata row (no static version was loaded yet).
+- **Opening evidence** is the evidence row linked to the episode with role `opening`. `agency_id` is null when the vehicle was not attributed to an agency.
+- **`previous_episode_count`** counts retained episodes of the same identity that opened before this one. Episodes that opened at the same `opened_at` are ordered by episode ID. **`previous_closed_at`** is the `closed_at` of the most recent of those, or null. Retention deletes old episodes, so the count can fall over time.
+- **`LATERAL` subqueries, not window functions.** The latest static context and the recurrence columns are computed per row with `LATERAL` lookups. The latest static context uses the primary keys of `unmatched_stop_episode_metadata` and `unmatched_trip_episode_metadata`; the recurrence columns use the `unmatched_stop_episode_entity`, `unmatched_trip_episode_entity` and `vehicle_anomaly_episode_entity_type` indexes. A window function partitioned by identity would stop PostgreSQL from applying filters such as `agency_id` before computing it.
 - **Clusters are not in the views,** because a cluster depends on the scheme. Queries join `stop_cluster_assignment` with `scheme_version` as a parameter.
 
 ## Meaning of unmatched reports
