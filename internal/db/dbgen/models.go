@@ -156,6 +156,27 @@ type UnmatchedStopEpisodeMetadatum struct {
 	AgencyID               int64
 }
 
+type UnmatchedStopEpisodeView struct {
+	UnmatchedStopEpisodeID  int64
+	ReportedStopID          int64
+	AgencyID                int64
+	FirstResponseAgencyID   int64
+	ClosingResponseAgencyID *int64
+	LastReportedAt          time.Time
+	CloseReason             *string
+	ServerID                int64
+	OpenedAt                time.Time
+	ClosedAt                *time.Time
+	OpeningResponseID       int64
+	ClosingResponseID       *int64
+	StopID                  string
+	StopMetadataVersionID   *int64
+	StaticFound             *bool
+	GtfsStaticVersionID     *int64
+	PreviousEpisodeCount    int64
+	PreviousClosedAt        *time.Time
+}
+
 type UnmatchedTripEpisode struct {
 	UnmatchedTripEpisodeID  int64
 	ReportedTripID          int64
@@ -173,6 +194,30 @@ type UnmatchedTripEpisodeMetadatum struct {
 	AgencyID               int64
 }
 
+type UnmatchedTripEpisodeView struct {
+	UnmatchedTripEpisodeID  int64
+	ReportedTripID          int64
+	AgencyID                int64
+	FirstResponseAgencyID   int64
+	ClosingResponseAgencyID *int64
+	LastReportedAt          time.Time
+	CloseReason             *string
+	ServerID                int64
+	OpenedAt                time.Time
+	ClosedAt                *time.Time
+	OpeningResponseID       int64
+	ClosingResponseID       *int64
+	TripID                  string
+	TripMetadataVersionID   *int64
+	StaticFound             *bool
+	GtfsStaticVersionID     *int64
+	RouteID                 *string
+	ServiceID               *string
+	BlockID                 *string
+	PreviousEpisodeCount    int64
+	PreviousClosedAt        *time.Time
+}
+
 type VehicleAnomalyEpisode struct {
 	VehicleAnomalyEpisodeID int64
 	VehicleEntityID         int64
@@ -187,6 +232,31 @@ type VehicleAnomalyEpisodeEvidence struct {
 	VehicleAnomalyEpisodeID   int64
 	VehiclePositionEvidenceID int64
 	EvidenceRole              string
+}
+
+type VehicleAnomalyEpisodeView struct {
+	VehicleAnomalyEpisodeID  int64
+	VehicleEntityID          int64
+	AnomalyTypeID            int16
+	RuleVersionID            int64
+	OpeningResponseID        int64
+	ClosingResponseID        *int64
+	CloseReason              *string
+	ServerID                 int64
+	OpenedAt                 time.Time
+	ClosedAt                 *time.Time
+	VehicleID                string
+	EndpointID               int64
+	AnomalyCode              string
+	AgencyID                 *int64
+	AttributionReason        *string
+	PositionValidationReason *string
+	ExpectedScheduleState    *string
+	RouteID                  *string
+	GtfsStaticVersionID      *int64
+	BoundingBoxVersionID     *int64
+	PreviousEpisodeCount     int64
+	PreviousClosedAt         *time.Time
 }
 
 type VehicleAnomalyRuleVersion struct {
