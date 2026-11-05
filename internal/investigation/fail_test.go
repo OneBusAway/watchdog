@@ -25,6 +25,7 @@ func TestFail_Mapping(t *testing.T) {
 	}{
 		{"no rows", fmt.Errorf("get episode: %w", pgx.ErrNoRows), http.StatusNotFound, "Not found", ""},
 		{"timeout", fmt.Errorf("%w: canceling statement: secret-detail", errQueryTimeout), http.StatusServiceUnavailable, "Query timeout", sentry.LevelWarning},
+		{"database unavailable", fmt.Errorf("%w: connection refused: secret-detail", errDatabaseUnavailable), http.StatusServiceUnavailable, "Database unavailable", sentry.LevelWarning},
 		{"client canceled", fmt.Errorf("%w: context canceled", errRequestCanceled), statusClientClosedRequest, "", ""},
 		{"anything else", errors.New("connection reset: secret-detail"), http.StatusInternalServerError, "Internal server error", sentry.LevelError},
 	}

@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"watchdog.onebusaway.org/internal/db/dbgen"
 )
@@ -21,6 +24,11 @@ var errQueryTimeout = errors.New("investigation query timed out")
 // errRequestCanceled marks a read stopped because the client went away. fail
 // does not report it to Sentry: nothing is wrong on our side.
 var errRequestCanceled = errors.New("investigation request canceled")
+
+// errDatabaseUnavailable marks a read that failed because PostgreSQL could not
+// be reached or was shutting down or starting up. That is an outage, not a bug
+// in a query, so fail answers 503 and reports a warning rather than a 500.
+var errDatabaseUnavailable = errors.New("investigation database unavailable")
 
 // read runs fn inside one REPEATABLE READ READ ONLY transaction, under the
 // 5-second query timeout. Every query fn runs through q sees the same
@@ -41,6 +49,8 @@ func (s *InvestigationService) read(ctx context.Context, fn func(ctx context.Con
 // An error is wrapped with errQueryTimeout when the timeout expired, or with
 // errRequestCanceled when the caller's context ended first. PostgreSQL and
 // pgx report both in several ways, so the context, not the error, decides.
+// Otherwise, an error that shows the database could not be reached is wrapped
+// with errDatabaseUnavailable.
 func readTx(ctx context.Context, pool *pgxpool.Pool, timeout time.Duration, fn func(ctx context.Context, tx pgx.Tx) error) error {
 	readCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -53,6 +63,8 @@ func readTx(ctx context.Context, pool *pgxpool.Pool, timeout time.Duration, fn f
 		return fmt.Errorf("%w: %w", errRequestCanceled, err)
 	case errors.Is(readCtx.Err(), context.DeadlineExceeded):
 		return fmt.Errorf("%w: %w", errQueryTimeout, err)
+	case databaseUnreachable(err):
+		return fmt.Errorf("%w: %w", errDatabaseUnavailable, err)
 	default:
 		return err
 	}
@@ -76,4 +88,31 @@ func runReadOnly(ctx context.Context, pool *pgxpool.Pool, fn func(ctx context.Co
 		return fmt.Errorf("commit read-only transaction: %w", err)
 	}
 	return nil
+}
+
+// databaseUnreachable reports whether err shows that PostgreSQL could not be
+// reached: no connection could be made, the connection broke, or the server
+// was shutting down or starting up. Errors from a query itself (a syntax
+// error, a missing column) are not included: those are bugs.
+func databaseUnreachable(err error) bool {
+	var connectErr *pgconn.ConnectError
+	if errors.As(err, &connectErr) {
+		return true
+	}
+	var netErr *net.OpError
+	if errors.As(err, &netErr) {
+		return true
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch {
+		case strings.HasPrefix(pgErr.Code, "08"): // connection exception
+			return true
+		case pgErr.Code == "57P01", // admin_shutdown
+			pgErr.Code == "57P02", // crash_shutdown
+			pgErr.Code == "57P03": // cannot_connect_now (starting up)
+			return true
+		}
+	}
+	return false
 }

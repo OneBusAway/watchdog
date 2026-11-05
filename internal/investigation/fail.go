@@ -29,6 +29,8 @@ func (s *InvestigationService) fail(w http.ResponseWriter, r *http.Request, err 
 //   - Query timeout: 503 "Query timeout", logged and reported to Sentry as a
 //     warning: a query that slow usually means a missing index or an
 //     unbounded filter, which is our bug.
+//   - Database unreachable: 503 "Database unavailable", logged and reported to
+//     Sentry as a warning: it is an outage, and the client can retry.
 //   - Client went away: 499, with no body and no Sentry report.
 //   - Anything else: 500, logged and reported to Sentry. The error text is
 //     never sent to the client.
@@ -44,6 +46,14 @@ func fail(w http.ResponseWriter, r *http.Request, err error, logger *slog.Logger
 		})
 		writeProblem(w, http.StatusServiceUnavailable, "Query timeout",
 			"The request's queries took longer than 5 seconds.", nil)
+	case errors.Is(err, errDatabaseUnavailable):
+		logger.Warn("investigation database unavailable", "method", r.Method, "path", r.URL.Path, "error", err)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags:  sentryTags(r),
+			Level: sentry.LevelWarning,
+		})
+		writeProblem(w, http.StatusServiceUnavailable, "Database unavailable",
+			"The investigation database could not be reached. Try again later.", nil)
 	case errors.Is(err, errRequestCanceled):
 		logger.Debug("investigation request canceled by client", "method", r.Method, "path", r.URL.Path)
 		w.WriteHeader(statusClientClosedRequest)
