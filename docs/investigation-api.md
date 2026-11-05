@@ -1101,13 +1101,13 @@ These decisions are final. Implementation issues quote them by identifier, and c
 
 ## 7. Schema follow-ups for the API
 
-The main list queries filter by agency or anomaly type and page by episode ID descending. Migration `00001` does not index those paths, so the implementation adds migration `00002` with:
+The main list queries filter by agency or anomaly type and page by episode ID descending. Migration `00001` does not index those paths, so migration `00002` adds:
 
-- `unmatched_stop_episode (agency_id, unmatched_stop_episode_id DESC)` and the same for `unmatched_trip_episode`.
-- `vehicle_anomaly_episode (anomaly_type_id, vehicle_anomaly_episode_id DESC)`.
-- `vehicle_position_evidence (agency_id, vehicle_position_response_id)`. A vehicle episode has no agency column; its agency comes from the opening evidence.
+- `unmatched_stop_episode_agency_id_desc` on `unmatched_stop_episode (agency_id, unmatched_stop_episode_id DESC)`, and `unmatched_trip_episode_agency_id_desc`, the same for `unmatched_trip_episode`.
+- `vehicle_anomaly_episode_type_id_desc` on `vehicle_anomaly_episode (anomaly_type_id, vehicle_anomaly_episode_id DESC)`.
+- `vehicle_position_evidence_agency_response` on `vehicle_position_evidence (agency_id, vehicle_position_response_id)`. A vehicle episode has no agency column; its agency comes from the opening evidence.
 
-Migration `00002` also adds the three episode views (D29). They need no new indexes: the `LATERAL` lookups for the latest static context and the D28 fields use the existing `stop_metadata_version_reported_stop`, `trip_metadata_version_reported_trip`, `unmatched_stop_episode_entity`, `unmatched_trip_episode_entity` and `vehicle_anomaly_episode_entity_type` indexes.
+Migration `00002` also adds the three episode views (D29). They need no new indexes: the `LATERAL` lookups for the latest static context use the primary keys of `unmatched_stop_episode_metadata` and `unmatched_trip_episode_metadata`, and those for the D28 fields use the existing `unmatched_stop_episode_entity`, `unmatched_trip_episode_entity` and `vehicle_anomaly_episode_entity_type` indexes.
 
 The time-window filter joins each episode to its opening and closing responses' `observed_at`. Both are reached through indexed foreign keys. If profiling shows this join dominates, a later migration can store `opened_at` on the episode rows.
 

@@ -52,6 +52,14 @@ var expectedTables = []string{
 	"vehicle_position_response",
 }
 
+// expectedViews is every view the migrations create. It must match the
+// "Views for the investigation API" section of the schema document.
+var expectedViews = []string{
+	"unmatched_stop_episode_view",
+	"unmatched_trip_episode_view",
+	"vehicle_anomaly_episode_view",
+}
+
 // PostgreSQL error codes the constraint tests expect.
 const (
 	codeForeignKeyViolation = "23503"
@@ -101,38 +109,60 @@ func TestOpenErrorDoesNotLeakPassword(t *testing.T) {
 	}
 }
 
-func listTables(t *testing.T, pool *pgxpool.Pool) []string {
+// listNames runs a query that returns one text column and collects the values.
+func listNames(t *testing.T, pool *pgxpool.Pool, query string, args ...any) []string {
 	t.Helper()
-	rows, err := pool.Query(context.Background(), `
-		SELECT table_name FROM information_schema.tables
-		WHERE table_schema = current_schema() AND table_name <> 'goose_db_version'
-		ORDER BY table_name`)
+	rows, err := pool.Query(context.Background(), query, args...)
 	if err != nil {
-		t.Fatalf("list tables: %v", err)
+		t.Fatalf("query %q: %v", query, err)
 	}
 	defer rows.Close()
 
-	var tables []string
+	var names []string
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
-			t.Fatalf("scan table name: %v", err)
+			t.Fatalf("scan name: %v", err)
 		}
-		tables = append(tables, name)
+		names = append(names, name)
 	}
 	if err := rows.Err(); err != nil {
-		t.Fatalf("list tables: %v", err)
+		t.Fatalf("query %q: %v", query, err)
 	}
-	return tables
+	return names
+}
+
+// listTables returns the base tables in the test schema. information_schema
+// also lists views, so they are excluded here and checked by listViews.
+func listTables(t *testing.T, pool *pgxpool.Pool) []string {
+	t.Helper()
+	return listNames(t, pool, `
+		SELECT table_name FROM information_schema.tables
+		WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'
+		  AND table_name <> 'goose_db_version'
+		ORDER BY table_name`)
+}
+
+func listViews(t *testing.T, pool *pgxpool.Pool) []string {
+	t.Helper()
+	return listNames(t, pool, `
+		SELECT table_name FROM information_schema.views
+		WHERE table_schema = current_schema()
+		ORDER BY table_name`)
+}
+
+func expectNames(t *testing.T, what string, got, want []string) {
+	t.Helper()
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("%s:\n got  %v\n want %v", what, got, want)
+	}
 }
 
 func TestMigrateCreatesSchema(t *testing.T) {
 	pool := dbtest.NewMigratedPool(t)
 
-	got := listTables(t, pool)
-	if strings.Join(got, ",") != strings.Join(expectedTables, ",") {
-		t.Fatalf("tables after migrating:\n got  %v\n want %v", got, expectedTables)
-	}
+	expectNames(t, "tables after migrating", listTables(t, pool), expectedTables)
+	expectNames(t, "views after migrating", listViews(t, pool), expectedViews)
 
 	var anomalyCodes []string
 	rows, err := pool.Query(context.Background(), "SELECT anomaly_code FROM vehicle_anomaly_type ORDER BY anomaly_code")
@@ -176,12 +206,36 @@ func TestMigrationsRollBackAndReapply(t *testing.T) {
 	if got := listTables(t, pool); len(got) != 0 {
 		t.Fatalf("tables left after migrating down: %v", got)
 	}
+	if got := listViews(t, pool); len(got) != 0 {
+		t.Fatalf("views left after migrating down: %v", got)
+	}
 	if _, err := provider.Up(ctx); err != nil {
 		t.Fatalf("migrate up again: %v", err)
 	}
-	if got := listTables(t, pool); len(got) != len(expectedTables) {
-		t.Fatalf("got %d tables after re-applying, want %d", len(got), len(expectedTables))
-	}
+	expectNames(t, "tables after re-applying", listTables(t, pool), expectedTables)
+	expectNames(t, "views after re-applying", listViews(t, pool), expectedViews)
+	expectNames(t, "API indexes after re-applying", listAPIIndexes(t, pool), expectedAPIIndexes)
+}
+
+// expectedAPIIndexes are the list-endpoint indexes migration 00002 adds.
+var expectedAPIIndexes = []string{
+	"unmatched_stop_episode_agency_id_desc",
+	"unmatched_trip_episode_agency_id_desc",
+	"vehicle_anomaly_episode_type_id_desc",
+	"vehicle_position_evidence_agency_response",
+}
+
+func listAPIIndexes(t *testing.T, pool *pgxpool.Pool) []string {
+	t.Helper()
+	return listNames(t, pool, `
+		SELECT indexname FROM pg_indexes
+		WHERE schemaname = current_schema() AND indexname = ANY($1)
+		ORDER BY indexname`, expectedAPIIndexes)
+}
+
+func TestMigrateCreatesAPIIndexes(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	expectNames(t, "API indexes after migrating", listAPIIndexes(t, pool), expectedAPIIndexes)
 }
 
 func TestGeneratedQueriesMatchSchema(t *testing.T) {
