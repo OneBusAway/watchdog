@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -768,5 +769,189 @@ func TestTrackVehicleTelemetryRetiresPreviousAgencyWhenVehicleBecomesUnattribute
 		"vehicle_id": "va", "agency_id": "agency-a", "server_url": baseURL, "feed": "0",
 	}); len(series) != 0 {
 		t.Fatalf("old per-vehicle series survived: %d", len(series))
+	}
+}
+
+// TestTrackVehicleTelemetryResolvesPureTripOnlyAttribution covers the PR #160
+// trip-based path on its own: a vehicle with no route_id but a known trip_id
+// must resolve through trip_id alone and be tracked under its agency.
+func TestTrackVehicleTelemetryResolvesPureTripOnlyAttribution(t *testing.T) {
+	const baseURL = "https://trip-only.example.com"
+	server := models.ObaServer{ServerName: "multi", ObaBaseURL: baseURL}
+	agencies := []models.ObaServer{
+		{ServerName: "multi", ObaBaseURL: baseURL, AgencyID: "A", AgencyName: "Agency A"},
+	}
+	index := gtfs.NewRouteAgencyIndex()
+	index.ReplaceCandidates(server.ServerKey(),
+		nil,
+		map[string][]string{"trip-only-a": {"A"}},
+		map[string]string{"A": "Agency A"},
+	)
+
+	now := time.Now().UTC()
+	lat, lon := float32(47.6), float32(-122.3)
+	store := gtfs.NewRealtimeStore()
+	store.Set(server.ServerKey(), &models.RealtimeData{Vehicles: []models.RealtimeVehicle{{
+		FeedID: "0",
+		Vehicle: remoteGtfs.Vehicle{
+			ID:        &remoteGtfs.VehicleID{ID: "trip-only-vehicle"},
+			Trip:      &remoteGtfs.Trip{ID: remoteGtfs.TripID{RouteID: "", ID: "trip-only-a"}},
+			Position:  &remoteGtfs.Position{Latitude: &lat, Longitude: &lon},
+			Timestamp: &now,
+		},
+	}}})
+
+	lastSeen := NewVehicleLastSeen()
+	if err := trackVehicleTelemetry(server, agencies, lastSeen, store, index); err != nil {
+		t.Fatalf("track: %v", err)
+	}
+
+	labels := map[string]string{"server_name": server.ServerName, "server_url": baseURL}
+	if got, _ := getMetricValue(GtfsRtUnattributedVehicles, labels); got != 0 {
+		t.Fatalf("trip-only vehicle counted as unattributed: %v", got)
+	}
+	for _, reason := range gtfs.AttributionFailureReasons {
+		reasonLabels := map[string]string{"server_name": server.ServerName, "server_url": baseURL, "reason": string(reason)}
+		if got, _ := getMetricValue(GtfsRtUnattributedVehiclesByReason, reasonLabels); got != 0 {
+			t.Fatalf("reason %s = %v, want 0 for a resolved trip-only vehicle", reason, got)
+		}
+	}
+	if got := lastSeen.Count(models.ServerKey(baseURL, "A")); got != 1 {
+		t.Fatalf("trip-only vehicle not tracked under its resolved agency: %d", got)
+	}
+}
+
+// TestTrackVehicleTelemetryKeepsReasonBreakdownIndependentAcrossServers checks
+// that processing two servers doesn't let one's classification counts bleed
+// into the other's series.
+func TestTrackVehicleTelemetryKeepsReasonBreakdownIndependentAcrossServers(t *testing.T) {
+	const urlOne = "https://independent-one.example.com"
+	const urlTwo = "https://independent-two.example.com"
+
+	serverOne := models.ObaServer{ServerName: "server-one", ObaBaseURL: urlOne}
+	agenciesOne := []models.ObaServer{{ServerName: "server-one", ObaBaseURL: urlOne, AgencyID: "A", AgencyName: "Agency A"}}
+	indexOne := gtfs.NewRouteAgencyIndex()
+	indexOne.Replace(serverOne.ServerKey(), map[string]string{"route-a": "A"}, nil, map[string]string{"A": "Agency A"})
+
+	serverTwo := models.ObaServer{ServerName: "server-two", ObaBaseURL: urlTwo}
+	agenciesTwo := []models.ObaServer{{ServerName: "server-two", ObaBaseURL: urlTwo, AgencyID: "B", AgencyName: "Agency B"}}
+	indexTwo := gtfs.NewRouteAgencyIndex()
+	indexTwo.Replace(serverTwo.ServerKey(), map[string]string{"route-b": "B"}, nil, map[string]string{"B": "Agency B"})
+
+	vehicle := func(id, routeID string) models.RealtimeVehicle {
+		var vehicleID *remoteGtfs.VehicleID
+		if id != "" {
+			vehicleID = &remoteGtfs.VehicleID{ID: id}
+		}
+		return models.RealtimeVehicle{FeedID: "0", Vehicle: remoteGtfs.Vehicle{
+			ID:   vehicleID,
+			Trip: &remoteGtfs.Trip{ID: remoteGtfs.TripID{RouteID: routeID}},
+		}}
+	}
+
+	storeOne := gtfs.NewRealtimeStore()
+	storeOne.Set(serverOne.ServerKey(), &models.RealtimeData{Vehicles: []models.RealtimeVehicle{
+		vehicle("", "route-a"), // resolves, but has no vehicle ID
+	}})
+	storeTwo := gtfs.NewRealtimeStore()
+	storeTwo.Set(serverTwo.ServerKey(), &models.RealtimeData{Vehicles: []models.RealtimeVehicle{
+		vehicle("v2", "route-unknown"), // has an ID, but the route is unknown
+	}})
+
+	if err := trackVehicleTelemetry(serverOne, agenciesOne, NewVehicleLastSeen(), storeOne, indexOne); err != nil {
+		t.Fatalf("server one: %v", err)
+	}
+	if err := trackVehicleTelemetry(serverTwo, agenciesTwo, NewVehicleLastSeen(), storeTwo, indexTwo); err != nil {
+		t.Fatalf("server two: %v", err)
+	}
+
+	assertReason := func(serverName, url string, want gtfs.AttributionFailureReason) {
+		for _, reason := range gtfs.AttributionFailureReasons {
+			labels := map[string]string{"server_name": serverName, "server_url": url, "reason": string(reason)}
+			got, _ := getMetricValue(GtfsRtUnattributedVehiclesByReason, labels)
+			wantValue := 0.0
+			if reason == want {
+				wantValue = 1
+			}
+			if got != wantValue {
+				t.Fatalf("%s reason %s = %v, want %v", serverName, reason, got, wantValue)
+			}
+		}
+	}
+	assertReason("server-one", urlOne, gtfs.AttributionMissingVehicleID)
+	assertReason("server-two", urlTwo, gtfs.AttributionUnknownRouteID)
+}
+
+// TestTrackVehicleTelemetryReasonLabelsStayBoundedAndIDFree checks that
+// neither the reason breakdown nor the candidate-association gauge ever
+// exposes a raw vehicle, route, or trip identifier as a label value.
+func TestTrackVehicleTelemetryReasonLabelsStayBoundedAndIDFree(t *testing.T) {
+	const baseURL = "https://cardinality-guard.example.com"
+	server := models.ObaServer{ServerName: "multi", ObaBaseURL: baseURL}
+	agencies := []models.ObaServer{
+		{ServerName: "multi", ObaBaseURL: baseURL, AgencyID: "A", AgencyName: "Agency A"},
+	}
+	index := gtfs.NewRouteAgencyIndex()
+	index.ReplaceCandidates(server.ServerKey(),
+		map[string][]string{"route-SECRET-ab": {"A", "C"}},
+		map[string][]string{"trip-SECRET-xy": {"A"}},
+		map[string]string{"A": "Agency A", "C": "Agency C"},
+	)
+
+	store := gtfs.NewRealtimeStore()
+	store.Set(server.ServerKey(), &models.RealtimeData{Vehicles: []models.RealtimeVehicle{
+		{FeedID: "0", Vehicle: remoteGtfs.Vehicle{
+			ID:   &remoteGtfs.VehicleID{ID: "vehicle-SECRET-999"},
+			Trip: &remoteGtfs.Trip{ID: remoteGtfs.TripID{RouteID: "route-SECRET-ab", ID: ""}},
+		}},
+		{FeedID: "0", Vehicle: remoteGtfs.Vehicle{ID: nil, Trip: nil}},
+	}})
+
+	if err := trackVehicleTelemetry(server, agencies, NewVehicleLastSeen(), store, index); err != nil {
+		t.Fatalf("track: %v", err)
+	}
+
+	for _, vec := range []*prometheus.GaugeVec{GtfsRtUnattributedVehiclesByReason, GtfsRtUnattributedVehicleCandidateAssociations} {
+		for _, series := range seriesMatching(vec, map[string]string{"server_url": baseURL}) {
+			for _, label := range series.Label {
+				if strings.Contains(label.GetValue(), "SECRET") {
+					t.Fatalf("label %s=%q leaked a raw identifier", label.GetName(), label.GetValue())
+				}
+			}
+		}
+	}
+}
+
+// TestTrackVehicleTelemetryRepeatedIdenticalTickDoesNotDoubleCount guards
+// against a regression to Counter-style accumulation: replaying the same
+// unattributed vehicle across two ticks must leave its reason count at 1,
+// not 2, since the gauge is written with Set.
+func TestTrackVehicleTelemetryRepeatedIdenticalTickDoesNotDoubleCount(t *testing.T) {
+	const baseURL = "https://no-double-count.example.com"
+	server := models.ObaServer{ServerName: "multi", ObaBaseURL: baseURL}
+	agencies := []models.ObaServer{
+		{ServerName: "multi", ObaBaseURL: baseURL, AgencyID: "A", AgencyName: "Agency A"},
+	}
+	index := gtfs.NewRouteAgencyIndex()
+
+	store := gtfs.NewRealtimeStore()
+	store.Set(server.ServerKey(), &models.RealtimeData{Vehicles: []models.RealtimeVehicle{
+		{FeedID: "0", Vehicle: remoteGtfs.Vehicle{ID: &remoteGtfs.VehicleID{ID: "repeat"}, Trip: nil}},
+	}})
+
+	lastSeen := NewVehicleLastSeen()
+	for i := 0; i < 2; i++ {
+		if err := trackVehicleTelemetry(server, agencies, lastSeen, store, index); err != nil {
+			t.Fatalf("tick %d: %v", i, err)
+		}
+	}
+
+	labels := map[string]string{"server_name": server.ServerName, "server_url": baseURL, "reason": string(gtfs.AttributionMissingRouteID)}
+	if got, _ := getMetricValue(GtfsRtUnattributedVehiclesByReason, labels); got != 1 {
+		t.Fatalf("missing_route_id after two identical ticks = %v, want 1 (gauge must not accumulate)", got)
+	}
+	aggLabels := map[string]string{"server_name": server.ServerName, "server_url": baseURL}
+	if got, _ := getMetricValue(GtfsRtUnattributedVehicles, aggLabels); got != 1 {
+		t.Fatalf("aggregate unattributed after two identical ticks = %v, want 1 (gauge must not accumulate)", got)
 	}
 }
