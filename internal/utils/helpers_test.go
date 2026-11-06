@@ -19,6 +19,11 @@ func TestSanitizeServerURL(t *testing.T) {
 			expected: "https://rt.example.com/vehiclePositions.pb",
 		},
 		{
+			name:     "lowercases scheme and host but not path",
+			input:    "HTTPS://user:pw@API.Example.COM/Where/API?key=x",
+			expected: "https://api.example.com/Where/API",
+		},
+		{
 			name:     "keeps path",
 			input:    "https://rt.example.com/feed/positions.pb",
 			expected: "https://rt.example.com/feed/positions.pb",
