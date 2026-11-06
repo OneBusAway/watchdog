@@ -1,4 +1,4 @@
-package db
+package db_test
 
 import (
 	"context"
@@ -7,8 +7,6 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
-	"math/rand/v2"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -16,13 +14,10 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"watchdog.onebusaway.org/internal/db"
 	"watchdog.onebusaway.org/internal/db/dbgen"
+	"watchdog.onebusaway.org/internal/db/dbtest"
 )
-
-// testDatabaseURLEnv names the PostgreSQL database the tests below run
-// against. Tests that need a database skip when it is unset, so `go test ./...`
-// works without PostgreSQL; CI sets it.
-const testDatabaseURLEnv = "WATCHDOG_TEST_DATABASE_URL"
 
 // expectedTables is every table the migrations create, excluding goose's own
 // version table. It must match docs/historical-investigation-schema.md.
@@ -69,7 +64,7 @@ func discardLogger() *slog.Logger {
 }
 
 func TestMigrationsAreEmbedded(t *testing.T) {
-	entries, err := fs.ReadDir(Migrations(), ".")
+	entries, err := fs.ReadDir(db.Migrations(), ".")
 	if err != nil {
 		t.Fatalf("read embedded migrations: %v", err)
 	}
@@ -82,7 +77,7 @@ func TestMigrationsAreEmbedded(t *testing.T) {
 }
 
 func TestOpenRejectsInvalidURL(t *testing.T) {
-	_, err := Open(context.Background(), "postgres://user:pass@host:notaport/db", discardLogger())
+	_, err := db.Open(context.Background(), "postgres://user:pass@host:notaport/db", discardLogger())
 	if err == nil {
 		t.Fatal("Open succeeded with an invalid URL")
 	}
@@ -97,63 +92,13 @@ func TestOpenErrorDoesNotLeakPassword(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	_, err := Open(ctx, url, discardLogger())
+	_, err := db.Open(ctx, url, discardLogger())
 	if err == nil {
 		t.Fatal("Open succeeded against a closed port")
 	}
 	if strings.Contains(err.Error(), password) {
 		t.Fatalf("error contains the password: %v", err)
 	}
-}
-
-// newTestPool returns a pool whose connections use a fresh, empty schema, so
-// each test migrates from scratch without touching other tests' data. The
-// schema is dropped when the test ends.
-func newTestPool(t *testing.T) *pgxpool.Pool {
-	t.Helper()
-
-	databaseURL := os.Getenv(testDatabaseURLEnv)
-	if databaseURL == "" {
-		t.Skipf("%s is not set; skipping PostgreSQL test", testDatabaseURLEnv)
-	}
-
-	ctx := context.Background()
-	schema := fmt.Sprintf("watchdog_test_%d", rand.Uint64())
-
-	admin, err := pgxpool.New(ctx, databaseURL)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	t.Cleanup(admin.Close)
-	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
-		t.Fatalf("create schema: %v", err)
-	}
-	t.Cleanup(func() {
-		if _, err := admin.Exec(context.Background(), "DROP SCHEMA "+schema+" CASCADE"); err != nil {
-			t.Errorf("drop schema: %v", err)
-		}
-	})
-
-	config, err := pgxpool.ParseConfig(databaseURL)
-	if err != nil {
-		t.Fatalf("parse %s: %v", testDatabaseURLEnv, err)
-	}
-	config.ConnConfig.RuntimeParams["search_path"] = schema
-	pool, err := pgxpool.NewWithConfig(ctx, config)
-	if err != nil {
-		t.Fatalf("connect to test schema: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	return pool
-}
-
-func newMigratedPool(t *testing.T) *pgxpool.Pool {
-	t.Helper()
-	pool := newTestPool(t)
-	if err := Migrate(context.Background(), pool, discardLogger()); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
-	return pool
 }
 
 func listTables(t *testing.T, pool *pgxpool.Pool) []string {
@@ -182,7 +127,7 @@ func listTables(t *testing.T, pool *pgxpool.Pool) []string {
 }
 
 func TestMigrateCreatesSchema(t *testing.T) {
-	pool := newMigratedPool(t)
+	pool := dbtest.NewMigratedPool(t)
 
 	got := listTables(t, pool)
 	if strings.Join(got, ",") != strings.Join(expectedTables, ",") {
@@ -209,19 +154,19 @@ func TestMigrateCreatesSchema(t *testing.T) {
 }
 
 func TestMigrateIsIdempotent(t *testing.T) {
-	pool := newMigratedPool(t)
-	if err := Migrate(context.Background(), pool, discardLogger()); err != nil {
+	pool := dbtest.NewMigratedPool(t)
+	if err := db.Migrate(context.Background(), pool, discardLogger()); err != nil {
 		t.Fatalf("second Migrate: %v", err)
 	}
 }
 
 func TestMigrationsRollBackAndReapply(t *testing.T) {
-	pool := newMigratedPool(t)
+	pool := dbtest.NewMigratedPool(t)
 	ctx := context.Background()
 
-	provider, err := newProvider(pool)
+	provider, err := db.NewProvider(pool)
 	if err != nil {
-		t.Fatalf("newProvider: %v", err)
+		t.Fatalf("NewProvider: %v", err)
 	}
 	defer provider.Close()
 
@@ -240,7 +185,7 @@ func TestMigrationsRollBackAndReapply(t *testing.T) {
 }
 
 func TestGeneratedQueriesMatchSchema(t *testing.T) {
-	pool := newMigratedPool(t)
+	pool := dbtest.NewMigratedPool(t)
 	ctx := context.Background()
 
 	const url = "https://api.example.com"
@@ -267,16 +212,11 @@ type fixture struct {
 
 func (f fixture) id(query string, args ...any) int64 {
 	f.t.Helper()
-	var id int64
-	if err := f.pool.QueryRow(context.Background(), query, args...).Scan(&id); err != nil {
-		f.t.Fatalf("fixture %q: %v", query, err)
-	}
-	return id
+	return dbtest.ID(f.t, f.pool, query, args...)
 }
 
 func (f fixture) exec(query string, args ...any) error {
-	_, err := f.pool.Exec(context.Background(), query, args...)
-	return err
+	return dbtest.Exec(f.pool, query, args...)
 }
 
 func expectCode(t *testing.T, err error, code string) {
@@ -298,7 +238,7 @@ func expectOK(t *testing.T, err error) {
 }
 
 func TestReportedStopIsScopedToAgency(t *testing.T) {
-	f := fixture{t, newMigratedPool(t)}
+	f := fixture{t, dbtest.NewMigratedPool(t)}
 	server := f.id("INSERT INTO onebusaway_server (normalized_base_url, display_name) VALUES ('u', 'n') RETURNING server_id")
 	agencyA := f.id("INSERT INTO agency (server_id, external_agency_id) VALUES ($1, 'A') RETURNING agency_id", server)
 	agencyB := f.id("INSERT INTO agency (server_id, external_agency_id) VALUES ($1, 'B') RETURNING agency_id", server)
@@ -317,7 +257,7 @@ type unmatchedFixture struct {
 }
 
 func newUnmatchedFixture(t *testing.T) unmatchedFixture {
-	f := fixture{t, newMigratedPool(t)}
+	f := fixture{t, dbtest.NewMigratedPool(t)}
 	server := f.id("INSERT INTO onebusaway_server (normalized_base_url, display_name) VALUES ('u', 'n') RETURNING server_id")
 	agency := f.id("INSERT INTO agency (server_id, external_agency_id) VALUES ($1, 'A') RETURNING agency_id", server)
 	other := f.id("INSERT INTO agency (server_id, external_agency_id) VALUES ($1, 'B') RETURNING agency_id", server)
@@ -414,7 +354,7 @@ type vehicleFixture struct {
 }
 
 func newVehicleFixture(t *testing.T) vehicleFixture {
-	f := fixture{t, newMigratedPool(t)}
+	f := fixture{t, dbtest.NewMigratedPool(t)}
 	server := f.id("INSERT INTO onebusaway_server (normalized_base_url, display_name) VALUES ('u', 'n') RETURNING server_id")
 	endpointA := f.id("INSERT INTO vehicle_position_endpoint (server_id, normalized_vehicle_position_url) VALUES ($1, 'a') RETURNING endpoint_id", server)
 	endpointB := f.id("INSERT INTO vehicle_position_endpoint (server_id, normalized_vehicle_position_url) VALUES ($1, 'b') RETURNING endpoint_id", server)
@@ -484,7 +424,7 @@ func TestVehicleEpisodeHasOneOpeningEvidenceLink(t *testing.T) {
 }
 
 func TestS2CellLevelMustMatchScheme(t *testing.T) {
-	f := fixture{t, newMigratedPool(t)}
+	f := fixture{t, dbtest.NewMigratedPool(t)}
 	expectOK(t, f.exec(`INSERT INTO cluster_scheme (scheme_version, s2_level, station_grouping, description)
 		VALUES ('s2_l13_root_station_v1', 13, 'root_parent_station', 'test')`))
 

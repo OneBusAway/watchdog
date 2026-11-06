@@ -261,3 +261,17 @@ Clients define the current-value window as `clamp(3 * interval, 60, 300)` second
 **Interpretation Guide:**
 - **Normal:** Most requests should be within a small range.    
 - **Investigate if:** Slow spikes or sustained latency above internal performance thresholds.
+
+---
+## 7. Investigation API Requests
+
+| Metric Name                                            | Type      | Labels            | Unit    | Description                                                                                  |
+| ------------------------------------------------------ | --------- | ----------------- | ------- | -------------------------------------------------------------------------------------------- |
+| `watchdog_investigation_api_requests_total`            | Counter   | `route`, `status` | count   | Investigation API requests, including rejected ones (`401`, `406`, `503`).                    |
+| `watchdog_investigation_api_request_duration_seconds`  | Histogram | `route`           | seconds | Time spent serving each Investigation API request.                                            |
+
+`route` is the route template, for example `/v1/servers/:server_id`, never the request path, so the number of series stays bounded.
+
+**Interpretation Guide:**
+- **Normal:** Mostly `200` and `304`, with latency well under the 5-second query timeout.
+- **Investigate if:** `401` rises (a client with a wrong or expired token), `503` appears (investigation storage disabled, or queries timing out), or latency on one route approaches 5 seconds.
