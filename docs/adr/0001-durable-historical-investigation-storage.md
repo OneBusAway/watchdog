@@ -228,6 +228,7 @@ Vehicle-feed absence history and PostgreSQL-outage history are deferred question
 | Prometheus role | Feed/agency/fleet aggregates and alerting | Retains trends and alert signals without normal per-vehicle samples. |
 | Persist every 30-second vehicle sample? | No | Would grow as vehicles × polls × metrics. Store anomaly opening/resolution evidence and materially meaningful changes only. |
 | Evidence cadence during an open vehicle anomaly? | Opening, resolution, and materially meaningful evidence changes only | Repeated identical polls do not add rows. |
+| Touch PostgreSQL on every poll? | No. Open episodes are held in memory and compared with each poll; PostgreSQL is written only when an episode opens or closes. An open unmatched episode's `last_reported_at` is saved at most every 10 minutes, on close, on server removal and on clean shutdown | Reading or writing every 30 seconds per server adds load without adding information while nothing changes. The cost is that an open episode's `last_reported_at` can be up to 10 minutes behind after a crash. See D31 in [investigation-api.md](../investigation-api.md#6-implementation-decisions). |
 | Persistent vehicle-position feed identity | Generated endpoint PK, unique normalized credential-free URL per server | Config order must not affect identity; URL changes create a new endpoint identity; no OBACloud feed ID or URL alias mapping is required. |
 | Keep vehicle state in Watchdog memory? | Yes, one latest state per active vehicle for stateful aggregate calculations | Preserves OBACloud summaries without exporting per-ID series or writing normal state to PostgreSQL. |
 | Current vehicle state in PostgreSQL? | No | Single-instance deployment; PostgreSQL holds abnormal episodes/evidence only. |
@@ -246,7 +247,7 @@ Vehicle-feed absence history and PostgreSQL-outage history are deferred question
 | PostgreSQL outages | Deferred; no outage table, health metric, or alert in the initial migration | Investigation persistence must not stop feed monitoring. |
 | PostgreSQL driver and migration tool | `pgx` v5 (`pgxpool`) driver, `goose` v3 SQL migrations, `sqlc` query generation | `pgx` is the native PostgreSQL driver and the one `sqlc`'s `pgx/v5` output targets. `goose` migrations are plain SQL files with Up and Down sections, which `sqlc` reads directly as its schema; they are embedded in the binary and applied at startup under a PostgreSQL advisory lock, so a future second instance cannot apply them twice. `golang-migrate` was the main alternative; it needs two files per migration and offers nothing this design needs that `goose` lacks. |
 | Historical maximum reported speed | Must be measured before selecting a plausibility threshold | Record the maximum from historical GTFS-Realtime data; do not assume the maximum itself is the threshold. |
-| Watchdog instances | One initially | Avoid duplicate polling and split in-memory state. |
+| Watchdog instances | One initially | Avoid duplicate polling and split in-memory state, including the open episodes that history recording compares each poll with (D31). |
 
 ## Remaining work
 

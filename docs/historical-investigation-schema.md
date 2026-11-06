@@ -400,7 +400,7 @@ These rules apply to stops and trips alike (`stop_metadata_version` / `unmatched
 - If the static facts are unchanged, do nothing. No duplicate row is written.
 - If they changed (including found ↔ not found), insert a metadata row for the new version and link the episode to it.
 
-**3. Never on ordinary polls.** Repeated OBA reports update only `last_reported_at`; they do not write metadata rows.
+**3. Never on ordinary polls.** A poll that opens or closes no episode writes nothing, including metadata rows (D31).
 
 **Which row applied when.** Order an episode's linked rows by their version's `published_at`. Each row applies from that time (or from the episode's opening, if later) until the next linked row. The version on a linked row can be older than the version Watchdog had loaded at a given moment; that means the facts did not change between them.
 
@@ -473,7 +473,7 @@ Create an agency row for each monitored agency evaluated against a successful OB
 - `unmatched_stop_episode_id BIGINT GENERATED ALWAYS AS IDENTITY` primary key;
 - `reported_stop_id BIGINT NOT NULL` and `agency_id BIGINT NOT NULL`;
 - `first_response_agency_id BIGINT NOT NULL` and nullable `closing_response_agency_id BIGINT`;
-- `last_reported_at TIMESTAMPTZ NOT NULL`, initialized from the first response and updated when a later complete response still reports the ID;
+- `last_reported_at TIMESTAMPTZ NOT NULL`, initialized from the first response. While the episode is open, Watchdog tracks the latest complete response that still reports the ID in memory and saves it at most every 10 minutes, when the episode closes, when its server is removed from the configuration, and on clean shutdown (D31 in [investigation-api.md](investigation-api.md#6-implementation-decisions)). For a closed episode it is exact; for an open one it can be up to 10 minutes behind after a crash;
 - nullable `close_reason TEXT`, null while open and `not_reported` when closed. `close_reason` currently has only one possible value for unmatched episodes, `not_reported`, so today it carries no information beyond `closing_response_agency_id IS NOT NULL`. It is kept on purpose so later close reasons (for example, an agency removed from monitoring) can be added without a schema change. Check it against an allowed list (`CHECK (close_reason IN ('not_reported'))`) and extend that list when a new reason is approved.
 - unique `(unmatched_stop_episode_id, reported_stop_id, agency_id)` for the metadata association table.
 
@@ -483,7 +483,7 @@ For each episode table, add composite foreign keys from `(reported_stop_id, agen
 
 The opening time is obtained from the referenced first response's `observed_at`. The ending time is obtained from the closing response's `observed_at`; the episode does not claim the exact time the backend changed its classification.
 
-Require `close_reason IS NULL` exactly when `closing_response_agency_id IS NULL`. The opening and closing responses must have `response_complete = TRUE`; a trigger enforces this, since a `CHECK` cannot read another table. An episode is open while its closing response is null. A partial unique index permits at most one open episode per reported stop or trip. If the ID appears again after closure, create a new episode. This represents a period during which OBA reported the ID as unmatched; it does not assert why the ID later disappeared. Repeated reports update the one open episode's `last_reported_at`; they do not insert a new episode or a full response body every poll.
+Require `close_reason IS NULL` exactly when `closing_response_agency_id IS NULL`. The opening and closing responses must have `response_complete = TRUE`; a trigger enforces this, since a `CHECK` cannot read another table. An episode is open while its closing response is null. A partial unique index permits at most one open episode per reported stop or trip. If the ID appears again after closure, create a new episode. This represents a period during which OBA reported the ID as unmatched; it does not assert why the ID later disappeared. Repeated reports don't insert a new episode or a full response body, and don't update the row on every poll; `last_reported_at` is saved as described above.
 
 ### Vehicle-position responses and anomaly evidence
 
@@ -623,7 +623,7 @@ CREATE UNIQUE INDEX vehicle_anomaly_one_open_per_type
     WHERE closing_response_id IS NULL;
 ```
 
-A retention job runs every 24 hours (D16). It deletes closed episodes and their evidence 90 days after `closed_at`. Open episodes are kept until they close, except for servers no longer in the configuration: their open episodes are deleted 90 days after their last observation (`last_reported_at` for unmatched episodes; the newest evidence's response `observed_at` for vehicle episodes). A removed server's history otherwise stays queryable. Static context, responses and identities are deleted once nothing references them. Do not store raw full-feed payloads or normal per-vehicle samples.
+A retention job runs every 24 hours (D16). It deletes closed episodes and their evidence 90 days after `closed_at`. Open episodes are kept until they close, except for servers no longer in the configuration: their open episodes are deleted 90 days after their last observation (`last_reported_at` for unmatched episodes, which is saved when the server is removed; the newest evidence's response `observed_at` for vehicle episodes). A removed server's history otherwise stays queryable. Static context, responses and identities are deleted once nothing references them. Do not store raw full-feed payloads or normal per-vehicle samples.
 
 The initial schema does not include separate vehicle-feed-absence records or PostgreSQL-outage records. Vehicle absence is informational and does not prove a vehicle problem; PostgreSQL availability recording and alerting remain deferred.
 
@@ -685,7 +685,7 @@ These records cannot prove that an ID later became matched when the source provi
 | Scenario | What the investigator needs to know | How the saved data helps |
 |---|---|---|
 | A new unmatched stop appears | Which agency and stop ID, when first seen, and what static stop details were available | The episode identifies the reported ID and opening OBA response; linked stop metadata records the applicable name and coordinates when a static match exists. |
-| The same stop remains unmatched for several hours | Is this one continuing report period or many unrelated notifications? | One open episode is maintained, with its first and last reported times; repeated polls do not create a new episode row. |
+| The same stop remains unmatched for several hours | Is this one continuing report period or many unrelated notifications? | One open episode is maintained, with its first and last reported times; repeated polls write nothing, and the last reported time is saved at most every 10 minutes (D31). |
 | An unmatched stop disappears from OBA metrics | Was it confirmed matched or simply omitted? | The episode closes as `not_reported`; the API must not call this a fix or a match. |
 | An ID reappears after it was no longer reported | Is this a recurrence? | A new episode links to the same reported stop/trip identity, while the earlier closed episode remains queryable. |
 | An unmatched ID has no static GTFS match | Can we still investigate the report? | The reported ID and episode are stored independently of optional static metadata. |
