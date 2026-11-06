@@ -11,6 +11,7 @@ import (
 	"watchdog.onebusaway.org/internal/config"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
+	"watchdog.onebusaway.org/internal/history"
 	"watchdog.onebusaway.org/internal/investigation"
 	"watchdog.onebusaway.org/internal/metrics"
 	"watchdog.onebusaway.org/internal/models"
@@ -38,8 +39,11 @@ type Application struct {
 	// InvestigationService serves the read-only Investigation API over
 	// InvestigationDB. Its routes are not registered in Routes yet.
 	InvestigationService *investigation.InvestigationService
-	Logger               *slog.Logger
-	Version              string
+	// HistoryService records observations in InvestigationDB. It is always
+	// set, and does nothing when InvestigationDB is nil.
+	HistoryService *history.HistoryService
+	Logger         *slog.Logger
+	Version        string
 	// collectMu serializes collection cycles so a new tick never overlaps
 	// unfinished work from the previous tick. collectOnce takes it with
 	// TryLock and skips the tick when it is already held.
@@ -117,6 +121,7 @@ func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version s
 		KnownServers:         NewKnownServerSet(cfg.GetServers()),
 		InvestigationDB:      investigationDB,
 		InvestigationService: investigationService,
+		HistoryService:       history.NewHistoryService(investigationDB, logger, version),
 		Logger:               logger,
 		Version:              version,
 	}
