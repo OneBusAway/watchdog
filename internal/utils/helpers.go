@@ -14,8 +14,10 @@ func MakeMap(key, value string) map[string]string {
 // query string and userinfo. This is used for Prometheus label values so that
 // credentials embedded in URLs (e.g. ?api_key=SECRET or user:pass@host) are
 // never exposed through metrics, while still distinguishing different API
-// endpoints by their path. It returns an empty string if the input cannot be
-// parsed.
+// endpoints by their path. The host is lowercased, because host names are
+// case-insensitive and one server must not appear under two label values or
+// identities; the path keeps its case, because paths are case-sensitive. It
+// returns an empty string if the input cannot be parsed.
 func SanitizeServerURL(rawURL string) string {
 	raw := strings.TrimSpace(rawURL)
 	if raw == "" {
@@ -44,5 +46,5 @@ func SanitizeServerURL(rawURL string) string {
 		return ""
 	}
 
-	return parsed.Scheme + "://" + parsed.Host + parsed.Path
+	return parsed.Scheme + "://" + strings.ToLower(parsed.Host) + parsed.Path
 }
