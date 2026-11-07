@@ -22,7 +22,14 @@ var fastStaticRefreshPolicy = staticRefreshRetryPolicy{initialDelay: time.Millis
 // empty, so a test can change a feed's content between campaigns.
 func feedServer(t *testing.T, body *atomic.Value) *httptest.Server {
 	t.Helper()
+	// /second.zip is a different feed for the same agency, so it carries its
+	// own trip ID.
+	second := makeScheduleZip(t, withTripID(basicScheduleFiles("UTC", "17:00:00", "18:00:00"), "T2"))
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/second.zip" {
+			_, _ = w.Write(second)
+			return
+		}
 		data, _ := body.Load().([]byte)
 		if len(data) == 0 {
 			http.NotFound(w, r)

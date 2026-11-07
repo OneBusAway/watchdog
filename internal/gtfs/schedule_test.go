@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 	// The binary embeds tzdata in main; tests embed it too so legacy links
@@ -233,7 +234,7 @@ func TestCompileSchedulesAcrossFeedsComparesTimezoneRules(t *testing.T) {
 		server := scheduleServer("A", "https://one.zip", "https://two.zip")
 		_, err := compileSchedules(server, []downloadedStaticFeed{
 			{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, basicScheduleFiles(first, "08:00:00", "09:00:00"))},
-			{url: server.GtfsStaticFeeds[1], data: makeScheduleZip(t, basicScheduleFiles(second, "17:00:00", "18:00:00"))},
+			{url: server.GtfsStaticFeeds[1], data: makeScheduleZip(t, withTripID(basicScheduleFiles(second, "17:00:00", "18:00:00"), "T2"))},
 		})
 		return err
 	}
@@ -328,7 +329,7 @@ func TestCompileSchedulesMultipleFeedsAndAtomicAvailability(t *testing.T) {
 	server := scheduleServer("A", "https://one.zip", "https://two.zip")
 	feeds := []downloadedStaticFeed{
 		{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, basicScheduleFiles("UTC", "08:00:00", "09:00:00"))},
-		{url: server.GtfsStaticFeeds[1], data: makeScheduleZip(t, basicScheduleFiles("UTC", "17:00:00", "18:00:00"))},
+		{url: server.GtfsStaticFeeds[1], data: makeScheduleZip(t, withTripID(basicScheduleFiles("UTC", "17:00:00", "18:00:00"), "T2"))},
 	}
 	snapshots, err := compileSchedules(server, feeds)
 	if err != nil {
@@ -393,6 +394,14 @@ func basicScheduleFiles(timezone, first, last string) map[string]string {
 		"stops.txt":      "stop_id,stop_name,stop_lat,stop_lon\nS1,One,1,1\nS2,Two,2,2\n",
 		"stop_times.txt": fmt.Sprintf("trip_id,arrival_time,departure_time,stop_id,stop_sequence\nT,%s,%s,S1,1\nT,%s,%s,S2,2\n", first, first, last, last),
 	}
+}
+
+// withTripID renames the single trip in basicScheduleFiles, so two feeds for
+// one agency can be compiled together without sharing a trip ID.
+func withTripID(files map[string]string, tripID string) map[string]string {
+	files["trips.txt"] = strings.Replace(files["trips.txt"], ",T\n", ","+tripID+"\n", 1)
+	files["stop_times.txt"] = strings.ReplaceAll(files["stop_times.txt"], "\nT,", "\n"+tripID+",")
+	return files
 }
 
 func makeScheduleZip(t *testing.T, files map[string]string) []byte {
