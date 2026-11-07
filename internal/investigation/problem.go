@@ -37,3 +37,9 @@ func writeProblem(w http.ResponseWriter, status int, title, detail string, inval
 		InvalidParams: invalid,
 	})
 }
+
+// writeNotFound writes the 404 for a URI that names no resource: a path ID
+// that is malformed, or that has no row.
+func writeNotFound(w http.ResponseWriter) {
+	writeProblem(w, http.StatusNotFound, "Not found", "No resource exists at this URI.", nil)
+}
