@@ -37,7 +37,7 @@ func (s *InvestigationService) fail(w http.ResponseWriter, r *http.Request, err 
 func fail(w http.ResponseWriter, r *http.Request, err error, logger *slog.Logger) {
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
-		writeProblem(w, http.StatusNotFound, "Not found", "No resource exists at this URI.", nil)
+		writeNotFound(w)
 	case errors.Is(err, errQueryTimeout):
 		logger.Warn("investigation query timed out", "method", r.Method, "path", r.URL.Path, "error", err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
