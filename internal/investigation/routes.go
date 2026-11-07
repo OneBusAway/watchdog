@@ -16,12 +16,14 @@ func (s *InvestigationService) registerRoutes(router *httprouter.Router) {
 	s.get(router, "/v1/reported-trips", s.listReportedTrips)
 	s.get(router, "/v1/cluster-schemes/:scheme_version", s.getClusterScheme)
 	s.get(router, "/v1/servers", s.listServers)
+	s.get(router, "/v1/servers/:server_id", s.getServer)
 	s.get(router, "/v1/unmatched-stop-episodes", s.listUnmatchedStopEpisodes)
 	s.get(router, "/v1/unmatched-stop-episodes/:episode_id", s.getUnmatchedStopEpisode)
 	s.get(router, "/v1/vehicles", s.listVehicles)
 	s.get(router, "/v1/vehicles/:vehicle_entity_id", s.getVehicle)
 	s.registerLoader("vehicle", s.loadVehicles)
 	s.get(router, "/v1/investigation", s.getInvestigationRoot)
+	s.registerLoader(kindServer, s.loadServers)
 }
 
 // get registers a read-only endpoint: it serves GET and HEAD requests for

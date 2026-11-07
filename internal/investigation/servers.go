@@ -12,7 +12,11 @@ import (
 	"watchdog.onebusaway.org/internal/utils"
 )
 
-// server is one OBA server in a response (E02).
+// kindServer is the include kind of a server (E03). Every link named server
+// points to one.
+const kindServer resourceKind = "server"
+
+// server is one OBA server in a response (E02, E03).
 type server struct {
 	ServerID          int64   `json:"server_id"`
 	NormalizedBaseURL string  `json:"normalized_base_url"`
@@ -96,21 +100,74 @@ func configuredServerURLs(servers []models.ObaServer) map[string]bool {
 func serverItems(rows []dbgen.OnebusawayServer, configured map[string]bool) []server {
 	items := make([]server, 0, len(rows))
 	for _, row := range rows {
-		id := strconv.FormatInt(row.ServerID, 10)
-		self := "/v1/servers/" + id
-		items = append(items, server{
-			ServerID:          row.ServerID,
-			NormalizedBaseURL: row.NormalizedBaseUrl,
-			DisplayName:       row.DisplayName,
-			CreatedAt:         newAPITime(row.CreatedAt),
-			Configured:        configured[row.NormalizedBaseUrl],
-			Links: links{
-				"self":                       self,
-				"agencies":                   self + "/agencies",
-				"vehicle_position_endpoints": self + "/vehicle-position-endpoints",
-				"gtfs_static_versions":       linkWithQuery("/v1/gtfs-static-versions", url.Values{"server_id": {id}}),
-			},
-		})
+		items = append(items, serverRepresentation(row, configured))
 	}
 	return items
+}
+
+// serverRepresentation maps one row to the representation that E02 lists,
+// E03 returns and the server loader includes.
+func serverRepresentation(row dbgen.OnebusawayServer, configured map[string]bool) server {
+	id := strconv.FormatInt(row.ServerID, 10)
+	self := "/v1/servers/" + id
+	return server{
+		ServerID:          row.ServerID,
+		NormalizedBaseURL: row.NormalizedBaseUrl,
+		DisplayName:       row.DisplayName,
+		CreatedAt:         newAPITime(row.CreatedAt),
+		Configured:        configured[row.NormalizedBaseUrl],
+		Links: links{
+			"self":                       self,
+			"agencies":                   self + "/agencies",
+			"vehicle_position_endpoints": self + "/vehicle-position-endpoints",
+			"gtfs_static_versions":       linkWithQuery("/v1/gtfs-static-versions", url.Values{"server_id": {id}}),
+		},
+	}
+}
+
+// getServer serves GET /v1/servers/:server_id: one recorded OBA server. It
+// takes no query parameters; there is nothing to include.
+func (s *InvestigationService) getServer(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	id, ok := pathID(ps, "server_id")
+	if !ok {
+		writeNotFound(w)
+		return
+	}
+	var bad invalidParams
+	parseQuery(r, &bad)
+	if len(bad) > 0 {
+		writeInvalidParams(w, bad)
+		return
+	}
+
+	var row dbgen.OnebusawayServer
+	err := s.read(r.Context(), func(ctx context.Context, q *dbgen.Queries) error {
+		var err error
+		row, err = q.GetServer(ctx, id)
+		return err
+	})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.writeJSON(w, r, serverRepresentation(row, configuredServerURLs(s.Servers())), cacheShort())
+}
+
+// loadServers is the include loader for kindServer.
+func (s *InvestigationService) loadServers(ctx context.Context, q *dbgen.Queries, ids []int64) (map[int64]any, error) {
+	return loadServers(ctx, q, ids, configuredServerURLs(s.Servers()))
+}
+
+// loadServers returns the E03 representation of each server in ids, in one
+// query.
+func loadServers(ctx context.Context, q *dbgen.Queries, ids []int64, configured map[string]bool) (map[int64]any, error) {
+	rows, err := q.ListServersByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int64]any, len(rows))
+	for _, row := range rows {
+		out[row.ServerID] = serverRepresentation(row, configured)
+	}
+	return out, nil
 }
