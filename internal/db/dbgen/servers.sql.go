@@ -9,6 +9,25 @@ import (
 	"context"
 )
 
+const getServer = `-- name: GetServer :one
+SELECT server_id, normalized_base_url, display_name, created_at
+FROM onebusaway_server
+WHERE server_id = $1
+`
+
+// One OBA server by ID.
+func (q *Queries) GetServer(ctx context.Context, serverID int64) (OnebusawayServer, error) {
+	row := q.db.QueryRow(ctx, getServer, serverID)
+	var i OnebusawayServer
+	err := row.Scan(
+		&i.ServerID,
+		&i.NormalizedBaseUrl,
+		&i.DisplayName,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listServers = `-- name: ListServers :many
 SELECT server_id, normalized_base_url, display_name, created_at
 FROM onebusaway_server
@@ -22,6 +41,40 @@ ORDER BY server_id
 // row: the column is unique).
 func (q *Queries) ListServers(ctx context.Context, normalizedBaseUrl *string) ([]OnebusawayServer, error) {
 	rows, err := q.db.Query(ctx, listServers, normalizedBaseUrl)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []OnebusawayServer
+	for rows.Next() {
+		var i OnebusawayServer
+		if err := rows.Scan(
+			&i.ServerID,
+			&i.NormalizedBaseUrl,
+			&i.DisplayName,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listServersByIDs = `-- name: ListServersByIDs :many
+SELECT server_id, normalized_base_url, display_name, created_at
+FROM onebusaway_server
+WHERE server_id = ANY($1::bigint[])
+ORDER BY server_id
+`
+
+// The OBA servers with the given IDs, for the include loader. IDs with no row
+// are left out.
+func (q *Queries) ListServersByIDs(ctx context.Context, serverIds []int64) ([]OnebusawayServer, error) {
+	rows, err := q.db.Query(ctx, listServersByIDs, serverIds)
 	if err != nil {
 		return nil, err
 	}
