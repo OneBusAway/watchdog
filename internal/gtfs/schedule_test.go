@@ -422,3 +422,215 @@ func makeScheduleZip(t *testing.T, files map[string]string) []byte {
 	}
 	return data.Bytes()
 }
+
+// classifyStore compiles files as one agency-mode feed for agency A and
+// returns the store and the agency's server key.
+func classifyStore(t *testing.T, files map[string]string) (*ScheduleStore, string) {
+	t.Helper()
+	server := scheduleServer("A", "https://classify.zip")
+	snapshots, err := compileSchedules(server, []downloadedStaticFeed{{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, files)}})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	store := NewScheduleStore()
+	store.Replace(server, snapshots)
+	return store, server.ServerKey()
+}
+
+func utc(year int, month time.Month, day, hour, minute int) time.Time {
+	return time.Date(year, month, day, hour, minute, 0, 0, time.UTC)
+}
+
+func assertClassification(t *testing.T, got TripClassification, state ExpectedScheduleState, reason ExpectedScheduleReason, start, end time.Time) {
+	t.Helper()
+	if !got.ScheduleAvailable || got.State != state || got.Reason != reason {
+		t.Fatalf("classification = %+v, want available %s/%s", got, state, reason)
+	}
+	if !got.WindowStart.Equal(start) || !got.WindowEnd.Equal(end) {
+		t.Fatalf("window = %s..%s, want %s..%s", got.WindowStart, got.WindowEnd, start, end)
+	}
+	if !start.IsZero() && (got.WindowStart.Location() != time.UTC || got.WindowEnd.Location() != time.UTC) {
+		t.Fatalf("window must be in UTC, got %s..%s", got.WindowStart.Location(), got.WindowEnd.Location())
+	}
+}
+
+func TestClassifyTrip_NoSchedule(t *testing.T) {
+	if got := NewScheduleStore().ClassifyTrip("https://oba.example|A", TripDescriptor{TripID: "T"}, utc(2026, 9, 9, 8, 30)); got != (TripClassification{}) {
+		t.Fatalf("missing schedule = %+v, want every field empty", got)
+	}
+
+	// After a failed refresh the kept snapshot may be outdated, so it must not
+	// classify trips.
+	store, key := classifyStore(t, basicScheduleFiles("UTC", "08:00:00", "09:00:00"))
+	store.MarkUnavailable(scheduleServer("A", "https://classify.zip"))
+	if got := store.ClassifyTrip(key, TripDescriptor{TripID: "T"}, utc(2026, 9, 9, 8, 30)); got != (TripClassification{}) {
+		t.Fatalf("unavailable schedule = %+v, want every field empty", got)
+	}
+}
+
+func TestClassifyTrip_NoTripDescriptor(t *testing.T) {
+	store, key := classifyStore(t, basicScheduleFiles("UTC", "08:00:00", "09:00:00"))
+	got := store.ClassifyTrip(key, TripDescriptor{}, utc(2026, 9, 9, 8, 30))
+	assertClassification(t, got, ExpectedScheduleUnknown, ExpectedReasonNoTripDescriptor, time.Time{}, time.Time{})
+}
+
+func TestClassifyTrip_TripNotInStatic(t *testing.T) {
+	store, key := classifyStore(t, basicScheduleFiles("UTC", "08:00:00", "09:00:00"))
+	got := store.ClassifyTrip(key, TripDescriptor{TripID: "NOPE"}, utc(2026, 9, 9, 8, 30))
+	assertClassification(t, got, ExpectedScheduleUnknown, ExpectedReasonTripNotInStaticGTFS, time.Time{}, time.Time{})
+}
+
+func TestClassifyTrip_FrequencyWithoutStartTime(t *testing.T) {
+	files := basicScheduleFiles("UTC", "00:00:00", "00:10:00")
+	files["frequencies.txt"] = "trip_id,start_time,end_time,headway_secs,exact_times\nT,06:00:00,07:00:00,1800,1\n"
+	store, key := classifyStore(t, files)
+	got := store.ClassifyTrip(key, TripDescriptor{TripID: "T"}, utc(2026, 9, 9, 6, 5))
+	assertClassification(t, got, ExpectedScheduleUnknown, ExpectedReasonTripInstanceAmbiguous, time.Time{}, time.Time{})
+}
+
+// A start date or time that is present but can't be parsed doesn't identify a
+// trip instance, so it is ambiguous rather than ignored.
+func TestClassifyTrip_MalformedStartFields(t *testing.T) {
+	store, key := classifyStore(t, basicScheduleFiles("UTC", "08:00:00", "09:00:00"))
+	for _, descriptor := range []TripDescriptor{
+		{TripID: "T", StartDate: "2026-09-09"},
+		{TripID: "T", StartTime: "8:00:00"},
+		{TripID: "T", StartTime: "08:75:00"},
+	} {
+		got := store.ClassifyTrip(key, descriptor, utc(2026, 9, 9, 8, 30))
+		assertClassification(t, got, ExpectedScheduleUnknown, ExpectedReasonTripInstanceAmbiguous, time.Time{}, time.Time{})
+	}
+}
+
+func TestClassifyTrip_ServiceNotActive(t *testing.T) {
+	files := basicScheduleFiles("UTC", "08:00:00", "09:00:00")
+	files["calendar.txt"] = "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nWK,1,0,0,0,0,0,0,20260101,20261231\n"
+	store, key := classifyStore(t, files)
+	// Wednesday; the candidates are Wednesday and Tuesday, and the trip runs
+	// only on Mondays.
+	got := store.ClassifyTrip(key, TripDescriptor{TripID: "T"}, utc(2026, 9, 9, 8, 30))
+	assertClassification(t, got, ExpectedScheduleInactive, ExpectedReasonServiceNotActiveOnDate, time.Time{}, time.Time{})
+}
+
+func TestClassifyTrip_WithinWindow(t *testing.T) {
+	store, key := classifyStore(t, basicScheduleFiles("UTC", "08:00:00", "09:00:00"))
+	got := store.ClassifyTrip(key, TripDescriptor{TripID: "T"}, utc(2026, 9, 9, 8, 30))
+	assertClassification(t, got, ExpectedScheduleActive, ExpectedReasonWithinScheduledWindow, utc(2026, 9, 9, 8, 0), utc(2026, 9, 9, 9, 0))
+}
+
+func TestClassifyTrip_BeforeWindow(t *testing.T) {
+	store, key := classifyStore(t, basicScheduleFiles("UTC", "08:00:00", "09:00:00"))
+	// Yesterday's window has ended and today's has not started; the earliest
+	// window starting after T wins.
+	got := store.ClassifyTrip(key, TripDescriptor{TripID: "T"}, utc(2026, 9, 9, 7, 0))
+	assertClassification(t, got, ExpectedScheduleInactive, ExpectedReasonBeforeScheduledWindow, utc(2026, 9, 9, 8, 0), utc(2026, 9, 9, 9, 0))
+}
+
+func TestClassifyTrip_AfterWindow(t *testing.T) {
+	store, key := classifyStore(t, basicScheduleFiles("UTC", "08:00:00", "09:00:00"))
+	// Both candidate windows have ended; the latest one is reported.
+	got := store.ClassifyTrip(key, TripDescriptor{TripID: "T"}, utc(2026, 9, 9, 10, 0))
+	assertClassification(t, got, ExpectedScheduleInactive, ExpectedReasonAfterScheduledWindow, utc(2026, 9, 9, 8, 0), utc(2026, 9, 9, 9, 0))
+}
+
+func TestClassifyTrip_StartDateGiven(t *testing.T) {
+	store, key := classifyStore(t, basicScheduleFiles("UTC", "08:00:00", "09:00:00"))
+	// Without a start date, today's window would contain T. The given date
+	// is the only candidate, so its window is reported as ended.
+	got := store.ClassifyTrip(key, TripDescriptor{TripID: "T", StartDate: "20260908"}, utc(2026, 9, 9, 8, 30))
+	assertClassification(t, got, ExpectedScheduleInactive, ExpectedReasonAfterScheduledWindow, utc(2026, 9, 8, 8, 0), utc(2026, 9, 8, 9, 0))
+}
+
+func TestClassifyTrip_OvernightTrip(t *testing.T) {
+	files := basicScheduleFiles("UTC", "24:00:00", "25:30:00")
+	// Tuesday 2026-09-08 only, so the 01:00 Wednesday observation can match
+	// only the previous service date.
+	files["calendar.txt"] = "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nWK,0,1,0,0,0,0,0,20260908,20260908\n"
+	store, key := classifyStore(t, files)
+	got := store.ClassifyTrip(key, TripDescriptor{TripID: "T"}, utc(2026, 9, 9, 1, 0))
+	assertClassification(t, got, ExpectedScheduleActive, ExpectedReasonWithinScheduledWindow, utc(2026, 9, 9, 0, 0), utc(2026, 9, 9, 1, 30))
+}
+
+func TestClassifyTrip_DSTDay(t *testing.T) {
+	files := basicScheduleFiles("America/New_York", "01:30:00", "03:30:00")
+	files["calendar.txt"] = "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nWK,0,0,0,0,0,0,1,20260308,20260308\n"
+	store, key := classifyStore(t, files)
+	// On 2026-03-08 noon is 16:00 UTC (EDT), so the reference is 04:00 UTC and
+	// the 01:30 offset is 05:30 UTC, not the 06:30 UTC a midnight reference
+	// would give.
+	got := store.ClassifyTrip(key, TripDescriptor{TripID: "T"}, utc(2026, 3, 8, 6, 0))
+	assertClassification(t, got, ExpectedScheduleActive, ExpectedReasonWithinScheduledWindow, utc(2026, 3, 8, 5, 30), utc(2026, 3, 8, 7, 30))
+}
+
+func TestClassifyTrip_FrequencyWithStartTime(t *testing.T) {
+	files := basicScheduleFiles("UTC", "00:00:00", "00:10:00")
+	files["frequencies.txt"] = "trip_id,start_time,end_time,headway_secs,exact_times\nT,06:00:00,07:00:00,1800,1\n"
+	store, key := classifyStore(t, files)
+	got := store.ClassifyTrip(key, TripDescriptor{TripID: "T", StartTime: "06:30:00"}, utc(2026, 9, 9, 6, 35))
+	assertClassification(t, got, ExpectedScheduleActive, ExpectedReasonWithinScheduledWindow, utc(2026, 9, 9, 6, 30), utc(2026, 9, 9, 6, 40))
+}
+
+func TestLookupTrip(t *testing.T) {
+	files := basicScheduleFiles("UTC", "08:00:00", "09:00:00")
+	files["trips.txt"] = "route_id,service_id,trip_id,block_id\nR,WK,T,B1\nR,WK,T2,\n"
+	files["stop_times.txt"] += "T2,10:00:00,10:00:00,S1,1\nT2,11:00:00,11:00:00,S2,2\n"
+	store, key := classifyStore(t, files)
+
+	if got, ok := store.LookupTrip(key, "T"); !ok || got != (TripInfo{RouteID: "R", ServiceID: "WK", BlockID: "B1"}) {
+		t.Fatalf("LookupTrip(T) = %+v, %t", got, ok)
+	}
+	if got, ok := store.LookupTrip(key, "T2"); !ok || got.BlockID != "" {
+		t.Fatalf("empty block_id value = %+v, %t; want found with empty block", got, ok)
+	}
+	if _, ok := store.LookupTrip(key, "NOPE"); ok {
+		t.Fatal("unknown trip must not be found")
+	}
+	if _, ok := NewScheduleStore().LookupTrip(key, "T"); ok {
+		t.Fatal("missing schedule must not find trips")
+	}
+
+	// A trip's route, service and block don't go stale, so a failed refresh
+	// leaves lookups answering from the kept snapshot.
+	store.MarkUnavailable(scheduleServer("A", "https://classify.zip"))
+	if _, ok := store.LookupTrip(key, "T"); !ok {
+		t.Fatal("lookup must keep answering from the retained snapshot")
+	}
+
+	noColumn, noColumnKey := classifyStore(t, basicScheduleFiles("UTC", "08:00:00", "09:00:00"))
+	if got, ok := noColumn.LookupTrip(noColumnKey, "T"); !ok || got != (TripInfo{RouteID: "R", ServiceID: "WK"}) {
+		t.Fatalf("missing block_id column = %+v, %t; want found with empty block", got, ok)
+	}
+}
+
+func TestCompileSchedulesRejectsTripRepeatedAcrossFeeds(t *testing.T) {
+	server := scheduleServer("A", "https://one.zip", "https://two.zip")
+	_, err := compileSchedules(server, []downloadedStaticFeed{
+		{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, basicScheduleFiles("UTC", "08:00:00", "09:00:00"))},
+		{url: server.GtfsStaticFeeds[1], data: makeScheduleZip(t, basicScheduleFiles("UTC", "17:00:00", "18:00:00"))},
+	})
+	if err == nil || !strings.Contains(err.Error(), `trip "T"`) {
+		t.Fatalf("repeated trip ID for one agency must fail the compile, got %v", err)
+	}
+}
+
+// An agency-mode entry compiles only its own agency, so another agency's
+// repeated trip ID in the same feeds must not reject it.
+func TestCompileSchedulesIgnoresOtherAgencyRepeatedTrip(t *testing.T) {
+	feed := func(ownTrip string) []byte {
+		files := basicScheduleFiles("UTC", "08:00:00", "09:00:00")
+		files["agency.txt"] = "agency_id,agency_name,agency_url,agency_timezone\nA,Agency A,https://a.example,UTC\nB,Agency B,https://b.example,UTC\n"
+		files["routes.txt"] = "route_id,agency_id,route_short_name,route_type\nRA,A,A,3\nRB,B,B,3\n"
+		files["trips.txt"] = fmt.Sprintf("route_id,service_id,trip_id\nRA,WK,%s\nRB,WK,TB\n", ownTrip)
+		files["stop_times.txt"] = fmt.Sprintf("trip_id,arrival_time,departure_time,stop_id,stop_sequence\n%[1]s,08:00:00,08:00:00,S1,1\n%[1]s,09:00:00,09:00:00,S2,2\nTB,08:00:00,08:00:00,S1,1\nTB,09:00:00,09:00:00,S2,2\n", ownTrip)
+		return makeScheduleZip(t, files)
+	}
+	server := scheduleServer("A", "https://one.zip", "https://two.zip")
+	feeds := []downloadedStaticFeed{{url: server.GtfsStaticFeeds[0], data: feed("TA1")}, {url: server.GtfsStaticFeeds[1], data: feed("TA2")}}
+	if _, err := compileSchedules(server, feeds); err != nil {
+		t.Fatalf("agency-mode compile must ignore agency B's repeated trip: %v", err)
+	}
+	server.AgencyID = ""
+	if _, err := compileSchedules(server, feeds); err == nil {
+		t.Fatal("server-mode compile must reject agency B's repeated trip")
+	}
+}
