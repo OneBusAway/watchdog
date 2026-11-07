@@ -63,6 +63,11 @@ func TestStaticArtifactCacheKeepsIdenticalFeedsIndependent(t *testing.T) {
 
 func TestStaticRefreshCampaignReusesSuccessfulFeed(t *testing.T) {
 	bundle := readFixture(t, "gtfs.zip")
+	// The second feed must not repeat the first feed's trip IDs for agency 40.
+	flakyFiles := basicScheduleFiles("America/Los_Angeles", "08:00:00", "09:00:00")
+	flakyFiles["agency.txt"] = "agency_id,agency_name,agency_url,agency_timezone\n40,Sound Transit,https://st.example,America/Los_Angeles\n"
+	flakyFiles["routes.txt"] = "route_id,agency_id,route_short_name,route_type\nR,40,R,3\n"
+	flakyBundle := makeScheduleZip(t, flakyFiles)
 	var goodRequests atomic.Int32
 	var flakyRequests atomic.Int32
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -75,7 +80,7 @@ func TestStaticRefreshCampaignReusesSuccessfulFeed(t *testing.T) {
 				http.Error(w, "unavailable", http.StatusServiceUnavailable)
 				return
 			}
-			_, _ = w.Write(bundle)
+			_, _ = w.Write(flakyBundle)
 		default:
 			http.NotFound(w, r)
 		}
@@ -284,7 +289,12 @@ func TestStaticRefreshCampaignsDoNotParseConcurrently(t *testing.T) {
 // probe succeeds it goes straight on to fetch the rest within the same attempt.
 func TestDailyConservativeProbeContinuesToRemainingFeeds(t *testing.T) {
 	bundle := makeScheduleZip(t, basicScheduleFiles("UTC", "08:00:00", "09:00:00"))
+	rest := makeScheduleZip(t, withTripID(basicScheduleFiles("UTC", "17:00:00", "18:00:00"), "T2"))
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rest.zip" {
+			_, _ = w.Write(rest)
+			return
+		}
 		_, _ = w.Write(bundle)
 	}))
 	defer ts.Close()
