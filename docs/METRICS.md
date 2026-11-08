@@ -30,6 +30,18 @@ Clients define the current-value window as `clamp(3 * interval, 60, 300)` second
 
 `service_slug` is a short, machine-readable identifier for the monitored service, supplied by the source of Watchdog's configuration. For example, `metro-transit-api` could identify a transit service. Watchdog treats the value as opaque: it does not parse it or depend on a particular hosting platform's naming rules. `environment` and `organization` are also supplied metadata. Existing configurations may omit all three fields; Watchdog continues monitoring those servers and simply omits their `watchdog_server_info` series.
 
+## 0.2. Investigation History Writes
+
+| Metric Name | Type | Labels | Unit | Description |
+| --- | --- | --- | --- | --- |
+| `watchdog_investigation_history_write_failures_total` | Counter | `step`, `server_name`, `server_url` | count | Writes to the optional PostgreSQL investigation history that failed (an error or the 5-second timeout). `step` names the recording step. |
+
+Recording history never stops collection: a failed write is logged, reported to Sentry and counted here, and the observation is lost. Without this counter, a gap in the history looks the same as a period with no problems. The series only exist while failures happen; Watchdog without `DATABASE_URL` never emits them.
+
+**Interpretation Guide:**
+- **Normal:** No series, or flat counters.
+- **Investigate if:** Any counter increases. Check the Sentry report for the step and server, and PostgreSQL's availability. History for that server and step is incomplete for the period of the increases.
+
 ---
 
 ## 1. API Availability
