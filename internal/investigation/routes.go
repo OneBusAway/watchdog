@@ -13,6 +13,7 @@ func (s *InvestigationService) Register(router *httprouter.Router) {
 
 // registerRoutes holds one s.get line per endpoint.
 func (s *InvestigationService) registerRoutes(router *httprouter.Router) {
+	s.get(router, "/v1/investigation", s.getInvestigationRoot)
 }
 
 // get registers a read-only endpoint: it serves GET and HEAD requests for
