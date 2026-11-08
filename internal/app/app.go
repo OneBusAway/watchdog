@@ -9,6 +9,7 @@ import (
 	"watchdog.onebusaway.org/internal/config"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
+	"watchdog.onebusaway.org/internal/investigation"
 	"watchdog.onebusaway.org/internal/metrics"
 )
 
@@ -30,8 +31,11 @@ type Application struct {
 	// database was unreachable at startup: PostgreSQL is optional, and every
 	// user must treat nil as "investigation storage disabled".
 	InvestigationDB *pgxpool.Pool
-	Logger          *slog.Logger
-	Version         string
+	// InvestigationService serves the read-only Investigation API over
+	// InvestigationDB. Its routes are not registered in Routes yet.
+	InvestigationService *investigation.InvestigationService
+	Logger               *slog.Logger
+	Version              string
 }
 
 // New creates and wires all dependencies for the Application.
@@ -67,6 +71,10 @@ func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version s
 	gtfsService.SetStaticRefreshObserver(metricsService.StaticRefreshObserver())
 	gtfsService.SetStaticFeedRefreshObserver(metricsService.StaticFeedRefreshObserver())
 
+	// No tokens yet: until the API reads INVESTIGATION_API_TOKEN, every
+	// investigation request is rejected.
+	investigationService := investigation.NewInvestigationService(investigationDB, cfg.GetServers, nil, logger)
+
 	return &Application{
 		ConfigService:  configService,
 		GtfsService:    gtfsService,
@@ -75,9 +83,10 @@ func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version s
 		// boot-time server list by the time New is called, so seeding in the
 		// constructor makes it impossible to forget and keeps the first
 		// refresh after start-up from re-downloading every bundle.
-		KnownServers:    NewKnownServerSet(cfg.GetServers()),
-		InvestigationDB: investigationDB,
-		Logger:          logger,
-		Version:         version,
+		KnownServers:         NewKnownServerSet(cfg.GetServers()),
+		InvestigationDB:      investigationDB,
+		InvestigationService: investigationService,
+		Logger:               logger,
+		Version:              version,
 	}
 }
