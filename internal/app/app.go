@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"watchdog.onebusaway.org/internal/config"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
@@ -24,8 +25,13 @@ type Application struct {
 	// seen configuration, so a --config-url refresh can tell newcomers (which
 	// need an immediate bundle download) from servers it has already seen.
 	KnownServers *KnownServerSet
-	Logger       *slog.Logger
-	Version      string
+	// InvestigationDB is the PostgreSQL pool for durable investigation
+	// history, already migrated. It is nil when DATABASE_URL is unset or the
+	// database was unreachable at startup: PostgreSQL is optional, and every
+	// user must treat nil as "investigation storage disabled".
+	InvestigationDB *pgxpool.Pool
+	Logger          *slog.Logger
+	Version         string
 }
 
 // New creates and wires all dependencies for the Application.
@@ -36,7 +42,7 @@ type Application struct {
 // resolve scopes for both agency-mode and server-mode entries. The
 // gtfs-service constructor receives the route index too so it can populate it
 // during static-bundle parse.
-func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version string, droppedStore *config.DroppedServersStore) *Application {
+func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version string, droppedStore *config.DroppedServersStore, investigationDB *pgxpool.Pool) *Application {
 
 	staticStore := gtfs.NewStaticStore()
 	staticStore.SetConfiguredServers(cfg.GetServers())
@@ -69,8 +75,9 @@ func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version s
 		// boot-time server list by the time New is called, so seeding in the
 		// constructor makes it impossible to forget and keeps the first
 		// refresh after start-up from re-downloading every bundle.
-		KnownServers: NewKnownServerSet(cfg.GetServers()),
-		Logger:       logger,
-		Version:      version,
+		KnownServers:    NewKnownServerSet(cfg.GetServers()),
+		InvestigationDB: investigationDB,
+		Logger:          logger,
+		Version:         version,
 	}
 }

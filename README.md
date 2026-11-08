@@ -185,6 +185,14 @@ Migrating to v2 is recommended whenever convenient — it's the only way to conf
     export CONFIG_AUTH_PASS="password"
 ```
 
+- **Investigation database (optional)**
+
+```bash
+    export DATABASE_URL="postgres://user:password@host:5432/watchdog?sslmode=require"
+```
+
+When `DATABASE_URL` is set, Watchdog connects to PostgreSQL at startup and applies any pending schema migrations. This database will hold durable investigation history ([ADR 0001](docs/adr/0001-durable-historical-investigation-storage.md), [schema](docs/historical-investigation-schema.md)). It is optional: if `DATABASE_URL` is unset, or the database is unreachable at startup, Watchdog logs it and keeps collecting and exporting Prometheus metrics without it. Docker Compose starts a local PostgreSQL and sets `DATABASE_URL` for you.
+
 ## Running
 
 It may take a few minutes for Watchdog to start exposing data to Prometheus, since initial setup includes tasks such as downloading the GTFS bundle.
@@ -294,6 +302,16 @@ During **production** (replace `<server-ip-or-domain>`):
 ```bash
 go test ./...
 ```
+
+### Database Tests
+
+The tests in `internal/db` apply the migrations and check the schema's constraints against a real PostgreSQL. They skip unless `WATCHDOG_TEST_DATABASE_URL` is set; each test creates and drops its own schema in that database.
+
+```bash
+WATCHDOG_TEST_DATABASE_URL="postgres://watchdog:watchdog@localhost:5432/watchdog?sslmode=disable" make test-db
+```
+
+After changing a query in `internal/db/queries` or adding a migration, regenerate the typed Go code with `make sqlc`.
 
 ### Integration Tests
 
