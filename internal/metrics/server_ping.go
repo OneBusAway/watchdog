@@ -37,6 +37,12 @@ func serverPing(ctx context.Context, client *onebusaway.Client, server models.Ob
 	serverURL := utils.SanitizeServerURL(server.ObaBaseURL)
 
 	if err != nil {
+		if ctx.Err() != nil {
+			// The ping was canceled by the cycle deadline or shutdown:
+			// incomplete collection, not a server outage. Leave the
+			// availability gauge and backoff state untouched.
+			return false
+		}
 		err := fmt.Errorf("failed to ping OBA server %s: %v", server.ObaBaseURL, err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: utils.MakeMap("server_name", server.ServerName),
