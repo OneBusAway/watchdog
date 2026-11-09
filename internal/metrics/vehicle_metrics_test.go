@@ -144,6 +144,10 @@ func TestCountActiveVehiclesForAgencyDeletesGaugeOnFetchFailure(t *testing.T) {
 	}
 }
 
+// TestCountActiveVehiclesForAgencyKeepsGaugeWhenCanceled verifies that a call
+// canceled by the cycle deadline or shutdown leaves the previous
+// oba_agency_active_vehicles value in place, since cancellation means an
+// incomplete collection rather than an outage.
 func TestCountActiveVehiclesForAgencyKeepsGaugeWhenCanceled(t *testing.T) {
 	ts := setupObaServer(t, `{"data":{"list":[{"vehicleId":"1"}]}}`, http.StatusOK)
 	defer ts.Close()
