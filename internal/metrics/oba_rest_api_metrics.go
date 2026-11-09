@@ -259,9 +259,18 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 		return nil
 	}
 
-	stopInfoMap, err := gtfs.GetStopLocationsByIDs(serverKey, unmatchedStopIDs, staticStore)
+	uniqueUnmatchedStopIDs := make([]string, 0, len(unmatchedStopIDs))
+	seenStops := make(map[string]struct{}, len(unmatchedStopIDs))
+	for _, id := range unmatchedStopIDs {
+		if _, seen := seenStops[id]; !seen {
+			seenStops[id] = struct{}{}
+			uniqueUnmatchedStopIDs = append(uniqueUnmatchedStopIDs, id)
+		}
+	}
+
+	stopInfoMap, err := gtfs.GetStopLocationsByIDs(serverKey, uniqueUnmatchedStopIDs, staticStore)
 	if err != nil {
-		ObaUnmatchedStopUnresolved.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(float64(len(unmatchedStopIDs)))
+		ObaUnmatchedStopUnresolved.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(float64(len(uniqueUnmatchedStopIDs)))
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags:         map[string]string{"agency_id": agencyID, "server_name": serverName},
 			ExtraContext: map[string]interface{}{"reason": "failed to match stop IDs to GTFS"},
@@ -292,11 +301,11 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 		unmatchedStopTracker.RecordLastSeen(serverKey, agencyID, agencyName, serverName, serverURL, stopID, stop.Name, latStr, lonStr)
 	}
 
-	unresolved := len(unmatchedStopIDs) - resolved
+	unresolved := len(uniqueUnmatchedStopIDs) - resolved
 	ObaUnmatchedStopUnresolved.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(float64(unresolved))
 	if unresolved > 0 {
 		logger.Warn("OBA unmatched stop IDs could not be resolved against the local GTFS bundle",
-			"agency_id", agencyID, "server_name", serverName, "requested", len(unmatchedStopIDs), "resolved", resolved)
+			"agency_id", agencyID, "server_name", serverName, "requested", len(uniqueUnmatchedStopIDs), "resolved", resolved)
 	}
 	reportUnmatchedStopClusters(serverKey, agencyID, agencyName, serverName, serverURL, stopInfoMap, unmatchedStopTracker)
 	return nil
