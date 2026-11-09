@@ -2,63 +2,59 @@ package config
 
 import (
 	"encoding/json"
-	"log/slog"
-	"os"
+	"strings"
 	"testing"
 
-	"watchdog.onebusaway.org/internal/models"
+	"github.com/getsentry/sentry-go"
+	"watchdog.onebusaway.org/internal/report"
 )
 
 func TestDroppedServersStore_SharedIdentityRecovery(t *testing.T) {
+	rec := report.CaptureSentry(t)
 	store := NewDroppedServersStore()
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	// 1. Initial state: "bad" server is malformed (missing API key)
-	brokenJSON := []json.RawMessage{
-		json.RawMessage(`{
-			"server_name": "bad",
-			"agency_name": "MBTA",
-			"agency_id": "1",
-			"oba_base_url": "http://api.pugetsound.onebusaway.org",
-			"gtfs_static_feeds": ["https://cdn.mbta.com/MBTA_GTFS.zip"]
-		}`),
+	broken := validServer()
+	broken.ServerName = "bad"
+	broken.GtfsStaticFeeds = nil
+
+	valid := validServer()
+	valid.ServerName = "a"
+
+	// Cycle 1: broken ("bad") and valid ("a") share an identity in the same config.
+	got := store.Reconcile([]json.RawMessage{
+		mustRawServer(t, broken),
+		mustRawServer(t, valid),
+	}, testLogger())
+	if len(got) != 1 || got[0].ServerName != "a" {
+		t.Fatalf("expected valid server 'a' to be kept, got %+v", got)
 	}
 
-	validServers := store.Reconcile(brokenJSON, logger)
-	if len(validServers) != 0 {
-		t.Fatalf("expected 0 valid servers, got %d", len(validServers))
+	// Cycle 2: the broken entry is removed, triggering recovery for the shared identity.
+	got = store.Reconcile([]json.RawMessage{
+		mustRawServer(t, valid),
+	}, testLogger())
+	if len(got) != 1 || got[0].ServerName != "a" {
+		t.Fatalf("expected valid server 'a' to be kept, got %+v", got)
 	}
 
-	// Verify it was recorded with the original "bad" tags
-	identity := string(models.ServerKey("http://api.pugetsound.onebusaway.org", "1"))
-	tags, ok := store.reported[identity]
-	if !ok {
-		t.Fatalf("expected server to be in reported store")
-	}
-	if tags["server_name"] != "bad" {
-		t.Errorf("expected reported tag to be 'bad', got %q", tags["server_name"])
+	events := rec.Events()
+	if len(events) != 2 {
+		t.Fatalf("expected 1 error + 1 recovery event, got %d", len(events))
 	}
 
-	// 2. Recovery state: a new valid server "a" shares the same identity
-	fixedJSON := []json.RawMessage{
-		json.RawMessage(`{
-			"server_name": "a",
-			"agency_name": "MBTA",
-			"agency_id": "1",
-			"oba_base_url": "http://api.pugetsound.onebusaway.org",
-			"oba_api_key": "TEST",
-			"gtfs_static_feeds": ["https://cdn.mbta.com/MBTA_GTFS.zip"],
-			"gtfs_rt_feeds": [{"trip_update_url": "http://test", "vehicle_position_url": "http://test"}]
-		}`),
+	recovery := events[1]
+	if recovery.Level != sentry.LevelInfo {
+		t.Errorf("expected info level for recovery event, got %s", recovery.Level)
+	}
+	if recovery.Tags["server_name"] != "bad" {
+		t.Errorf("expected recovery server_name tag to be %q, got %q", "bad", recovery.Tags["server_name"])
 	}
 
-	validServers = store.Reconcile(fixedJSON, logger)
-	if len(validServers) != 1 {
-		t.Fatalf("expected 1 valid server, got %d", len(validServers))
+	msg := recovery.Message
+	if msg == "" && len(recovery.Exception) > 0 {
+		msg = recovery.Exception[0].Value
 	}
-
-	// Verify it was cleared from the reported store
-	if _, ok := store.reported[identity]; ok {
-		t.Errorf("expected server to be cleared from reported store after recovery")
+	if !strings.Contains(msg, `"bad"`) {
+		t.Errorf("expected recovery message to name %q, got %q", "bad", msg)
 	}
 }
