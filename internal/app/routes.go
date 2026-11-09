@@ -27,6 +27,8 @@ import (
 //     Exposes all Prometheus metrics collected by the application for scraping by Prometheus.
 //     Handled by a cached Prometheus handler (`middleware.NewCachedPromHandler`), which
 //     reduces collection overhead by caching exposition output for a configurable duration.
+//   - The Investigation API (GET and HEAD), only when app.InvestigationService is
+//     enabled. Every route requires a bearer token; see internal/investigation.
 //
 // Middleware:
 //   - middleware.SentryMiddleware:
@@ -55,6 +57,12 @@ func (app *Application) Routes(ctx context.Context) http.Handler {
 	// respectively.
 	router.HandlerFunc(http.MethodGet, "/v1/healthcheck", app.healthcheckHandler)
 	router.Handler(http.MethodGet, "/metrics", middleware.NewCachedPromHandler(ctx, prometheus.DefaultGatherer, 10*time.Second))
+
+	// The Investigation API exposes entity history, so its routes exist only
+	// when INVESTIGATION_API_TOKEN is set. Otherwise they return 404.
+	if app.InvestigationService.Enabled() {
+		app.InvestigationService.Register(router)
+	}
 
 	// TODO(architecture): Historical investigation of unmatched stops and trips is
 	// not currently reliable. The upstream /api/where/metrics.json endpoint exposes
