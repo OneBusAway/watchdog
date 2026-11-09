@@ -76,12 +76,6 @@ func ValidateServer(server models.ObaServer) error {
 	return nil
 }
 
-// newErrRecovered builds the message for a server that was previously dropped
-// as invalid and now passes validation.
-func newErrRecovered(server models.ObaServer) error {
-	return fmt.Errorf("server %q recovered: previously invalid configuration", server.ServerName)
-}
-
 // ShouldExitOnStartupLoad reports whether a failed or empty initial load must
 // stop the process. A local --config-file will not change underneath us, so
 // failing fast is right. A remote --config-url can be temporarily empty,
