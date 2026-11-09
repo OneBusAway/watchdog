@@ -144,6 +144,49 @@ func TestCountActiveVehiclesForAgencyDeletesGaugeOnFetchFailure(t *testing.T) {
 	}
 }
 
+func TestCountActiveVehiclesForAgencyKeepsGaugeWhenCanceled(t *testing.T) {
+	ts := setupObaServer(t, `{"data":{"list":[{"vehicleId":"1"}]}}`, http.StatusOK)
+	defer ts.Close()
+
+	server := models.ObaServer{
+		AgencyID:   "agency-canceled-test",
+		AgencyName: "Agency Canceled Test",
+		ServerName: "test-server",
+		ObaBaseURL: ts.URL,
+		ObaApiKey:  "key",
+	}
+	labels := []string{server.AgencyID, server.AgencyName, server.ServerName, utils.SanitizeServerURL(server.ObaBaseURL)}
+	labelFilter := map[string]string{
+		"agency_id":   server.AgencyID,
+		"agency_name": server.AgencyName,
+		"server_name": server.ServerName,
+		"server_url":  utils.SanitizeServerURL(server.ObaBaseURL),
+	}
+
+	AgencyActiveVehiclesGauge.WithLabelValues(labels...).Set(42)
+
+	client := onebusaway.NewClient(
+		option.WithAPIKey(server.ObaApiKey),
+		option.WithBaseURL(server.ObaBaseURL),
+		option.WithMaxRetries(0),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := countActiveVehiclesForAgency(ctx, client, server); err == nil {
+		t.Fatal("expected error from canceled call")
+	}
+
+	got := seriesMatching(AgencyActiveVehiclesGauge, labelFilter)
+	if len(got) != 1 {
+		t.Fatalf("expected active-vehicle gauge series to survive cancellation, got %d series", len(got))
+	}
+	if v := got[0].GetGauge().GetValue(); v != 42 {
+		t.Fatalf("expected previous value 42 to be kept, got %v", v)
+	}
+}
+
 func TestCountActiveVehiclesForAgencyDeletesGaugeOnNilResponse(t *testing.T) {
 	ts := setupObaServer(t, `null`, http.StatusOK)
 	defer ts.Close()

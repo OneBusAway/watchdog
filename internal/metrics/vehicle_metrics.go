@@ -171,7 +171,11 @@ func countActiveVehiclesForAgency(ctx context.Context, client *onebusaway.Client
 			},
 		})
 
-		AgencyActiveVehiclesGauge.DeleteLabelValues(server.AgencyID, server.AgencyName, server.ServerName, utils.SanitizeServerURL(server.ObaBaseURL))
+		// A call canceled by the cycle deadline or shutdown means the collection
+		// was incomplete, not that the agency has no data, so keep the last value.
+		if ctx.Err() == nil {
+			AgencyActiveVehiclesGauge.DeleteLabelValues(server.AgencyID, server.AgencyName, server.ServerName, utils.SanitizeServerURL(server.ObaBaseURL))
+		}
 
 		return 0, err
 	}
