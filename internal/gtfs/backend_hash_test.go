@@ -1,10 +1,12 @@
 package gtfs
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,6 +19,8 @@ import (
 
 func TestBackendHashRefresh(t *testing.T) {
 	h := newUnchangedFeedHarness(t)
+	var campaignLogs bytes.Buffer
+	h.service.Logger = slog.New(slog.NewJSONHandler(&campaignLogs, nil))
 	var hash atomic.Value
 	var downloads atomic.Int32
 	hash.Store("")
@@ -85,6 +89,15 @@ func TestBackendHashRefresh(t *testing.T) {
 	if downloads.Load() != 3 {
 		t.Fatal("new backend hash did not trigger refresh")
 	}
+	// Load-balanced nodes may alternate versions after campaigns finish.
+	for _, version := range []string{"a", "b", "a", "b"} {
+		hash.Store(strings.Repeat(version, 64))
+		check()
+		wait()
+		if downloads.Load() != 3 {
+			t.Fatal("alternating backend hashes downloaded again")
+		}
+	}
 	// A daily refresh remains independent of backend attempt suppression.
 	h.body.Store(withExtraZipEntry(t, h.body.Load().([]byte)))
 	sum = sha256.Sum256(h.body.Load().([]byte))
@@ -98,6 +111,47 @@ func TestBackendHashRefresh(t *testing.T) {
 	h.run(t, h.server, StaticRefreshDaily)
 	if downloads.Load() != 5 {
 		t.Fatalf("daily refresh did not run: %d", downloads.Load())
+	}
+	if got := strings.Count(campaignLogs.String(), `"trigger":"backend_changed"`); got != 3 {
+		t.Fatalf("campaign-start logs = %d, want 3 actual starts", got)
+	}
+	// Publish A, deploy B, then roll back to A. An attempt against an older
+	// local snapshot must not suppress that rollback.
+	bundleA := h.body.Load().([]byte)
+	hashA := hash.Load().(string)
+	h.body.Store(withExtraZipEntry(t, bundleA))
+	sumB := sha256.Sum256(h.body.Load().([]byte))
+	hash.Store(hex.EncodeToString(sumB[:]))
+	check()
+	wait()
+	check()
+	if observed == nil || !*observed {
+		t.Fatal("deployment B did not publish")
+	}
+	beforeRollback := downloads.Load()
+	h.body.Store(bundleA)
+	hash.Store(hashA)
+	check()
+	wait()
+	check()
+	if downloads.Load() != beforeRollback+1 || observed == nil || !*observed {
+		t.Fatal("backend rollback to previously attempted A was suppressed")
+	}
+	// History is bounded; an evicted version can be retried later.
+	for i := 0; i < maxRecentBackendHashes; i++ {
+		hash.Store(fmt.Sprintf("%064x", i+100))
+		check()
+		wait()
+	}
+	if got := len(c.backendAttempts[h.server.ServerKey()].hashes); got != maxRecentBackendHashes {
+		t.Fatalf("history length = %d", got)
+	}
+	before := downloads.Load()
+	hash.Store(strings.Repeat("a", 64))
+	check()
+	wait()
+	if downloads.Load() != before+1 {
+		t.Fatal("evicted hash was not eligible for refresh")
 	}
 }
 
@@ -150,7 +204,7 @@ func TestBackendHashUnavailableAndMultiFeed(t *testing.T) {
 func TestBackendHashConfigurationReconciliation(t *testing.T) {
 	h := newUnchangedFeedHarness(t)
 	c := h.service.refreshCoordinator
-	c.backendAttempts[h.server.ServerKey()] = backendHashAttempt{fingerprint: staticConfigFingerprint(h.server), hash: strings.Repeat("a", 64)}
+	c.backendAttempts[h.server.ServerKey()] = backendHashAttempt{fingerprint: staticConfigFingerprint(h.server), hashes: []string{strings.Repeat("a", 64)}}
 	changed := h.server
 	changed.GtfsStaticFeeds = []string{"one.zip", "two.zip"}
 	h.store.SetConfiguredServers([]models.ObaServer{changed})
@@ -165,7 +219,7 @@ func TestBackendHashConfigurationReconciliation(t *testing.T) {
 	if !called || len(c.backendAttempts) != 0 {
 		t.Fatal("configuration change retained backend state")
 	}
-	c.backendAttempts[changed.ServerKey()] = backendHashAttempt{fingerprint: staticConfigFingerprint(changed), hash: strings.Repeat("b", 64)}
+	c.backendAttempts[changed.ServerKey()] = backendHashAttempt{fingerprint: staticConfigFingerprint(changed), hashes: []string{strings.Repeat("b", 64)}}
 	h.service.ReconcileStaticRefreshCampaigns(nil)
 	if len(c.backendAttempts) != 0 {
 		t.Fatal("removed server retained backend state")
@@ -302,5 +356,66 @@ func TestBackendHashObservationDoesNotWaitForPublication(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("observation waited for publication lock")
+	}
+}
+
+// TestBackendMetadataLogging distinguishes unexpected metadata from ordinary unsupported backends.
+func TestBackendMetadataLogging(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		status       int
+		body, reason string
+	}{
+		{"missing_endpoint", 404, "", ""}, {"unavailable", 503, "", ""}, {"no_hash", 200, `{}`, ""},
+		{"malformed", 200, `{not-json`, "malformed_json"},
+		{"invalid_hash", 200, `{"staticGtfsHash":"private-response"}`, "invalid_hash"},
+		{"unauthorized", 401, "", `"status":401`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newUnchangedFeedHarness(t)
+			var logs bytes.Buffer
+			h.service.Logger = slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(tc.status); fmt.Fprint(w, tc.body) }))
+			defer ts.Close()
+			h.server.ObaBaseURL = ts.URL
+			h.server.ObaApiKey = "private-key"
+			if hash := h.service.fetchBackendHash(context.Background(), h.server); hash != "" {
+				t.Fatal("invalid response returned a hash")
+			}
+			got := logs.String()
+			if tc.reason == "" && got != "" {
+				t.Fatalf("expected response logged: %s", got)
+			}
+			if tc.reason != "" && (!strings.Contains(got, tc.reason) || !strings.Contains(got, ts.URL)) {
+				t.Fatalf("missing diagnostic: %s", got)
+			}
+			if strings.Contains(got, "private-key") || strings.Contains(got, "private-response") {
+				t.Fatal("metadata diagnostics exposed sensitive values")
+			}
+		})
+	}
+}
+
+// TestBackendMetadataRequestDiagnostics distinguishes an optional timeout from caller cancellation.
+func TestBackendMetadataRequestDiagnostics(t *testing.T) {
+	for _, cancelCaller := range []bool{false, true} {
+		t.Run(fmt.Sprintf("caller_canceled_%t", cancelCaller), func(t *testing.T) {
+			h := newUnchangedFeedHarness(t)
+			var logs bytes.Buffer
+			h.service.Logger = slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+			defer ts.Close()
+			h.server.ObaBaseURL = ts.URL
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if cancelCaller {
+				cancel()
+			}
+			h.service.fetchBackendHash(ctx, h.server)
+			logged := strings.Contains(logs.String(), "request_failed")
+			if logged == cancelCaller {
+				t.Fatalf("request failure logged=%v for caller canceled=%v", logged, cancelCaller)
+			}
+		})
 	}
 }

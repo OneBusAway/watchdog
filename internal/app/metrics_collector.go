@@ -154,10 +154,18 @@ func (app *Application) collectOnce(ctx context.Context) {
 	var wg sync.WaitGroup
 	// Entries sharing a backend share one metadata request per tick.
 	metadataChecks := make(map[string]*sync.Once)
+	metadataAllowed := make(map[string]bool)
+	metadataNow := time.Now().UTC()
 	backendEntries := make(map[string][]models.ObaServer)
 	for _, target := range targets {
 		key := utils.SanitizeServerURL(target.server.ObaBaseURL)
 		metadataChecks[key] = &sync.Once{}
+		// A deployment is skipped only when every configured entry is backing
+		// off. Snapshot this before collection workers can change backoff.
+		retryAt, backingOff := app.ConfigService.BackoffStore.NextRetryAt(target.server.ServerKey())
+		if !backingOff || !metadataNow.Before(retryAt) {
+			metadataAllowed[key] = true
+		}
 		backendEntries[key] = append(backendEntries[key], target.server)
 	}
 	start := int(app.collectStart % uint64(len(targets)))
@@ -185,7 +193,9 @@ launch:
 				defer close(metadataDone)
 				key := utils.SanitizeServerURL(t.server.ObaBaseURL)
 				metadataChecks[key].Do(func() {
-					app.GtfsService.CheckBackendBundles(cycleCtx, ctx, backendEntries[key])
+					if metadataAllowed[key] {
+						app.GtfsService.CheckBackendBundles(cycleCtx, ctx, backendEntries[key])
+					}
 				})
 			}()
 			app.collectForScope(cycleCtx, t.server, t.scope)

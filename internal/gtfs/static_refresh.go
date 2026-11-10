@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -43,6 +44,9 @@ const (
 	StaticRefreshBackendChanged StaticRefreshTrigger = "backend_changed"
 	StaticRefreshConfigChange   StaticRefreshTrigger = "config_change"
 )
+
+// maxRecentBackendHashes bounds rolling-deployment suppression; daily refreshes remain independent.
+const maxRecentBackendHashes = 8
 
 const maxStaticCampaignCacheSize = int64(2 << 30)
 const maxStaticFeedDownloadSize = int64(512 << 20)
@@ -114,7 +118,7 @@ func (c *staticRefreshCoordinator) start(ctx context.Context, service *GtfsServi
 	c.mu.Lock()
 	if len(backendHash) > 0 {
 		attempt := c.backendAttempts[key]
-		if attempt.fingerprint == fingerprint && attempt.hash == backendHash[0] {
+		if attempt.fingerprint == fingerprint && slices.Contains(attempt.hashes, backendHash[0]) {
 			c.mu.Unlock()
 			cancel()
 			return false
@@ -138,7 +142,15 @@ func (c *staticRefreshCoordinator) start(ctx context.Context, service *GtfsServi
 		}
 	}
 	if len(backendHash) > 0 {
-		c.backendAttempts[key] = backendHashAttempt{fingerprint: fingerprint, hash: backendHash[0]}
+		attempt := c.backendAttempts[key]
+		if attempt.fingerprint != fingerprint {
+			attempt = backendHashAttempt{fingerprint: fingerprint}
+		}
+		attempt.hashes = append(attempt.hashes, backendHash[0])
+		if len(attempt.hashes) > maxRecentBackendHashes {
+			attempt.hashes = attempt.hashes[1:]
+		}
+		c.backendAttempts[key] = attempt
 	}
 	c.active[key] = activeStaticCampaign{fingerprint: fingerprint, generation: generation, cancel: cancel}
 	c.mu.Unlock()
@@ -220,6 +232,12 @@ func (c *staticRefreshCoordinator) recordPublished(ctx context.Context, server m
 		return false
 	}
 	content := publishedStaticContent{fingerprint: staticConfigFingerprint(server), hashes: hashes}
+	previous := c.snapshotContent[server.ServerKey()]
+	if previous.fingerprint != content.fingerprint || !slices.Equal(previous.hashes, hashes) {
+		// Attempts describe mismatches against the old local bundle. A new
+		// publication must allow retries of prior backend versions, including rollbacks.
+		delete(c.backendAttempts, server.ServerKey())
+	}
 	c.published[server.ServerKey()] = content
 	// Retain the identity of the snapshot still in use if a later refresh
 	// fails and invalidates only the unchanged-download optimization.

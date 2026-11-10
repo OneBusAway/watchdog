@@ -33,8 +33,18 @@ For backends whose configured entries all reference the same single static feed,
 each collection tick also checks
 `/api/v2/metadata.json`. If the backend's `staticGtfsHash` differs from the
 SHA-256 of Watchdog's published zip, Watchdog starts a `backend_changed`
-refresh campaign. A persistent mismatch does not start another campaign until
-the backend reports a different hash. Daily refreshes continue independently.
+refresh campaign. Watchdog remembers the last eight backend hashes that started
+campaigns for each configured entry, so nodes alternating between recent bundle versions do
+not cause repeated downloads. An unseen or evicted hash can start a new
+campaign. Publishing a different local bundle or changing static configuration
+clears this history so a backend rollback can trigger a refresh. Daily refreshes
+continue independently. The shared metadata request is skipped
+when every entry for a backend is in collection backoff; it resumes when any
+entry is ready. A skipped request leaves the last hash-match observation intact.
+
+Malformed metadata and unexpected request failures are logged at debug level,
+and backend-triggered campaign starts at info level. Missing hashes and HTTP
+404/503 responses remain quiet.
 
 `gtfs_static_backend_hash_match` reports 1 for a match and 0 for a mismatch.
 It is omitted until a local snapshot has been published. A failed refresh

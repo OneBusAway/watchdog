@@ -37,16 +37,34 @@ func TestCollectionChecksMetadataOncePerBackend(t *testing.T) {
 	server.AgencyID = "A"
 	sibling := server
 	sibling.AgencyID = "B"
+	sibling.ServerName = "metadata-test-sibling"
 	entries := []models.ObaServer{server, sibling}
 	app.ConfigService.Config.UpdateConfig(entries)
 	app.GtfsService.StaticStore.SetConfiguredServers(entries)
+	observations := make(map[string]int)
+	app.GtfsService.SetBackendHashObserver(func(server models.ObaServer, _ *bool) { observations[server.AgencyID]++ })
 	for _, entry := range entries {
 		app.ConfigService.BackoffStore.UpdateBackoff(entry.ServerKey())
 	}
 	app.collectOnce(context.Background())
+	if requests.Load() != 0 {
+		t.Fatal("metadata queried while every entry was backing off")
+	}
+	// A ready sibling permits one shared request, whichever worker arrives first.
+	app.ConfigService.BackoffStore.ResetBackoff(server.ServerKey())
+	app.collectOnce(context.Background())
+	if requests.Load() != 1 {
+		t.Fatalf("metadata requests = %d, want one for ready sibling", requests.Load())
+	}
+	if observations["A"] != 1 || observations["B"] != 1 {
+		t.Fatalf("shared check lost a sibling: %v", observations)
+	}
+	for _, entry := range entries {
+		app.ConfigService.BackoffStore.ResetBackoff(entry.ServerKey())
+	}
 	app.collectOnce(context.Background())
 	if requests.Load() != 2 {
-		t.Fatalf("metadata requests = %d, want one per tick", requests.Load())
+		t.Fatalf("metadata requests = %d, want one per ready tick", requests.Load())
 	}
 }
 
