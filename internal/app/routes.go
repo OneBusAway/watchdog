@@ -54,7 +54,7 @@ func (app *Application) Routes(ctx context.Context) http.Handler {
 	// http.MethodPost are constants which equate to the strings "GET" and "POST"
 	// respectively.
 	router.HandlerFunc(http.MethodGet, "/v1/healthcheck", app.healthcheckHandler)
-	router.Handler(http.MethodGet, "/metrics", middleware.NewCachedPromHandler(ctx, prometheus.DefaultGatherer, 10*time.Second))
+	router.Handler(http.MethodGet, "/metrics", middleware.NewCachedPromHandler(ctx, prometheus.DefaultGatherer, 10*time.Second, app.Logger))
 
 	// TODO(architecture): Historical investigation of unmatched stops and trips is
 	// not currently reliable. The upstream /api/where/metrics.json endpoint exposes

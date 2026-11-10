@@ -3,64 +3,47 @@ package middleware
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/expfmt"
+	"watchdog.onebusaway.org/internal/report"
 )
 
 // CachedPromHandler wraps promhttp.HandlerFor with a caching layer.
-//
-// Purpose:
-//   - Prometheus scrapes `/metrics` endpoints frequently (every few seconds).
-//   - Each scrape triggers metrics gathering and text serialization, which
-//     can become expensive under high concurrency.
-//   - CachedPromHandler precomputes the exposition at fixed intervals (ttl)
-//     and serves that cached result to all clients.
-//
-// Benefit:
-// - Reduces CPU and allocation overhead during high load.
-// - Ensures predictable latency even if multiple Prometheus servers scrape at once.
+// It precomputes the Prometheus exposition at fixed intervals and serves the
+// last good result. When a gather fails the cache is cleared so the next
+// scrape falls through to the live handler and Prometheus sees the real 500,
+// keeping the failure visible rather than freezing all gauges at their last
+// value indefinitely.
 type CachedPromHandler struct {
-	mu    sync.RWMutex  // Guards concurrent access to cache
-	cache []byte        // Holds the precomputed metrics exposition
-	ttl   time.Duration // Refresh interval for the cache
-	h     http.Handler  // Underlying promhttp handler used for actual gathering
+	mu      sync.RWMutex
+	cache   []byte
+	failing bool // true once the first failing refresh is seen; reset on success
+	ttl     time.Duration
+	h       http.Handler
+	log     *slog.Logger
 }
 
-// NewCachedPromHandler creates a new CachedPromHandler instance.
-//
-// Parameters:
-// - ctx: a context passed down from main(), used to gracefully stop the background goroutine.
-// - gatherer: the Prometheus gatherer (commonly prometheus.DefaultGatherer or a custom registry).
-// - ttl: how often the cache should refresh; should be <= scrape interval.
-//
-// Why it exists:
-// - Spawns a refreshLoop in the background to keep the cache warm.
-// - Ensures clients always get a quick response without redoing expensive metric collection.
-func NewCachedPromHandler(ctx context.Context, gatherer prometheus.Gatherer, ttl time.Duration) *CachedPromHandler {
+// NewCachedPromHandler starts a background refresh loop and returns a handler
+// that serves the cached exposition. log is used to record gather failures.
+func NewCachedPromHandler(ctx context.Context, gatherer prometheus.Gatherer, ttl time.Duration, log *slog.Logger) *CachedPromHandler {
 	c := &CachedPromHandler{
 		ttl: ttl,
 		h:   promhttp.HandlerFor(gatherer, promhttp.HandlerOpts{}),
+		log: log,
 	}
-
 	go c.refreshLoop(ctx)
 	return c
 }
 
-// refreshLoop runs in a goroutine and periodically refreshes the metrics cache.
-//
-// Purpose:
-// - Keeps the cached exposition up-to-date by calling promhttp.Handler.
-// - Runs until the provided context is cancelled (e.g., application shutdown).
-//
-// Why context:
-// - Without context, this goroutine would run forever, causing leaks.
-// - Using ctx.Done() allows clean shutdown when the server stops.
 func (c *CachedPromHandler) refreshLoop(ctx context.Context) {
 	ticker := time.NewTicker(c.ttl)
 	defer ticker.Stop()
@@ -72,10 +55,8 @@ func (c *CachedPromHandler) refreshLoop(ctx context.Context) {
 		case <-ticker.C:
 			var buf bytes.Buffer
 			rec := &responseRecorder{buf: &buf}
-			// Create a minimal synthetic *http.Request.
-			// Required because promhttp.HandlerFor dereferences fields like Method and URL.
-			// Passing nil would cause a panic, but this lightweight request avoids real I/O
-			// while satisfying the handler's expectations.
+			// A minimal synthetic request is required: promhttp.HandlerFor
+			// dereferences Method and URL and panics on nil.
 			req := &http.Request{
 				Method: http.MethodGet,
 				URL:    &url.URL{Path: "/metrics"},
@@ -84,61 +65,62 @@ func (c *CachedPromHandler) refreshLoop(ctx context.Context) {
 			c.h.ServeHTTP(rec, req)
 
 			c.mu.Lock()
-			c.cache = buf.Bytes()
+			// status == 0 means promhttp gathered successfully but produced no
+			// metric families, so it never called Write or WriteHeader.
+			if rec.status == 0 || rec.status == http.StatusOK {
+				c.cache = buf.Bytes()
+				c.failing = false
+			} else {
+				// Clear the cache so ServeHTTP falls back to the live handler.
+				// Prometheus then sees a real 500 and up drops to 0, keeping
+				// the failure visible.
+				errMsg := strings.TrimSpace(buf.String())
+				c.log.Error("metrics gather failed; clearing cache so scraper sees the error",
+					"status", rec.status, "error", errMsg)
+				// Report only on the first failing refresh to avoid flooding Sentry.
+				if !c.failing {
+					report.ReportErrorWithSentryOptions(
+						fmt.Errorf("metrics gather failed (status %d): %s", rec.status, errMsg),
+						report.SentryReportOptions{},
+					)
+					c.failing = true
+				}
+				c.cache = nil
+			}
 			c.mu.Unlock()
 		}
 	}
 }
 
-// ServeHTTP implements http.Handler by serving cached metrics.
-//
-// Behavior:
-//   - If cache is still empty (e.g., right after startup), falls back
-//     to calling the underlying promhttp handler directly.
-//   - Otherwise, serves the precomputed response immediately.
-//
-// Why it exists:
-//   - Provides a standard http.Handler interface, so it can be plugged
-//     directly into any HTTP server or router (mux, chi, etc.).
-//   - Ensures consistent Content-Type for the Prometheus text exposition
-//     format. Instead of hardcoding ("text/plain; version=0.0.4"), we use
-//     expfmt.NewFormat(expfmt.TypeTextPlain) to stay aligned with the official
-//     Prometheus library and avoid reliance on deprecated constants.
+// ServeHTTP serves the cached exposition, or falls back to the live handler
+// when the cache is empty (startup or after a gather failure).
 func (c *CachedPromHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	// If cache is empty (very early after startup), fall back to live handler.
 	if len(c.cache) == 0 {
 		c.h.ServeHTTP(w, r)
 		return
 	}
-	// Use Prometheus-provided constant for text exposition format (version=0.0.4)
+	// Use the Prometheus-provided constant for the text exposition Content-Type
+	// to stay aligned with the official library and avoid deprecated constants.
 	w.Header().Set("Content-Type", string(expfmt.NewFormat(expfmt.TypeTextPlain)))
 	_, _ = w.Write(c.cache)
 }
 
-// responseRecorder is a lightweight implementation of http.ResponseWriter.
-//
-// Purpose:
-//   - promhttp.Handler writes directly to a ResponseWriter.
-//   - To capture this output for caching, we need a fake ResponseWriter
-//     that redirects writes into a bytes.Buffer instead of a socket.
-//
-// Why minimal:
-//   - Only implements methods promhttp actually calls (Header, Write, WriteHeader).
-//   - We ignore status codes because Prometheus metrics exposition
-//     is always a `200 OK` if gathered successfully.
+// responseRecorder captures the status code and body that promhttp writes.
+// status is 0 until the first Write or WriteHeader call.
 type responseRecorder struct {
-	buf *bytes.Buffer
+	buf    *bytes.Buffer
+	status int
 }
 
-// Write appends the promhttp output into the buffer.
-// Required to satisfy http.ResponseWriter interface.
-func (rr *responseRecorder) Write(b []byte) (int, error) { return rr.buf.Write(b) }
+func (rr *responseRecorder) Write(b []byte) (int, error) {
+	if rr.status == 0 {
+		rr.status = http.StatusOK
+	}
+	return rr.buf.Write(b)
+}
 
-// Header and WriteHeader are implemented only to satisfy the http.ResponseWriter interface.
-// - Header returns a new, empty HTTP header map (unused).
-// - WriteHeader is a no-op since status codes are not needed.
 func (rr *responseRecorder) Header() http.Header        { return http.Header{} }
-func (rr *responseRecorder) WriteHeader(statusCode int) {}
+func (rr *responseRecorder) WriteHeader(statusCode int) { rr.status = statusCode }
