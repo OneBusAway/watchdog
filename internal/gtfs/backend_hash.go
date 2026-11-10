@@ -11,11 +11,12 @@ import (
 	"time"
 
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/utils"
 )
 
 type backendHashAttempt struct {
 	fingerprint string
-	hash        string
+	hashes      []string
 }
 
 // CheckBackendBundles checks one deployment, including any agency-scoped entries
@@ -53,14 +54,13 @@ func (gs *GtfsService) CheckBackendBundles(ctx, campaignCtx context.Context, ser
 				value := content.hashes[0] == hash
 				match = &value
 			}
-			attempt := c.backendAttempts[server.ServerKey()]
-			if attempt.hash != hash {
-				delete(c.backendAttempts, server.ServerKey())
-			}
 			c.mu.Unlock()
 			gs.StaticStore.mu.RUnlock()
 			if match == nil || !*match {
-				c.start(campaignCtx, gs, server, StaticRefreshBackendChanged, 5, hash)
+				if c.start(campaignCtx, gs, server, StaticRefreshBackendChanged, 5, hash) {
+					gs.Logger.Info("Starting backend-changed static GTFS refresh campaign", "server_name", server.ServerName,
+						"server_url", utils.SanitizeServerURL(server.ObaBaseURL), "trigger", StaticRefreshBackendChanged)
+				}
 			}
 		}
 		prior, seen := results[key]
@@ -122,22 +122,43 @@ func (gs *GtfsService) fetchBackendHash(ctx context.Context, server models.ObaSe
 	}
 	response, err := gs.Client.Do(req)
 	if err != nil {
+		if ctx.Err() == nil {
+			gs.logBackendMetadataFailure(server, "request_failed")
+		}
 		return ""
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
+		if response.StatusCode != http.StatusNotFound && response.StatusCode != http.StatusServiceUnavailable {
+			gs.Logger.Debug("Backend metadata request returned unexpected status", "server_name", server.ServerName,
+				"server_url", utils.SanitizeServerURL(server.ObaBaseURL), "status", response.StatusCode)
+		}
 		return ""
 	}
 	var metadata struct {
 		StaticGtfsHash string `json:"staticGtfsHash"`
 	}
 	if json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&metadata) != nil {
+		if ctx.Err() == nil {
+			gs.logBackendMetadataFailure(server, "malformed_json")
+		}
 		return ""
 	}
 	hash := strings.ToLower(strings.TrimSpace(metadata.StaticGtfsHash))
+	// An absent hash is an expected unsupported-backend response.
+	if hash == "" {
+		return ""
+	}
 	decoded, err := hex.DecodeString(hash)
 	if err != nil || len(decoded) != 32 {
+		gs.logBackendMetadataFailure(server, "invalid_hash")
 		return ""
 	}
 	return hash
+}
+
+// logBackendMetadataFailure records optional metadata failures without exposing response bodies or API keys.
+func (gs *GtfsService) logBackendMetadataFailure(server models.ObaServer, reason string) {
+	gs.Logger.Debug("Backend metadata unavailable", "server_name", server.ServerName,
+		"server_url", utils.SanitizeServerURL(server.ObaBaseURL), "reason", reason)
 }

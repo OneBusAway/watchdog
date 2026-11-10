@@ -44,10 +44,23 @@ func TestCollectionChecksMetadataOncePerBackend(t *testing.T) {
 		app.ConfigService.BackoffStore.UpdateBackoff(entry.ServerKey())
 	}
 	app.collectOnce(context.Background())
+	if requests.Load() != 0 {
+		t.Fatal("metadata queried while every entry was backing off")
+	}
+	// A ready sibling permits one shared request, whichever worker arrives first.
+	app.ConfigService.BackoffStore.ResetBackoff(server.ServerKey())
+	app.collectOnce(context.Background())
+	if requests.Load() != 1 {
+		t.Fatalf("metadata requests = %d, want one for ready sibling", requests.Load())
+	}
+	for _, entry := range entries {
+		app.ConfigService.BackoffStore.ResetBackoff(entry.ServerKey())
+	}
 	app.collectOnce(context.Background())
 	if requests.Load() != 2 {
-		t.Fatalf("metadata requests = %d, want one per tick", requests.Load())
+		t.Fatalf("metadata requests = %d, want one per ready tick", requests.Load())
 	}
+
 }
 
 func TestSlowMetadataDoesNotDelayNormalCollection(t *testing.T) {
