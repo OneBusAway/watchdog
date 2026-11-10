@@ -36,7 +36,8 @@ SHA-256 of Watchdog's published zip, Watchdog starts a `backend_changed`
 refresh campaign. Watchdog remembers the last eight backend hashes that started
 campaigns for each configured entry, so nodes alternating between recent bundle versions do
 not cause repeated downloads. An unseen or evicted hash can start a new
-campaign. Changing static configuration clears this history. Daily refreshes
+campaign. Publishing a different local bundle or changing static configuration
+clears this history so a backend rollback can trigger a refresh. Daily refreshes
 continue independently. The shared metadata request is skipped
 when every entry for a backend is in collection backoff; it resumes when any
 entry is ready. A skipped request leaves the last hash-match observation intact.

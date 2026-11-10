@@ -232,6 +232,12 @@ func (c *staticRefreshCoordinator) recordPublished(ctx context.Context, server m
 		return false
 	}
 	content := publishedStaticContent{fingerprint: staticConfigFingerprint(server), hashes: hashes}
+	previous := c.snapshotContent[server.ServerKey()]
+	if previous.fingerprint != content.fingerprint || !slices.Equal(previous.hashes, hashes) {
+		// Attempts describe mismatches against the old local bundle. A new
+		// publication must allow retries of prior backend versions, including rollbacks.
+		delete(c.backendAttempts, server.ServerKey())
+	}
 	c.published[server.ServerKey()] = content
 	// Retain the identity of the snapshot still in use if a later refresh
 	// fails and invalidates only the unchanged-download optimization.

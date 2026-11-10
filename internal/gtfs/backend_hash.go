@@ -59,7 +59,7 @@ func (gs *GtfsService) CheckBackendBundles(ctx, campaignCtx context.Context, ser
 			if match == nil || !*match {
 				if c.start(campaignCtx, gs, server, StaticRefreshBackendChanged, 5, hash) {
 					gs.Logger.Info("Starting backend-changed static GTFS refresh campaign", "server_name", server.ServerName,
-						"server_url", utils.SanitizeServerURL(server.ObaBaseURL), "trigger", StaticRefreshBackendChanged)
+						"server_url", utils.SanitizeServerURL(server.ObaBaseURL), "trigger", StaticRefreshBackendChanged, "agency_id", server.AgencyID, "agency_name", server.AgencyName)
 				}
 			}
 		}
@@ -107,6 +107,7 @@ func (gs *GtfsService) observeBackendHash(server models.ObaServer, match *bool) 
 // fetchBackendHash returns a valid SHA-256 from optional backend metadata, or an empty string on failure.
 func (gs *GtfsService) fetchBackendHash(ctx context.Context, server models.ObaServer) string {
 	// A stalled optional endpoint must not consume the collection deadline.
+	callerCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	endpoint, err := url.Parse(strings.TrimRight(server.ObaBaseURL, "/") + "/api/v2/metadata.json")
@@ -122,7 +123,7 @@ func (gs *GtfsService) fetchBackendHash(ctx context.Context, server models.ObaSe
 	}
 	response, err := gs.Client.Do(req)
 	if err != nil {
-		if ctx.Err() == nil {
+		if callerCtx.Err() == nil {
 			gs.logBackendMetadataFailure(server, "request_failed")
 		}
 		return ""
@@ -139,7 +140,7 @@ func (gs *GtfsService) fetchBackendHash(ctx context.Context, server models.ObaSe
 		StaticGtfsHash string `json:"staticGtfsHash"`
 	}
 	if json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&metadata) != nil {
-		if ctx.Err() == nil {
+		if callerCtx.Err() == nil {
 			gs.logBackendMetadataFailure(server, "malformed_json")
 		}
 		return ""
