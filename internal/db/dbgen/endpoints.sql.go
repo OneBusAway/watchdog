@@ -42,3 +42,51 @@ func (q *Queries) ListServerVehiclePositionEndpoints(ctx context.Context, server
 	}
 	return items, nil
 }
+
+const getVehiclePositionEndpoint = `-- name: GetVehiclePositionEndpoint :one
+SELECT endpoint_id, server_id, normalized_vehicle_position_url, created_at
+FROM vehicle_position_endpoint
+WHERE endpoint_id = $1
+`
+
+// One vehicle-position feed endpoint by its ID.
+func (q *Queries) GetVehiclePositionEndpoint(ctx context.Context, endpointID int64) (VehiclePositionEndpoint, error) {
+	row := q.db.QueryRow(ctx, getVehiclePositionEndpoint, endpointID)
+	var i VehiclePositionEndpoint
+	err := row.Scan(&i.EndpointID, &i.ServerID, &i.NormalizedVehiclePositionUrl, &i.CreatedAt)
+	return i, err
+}
+
+const listVehiclePositionEndpointsByIDs = `-- name: ListVehiclePositionEndpointsByIDs :many
+SELECT endpoint_id, server_id, normalized_vehicle_position_url, created_at
+FROM vehicle_position_endpoint
+WHERE endpoint_id = ANY($1::bigint[])
+ORDER BY endpoint_id
+`
+
+// The vehicle-position endpoints with the given IDs, for the include loader.
+// IDs with no row are left out.
+func (q *Queries) ListVehiclePositionEndpointsByIDs(ctx context.Context, endpointIds []int64) ([]VehiclePositionEndpoint, error) {
+	rows, err := q.db.Query(ctx, listVehiclePositionEndpointsByIDs, endpointIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VehiclePositionEndpoint
+	for rows.Next() {
+		var i VehiclePositionEndpoint
+		if err := rows.Scan(
+			&i.EndpointID,
+			&i.ServerID,
+			&i.NormalizedVehiclePositionUrl,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
