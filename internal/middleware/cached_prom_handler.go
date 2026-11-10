@@ -83,9 +83,11 @@ func (c *CachedPromHandler) refreshLoop(ctx context.Context) {
 			}
 			c.h.ServeHTTP(rec, req)
 
-			c.mu.Lock()
-			c.cache = buf.Bytes()
-			c.mu.Unlock()
+			if rec.status == http.StatusOK {
+				c.mu.Lock()
+				c.cache = buf.Bytes()
+				c.mu.Unlock()
+			}
 		}
 	}
 }
@@ -127,18 +129,21 @@ func (c *CachedPromHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 //
 // Why minimal:
 //   - Only implements methods promhttp actually calls (Header, Write, WriteHeader).
-//   - We ignore status codes because Prometheus metrics exposition
-//     is always a `200 OK` if gathered successfully.
+//   - status captures the HTTP status code so the refresh loop can discard
+//     error responses and preserve the last successful cache.
 type responseRecorder struct {
-	buf *bytes.Buffer
+	buf    *bytes.Buffer
+	status int
 }
 
 // Write appends the promhttp output into the buffer.
 // Required to satisfy http.ResponseWriter interface.
-func (rr *responseRecorder) Write(b []byte) (int, error) { return rr.buf.Write(b) }
+func (rr *responseRecorder) Write(b []byte) (int, error) {
+	if rr.status == 0 {
+		rr.status = http.StatusOK
+	}
+	return rr.buf.Write(b)
+}
 
-// Header and WriteHeader are implemented only to satisfy the http.ResponseWriter interface.
-// - Header returns a new, empty HTTP header map (unused).
-// - WriteHeader is a no-op since status codes are not needed.
 func (rr *responseRecorder) Header() http.Header        { return http.Header{} }
-func (rr *responseRecorder) WriteHeader(statusCode int) {}
+func (rr *responseRecorder) WriteHeader(statusCode int) { rr.status = statusCode }
