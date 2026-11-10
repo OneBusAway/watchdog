@@ -25,6 +25,11 @@ type obaSDKKey struct {
 // and force repeated TCP/TLS handshakes. Reusing a single client per server
 // keeps connections warm across polls (IdleConnTimeout 90s > 30s tick).
 //
+// Clients are created with option.WithMaxRetries(0) so cycle-scoped requests
+// do not retry on failure or timeout. The OBA SDK retries twice by default,
+// which would cause a single hanging endpoint to spend roughly three request
+// timeouts against the cycle deadline.
+//
 // Clients are created with the injected pooled *http.Client via
 // option.WithHTTPClient, so SDK requests:
 //   - reuse connections alongside watchdog's own traffic,
@@ -61,6 +66,7 @@ func (c *ObaSDKClientCache) For(server models.ObaServer) *onebusaway.Client {
 	opts := []option.RequestOption{
 		option.WithAPIKey(server.ObaApiKey),
 		option.WithBaseURL(server.ObaBaseURL),
+		option.WithMaxRetries(0),
 	}
 	if c.client != nil {
 		opts = append(opts, option.WithHTTPClient(c.client))
