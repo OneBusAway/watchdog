@@ -66,6 +66,7 @@ Clients define the current-value window as `clamp(3 * interval, 60, 300)` second
 | `gtfs_static_refresh_last_attempt_success` | Gauge | `server_name`, `server_url` | boolean | Result of the latest complete refresh attempt. |
 | `gtfs_static_refresh_retrying` | Gauge | `server_name`, `server_url` | boolean | Whether the daily bounded retry campaign is active. |
 | `gtfs_static_refresh_gave_up` | Gauge | `server_name`, `server_url` | boolean | Whether the current campaign exhausted its 12-hour budget. |
+| `gtfs_static_backend_hash_match` | Gauge | `server_name`, `server_url` | boolean | Whether the backend static GTFS zip hash matches Watchdog's published bundle. Absent when metadata or a local snapshot hash is unavailable, or backend entries do not all share the same single static feed. |
 | `gtfs_static_feed_fetch_success` | Gauge | `feed_url`, `server_name`, `server_url` | boolean | Whether the latest campaign attempt for this configured static feed succeeded. |
 | `gtfs_static_feed_last_attempt_timestamp_seconds` | Gauge | same feed labels | unix_timestamp | Time of the latest fetch attempt for this feed. |
 | `gtfs_static_feed_last_successful_fetch_timestamp_seconds` | Gauge | same feed labels | unix_timestamp | Time of the latest successful fetch for this feed. Preserved across later failures. |

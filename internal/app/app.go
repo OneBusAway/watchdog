@@ -11,6 +11,8 @@ import (
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/metrics"
+	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/utils"
 )
 
 // Application represents the main application structure.
@@ -75,8 +77,16 @@ func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version s
 	metricsService.ReportCollectionInterval(time.Duration(cfg.FetchInterval) * time.Second)
 	metricsService.ReportServerInfo(cfg.GetServers())
 
-	// Wire the per-agency introspection gauge emission through a callback so
+	// Wire static bundle and backend hash metrics through callbacks so
 	// the metrics package doesn't need to import gtfs (and vice versa).
+	gtfsService.SetBackendHashObserver(func(server models.ObaServer, match *bool) {
+		labels := []string{server.ServerName, utils.SanitizeServerURL(server.ObaBaseURL)}
+		if match == nil {
+			metrics.GtfsStaticBackendHashMatch.DeleteLabelValues(labels...)
+		} else {
+			metrics.GtfsStaticBackendHashMatch.WithLabelValues(labels...).Set(boolToFloat(*match))
+		}
+	})
 	gtfsService.SetBundleObserver(metricsService.StaticBundleObserver())
 	gtfsService.SetFeedMappingObserver(metricsService.StaticFeedMappingObserver())
 	gtfsService.SetStaticRefreshObserver(metricsService.StaticRefreshObserver())

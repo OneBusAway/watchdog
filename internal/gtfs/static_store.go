@@ -97,6 +97,11 @@ func (s *StaticStore) SetConfiguredServers(servers []models.ObaServer) {
 func (s *StaticStore) IsConfigured(server models.ObaServer) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.isConfiguredLocked(server)
+}
+
+// Caller holds s.mu for reading or writing.
+func (s *StaticStore) isConfiguredLocked(server models.ObaServer) bool {
 	if !s.configurationSet {
 		return true
 	}

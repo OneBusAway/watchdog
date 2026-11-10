@@ -29,6 +29,26 @@ A successful zero remains `0`. A failed or old collection must produce an absent
 
 Static GTFS refreshes daily and does not use the realtime window.
 
+For backends whose configured entries all reference the same single static feed,
+each collection tick also checks
+`/api/v2/metadata.json`. If the backend's `staticGtfsHash` differs from the
+SHA-256 of Watchdog's published zip, Watchdog starts a `backend_changed`
+refresh campaign. A persistent mismatch does not start another campaign until
+the backend reports a different hash. Daily refreshes continue independently.
+
+`gtfs_static_backend_hash_match` reports 1 for a match and 0 for a mismatch.
+It is omitted until a local snapshot has been published. A failed refresh
+preserves the hash of the snapshot still in use. Entries sharing a backend
+and metric labels produce one combined result, which is unknown if any local
+snapshot hash is unavailable.
+A persistent 0 can mean the configured feed URL differs from the backend's
+bundle source, or the backend has not loaded the latest feed. Missing or failed
+metadata responses omit the gauge and leave normal collection and API backoff
+unchanged. Backends with multiple static feeds, or different feed URLs across
+agency entries, retain daily refreshes only. The existing agency coverage
+comparison continues to report coverage and filter agency processing; it does
+not start static refreshes.
+
 | State | Definition |
 | --- | --- |
 | Current | Complete refresh succeeded within 26 hours and the bundle is usable. |

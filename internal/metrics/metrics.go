@@ -471,3 +471,9 @@ var (
 		[]string{"url", "method", "status_code"},
 	))
 )
+
+// GtfsStaticBackendHashMatch is absent when the backend hash is unavailable.
+var GtfsStaticBackendHashMatch = tracked(promauto.NewGaugeVec(prometheus.GaugeOpts{
+	Name: "gtfs_static_backend_hash_match",
+	Help: "1 if the backend static GTFS zip hash matches the published local bundle, 0 otherwise",
+}, []string{"server_name", "server_url"}))

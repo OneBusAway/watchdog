@@ -20,6 +20,7 @@ func TestDeleteSeriesForServerRetiresEverySeries(t *testing.T) {
 
 	RealtimeVehiclePositions.WithLabelValues("agency-a", "Agency A", "gone", goneURL).Set(7)
 	ObaApiStatus.WithLabelValues("gone", goneURL).Set(1)
+	GtfsStaticBackendHashMatch.WithLabelValues("gone", goneURL).Set(0)
 	WatchdogServerInfo.WithLabelValues(goneURL, "gone-service", "test", "Gone Org").Set(1)
 	GtfsRtVehicleStateChanges.WithLabelValues("agency-a", "Agency A", "gone", goneURL, "0").Inc()
 	RealtimeVehiclePositions.WithLabelValues("agency-b", "Agency B", "kept", keptURL).Set(3)
@@ -34,6 +35,7 @@ func TestDeleteSeriesForServerRetiresEverySeries(t *testing.T) {
 		labels prometheus.Labels
 	}{
 		{"realtime positions", RealtimeVehiclePositions, prometheus.Labels{"agency_id": "agency-a", "agency_name": "Agency A", "server_name": "gone", "server_url": goneURL}},
+		{"backend hash", GtfsStaticBackendHashMatch, prometheus.Labels{"server_name": "gone", "server_url": goneURL}},
 		{"api status", ObaApiStatus, prometheus.Labels{"server_name": "gone", "server_url": goneURL}},
 		{"server info", WatchdogServerInfo, prometheus.Labels{"server_url": goneURL, "service_slug": "gone-service", "environment": "test", "organization": "Gone Org"}},
 		{"state changes", GtfsRtVehicleStateChanges, prometheus.Labels{"agency_id": "agency-a", "agency_name": "Agency A", "server_name": "gone", "server_url": goneURL, "feed": "0"}},
