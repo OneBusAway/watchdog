@@ -1,13 +1,14 @@
 package app
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -102,10 +103,9 @@ func TestSlowMetadataDoesNotDelayNormalCollection(t *testing.T) {
 }
 
 func TestBackendHashGaugeLifecycleAndAPIHealth(t *testing.T) {
-	bundle, err := os.ReadFile("../../testdata/gtfs.zip")
-	if err != nil {
-		t.Fatal(err)
-	}
+	// This test exercises hash publication, not large-feed parsing. Keep the
+	// fixture tiny so race instrumentation cannot exhaust the startup deadline.
+	bundle := backendHashTestFeed(t)
 	sum := sha256.Sum256(bundle)
 	var backendHash atomic.Value
 	backendHash.Store(hex.EncodeToString(sum[:]))
@@ -179,4 +179,31 @@ func TestBackendHashGaugeLifecycleAndAPIHealth(t *testing.T) {
 	backendHash.Store(hex.EncodeToString(sum[:]))
 	check()
 	assertGauge(1, true)
+}
+
+func backendHashTestFeed(t *testing.T) []byte {
+	t.Helper()
+	files := map[string]string{
+		"agency.txt":     "agency_id,agency_name,agency_url,agency_timezone\n40,Sound Transit,https://example.com,UTC\n",
+		"routes.txt":     "route_id,agency_id,route_short_name,route_type\nR,40,R,3\n",
+		"calendar.txt":   "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nWK,1,1,1,1,1,1,1,20260101,20261231\n",
+		"trips.txt":      "route_id,service_id,trip_id\nR,WK,T\n",
+		"stops.txt":      "stop_id,stop_name,stop_lat,stop_lon\nS1,One,1,1\nS2,Two,2,2\n",
+		"stop_times.txt": "trip_id,arrival_time,departure_time,stop_id,stop_sequence\nT,08:00:00,08:00:00,S1,1\nT,09:00:00,09:00:00,S2,2\n",
+	}
+	var data bytes.Buffer
+	writer := zip.NewWriter(&data)
+	for name, content := range files {
+		file, err := writer.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return data.Bytes()
 }
