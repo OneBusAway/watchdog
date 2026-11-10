@@ -12,17 +12,18 @@ import (
 )
 
 type GtfsService struct {
-	StaticStore        *StaticStore
-	RealtimeStore      *RealtimeStore
-	BoundingBoxStore   *geo.BoundingBoxStore
-	RouteAgencyIndex   *RouteAgencyIndex
-	Logger             *slog.Logger
-	Client             *http.Client
-	Observer           StaticBundleObserver
-	MappingObserver    StaticFeedMappingObserver
-	RefreshObserver    StaticRefreshObserver
-	FeedObserver       StaticFeedRefreshObserver
-	refreshCoordinator *staticRefreshCoordinator
+	StaticStore         *StaticStore
+	RealtimeStore       *RealtimeStore
+	BoundingBoxStore    *geo.BoundingBoxStore
+	RouteAgencyIndex    *RouteAgencyIndex
+	Logger              *slog.Logger
+	Client              *http.Client
+	Observer            StaticBundleObserver
+	MappingObserver     StaticFeedMappingObserver
+	RefreshObserver     StaticRefreshObserver
+	BackendHashObserver func(models.ObaServer, *bool)
+	FeedObserver        StaticFeedRefreshObserver
+	refreshCoordinator  *staticRefreshCoordinator
 	// staticParseSlot admits one static feed parse or publish at a time. A
 	// production merged feed costs hundreds of MB of heap to parse, so
 	// concurrent campaigns (every server starts one at boot) stack past the
@@ -68,9 +69,12 @@ func NewGtfsService(staticStore *StaticStore, realtimeStore *RealtimeStore, boun
 	}
 }
 
-// SetBundleObserver registers a callback that fires once per (server, agency)
-// tuple after each static bundle is stored. Used by the metrics layer to
-// emit introspection gauges without creating an import cycle.
+// SetBackendHashObserver registers deployment-level hash comparison metrics.
+func (gs *GtfsService) SetBackendHashObserver(observer func(models.ObaServer, *bool)) {
+	gs.BackendHashObserver = observer
+}
+
+// SetBundleObserver registers metrics emitted after each agency snapshot is stored.
 func (gs *GtfsService) SetBundleObserver(observer StaticBundleObserver) {
 	gs.Observer = observer
 }
@@ -124,8 +128,20 @@ func (gs *GtfsService) StartStaticRefreshCampaigns(ctx context.Context, servers 
 	}
 }
 
+// ReconcileStaticRefreshCampaigns retires obsolete campaigns and incomparable backend hash metrics.
 func (gs *GtfsService) ReconcileStaticRefreshCampaigns(servers []models.ObaServer) {
 	gs.refreshCoordinator.reconcile(servers)
+	byBackend := make(map[string][]models.ObaServer)
+	for _, server := range servers {
+		byBackend[models.ServerKey(server.ObaBaseURL, "")] = append(byBackend[models.ServerKey(server.ObaBaseURL, "")], server)
+	}
+	for _, entries := range byBackend {
+		if !backendHashEligible(entries) {
+			for _, server := range entries {
+				gs.observeBackendHash(server, nil)
+			}
+		}
+	}
 }
 
 func (gs *GtfsService) ReconcileRealtimeConfiguration(server models.ObaServer) {

@@ -151,6 +151,14 @@ func (app *Application) collectOnce(ctx context.Context) {
 	}
 	sem := make(chan struct{}, limit)
 	var wg sync.WaitGroup
+	// Entries sharing a backend share one metadata request per tick.
+	metadataChecks := make(map[string]*sync.Once)
+	backendEntries := make(map[string][]models.ObaServer)
+	for _, target := range targets {
+		key := utils.SanitizeServerURL(target.server.ObaBaseURL)
+		metadataChecks[key] = &sync.Once{}
+		backendEntries[key] = append(backendEntries[key], target.server)
+	}
 	start := int(app.collectStart % uint64(len(targets)))
 	app.collectStart++
 launch:
@@ -171,7 +179,16 @@ launch:
 		go func(t collectionTarget) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			metadataDone := make(chan struct{})
+			go func() {
+				defer close(metadataDone)
+				key := utils.SanitizeServerURL(t.server.ObaBaseURL)
+				metadataChecks[key].Do(func() {
+					app.GtfsService.CheckBackendBundles(cycleCtx, ctx, backendEntries[key])
+				})
+			}()
 			app.collectForScope(cycleCtx, t.server, t.scope)
+			<-metadataDone
 		}(target)
 	}
 	wg.Wait()

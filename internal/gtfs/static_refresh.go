@@ -38,9 +38,10 @@ var errStaticServerUnconfigured = errors.New("static refresh server is no longer
 type StaticRefreshTrigger string
 
 const (
-	StaticRefreshStartup      StaticRefreshTrigger = "startup"
-	StaticRefreshDaily        StaticRefreshTrigger = "daily"
-	StaticRefreshConfigChange StaticRefreshTrigger = "config_change"
+	StaticRefreshStartup        StaticRefreshTrigger = "startup"
+	StaticRefreshDaily          StaticRefreshTrigger = "daily"
+	StaticRefreshBackendChanged StaticRefreshTrigger = "backend_changed"
+	StaticRefreshConfigChange   StaticRefreshTrigger = "config_change"
 )
 
 const maxStaticCampaignCacheSize = int64(2 << 30)
@@ -71,20 +72,25 @@ type activeStaticCampaign struct {
 }
 
 type staticRefreshCoordinator struct {
-	mu             sync.Mutex
-	active         map[string]activeStaticCampaign
-	histories      map[string]*staticFeedFailureHistory
-	published      map[string]publishedStaticContent
-	policy         staticRefreshRetryPolicy
-	nextGeneration uint64
+	mu              sync.Mutex
+	active          map[string]activeStaticCampaign
+	histories       map[string]*staticFeedFailureHistory
+	backendAttempts map[string]backendHashAttempt
+	published       map[string]publishedStaticContent
+	snapshotContent map[string]publishedStaticContent
+	policy          staticRefreshRetryPolicy
+	nextGeneration  uint64
 }
 
+// newStaticRefreshCoordinator initializes campaign, published-content, and backend-attempt tracking.
 func newStaticRefreshCoordinator() *staticRefreshCoordinator {
 	return &staticRefreshCoordinator{
-		active:    make(map[string]activeStaticCampaign),
-		histories: make(map[string]*staticFeedFailureHistory),
-		published: make(map[string]publishedStaticContent),
-		policy:    dailyStaticRefreshRetryPolicy,
+		snapshotContent: make(map[string]publishedStaticContent),
+		backendAttempts: make(map[string]backendHashAttempt),
+		active:          make(map[string]activeStaticCampaign),
+		histories:       make(map[string]*staticFeedFailureHistory),
+		published:       make(map[string]publishedStaticContent),
+		policy:          dailyStaticRefreshRetryPolicy,
 	}
 }
 
@@ -92,19 +98,35 @@ func staticFeedHistoryKey(server models.ObaServer, feedURL string) string {
 	return server.ServerKey() + "|" + feedURL
 }
 
-func (c *staticRefreshCoordinator) start(ctx context.Context, service *GtfsService, server models.ObaServer, trigger StaticRefreshTrigger, maxRetries int) {
+// start registers a campaign only for current configuration, suppressing active campaigns and repeated backend hashes.
+func (c *staticRefreshCoordinator) start(ctx context.Context, service *GtfsService, server models.ObaServer, trigger StaticRefreshTrigger, maxRetries int, backendHash ...string) bool {
+	// Keep configuration validation atomic with campaign registration. This
+	// short read lock does not wait on the static publication refresh lock.
+	service.StaticStore.mu.RLock()
+	defer service.StaticStore.mu.RUnlock()
+	if ctx.Err() != nil || !service.StaticStore.isConfiguredLocked(server) {
+		return false
+	}
 	key := server.ServerKey()
 	fingerprint := staticConfigFingerprint(server)
 	campaignCtx, cancel := context.WithCancel(ctx)
 
 	c.mu.Lock()
+	if len(backendHash) > 0 {
+		attempt := c.backendAttempts[key]
+		if attempt.fingerprint == fingerprint && attempt.hash == backendHash[0] {
+			c.mu.Unlock()
+			cancel()
+			return false
+		}
+	}
 	c.nextGeneration++
 	generation := c.nextGeneration
 	if active, ok := c.active[key]; ok {
 		if active.fingerprint == fingerprint {
 			c.mu.Unlock()
 			cancel()
-			return
+			return false
 		}
 		active.cancel()
 	}
@@ -114,6 +136,9 @@ func (c *staticRefreshCoordinator) start(ctx context.Context, service *GtfsServi
 				delete(c.histories, historyKey)
 			}
 		}
+	}
+	if len(backendHash) > 0 {
+		c.backendAttempts[key] = backendHashAttempt{fingerprint: fingerprint, hash: backendHash[0]}
 	}
 	c.active[key] = activeStaticCampaign{fingerprint: fingerprint, generation: generation, cancel: cancel}
 	c.mu.Unlock()
@@ -127,8 +152,10 @@ func (c *staticRefreshCoordinator) start(ctx context.Context, service *GtfsServi
 		}
 		c.mu.Unlock()
 	}()
+	return true
 }
 
+// reconcile cancels obsolete campaigns and removes state belonging to removed or changed configurations.
 func (c *staticRefreshCoordinator) reconcile(servers []models.ObaServer) {
 	configured := make(map[string]string, len(servers))
 	configuredFeeds := make(map[string]struct{})
@@ -144,6 +171,16 @@ func (c *staticRefreshCoordinator) reconcile(servers []models.ObaServer) {
 		if configured[key] != active.fingerprint {
 			active.cancel()
 			delete(c.active, key)
+		}
+	}
+	for key, attempt := range c.backendAttempts {
+		if configured[key] != attempt.fingerprint {
+			delete(c.backendAttempts, key)
+		}
+	}
+	for key, content := range c.snapshotContent {
+		if configured[key] != content.fingerprint {
+			delete(c.snapshotContent, key)
 		}
 	}
 	for key, content := range c.published {
@@ -175,13 +212,18 @@ func (c *staticRefreshCoordinator) unchanged(server models.ObaServer, hashes []s
 	return true
 }
 
+// recordPublished records the zip hashes of a successful publication unless its context was canceled.
 func (c *staticRefreshCoordinator) recordPublished(ctx context.Context, server models.ObaServer, hashes []string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if ctx.Err() != nil {
 		return false
 	}
-	c.published[server.ServerKey()] = publishedStaticContent{fingerprint: staticConfigFingerprint(server), hashes: hashes}
+	content := publishedStaticContent{fingerprint: staticConfigFingerprint(server), hashes: hashes}
+	c.published[server.ServerKey()] = content
+	// Retain the identity of the snapshot still in use if a later refresh
+	// fails and invalidates only the unchanged-download optimization.
+	c.snapshotContent[server.ServerKey()] = content
 	return true
 }
 
