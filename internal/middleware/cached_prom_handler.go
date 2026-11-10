@@ -59,7 +59,9 @@ func (c *CachedPromHandler) refreshLoop(ctx context.Context) {
 			c.h.ServeHTTP(rec, req)
 
 			c.mu.Lock()
-			if rec.status == http.StatusOK {
+			// status == 0 means promhttp gathered successfully but produced no
+			// metric families, so it never called Write or WriteHeader.
+			if rec.status == 0 || rec.status == http.StatusOK {
 				c.cache = buf.Bytes()
 			} else {
 				// Clear the cache so ServeHTTP falls back to the live handler.
