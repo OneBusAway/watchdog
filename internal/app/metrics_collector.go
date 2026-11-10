@@ -33,10 +33,11 @@ var (
 //
 // The deadline bounds a cycle so stalled work cannot accumulate into later
 // cycles; it is not a guarantee that every degraded entry finishes inside
-// it. SDK calls (server ping, vehicles-for-agency) are retried by the
-// OneBusAway client (default 2 retries), so one hanging step can take
-// roughly three per-request timeouts, and multi-feed or many-agency chains
-// can still exceed the deadline. When that happens the cycle cancels, the
+// it. SDK calls (server ping, vehicles-for-agency) are configured with
+// option.WithMaxRetries(0) so a hanging step fails within a single request
+// timeout rather than consuming roughly three timeouts in retries. Even so,
+// multi-feed or many-agency chains can still exceed the deadline. When that
+// happens the cycle cancels, the
 // completion gauge holds, and round-robin admission spreads the skipped work
 // fairly across subsequent cycles while the per-entry gauges keep reporting
 // whatever each entry last managed to collect.
