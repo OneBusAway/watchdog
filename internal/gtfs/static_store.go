@@ -94,13 +94,14 @@ func (s *StaticStore) SetConfiguredServers(servers []models.ObaServer) {
 	s.configurationSet = true
 }
 
+// IsConfigured reports whether the entry still matches the configured static identity.
 func (s *StaticStore) IsConfigured(server models.ObaServer) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.isConfiguredLocked(server)
 }
 
-// Caller holds s.mu for reading or writing.
+// isConfiguredLocked compares static identity while the caller holds s.mu for reading or writing.
 func (s *StaticStore) isConfiguredLocked(server models.ObaServer) bool {
 	if !s.configurationSet {
 		return true

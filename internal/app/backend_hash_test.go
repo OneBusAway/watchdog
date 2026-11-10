@@ -139,6 +139,17 @@ func TestBackendHashGaugeLifecycleAndAPIHealth(t *testing.T) {
 	assertGauge(0, false)
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
+	// Preserve the existing metrics observer while retaining feed failure
+	// diagnostics for a timeout, without sharing mutable state with the worker.
+	feedDiagnostics := make(chan gtfs.StaticFeedRefreshObservation, 16)
+	reportFeed := app.MetricsService.StaticFeedRefreshObserver()
+	app.GtfsService.SetStaticFeedRefreshObserver(func(server models.ObaServer, feedURL string, observation gtfs.StaticFeedRefreshObservation) {
+		reportFeed(server, feedURL, observation)
+		select {
+		case feedDiagnostics <- observation:
+		default:
+		}
+	})
 	app.GtfsService.StartStaticRefreshCampaigns(ctx, []models.ObaServer{server}, gtfs.StaticRefreshStartup, 1)
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -147,7 +158,16 @@ func TestBackendHashGaugeLifecycleAndAPIHealth(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("startup publish did not finish")
+			var latestFeed gtfs.StaticFeedRefreshObservation
+			draining := true
+			for draining {
+				select {
+				case latestFeed = <-feedDiagnostics:
+				default:
+					draining = false
+				}
+			}
+			t.Fatalf("startup publish did not finish: refresh_state=%+v present=%t latest_feed=%+v", state, ok, latestFeed)
 		}
 		time.Sleep(time.Millisecond)
 	}
@@ -181,6 +201,7 @@ func TestBackendHashGaugeLifecycleAndAPIHealth(t *testing.T) {
 	assertGauge(1, true)
 }
 
+// backendHashTestFeed builds a minimal valid feed for the gauge publication test.
 func backendHashTestFeed(t *testing.T) []byte {
 	t.Helper()
 	files := map[string]string{

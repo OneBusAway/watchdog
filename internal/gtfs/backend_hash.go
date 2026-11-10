@@ -78,7 +78,7 @@ func (gs *GtfsService) CheckBackendBundles(ctx, campaignCtx context.Context, ser
 	}
 }
 
-// A single backend hash is comparable only when all entries for that backend
+// backendHashEligible reports whether all entries for a backend
 // refer to the same single zip. Per-agency zips and mixed feed configurations
 // cannot describe the identity of the backend bundle as a whole.
 func backendHashEligible(servers []models.ObaServer) bool {
@@ -94,6 +94,7 @@ func backendHashEligible(servers []models.ObaServer) bool {
 	return true
 }
 
+// observeBackendHash reports a comparison only while its static configuration remains current.
 func (gs *GtfsService) observeBackendHash(server models.ObaServer, match *bool) {
 	// Collection must not wait for the potentially long publication lock.
 	// As with other collection gauges, departed-server pruning retires a
@@ -103,6 +104,7 @@ func (gs *GtfsService) observeBackendHash(server models.ObaServer, match *bool) 
 	}
 }
 
+// fetchBackendHash returns a valid SHA-256 from optional backend metadata, or an empty string on failure.
 func (gs *GtfsService) fetchBackendHash(ctx context.Context, server models.ObaServer) string {
 	// A stalled optional endpoint must not consume the collection deadline.
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)

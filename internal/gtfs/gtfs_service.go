@@ -128,6 +128,7 @@ func (gs *GtfsService) StartStaticRefreshCampaigns(ctx context.Context, servers 
 	}
 }
 
+// ReconcileStaticRefreshCampaigns retires obsolete campaigns and incomparable backend hash metrics.
 func (gs *GtfsService) ReconcileStaticRefreshCampaigns(servers []models.ObaServer) {
 	gs.refreshCoordinator.reconcile(servers)
 	byBackend := make(map[string][]models.ObaServer)

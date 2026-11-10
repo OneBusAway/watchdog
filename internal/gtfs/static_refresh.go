@@ -82,6 +82,7 @@ type staticRefreshCoordinator struct {
 	nextGeneration  uint64
 }
 
+// newStaticRefreshCoordinator initializes campaign, published-content, and backend-attempt tracking.
 func newStaticRefreshCoordinator() *staticRefreshCoordinator {
 	return &staticRefreshCoordinator{
 		snapshotContent: make(map[string]publishedStaticContent),
@@ -97,6 +98,7 @@ func staticFeedHistoryKey(server models.ObaServer, feedURL string) string {
 	return server.ServerKey() + "|" + feedURL
 }
 
+// start registers a campaign only for current configuration, suppressing active campaigns and repeated backend hashes.
 func (c *staticRefreshCoordinator) start(ctx context.Context, service *GtfsService, server models.ObaServer, trigger StaticRefreshTrigger, maxRetries int, backendHash ...string) bool {
 	// Keep configuration validation atomic with campaign registration. This
 	// short read lock does not wait on the static publication refresh lock.
@@ -153,6 +155,7 @@ func (c *staticRefreshCoordinator) start(ctx context.Context, service *GtfsServi
 	return true
 }
 
+// reconcile cancels obsolete campaigns and removes state belonging to removed or changed configurations.
 func (c *staticRefreshCoordinator) reconcile(servers []models.ObaServer) {
 	configured := make(map[string]string, len(servers))
 	configuredFeeds := make(map[string]struct{})
@@ -209,6 +212,7 @@ func (c *staticRefreshCoordinator) unchanged(server models.ObaServer, hashes []s
 	return true
 }
 
+// recordPublished records the zip hashes of a successful publication unless its context was canceled.
 func (c *staticRefreshCoordinator) recordPublished(ctx context.Context, server models.ObaServer, hashes []string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
