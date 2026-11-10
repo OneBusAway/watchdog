@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -21,10 +20,9 @@ import (
 // added by a later --config-url refresh never had its bundle downloaded — its
 // static-derived metrics stayed empty until the process restarted.
 func TestRefreshGTFSBundlesReadsLiveConfig(t *testing.T) {
-	bundle, err := os.ReadFile("../../testdata/gtfs.zip")
-	if err != nil {
-		t.Fatalf("read GTFS fixture: %v", err)
-	}
+	// Only supplier updates are under test; a tiny feed avoids spending the
+	// next-tick deadline parsing the large fixture under race instrumentation.
+	bundle := smallStaticFeed(t)
 
 	var (
 		shuttingDown  atomic.Bool
@@ -60,14 +58,14 @@ func TestRefreshGTFSBundlesReadsLiveConfig(t *testing.T) {
 		defer suppliedMu.Unlock()
 		list := []models.ObaServer{{
 			ServerName:      "initial",
-			AgencyID:        "40",
+			AgencyID:        "A",
 			ObaBaseURL:      ts.URL,
 			GtfsStaticFeeds: []string{ts.URL + "/initial.zip"},
 		}}
 		if added {
 			list = append(list, models.ObaServer{
 				ServerName:      "added",
-				AgencyID:        "40",
+				AgencyID:        "A",
 				ObaBaseURL:      ts.URL + "/other",
 				GtfsStaticFeeds: []string{ts.URL + "/added.zip"},
 			})
