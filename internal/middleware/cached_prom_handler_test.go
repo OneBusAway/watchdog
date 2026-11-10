@@ -3,14 +3,21 @@ package middleware
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	dto "github.com/prometheus/client_model/go"
+
 	"github.com/prometheus/client_golang/prometheus"
 )
+
+func nopLogger() *slog.Logger { return slog.New(slog.NewTextHandler(bytes.NewBuffer(nil), nil)) }
 
 func TestResponseRecorder_TracksStatusCode(t *testing.T) {
 	rr := &responseRecorder{buf: new(bytes.Buffer)}
@@ -28,26 +35,71 @@ func TestResponseRecorder_ImpliesOKOnWrite(t *testing.T) {
 	}
 }
 
-func TestCachedPromHandler_DoesNotServeErrorBodyAs200(t *testing.T) {
+// toggleGatherer is a Gatherer that returns a valid metric while ok is true,
+// and returns an error with no families once ok is set to false.
+type toggleGatherer struct {
+	ok    atomic.Bool
+	gauge prometheus.Gauge
+}
+
+func newToggleGatherer() *toggleGatherer {
+	g := &toggleGatherer{}
+	g.ok.Store(true)
+	g.gauge = prometheus.NewGauge(prometheus.GaugeOpts{Name: "good_metric", Help: "test"})
+	g.gauge.Set(1)
+	return g
+}
+
+func (g *toggleGatherer) Gather() ([]*dto.MetricFamily, error) {
+	if !g.ok.Load() {
+		return nil, fmt.Errorf("forced gather failure")
+	}
 	reg := prometheus.NewRegistry()
-	g := prometheus.NewGauge(prometheus.GaugeOpts{Name: "good_metric", Help: "test"})
-	reg.MustRegister(g)
-	g.Set(1)
+	reg.MustRegister(g.gauge)
+	return reg.Gather()
+}
+
+// TestCachedPromHandler_ClearsOnGatherFailure verifies that:
+//   - While the gatherer succeeds, the cached body is served with 200.
+//   - After the gatherer fails, the cache is cleared so the next scrape falls
+//     through to the live handler and returns a non-200 — never the error body
+//     with a 200 status.
+func TestCachedPromHandler_ClearsOnGatherFailure(t *testing.T) {
+	tg := newToggleGatherer()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	h := NewCachedPromHandler(ctx, reg, 20*time.Millisecond)
+	const ttl = 20 * time.Millisecond
+	h := NewCachedPromHandler(ctx, tg, ttl, nopLogger())
 
-	// Wait for a successful refresh to populate the cache.
-	time.Sleep(60 * time.Millisecond)
+	// Poll until the cache is warm with a successful gather.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+		if rec.Code == http.StatusOK && strings.Contains(rec.Body.String(), "good_metric") {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	warm := httptest.NewRecorder()
+	h.ServeHTTP(warm, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if warm.Code != http.StatusOK || !strings.Contains(warm.Body.String(), "good_metric") {
+		t.Fatalf("cache not populated after 2s: status=%d body=%s", warm.Code, warm.Body)
+	}
 
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200 from populated cache, got %d", rec.Code)
+	// Flip the gatherer to fail, then wait until the cache is cleared.
+	tg.ok.Store(false)
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+		if rec.Code != http.StatusOK {
+			// Cache was cleared; live handler returned a non-200 error.
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
-	if !strings.Contains(rec.Body.String(), "good_metric") {
-		t.Fatalf("expected good_metric in body, got: %s", rec.Body.String())
-	}
+	t.Fatal("cache was not cleared after gather failure within 2s")
 }
