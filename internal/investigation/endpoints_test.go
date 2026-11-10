@@ -465,9 +465,9 @@ func TestGetVehiclePositionEndpoint_IncludeServer(t *testing.T) {
 // configured flag computed from the endpoint's own server, not from all servers.
 func TestEndpointLoader(t *testing.T) {
 	pool := dbtest.NewMigratedPool(t)
-	// Two servers; both are configured with the same feed URL.
-	// The loader must report configured=true for server1's endpoint and
-	// configured=false for server2's endpoint (server2 is not configured).
+	// Two servers; both have an endpoint on the same feed URL.
+	// Only server1 is configured to fetch it, so the loader must report
+	// configured=true for server1's endpoint and false for server2's.
 	server1ID := insertServer(t, pool, "https://example.com", "Example")
 	server2ID := insertServer(t, pool, "https://other.example.com", "Other")
 	sharedFeed := "https://feeds.example.com/vp"
