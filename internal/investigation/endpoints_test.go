@@ -357,7 +357,14 @@ func TestGetVehiclePositionEndpoint_ReturnsRepresentation(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body)
 	}
-	var body vehiclePositionEndpoint
+	var body struct {
+		EndpointID                   int64             `json:"endpoint_id"`
+		ServerID                     int64             `json:"server_id"`
+		NormalizedVehiclePositionURL string            `json:"normalized_vehicle_position_url"`
+		CreatedAt                    string            `json:"created_at"`
+		Configured                   bool              `json:"configured"`
+		Links                        map[string]string `json:"links"`
+	}
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -452,43 +459,65 @@ func TestGetVehiclePositionEndpoint_IncludeServer(t *testing.T) {
 	}
 }
 
+// TestEndpointLoader verifies the loader returns exactly the requested IDs in
+// two queries (endpoints + servers), and that each included representation
+// matches what a direct GET on that endpoint would return — including the
+// configured flag computed from the endpoint's own server, not from all servers.
 func TestEndpointLoader(t *testing.T) {
 	pool := dbtest.NewMigratedPool(t)
-	serverID := insertServer(t, pool, "https://example.com", "Example")
-	ids := []int64{
-		insertEndpoint(t, pool, serverID, "https://feeds.example.com/a"),
-		insertEndpoint(t, pool, serverID, "https://feeds.example.com/b"),
-	}
-	insertEndpoint(t, pool, serverID, "https://feeds.example.com/not-asked")
+	// Two servers; both are configured with the same feed URL.
+	// The loader must report configured=true for server1's endpoint and
+	// configured=false for server2's endpoint (server2 is not configured).
+	server1ID := insertServer(t, pool, "https://example.com", "Example")
+	server2ID := insertServer(t, pool, "https://other.example.com", "Other")
+	sharedFeed := "https://feeds.example.com/vp"
+	ep1 := insertEndpoint(t, pool, server1ID, sharedFeed)
+	ep2 := insertEndpoint(t, pool, server2ID, sharedFeed)
+	insertEndpoint(t, pool, server1ID, "https://feeds.example.com/not-asked")
 
 	s, _ := newTestService(t)
+	// Only server1 is configured with the shared feed.
+	s.Servers = func() []models.ObaServer {
+		return []models.ObaServer{configuredServer("https://example.com", sharedFeed)}
+	}
 	db := &countingDB{DBTX: pool}
-	got, err := s.loaders[kindEndpoint](context.Background(), dbgen.New(db), ids)
+	got, err := s.loaders[kindEndpoint](context.Background(), dbgen.New(db), []int64{ep1, ep2})
 	if err != nil {
 		t.Fatalf("loadEndpoints: %v", err)
 	}
-	if db.queries != 1 {
-		t.Errorf("loader ran %d queries, want 1", db.queries)
+	// Expect 2 queries: one for endpoints, one for servers.
+	if db.queries != 2 {
+		t.Errorf("loader ran %d queries, want 2", db.queries)
 	}
 	if len(got) != 2 {
 		t.Fatalf("got %d representations, want 2", len(got))
 	}
-	for _, id := range ids {
-		if _, ok := got[id]; !ok {
-			t.Errorf("missing representation for id %d", id)
-		}
-	}
-}
 
-func TestAllConfiguredVehiclePositionURLs(t *testing.T) {
-	servers := []models.ObaServer{
-		configuredServer("https://a.example.com", "https://feeds.example.com/a?key=x", ""),
-		configuredServer("https://b.example.com", "https://feeds.example.com/b"),
-	}
-	got := allConfiguredVehiclePositionURLs(servers)
-	want := map[string]bool{"https://feeds.example.com/a": true, "https://feeds.example.com/b": true}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("allConfigured = %v, want %v", got, want)
+	// Compare loader output against what a direct GET returns for each endpoint.
+	router := newEndpointsRouter(t, pool, configuredServer("https://example.com", sharedFeed))
+	for _, tc := range []struct {
+		id             int64
+		wantConfigured bool
+	}{
+		{ep1, true},
+		{ep2, false},
+	} {
+		loaderRep, ok := got[tc.id]
+		if !ok {
+			t.Fatalf("missing representation for endpoint %d", tc.id)
+		}
+		loaderJSON, err := json.Marshal(loaderRep)
+		if err != nil {
+			t.Fatalf("marshal loader rep: %v", err)
+		}
+		getPath := "/v1/vehicle-position-endpoints/" + strconv.FormatInt(tc.id, 10)
+		getRec := doGet(t, router, getPath, nil)
+		if getRec.Code != http.StatusOK {
+			t.Fatalf("GET %s: status = %d", getPath, getRec.Code)
+		}
+		if string(loaderJSON)+"\n" != getRec.Body.String() {
+			t.Errorf("endpoint %d: loader =\n%s\nGET returned\n%s", tc.id, loaderJSON, getRec.Body)
+		}
 	}
 }
 

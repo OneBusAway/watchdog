@@ -188,36 +188,38 @@ func (s *InvestigationService) getVehiclePositionEndpoint(w http.ResponseWriter,
 }
 
 // loadEndpoints is the include loader for kindEndpoint. It returns the E07
-// representation of each endpoint in ids, in one query. Because endpoints
-// from different servers may be included at once, configured is checked
-// against all configured vehicle-position URLs across all servers.
+// representation of each endpoint in ids, using two queries: one for the
+// endpoints and one for their parent servers. Each endpoint's configured flag
+// is computed from its own server's configuration entry, matching exactly what
+// a direct GET on that endpoint would return.
 func (s *InvestigationService) loadEndpoints(ctx context.Context, q *dbgen.Queries, ids []int64) (map[int64]any, error) {
 	rows, err := q.ListVehiclePositionEndpointsByIDs(ctx, ids)
 	if err != nil {
 		return nil, err
 	}
-	configured := allConfiguredVehiclePositionURLs(s.Servers())
+	// Collect distinct server_ids so we can fetch them in one query.
+	seen := map[int64]bool{}
+	serverIDs := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		if !seen[row.ServerID] {
+			seen[row.ServerID] = true
+			serverIDs = append(serverIDs, row.ServerID)
+		}
+	}
+	servers, err := q.ListServersByIDs(ctx, serverIDs)
+	if err != nil {
+		return nil, err
+	}
+	configuredByServer := make(map[int64]map[string]bool, len(servers))
+	for _, srv := range servers {
+		configuredByServer[srv.ServerID] = configuredVehiclePositionURLs(s.Servers(), srv.NormalizedBaseUrl)
+	}
 	out := make(map[int64]any, len(rows))
 	for _, row := range rows {
 		l := endpointLinks(row)
-		out[row.EndpointID] = endpointRepresentation(row, l, configured)
+		out[row.EndpointID] = endpointRepresentation(row, l, configuredByServer[row.ServerID])
 	}
 	return out, nil
-}
-
-// allConfiguredVehiclePositionURLs returns every normalized vehicle-position
-// URL from every configured server, regardless of base URL. Used by
-// loadEndpoints where endpoints from different servers may appear together.
-func allConfiguredVehiclePositionURLs(servers []models.ObaServer) map[string]bool {
-	configured := map[string]bool{}
-	for _, srv := range servers {
-		for _, feed := range srv.GtfsRTFeeds {
-			if u := utils.SanitizeServerURL(feed.VehiclePositionURL); u != "" {
-				configured[u] = true
-			}
-		}
-	}
-	return configured
 }
 
 // endpointRepresentation maps one row to the representation that E06 lists

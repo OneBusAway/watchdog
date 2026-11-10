@@ -9,6 +9,25 @@ import (
 	"context"
 )
 
+const getVehiclePositionEndpoint = `-- name: GetVehiclePositionEndpoint :one
+SELECT endpoint_id, server_id, normalized_vehicle_position_url, created_at
+FROM vehicle_position_endpoint
+WHERE endpoint_id = $1
+`
+
+// One vehicle-position feed endpoint by its ID.
+func (q *Queries) GetVehiclePositionEndpoint(ctx context.Context, endpointID int64) (VehiclePositionEndpoint, error) {
+	row := q.db.QueryRow(ctx, getVehiclePositionEndpoint, endpointID)
+	var i VehiclePositionEndpoint
+	err := row.Scan(
+		&i.EndpointID,
+		&i.ServerID,
+		&i.NormalizedVehiclePositionUrl,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listServerVehiclePositionEndpoints = `-- name: ListServerVehiclePositionEndpoints :many
 SELECT endpoint_id, server_id, normalized_vehicle_position_url, created_at
 FROM vehicle_position_endpoint
@@ -41,20 +60,6 @@ func (q *Queries) ListServerVehiclePositionEndpoints(ctx context.Context, server
 		return nil, err
 	}
 	return items, nil
-}
-
-const getVehiclePositionEndpoint = `-- name: GetVehiclePositionEndpoint :one
-SELECT endpoint_id, server_id, normalized_vehicle_position_url, created_at
-FROM vehicle_position_endpoint
-WHERE endpoint_id = $1
-`
-
-// One vehicle-position feed endpoint by its ID.
-func (q *Queries) GetVehiclePositionEndpoint(ctx context.Context, endpointID int64) (VehiclePositionEndpoint, error) {
-	row := q.db.QueryRow(ctx, getVehiclePositionEndpoint, endpointID)
-	var i VehiclePositionEndpoint
-	err := row.Scan(&i.EndpointID, &i.ServerID, &i.NormalizedVehiclePositionUrl, &i.CreatedAt)
-	return i, err
 }
 
 const listVehiclePositionEndpointsByIDs = `-- name: ListVehiclePositionEndpointsByIDs :many
