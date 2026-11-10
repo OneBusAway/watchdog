@@ -3,7 +3,6 @@ package investigation
 import (
 	"context"
 	"net/http"
-	"net/url"
 	"strconv"
 	"time"
 
@@ -72,11 +71,11 @@ func (s *InvestigationService) getVehiclePositionResponse(w http.ResponseWriter,
 		s.fail(w, r, err)
 		return
 	}
-	s.writeJSON(w, r, body, cacheImmutable(time.Time{}))
+	s.writeJSON(w, r, body, cacheImmutable(time.Time(body.ObservedAt)))
 }
 
 // responseLinks is everything one response links to that can be included:
-// itself, its endpoint, and the evidence list.
+// itself and its endpoint.
 func responseLinks(row dbgen.VehiclePositionResponse) itemLinks {
 	self := "/v1/vehicle-position-responses/" + strconv.FormatInt(row.VehiclePositionResponseID, 10)
 	return itemLinks{
@@ -89,10 +88,6 @@ func responseLinks(row dbgen.VehiclePositionResponse) itemLinks {
 			Kind: kindEndpoint,
 			ID:   row.EndpointID,
 			URL:  "/v1/vehicle-position-endpoints/" + strconv.FormatInt(row.EndpointID, 10),
-		},
-		"evidence": related{
-			URL: linkWithQuery("/v1/vehicle-position-evidence",
-				url.Values{"response_id": {strconv.FormatInt(row.VehiclePositionResponseID, 10)}}),
 		},
 	}
 }
@@ -115,7 +110,7 @@ func responseRepresentation(row dbgen.VehiclePositionResponse, l itemLinks) vehi
 	}
 }
 
-// loadResponses is the include loader for kindResponse. It returns the E28
+// loadResponses is the include loader for kindVehicleResponse. It returns the E28
 // representation of each response in ids, in one query.
 func loadResponses(ctx context.Context, q *dbgen.Queries, ids []int64) (map[int64]any, error) {
 	rows, err := q.ListVehiclePositionResponsesByIDs(ctx, ids)

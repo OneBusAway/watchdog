@@ -83,7 +83,13 @@ func TestGetVehiclePositionResponse_ReturnsRepresentation(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body)
 	}
-	var body vehiclePositionResponse
+	var body struct {
+		VehiclePositionResponseID int64             `json:"vehicle_position_response_id"`
+		EndpointID                int64             `json:"endpoint_id"`
+		ObservedAt                string            `json:"observed_at"`
+		Incrementality            string            `json:"incrementality"`
+		Links                     map[string]string `json:"links"`
+	}
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -96,19 +102,20 @@ func TestGetVehiclePositionResponse_ReturnsRepresentation(t *testing.T) {
 	if body.Incrementality != "FULL_DATASET" {
 		t.Errorf("incrementality = %q, want FULL_DATASET", body.Incrementality)
 	}
+	if body.ObservedAt == "" {
+		t.Error("observed_at is empty")
+	}
 	if body.Links["self"] != path {
 		t.Errorf("self link = %q, want %q", body.Links["self"], path)
 	}
 	if body.Links["endpoint"] != "/v1/vehicle-position-endpoints/"+strconv.FormatInt(endpointID, 10) {
 		t.Errorf("endpoint link = %q", body.Links["endpoint"])
 	}
-	wantEvidence := "/v1/vehicle-position-evidence?response_id=" + strconv.FormatInt(responseID, 10)
-	if body.Links["evidence"] != wantEvidence {
-		t.Errorf("evidence link = %q, want %q", body.Links["evidence"], wantEvidence)
+	if _, ok := body.Links["evidence"]; ok {
+		t.Error("evidence link should not be present")
 	}
-	// Immutable cache.
-	if got := rec.Header().Get("Cache-Control"); got == "private, max-age=30" {
-		t.Error("vehicle-position-response should use immutable cache, not short cache")
+	if got := rec.Header().Get("Cache-Control"); got != "private, max-age=86400" {
+		t.Errorf("Cache-Control = %q, want private, max-age=86400", got)
 	}
 }
 
