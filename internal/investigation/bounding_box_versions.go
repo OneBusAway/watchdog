@@ -72,7 +72,11 @@ func (s *InvestigationService) getBoundingBoxVersion(w http.ResponseWriter, r *h
 		s.fail(w, r, err)
 		return
 	}
-	s.writeJSON(w, r, body, cacheImmutable(time.Time{}))
+	policy := cacheImmutable(time.Time{})
+	if inc.requested() {
+		policy = cacheShort()
+	}
+	s.writeJSON(w, r, body, policy)
 }
 
 // boundingBoxVersionLinks is everything one version links to that can be

@@ -138,9 +138,9 @@ func TestGetBoundingBoxVersion_ReturnsRepresentation(t *testing.T) {
 	if _, ok := body.Links["agency"]; ok {
 		t.Error("agency link present for server-wide bounding box")
 	}
-	// Immutable cache.
-	if got := rec.Header().Get("Cache-Control"); got == "private, max-age=30" {
-		t.Error("bounding-box-version should use immutable cache, not short cache")
+	// Immutable cache (no includes).
+	if got := rec.Header().Get("Cache-Control"); got != "private, max-age=86400" {
+		t.Errorf("Cache-Control = %q, want \"private, max-age=86400\"", got)
 	}
 }
 
@@ -239,6 +239,43 @@ func TestGetBoundingBoxVersion_IncludeServer(t *testing.T) {
 	}
 	if got := string(body.Included[serverURL]) + "\n"; got != get.Body.String() {
 		t.Errorf("included server =\n%s\nGET returned\n%s", got, get.Body)
+	}
+}
+
+func TestGetBoundingBoxVersion_IncludeAgency(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	serverID := insertServer(t, pool, "https://example.com", "Example")
+	svID := insertGtfsStaticVersion(t, pool, serverID)
+	name := "Metro"
+	agencyID := insertAgency(t, pool, serverID, "metro", &name)
+	bbvID := insertBoundingBoxVersion(t, pool, svID, serverID, &agencyID)
+	router := newBoundingBoxRouter(t, pool)
+	path := bbPath(bbvID)
+	agencyURL := "/v1/agencies/" + strconv.FormatInt(agencyID, 10)
+
+	rec := doGet(t, router, path+"?include=agency", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		Included map[string]json.RawMessage `json:"included"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Included) != 1 {
+		t.Fatalf("included has %d entries, want 1: %v", len(body.Included), body.Included)
+	}
+	get := doGet(t, router, agencyURL, nil)
+	if get.Code != http.StatusOK {
+		t.Fatalf("GET %s: status = %d", agencyURL, get.Code)
+	}
+	if got := string(body.Included[agencyURL]) + "\n"; got != get.Body.String() {
+		t.Errorf("included agency =\n%s\nGET returned\n%s", got, get.Body)
+	}
+	// With includes, cache should be short (embedded data can change).
+	if got := rec.Header().Get("Cache-Control"); got != "private, max-age=30" {
+		t.Errorf("Cache-Control with include = %q, want \"private, max-age=30\"", got)
 	}
 }
 
