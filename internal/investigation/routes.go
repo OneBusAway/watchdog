@@ -13,6 +13,8 @@ func (s *InvestigationService) Register(router *httprouter.Router) {
 
 // registerRoutes holds one s.get line per endpoint.
 func (s *InvestigationService) registerRoutes(router *httprouter.Router) {
+	// E01 does not read the database, so it bypasses requireDatabase.
+	s.getNoDatabase(router, "/v1/investigation", s.getInvestigationRoot)
 	s.get(router, "/v1/servers", s.listServers)
 	s.get(router, "/v1/servers/:server_id", s.getServer)
 	s.registerLoader(kindServer, s.loadServers)
@@ -20,6 +22,16 @@ func (s *InvestigationService) registerRoutes(router *httprouter.Router) {
 	s.get(router, "/v1/agencies/:agency_id", s.getAgency)
 	s.registerLoader(kindAgency, loadAgencies)
 	s.get(router, "/v1/servers/:server_id/vehicle-position-endpoints", s.listServerVehiclePositionEndpoints)
+}
+
+// getNoDatabase registers a read-only endpoint that does not require
+// investigation storage to be enabled. It is identical to get except that
+// requireDatabase is omitted from the pipeline. Use it only for endpoints
+// that never call s.read.
+func (s *InvestigationService) getNoDatabase(router *httprouter.Router, path string, handler httprouter.Handle) {
+	h := withMetrics(path, s.authenticate(negotiate(handler)))
+	router.Handle(http.MethodGet, path, h)
+	router.Handle(http.MethodHead, path, h)
 }
 
 // get registers a read-only endpoint: it serves GET and HEAD requests for
