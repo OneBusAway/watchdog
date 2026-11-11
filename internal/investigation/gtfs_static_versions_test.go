@@ -271,8 +271,8 @@ func TestGetGTFSStaticVersion_ETag(t *testing.T) {
 	if tag == "" {
 		t.Fatal("no ETag header")
 	}
-	if got := first.Header().Get("Cache-Control"); got != "private, max-age=30" {
-		t.Errorf("Cache-Control = %q, want private, max-age=30", got)
+	if got := first.Header().Get("Cache-Control"); got != "private, max-age=86400" {
+		t.Errorf("Cache-Control = %q, want private, max-age=86400", got)
 	}
 	second := doGet(t, router, staticVersionPath(versionID), map[string]string{"If-None-Match": tag})
 	if second.Code != http.StatusNotModified {

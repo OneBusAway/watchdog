@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/julienschmidt/httprouter"
 	"watchdog.onebusaway.org/internal/db/dbgen"
@@ -55,11 +56,13 @@ func (s *InvestigationService) getGTFSStaticVersion(w http.ResponseWriter, r *ht
 	}
 
 	var body gtfsStaticVersion
+	var publishedAt time.Time
 	err := s.read(r.Context(), func(ctx context.Context, q *dbgen.Queries) error {
 		row, err := q.GetGTFSStaticVersion(ctx, id)
 		if err != nil {
 			return err
 		}
+		publishedAt = row.PublishedAt
 		sources, err := q.ListGTFSStaticVersionSources(ctx, id)
 		if err != nil {
 			return err
@@ -77,7 +80,11 @@ func (s *InvestigationService) getGTFSStaticVersion(w http.ResponseWriter, r *ht
 		s.fail(w, r, err)
 		return
 	}
-	s.writeJSON(w, r, body, cacheShort())
+	cache := cacheImmutable(publishedAt)
+	if inc.requested() {
+		cache = cacheShort()
+	}
+	s.writeJSON(w, r, body, cache)
 }
 
 // gtfsStaticVersionIncludable lists what include= accepts on E35.
