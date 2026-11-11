@@ -89,7 +89,11 @@ func (s *InvestigationService) getVehiclePositionEvidence(w http.ResponseWriter,
 		s.fail(w, r, err)
 		return
 	}
-	s.writeJSON(w, r, body, cacheImmutable(observedAt))
+	cache := cacheImmutable(observedAt)
+	if inc.requested() {
+		cache = cacheShort()
+	}
+	s.writeJSON(w, r, body, cache)
 }
 
 // evidenceItemLinks builds the includable links for one evidence record. Only

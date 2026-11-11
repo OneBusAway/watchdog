@@ -30,8 +30,8 @@ func newEvidenceRouter(t *testing.T, pool *pgxpool.Pool) http.Handler {
 	return router
 }
 
-// insertResponse records a vehicle_position_response row and returns its ID.
-func insertResponse(t *testing.T, pool *pgxpool.Pool, endpointID int64, observedAt time.Time) int64 {
+// insertResponseAt records a vehicle_position_response row and returns its ID.
+func insertResponseAt(t *testing.T, pool *pgxpool.Pool, endpointID int64, observedAt time.Time) int64 {
 	t.Helper()
 	return dbtest.ID(t, pool,
 		"INSERT INTO vehicle_position_response (endpoint_id, observed_at, incrementality) VALUES ($1, $2, 'FULL_DATASET') RETURNING vehicle_position_response_id",
@@ -101,7 +101,7 @@ func TestGetVehiclePositionEvidence_ReturnsRepresentation(t *testing.T) {
 	serverID := insertServer(t, pool, "https://example.com", "Example")
 	endpointID := insertEndpoint(t, pool, serverID, "https://feeds.example.com/vp")
 	observedAt := time.Date(2026, 10, 24, 15, 10, 30, 0, time.UTC)
-	responseID := insertResponse(t, pool, endpointID, observedAt)
+	responseID := insertResponseAt(t, pool, endpointID, observedAt)
 	evidenceID := insertEvidence(t, pool, responseID)
 	router := newEvidenceRouter(t, pool)
 
@@ -158,7 +158,7 @@ func TestGetVehiclePositionEvidence_CacheImmutable(t *testing.T) {
 	serverID := insertServer(t, pool, "https://example.com", "Example")
 	endpointID := insertEndpoint(t, pool, serverID, "https://feeds.example.com/vp")
 	observedAt := time.Date(2026, 10, 24, 15, 10, 30, 0, time.UTC)
-	responseID := insertResponse(t, pool, endpointID, observedAt)
+	responseID := insertResponseAt(t, pool, endpointID, observedAt)
 	evidenceID := insertEvidence(t, pool, responseID)
 	router := newEvidenceRouter(t, pool)
 
@@ -174,6 +174,61 @@ func TestGetVehiclePositionEvidence_CacheImmutable(t *testing.T) {
 	}
 }
 
+// TestGetVehiclePositionEvidence_IncludeAgency checks ?include=agency: returns
+// 200, included agency matches GET /v1/agencies/:id, and Cache-Control is short.
+func TestGetVehiclePositionEvidence_IncludeAgency(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires database")
+	}
+	pool := dbtest.NewMigratedPool(t)
+
+	serverID := insertServer(t, pool, "https://example.com", "Example")
+	endpointID := insertEndpoint(t, pool, serverID, "https://feeds.example.com/vp")
+	agencyName := "Example Transit"
+	agencyID := insertAgency(t, pool, serverID, "1", &agencyName)
+	observedAt := time.Date(2026, 10, 24, 15, 10, 30, 0, time.UTC)
+	responseID := insertResponseAt(t, pool, endpointID, observedAt)
+
+	// Insert evidence row with agency_id set.
+	evidenceID := dbtest.ID(t, pool,
+		"INSERT INTO vehicle_position_evidence (vehicle_position_response_id, agency_id, position_valid) VALUES ($1, $2, true) RETURNING vehicle_position_evidence_id",
+		responseID, agencyID)
+
+	s, _ := newTestService(t)
+	s.Pool = pool
+	s.Servers = func() []models.ObaServer { return nil }
+	router := httprouter.New()
+	router.GET("/v1/vehicle-position-evidence/:evidence_id", s.getVehiclePositionEvidence)
+	router.HEAD("/v1/vehicle-position-evidence/:evidence_id", s.getVehiclePositionEvidence)
+	router.GET("/v1/agencies/:agency_id", s.getAgency)
+
+	rec := doGet(t, router, evidencePath(evidenceID)+"?include=agency", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "private, max-age=30" {
+		t.Errorf("Cache-Control = %q, want private, max-age=30", got)
+	}
+
+	var body struct {
+		Included map[string]json.RawMessage `json:"included"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	agencyURL := "/v1/agencies/" + strconv.FormatInt(agencyID, 10)
+	if len(body.Included) != 1 {
+		t.Fatalf("included has %d entries, want 1: %v", len(body.Included), body.Included)
+	}
+	get := doGet(t, router, agencyURL, nil)
+	if get.Code != http.StatusOK {
+		t.Fatalf("GET %s: status = %d", agencyURL, get.Code)
+	}
+	if got := string(body.Included[agencyURL]) + "\n"; got != get.Body.String() {
+		t.Errorf("included agency =\n%s\nGET returned\n%s", got, get.Body)
+	}
+}
+
 func TestGetVehiclePositionEvidence_Head(t *testing.T) {
 	if testing.Short() {
 		t.Skip("requires database")
@@ -182,7 +237,7 @@ func TestGetVehiclePositionEvidence_Head(t *testing.T) {
 
 	serverID := insertServer(t, pool, "https://example.com", "Example")
 	endpointID := insertEndpoint(t, pool, serverID, "https://feeds.example.com/vp")
-	responseID := insertResponse(t, pool, endpointID, time.Now())
+	responseID := insertResponseAt(t, pool, endpointID, time.Now())
 	evidenceID := insertEvidence(t, pool, responseID)
 	router := newEvidenceRouter(t, pool)
 	path := evidencePath(evidenceID)
