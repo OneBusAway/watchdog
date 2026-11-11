@@ -220,35 +220,37 @@ func TestGetGTFSStaticVersion_SourcesAndAgencies(t *testing.T) {
 		t.Fatalf("decode body: %v", err)
 	}
 
-	// Sources should be ordered by source_id ascending (srcA < srcB).
+	// srcB was inserted first so has the lower source_id; ORDER BY source_id
+	// ascending means srcB comes first, then srcA.
 	if len(body.Sources) != 2 {
 		t.Fatalf("len(sources) = %d, want 2", len(body.Sources))
 	}
-	if body.Sources[0].SourceID != srcA {
-		t.Errorf("sources[0].source_id = %d, want %d", body.Sources[0].SourceID, srcA)
+	if body.Sources[0].SourceID != srcB {
+		t.Errorf("sources[0].source_id = %d, want %d", body.Sources[0].SourceID, srcB)
 	}
-	if body.Sources[0].NormalizedSourceURL != "https://feeds.example.com/a" {
-		t.Errorf("sources[0].normalized_source_url = %q, want https://feeds.example.com/a", body.Sources[0].NormalizedSourceURL)
+	if body.Sources[0].NormalizedSourceURL != "https://feeds.example.com/b" {
+		t.Errorf("sources[0].normalized_source_url = %q, want https://feeds.example.com/b", body.Sources[0].NormalizedSourceURL)
 	}
-	if body.Sources[0].SourceContentSha256 != sha256a {
+	if body.Sources[0].SourceContentSha256 != sha256b {
 		t.Errorf("sources[0].source_content_sha256 mismatch")
 	}
-	if body.Sources[1].SourceID != srcB {
-		t.Errorf("sources[1].source_id = %d, want %d", body.Sources[1].SourceID, srcB)
+	if body.Sources[1].SourceID != srcA {
+		t.Errorf("sources[1].source_id = %d, want %d", body.Sources[1].SourceID, srcA)
 	}
 
-	// Agencies should be ordered by agency_id ascending (agencyA < agencyB).
+	// agencyB was inserted first so has the lower agency_id; ORDER BY agency_id
+	// ascending means agencyB comes first, then agencyA.
 	if len(body.Agencies) != 2 {
 		t.Fatalf("len(agencies) = %d, want 2", len(body.Agencies))
 	}
-	if body.Agencies[0].AgencyID != agencyA {
-		t.Errorf("agencies[0].agency_id = %d, want %d", body.Agencies[0].AgencyID, agencyA)
+	if body.Agencies[0].AgencyID != agencyB {
+		t.Errorf("agencies[0].agency_id = %d, want %d", body.Agencies[0].AgencyID, agencyB)
 	}
-	if body.Agencies[0].ExternalAgencyID != "1" {
-		t.Errorf("agencies[0].external_agency_id = %q, want 1", body.Agencies[0].ExternalAgencyID)
+	if body.Agencies[0].ExternalAgencyID != "40" {
+		t.Errorf("agencies[0].external_agency_id = %q, want 40", body.Agencies[0].ExternalAgencyID)
 	}
-	if body.Agencies[1].AgencyID != agencyB {
-		t.Errorf("agencies[1].agency_id = %d, want %d", body.Agencies[1].AgencyID, agencyB)
+	if body.Agencies[1].AgencyID != agencyA {
+		t.Errorf("agencies[1].agency_id = %d, want %d", body.Agencies[1].AgencyID, agencyA)
 	}
 }
 
