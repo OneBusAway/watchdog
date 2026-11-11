@@ -39,12 +39,11 @@ func insertResponse(t *testing.T, pool *pgxpool.Pool, endpointID int64, observed
 }
 
 // insertEvidence records a vehicle_position_evidence row and returns its ID.
-// Nullable fields are left NULL; callers that need specific values should
-// insert via dbtest.Exec directly.
+// Uses position_valid = true; the check constraint requires a reason when false.
 func insertEvidence(t *testing.T, pool *pgxpool.Pool, responseID int64) int64 {
 	t.Helper()
 	return dbtest.ID(t, pool,
-		"INSERT INTO vehicle_position_evidence (vehicle_position_response_id, position_valid) VALUES ($1, false) RETURNING vehicle_position_evidence_id",
+		"INSERT INTO vehicle_position_evidence (vehicle_position_response_id, position_valid) VALUES ($1, true) RETURNING vehicle_position_evidence_id",
 		responseID)
 }
 
@@ -124,8 +123,8 @@ func TestGetVehiclePositionEvidence_ReturnsRepresentation(t *testing.T) {
 	if body.ObservedAt != "2026-10-24T15:10:30Z" {
 		t.Errorf("observed_at = %q, want 2026-10-24T15:10:30Z", body.ObservedAt)
 	}
-	if body.PositionValid {
-		t.Error("position_valid = true, want false")
+	if !body.PositionValid {
+		t.Error("position_valid = false, want true")
 	}
 	wantSelf := evidencePath(evidenceID)
 	if got := body.Links["self"]; got != wantSelf {
