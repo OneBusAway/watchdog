@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/julienschmidt/httprouter"
 	"watchdog.onebusaway.org/internal/db/dbgen"
@@ -41,6 +42,20 @@ type vehiclePositionEvidence struct {
 	Links                     links    `json:"links"`
 }
 
+// evidenceBody is the E27 response: the evidence record, plus included when asked for.
+// Embedding keeps the evidence fields at the top level.
+type evidenceBody struct {
+	vehiclePositionEvidence
+	Included included `json:"included,omitzero"`
+}
+
+// evidenceIncludable is what ?include= accepts on E27: an evidence record
+// links to one agency and one endpoint (when their loaders are registered).
+var evidenceIncludable = map[string]resourceKind{
+	"agency":   kindAgency,
+	"endpoint": kindEndpoint,
+}
+
 // getVehiclePositionEvidence serves GET /v1/vehicle-position-evidence/:evidence_id:
 // one evidence record with every stored value.
 func (s *InvestigationService) getVehiclePositionEvidence(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
@@ -50,41 +65,64 @@ func (s *InvestigationService) getVehiclePositionEvidence(w http.ResponseWriter,
 		return
 	}
 	var bad invalidParams
-	parseQuery(r, &bad)
+	values := parseQuery(r, &bad, "include")
+	inc := s.parseInclude(values, evidenceIncludable, &bad)
 	if len(bad) > 0 {
 		writeInvalidParams(w, bad)
 		return
 	}
 
-	var row dbgen.GetVehiclePositionEvidenceRow
+	var body evidenceBody
+	var observedAt time.Time
 	err := s.read(r.Context(), func(ctx context.Context, q *dbgen.Queries) error {
-		var err error
-		row, err = q.GetVehiclePositionEvidence(ctx, id)
+		row, err := q.GetVehiclePositionEvidence(ctx, id)
+		if err != nil {
+			return err
+		}
+		observedAt = row.ObservedAt
+		l := evidenceItemLinks(row)
+		body.vehiclePositionEvidence = evidenceRepresentation(row, l)
+		body.Included, err = s.loadIncluded(ctx, q, []itemLinks{l}, inc)
 		return err
 	})
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	s.writeJSON(w, r, vehiclePositionEvidenceRepresentation(row), cacheImmutable(row.ObservedAt))
+	s.writeJSON(w, r, body, cacheImmutable(observedAt))
 }
 
-// vehiclePositionEvidenceRepresentation maps one row to the E27 response body.
-func vehiclePositionEvidenceRepresentation(row dbgen.GetVehiclePositionEvidenceRow) vehiclePositionEvidence {
-	evidenceID := strconv.FormatInt(row.VehiclePositionEvidenceID, 10)
-	responseID := strconv.FormatInt(row.VehiclePositionResponseID, 10)
-	endpointID := strconv.FormatInt(row.EndpointID, 10)
-
-	out := links{
-		"self":     "/v1/vehicle-position-evidence/" + evidenceID,
-		"response": "/v1/vehicle-position-responses/" + responseID,
-		"endpoint": "/v1/vehicle-position-endpoints/" + endpointID,
-	}
-	if row.VehicleEntityID != nil {
-		out["vehicle"] = "/v1/vehicles/" + strconv.FormatInt(*row.VehicleEntityID, 10)
+// evidenceItemLinks builds the includable links for one evidence record. Only
+// links whose kind has a registered loader are placed here; other links (self,
+// response, vehicle, …) are added directly in evidenceRepresentation.
+func evidenceItemLinks(row dbgen.GetVehiclePositionEvidenceRow) itemLinks {
+	l := itemLinks{
+		"endpoint": {
+			Kind: kindEndpoint,
+			ID:   row.EndpointID,
+			URL:  "/v1/vehicle-position-endpoints/" + strconv.FormatInt(row.EndpointID, 10),
+		},
 	}
 	if row.AgencyID != nil {
-		out["agency"] = "/v1/agencies/" + strconv.FormatInt(*row.AgencyID, 10)
+		l["agency"] = related{
+			Kind: kindAgency,
+			ID:   *row.AgencyID,
+			URL:  "/v1/agencies/" + strconv.FormatInt(*row.AgencyID, 10),
+		}
+	}
+	return l
+}
+
+// evidenceRepresentation maps one row to the E27 response body.
+func evidenceRepresentation(row dbgen.GetVehiclePositionEvidenceRow, l itemLinks) vehiclePositionEvidence {
+	evidenceID := strconv.FormatInt(row.VehiclePositionEvidenceID, 10)
+	responseID := strconv.FormatInt(row.VehiclePositionResponseID, 10)
+
+	out := l.links()
+	out["self"] = "/v1/vehicle-position-evidence/" + evidenceID
+	out["response"] = "/v1/vehicle-position-responses/" + responseID
+	if row.VehicleEntityID != nil {
+		out["vehicle"] = "/v1/vehicles/" + strconv.FormatInt(*row.VehicleEntityID, 10)
 	}
 	if row.GtfsStaticVersionID != nil {
 		out["gtfs_static_version"] = "/v1/gtfs-static-versions/" + strconv.FormatInt(*row.GtfsStaticVersionID, 10)

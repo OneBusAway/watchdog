@@ -65,6 +65,15 @@ func TestGetVehiclePositionEvidence_RejectsUnknownParameter(t *testing.T) {
 	wantInvalidParam(t, doGet(t, router, "/v1/vehicle-position-evidence/1?foo=bar", nil), "foo")
 }
 
+func TestGetVehiclePositionEvidence_RejectsBadInclude(t *testing.T) {
+	router := newEvidenceRouter(t, nil)
+	for _, query := range []string{"include=self", "include=foo", "include=", "include=agency,agency", "include=agency,"} {
+		t.Run(query, func(t *testing.T) {
+			wantInvalidParam(t, doGet(t, router, "/v1/vehicle-position-evidence/1?"+query, nil), "include")
+		})
+	}
+}
+
 func TestGetVehiclePositionEvidence_MalformedIDReturns404(t *testing.T) {
 	router := newEvidenceRouter(t, nil)
 	for _, id := range []string{"abc", "0", "-1", "07"} {
