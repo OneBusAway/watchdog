@@ -364,6 +364,11 @@ var (
 		Help: "Ratio of matched stops to total stops",
 	}, []string{"agency_id", "agency_name", "server_name", "server_url"}))
 
+	BusesInServicePercent = tracked(promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "oba_buses_in_service_percent",
+		Help: "Percentage of scheduled trips with a realtime record (realtime_records_total / scheduled_trips_count * 100)",
+	}, []string{"agency_id", "agency_name", "server_name", "server_url"}))
+
 	ObaTimeSinceUpdate = tracked(promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "oba_time_since_last_update_seconds",
