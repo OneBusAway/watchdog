@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"testing"
 
@@ -154,8 +155,13 @@ func TestGetStaticGtfsSource_Head(t *testing.T) {
 	if head.Code != get.Code {
 		t.Errorf("HEAD status = %d, GET status = %d", head.Code, get.Code)
 	}
-	if head.Body.Len() != 0 {
-		t.Errorf("HEAD body is not empty")
+	if !reflect.DeepEqual(head.Header(), get.Header()) {
+		t.Errorf("HEAD headers = %v, GET headers = %v", head.Header(), get.Header())
+	}
+	// httptest.ResponseRecorder keeps what the handler wrote; net/http drops
+	// a HEAD body on the wire. Matching headers is what this test verifies.
+	if get.Body.Len() == 0 {
+		t.Error("GET body is empty")
 	}
 }
 
