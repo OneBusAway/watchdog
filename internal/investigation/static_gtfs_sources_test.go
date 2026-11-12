@@ -172,4 +172,3 @@ func TestGetStaticGtfsSource_Head(t *testing.T) {
 		t.Error("GET body is empty")
 	}
 }
-
