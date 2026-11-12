@@ -3,6 +3,7 @@ package investigation
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"github.com/julienschmidt/httprouter"
@@ -56,7 +57,6 @@ func (s *InvestigationService) getVehicleAnomalyRuleVersion(w http.ResponseWrite
 // vehicleAnomalyRuleVersionRepresentation maps one row to its E33 representation.
 func vehicleAnomalyRuleVersionRepresentation(row dbgen.GetVehicleAnomalyRuleVersionRow) vehicleAnomalyRuleVersion {
 	id := strconv.FormatInt(row.RuleVersionID, 10)
-	typeID := strconv.FormatInt(int64(row.AnomalyTypeID), 10)
 	return vehicleAnomalyRuleVersion{
 		RuleVersionID:             row.RuleVersionID,
 		AnomalyTypeID:             row.AnomalyTypeID,
@@ -69,7 +69,7 @@ func vehicleAnomalyRuleVersionRepresentation(row dbgen.GetVehicleAnomalyRuleVers
 		ReportedSpeedThresholdMps: row.ReportedSpeedThresholdMps,
 		Links: links{
 			"self":         "/v1/vehicle-anomaly-rule-versions/" + id,
-			"anomaly_type": "/v1/vehicle-anomaly-types/" + typeID,
+			"anomaly_type": "/v1/vehicle-anomaly-types/" + url.PathEscape(row.AnomalyCode),
 		},
 	}
 }

@@ -88,6 +88,9 @@ func TestGetVehicleAnomalyRuleVersion_ReturnsRepresentation(t *testing.T) {
 	if body.Links["self"] != "/v1/vehicle-anomaly-rule-versions/77" {
 		t.Errorf("links.self = %q", body.Links["self"])
 	}
+	if body.Links["anomaly_type"] != "/v1/vehicle-anomaly-types/stale_source_timestamp" {
+		t.Errorf("links.anomaly_type = %q, want /v1/vehicle-anomaly-types/stale_source_timestamp", body.Links["anomaly_type"])
+	}
 }
 
 func TestGetVehicleAnomalyRuleVersion_CacheImmutable(t *testing.T) {
