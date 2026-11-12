@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
-	"strconv"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -29,14 +28,6 @@ func newStaticGtfsSourcesRouter(t *testing.T, pool *pgxpool.Pool, servers ...mod
 	router.HEAD("/v1/static-gtfs-sources/:source_id", s.getStaticGtfsSource)
 	router.GET("/v1/servers/:server_id", s.getServer)
 	return router
-}
-
-// insertStaticGtfsSource records a static GTFS source and returns its ID.
-func insertStaticGtfsSource(t *testing.T, pool *pgxpool.Pool, serverID int64, normalizedURL string) int64 {
-	t.Helper()
-	return dbtest.ID(t, pool,
-		"INSERT INTO static_gtfs_source (server_id, normalized_source_url) VALUES ($1, $2) RETURNING source_id",
-		serverID, normalizedURL)
 }
 
 func TestGetStaticGtfsSource_Registered(t *testing.T) {
@@ -89,7 +80,12 @@ func TestGetStaticGtfsSource_ReturnsRepresentation(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body)
 	}
-	var body staticGtfsSource
+	var body struct {
+		SourceID            int64             `json:"source_id"`
+		ServerID            int64             `json:"server_id"`
+		NormalizedSourceURL string            `json:"normalized_source_url"`
+		Links               map[string]string `json:"links"`
+	}
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -99,11 +95,14 @@ func TestGetStaticGtfsSource_ReturnsRepresentation(t *testing.T) {
 	if body.ServerID != 7 {
 		t.Errorf("server_id = %d, want 7", body.ServerID)
 	}
+	if body.NormalizedSourceURL != "https://gtfs.example.com/feed.zip" {
+		t.Errorf("normalized_source_url = %q, want https://gtfs.example.com/feed.zip", body.NormalizedSourceURL)
+	}
 	if body.Links["self"] != "/v1/static-gtfs-sources/20" {
 		t.Errorf("links.self = %q", body.Links["self"])
 	}
-	if body.Links["gtfs_static_versions"] == "" {
-		t.Error("links.gtfs_static_versions is missing")
+	if body.Links["server"] != "/v1/servers/7" {
+		t.Errorf("links.server = %q, want /v1/servers/7", body.Links["server"])
 	}
 }
 
@@ -118,7 +117,8 @@ func TestGetStaticGtfsSource_IncludeServer(t *testing.T) {
 		t.Fatalf("insert static_gtfs_source: %v", err)
 	}
 
-	rec := doGet(t, newStaticGtfsSourcesRouter(t, pool), "/v1/static-gtfs-sources/20?include=server", nil)
+	router := newStaticGtfsSourcesRouter(t, pool)
+	rec := doGet(t, router, "/v1/static-gtfs-sources/20?include=server", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body)
 	}
@@ -128,8 +128,16 @@ func TestGetStaticGtfsSource_IncludeServer(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if _, ok := body.Included["/v1/servers/7"]; !ok {
-		t.Errorf("included[/v1/servers/7] missing; included = %v", body.Included)
+	serverURL := "/v1/servers/7"
+	if _, ok := body.Included[serverURL]; !ok {
+		t.Fatalf("included[%s] missing; included = %v", serverURL, body.Included)
+	}
+	get := doGet(t, router, serverURL, nil)
+	if get.Code != http.StatusOK {
+		t.Fatalf("GET %s: status = %d", serverURL, get.Code)
+	}
+	if got := string(body.Included[serverURL]) + "\n"; got != get.Body.String() {
+		t.Errorf("included server =\n%s\nGET returned\n%s", got, get.Body)
 	}
 }
 
@@ -165,6 +173,3 @@ func TestGetStaticGtfsSource_Head(t *testing.T) {
 	}
 }
 
-func staticGtfsSourcePath(id int64) string {
-	return "/v1/static-gtfs-sources/" + strconv.FormatInt(id, 10)
-}

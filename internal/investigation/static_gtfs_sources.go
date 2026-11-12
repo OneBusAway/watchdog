@@ -3,7 +3,6 @@ package investigation
 import (
 	"context"
 	"net/http"
-	"net/url"
 	"strconv"
 
 	"github.com/julienschmidt/httprouter"
@@ -83,14 +82,11 @@ func staticGtfsSourceLinks(row dbgen.StaticGtfsSource) itemLinks {
 
 // staticGtfsSourceRepresentation maps one row to its E36 representation.
 func staticGtfsSourceRepresentation(row dbgen.StaticGtfsSource, l itemLinks) staticGtfsSource {
-	out := l.links()
-	out["gtfs_static_versions"] = linkWithQuery("/v1/gtfs-static-versions",
-		url.Values{"source_id": {strconv.FormatInt(row.SourceID, 10)}})
 	return staticGtfsSource{
 		SourceID:            row.SourceID,
 		ServerID:            row.ServerID,
 		NormalizedSourceURL: row.NormalizedSourceUrl,
-		Links:               out,
+		Links:               l.links(),
 	}
 }
 
