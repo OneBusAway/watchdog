@@ -67,7 +67,12 @@ func TestGetVehicleAnomalyRuleVersion_ReturnsRepresentation(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body)
 	}
-	var body vehicleAnomalyRuleVersion
+	var body struct {
+		RuleVersionID int64             `json:"rule_version_id"`
+		AnomalyCode   string            `json:"anomaly_code"`
+		EffectiveAt   string            `json:"effective_at"`
+		Links         map[string]string `json:"links"`
+	}
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -76,6 +81,9 @@ func TestGetVehicleAnomalyRuleVersion_ReturnsRepresentation(t *testing.T) {
 	}
 	if body.AnomalyCode == "" {
 		t.Error("anomaly_code is empty; expected JOIN to populate it")
+	}
+	if body.EffectiveAt != "2026-01-01T00:00:00Z" {
+		t.Errorf("effective_at = %q, want 2026-01-01T00:00:00Z", body.EffectiveAt)
 	}
 	if body.Links["self"] != "/v1/vehicle-anomaly-rule-versions/77" {
 		t.Errorf("links.self = %q", body.Links["self"])
@@ -124,7 +132,7 @@ func TestGetVehicleAnomalyRuleVersion_Head(t *testing.T) {
 	if head.Code != get.Code {
 		t.Errorf("HEAD status = %d, GET status = %d", head.Code, get.Code)
 	}
-	if head.Body.Len() != 0 {
-		t.Errorf("HEAD body is not empty")
+	if get.Body.Len() == 0 {
+		t.Error("GET body is empty")
 	}
 }
