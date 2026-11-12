@@ -132,6 +132,19 @@ func TestFetchObaAPIMetrics(t *testing.T) {
 			if records != 3 {
 				t.Fatalf("expected oba_realtime_records_count to be 3, got %v", records)
 			}
+
+			percent, err := getMetricValue(BusesInServicePercent, map[string]string{
+				"agency_id":   tt.agencyID,
+				"agency_name": tt.agencyName,
+				"server_name": "test-server",
+				"server_url":  utils.SanitizeServerURL(baseURL),
+			})
+			if err != nil {
+				t.Fatalf("failed to read oba_buses_in_service_percent: %v", err)
+			}
+			if percent != 60 {
+				t.Fatalf("expected oba_buses_in_service_percent to be 60, got %v", percent)
+			}
 		})
 	}
 }
@@ -183,6 +196,7 @@ func TestFetchObaAPIMetricsRetiresRatiosWithoutObservations(t *testing.T) {
 	}
 	TripMatchRatio.With(labels).Set(0.75)
 	StopMatchRatio.With(labels).Set(0.8)
+	BusesInServicePercent.With(labels).Set(60)
 
 	err := fetchObaAPIMetrics(
 		context.Background(), agencyID, agencyName, serverName, server.URL, "key",
@@ -201,6 +215,9 @@ func TestFetchObaAPIMetricsRetiresRatiosWithoutObservations(t *testing.T) {
 	}
 	if got := seriesMatching(ObaMetricsLastSuccessfulFetch, labels); len(got) != 1 {
 		t.Fatalf("expected one metrics freshness series, got %d", len(got))
+	}
+	if got := seriesMatching(BusesInServicePercent, labels); len(got) != 0 {
+		t.Fatalf("expected buses-in-service percent to be deleted, got %d series", len(got))
 	}
 }
 

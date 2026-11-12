@@ -232,6 +232,15 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 		ObaScheduledTrips.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(float64(count))
 	}
 
+	realtimeRecords := entry.RealtimeRecordsTotal[agencyID]
+	scheduledTrips := entry.ScheduledTripsCount[agencyID]
+	if scheduledTrips > 0 {
+		BusesInServicePercent.WithLabelValues(agencyID, agencyName, serverName, serverURL).
+			Set(float64(realtimeRecords) / float64(scheduledTrips) * 100)
+	} else {
+		BusesInServicePercent.DeleteLabelValues(agencyID, agencyName, serverName, serverURL)
+	}
+
 	if count, ok := entry.StopIDsMatchedCount[agencyID]; ok {
 		ObaStopsMatched.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(float64(count))
 	}
