@@ -125,6 +125,18 @@ func TestValidateExpression(t *testing.T) {
 			name: "Grafana template variable in label matcher",
 			expr: `up{job="$job", instance="$instance"}`,
 		},
+		{
+			name: "Grafana variable in offset followed by set operator and",
+			expr: "http_requests_total offset $offset and up",
+		},
+		{
+			name: "Grafana variable in offset followed by set operator or",
+			expr: "http_requests_total offset $offset or up",
+		},
+		{
+			name: "Grafana variable in offset followed by set operator unless",
+			expr: "http_requests_total offset $offset unless up",
+		},
 	}
 
 	for _, tt := range tests {
@@ -182,8 +194,10 @@ func TestValidateExpressions(t *testing.T) {
 	got := ValidateExpressions(expressions)
 
 	if len(got) != 2 {
+
 		t.Fatalf("got %d validation errors, want 2", len(got))
 	}
+
 }
 
 func TestRepositoryDashboardsPromQL(t *testing.T) {

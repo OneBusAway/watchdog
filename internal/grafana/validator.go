@@ -63,15 +63,15 @@ var (
 	legacyVarRegex = regexp.MustCompile(`\[\[([a-zA-Z_][a-zA-Z0-9_]*)\]\]`)
 
 	// Matches offset position with optional sign (+ or -), optional whitespace,
-	// and optional duration unit suffix (e.g. offset $var, offset - $var, offset +${hours}h).
-	offsetRegex = regexp.MustCompile(`(?i)\boffset\s*([+-])?\s*(?:\$\{[a-zA-Z_][a-zA-Z0-9_]*(?::[a-zA-Z0-9_]+)?\}|\$[a-zA-Z_][a-zA-Z0-9_]*)\s*([a-zA-Z]+)?`)
+	// and optional attached duration unit suffix (e.g. offset $var, offset - $var, offset +${hours}h).
+	offsetRegex = regexp.MustCompile(`(?i)\boffset\s*([+-])?\s*(?:\$\{[a-zA-Z_][a-zA-Z0-9_]*(?::[a-zA-Z0-9_]+)?\}|\$[a-zA-Z_][a-zA-Z0-9_]*)([a-zA-Z]+)?`)
 
 	// Matches range brackets: [ ... ]
 	rangeSelectorRegex = regexp.MustCompile(`\[([^\[\]]+)\]`)
 
 	// Matches variables inside range selectors/subqueries, including attached duration units:
-	// e.g. $var, ${var}, ${hours}h, $hours h
-	variableInDurationRegex = regexp.MustCompile(`(?:\$\{[a-zA-Z_][a-zA-Z0-9_]*(?::[a-zA-Z0-9_]+)?\}|\$[a-zA-Z_][a-zA-Z0-9_]*)\s*([a-zA-Z]+)?`)
+	// e.g. $var, ${var}, ${hours}h
+	variableInDurationRegex = regexp.MustCompile(`(?:\$\{[a-zA-Z_][a-zA-Z0-9_]*(?::[a-zA-Z0-9_]+)?\}|\$[a-zA-Z_][a-zA-Z0-9_]*)([a-zA-Z]+)?`)
 )
 
 // normalizeGrafanaExpression replaces supported Grafana macros and template
