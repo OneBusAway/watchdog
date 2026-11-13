@@ -48,6 +48,15 @@ func parseQuery(r *http.Request, bad *invalidParams, allowed ...string) url.Valu
 	return values
 }
 
+// required adds a problem for each of names the request left out.
+func required(values url.Values, bad *invalidParams, names ...string) {
+	for _, name := range names {
+		if !values.Has(name) {
+			bad.add(name, "is required")
+		}
+	}
+}
+
 // The param functions read one parameter. They return nil when it is absent,
 // which is what sqlc's nullable query parameters expect, and add to bad when it
 // is present but wrong.
