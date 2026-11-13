@@ -319,31 +319,109 @@ func TestStaticReadersIgnoreNonRootTableNames(t *testing.T) {
 }
 
 func TestRealtimeTripUpdateCanReferenceVehiclePosition(t *testing.T) {
-	var feed gtfsrt.FeedMessage
-	if err := proto.Unmarshal(marshalVehicleFeed(t, "north:101", 1, 2), &feed); err != nil {
-		t.Fatal(err)
+	cases := []struct {
+		name, positionLabel, referenceLabel, positionPlate, referencePlate string
+	}{
+		{name: "matching descriptors"},
+		{name: "position label", positionLabel: "Bus 101"},
+		{name: "reference label", referenceLabel: "Bus 101"},
+		{name: "position plate", positionPlate: "ABC-101"},
+		{name: "reference plate", referencePlate: "ABC-101"},
+		{name: "different metadata", positionLabel: "Bus 101", referenceLabel: "101", positionPlate: "ABC-101", referencePlate: "other"},
 	}
-	feed.Entity[0].Vehicle.Trip = &gtfsrt.TripDescriptor{TripId: proto.String("north:T")}
-	feed.Entity = append(feed.Entity, &gtfsrt.FeedEntity{
-		Id: proto.String("trip-update"),
-		TripUpdate: &gtfsrt.TripUpdate{
-			Trip:    &gtfsrt.TripDescriptor{TripId: proto.String("north:T")},
-			Vehicle: &gtfsrt.VehicleDescriptor{Id: proto.String("north:101")},
-		},
-	})
-	data, err := proto.Marshal(&feed)
-	if err != nil {
-		t.Fatal(err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var feed gtfsrt.FeedMessage
+			if err := proto.Unmarshal(marshalVehicleFeed(t, "north:101", 1, 2), &feed); err != nil {
+				t.Fatal(err)
+			}
+			position := feed.Entity[0].Vehicle
+			position.Trip = &gtfsrt.TripDescriptor{TripId: proto.String("north:T")}
+			position.Vehicle.Label, position.Vehicle.LicensePlate = proto.String(tc.positionLabel), proto.String(tc.positionPlate)
+			feed.Entity = append(feed.Entity, &gtfsrt.FeedEntity{
+				Id: proto.String("trip-update"),
+				TripUpdate: &gtfsrt.TripUpdate{
+					Trip:    &gtfsrt.TripDescriptor{TripId: proto.String("north:T")},
+					Vehicle: &gtfsrt.VehicleDescriptor{Id: proto.String("north:101"), Label: proto.String(tc.referenceLabel), LicensePlate: proto.String(tc.referencePlate)},
+				},
+			}, &gtfsrt.FeedEntity{
+				Id: proto.String("reference-only"),
+				TripUpdate: &gtfsrt.TripUpdate{
+					Trip:    &gtfsrt.TripDescriptor{TripId: proto.String("south:T")},
+					Vehicle: &gtfsrt.VehicleDescriptor{Id: proto.String("south:202")},
+				},
+			})
+			wantHash := vehicleStateHashes(feed.Entity)["north:101"][0]
+			data, err := proto.Marshal(&feed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ts := serveBytes(t, data)
+			defer ts.Close()
+			server := models.ObaServer{GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: ts.URL}}}
+			store := NewRealtimeStore()
+			if err := fetchAndStoreGTFSRTFeed(context.Background(), server, store, ts.Client(), nil); err != nil {
+				t.Fatal(err)
+			}
+			snapshot := store.Get(server.ServerKey())
+			if snapshot == nil || len(snapshot.Vehicles) != 2 {
+				t.Fatalf("expected one position and one reference-only vehicle, got %+v", snapshot)
+				return
+			}
+			for _, entry := range snapshot.Vehicles {
+				switch entry.Vehicle.GetID().ID {
+				case "north:101":
+					if !entry.Vehicle.IsEntityInMessage || entry.Vehicle.Position == nil || entry.StateHash != wantHash || entry.Vehicle.ID.Label != tc.positionLabel || entry.Vehicle.ID.LicensePlate != tc.positionPlate {
+						t.Fatalf("position or its state hash was replaced by a reference: %+v", entry)
+					}
+				case "south:202":
+					if entry.Vehicle.IsEntityInMessage || entry.Vehicle.Position != nil || entry.StateHash != "" {
+						t.Fatalf("reference-only vehicle changed: %+v", entry)
+					}
+				default:
+					t.Fatalf("unexpected vehicle: %+v", entry)
+				}
+			}
+		})
 	}
-	ts := serveBytes(t, data)
-	defer ts.Close()
-	server := models.ObaServer{GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: ts.URL}}}
-	store := NewRealtimeStore()
-	if err := fetchAndStoreGTFSRTFeed(context.Background(), server, store, ts.Client(), nil); err != nil {
-		t.Fatal(err)
-	}
-	snapshot := store.Get(server.ServerKey())
-	if snapshot == nil || len(snapshot.Vehicles) != 1 || snapshot.Vehicles[0].Vehicle.ID.ID != "north:101" || snapshot.Vehicles[0].Vehicle.Position == nil {
-		t.Fatalf("valid shared vehicle reference changed: %+v", snapshot)
+}
+
+func TestMergedStaticRejectsRepeatedScheduleTables(t *testing.T) {
+	for _, name := range []string{"stop_times.txt", "calendar_dates.txt", "frequencies.txt"} {
+		t.Run(name, func(t *testing.T) {
+			files := basicScheduleFiles("UTC", "08:00:00", "09:00:00")
+			files["calendar_dates.txt"] = "service_id,date,exception_type\nWK,20260908,1\n"
+			files["frequencies.txt"] = "trip_id,start_time,end_time,headway_secs,exact_times\nT,08:00:00,09:00:00,600,0\n"
+			var data bytes.Buffer
+			archive := zip.NewWriter(&data)
+			write := func(name, content string) {
+				t.Helper()
+				file, err := archive.Create(name)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := io.WriteString(file, content); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for table, content := range files {
+				write(table, content)
+			}
+			write(name, files[name])
+			if err := archive.Close(); err != nil {
+				t.Fatal(err)
+			}
+			server := scheduleServer("A", "https://merged.example/static.zip")
+			_, err := parseStaticBundleData(data.Bytes(), server.GtfsStaticFeeds[0], server.AgencyID)
+			var failure *StaticFeedError
+			if !errors.As(err, &failure) || failure.Reason != StaticReasonDuplicateID {
+				t.Errorf("repeated schedule table was not classified as a duplicate: %v", err)
+			}
+			_, err = parseRawScheduleFeed(server.GtfsStaticFeeds[0], data.Bytes(), server)
+			var duplicate *duplicateIDError
+			if !errors.As(err, &duplicate) || duplicate.kind != "table" || duplicate.id != name {
+				t.Errorf("schedule parser silently replaced %s: %v", name, err)
+			}
+		})
 	}
 }

@@ -1076,10 +1076,24 @@ func parseGTFSRTFeed(ctx context.Context, server models.ObaServer, client *http.
 		FeedID: feedID, FeedURL: sanitizedURL,
 		FullDataset: raw.Header == nil || raw.Header.GetIncrementality() == gtfsrt.FeedHeader_FULL_DATASET,
 	})
+	positionIDs := make(map[string]struct{})
+	for _, vehicle := range parsed.Vehicles {
+		if vehicle.IsEntityInMessage && vehicle.ID != nil && vehicle.ID.ID != "" {
+			positionIDs[vehicle.ID.ID] = struct{}{}
+		}
+	}
 	for _, vehicle := range parsed.Vehicles {
 		id := ""
 		if vehicle.ID != nil {
 			id = vehicle.ID.ID
+		}
+		// go-gtfs keys descriptors by ID, label, and license plate. A trip
+		// update can therefore produce a second, reference-only entry for a
+		// position's vehicle. It must not consume that position's state hash.
+		if !vehicle.IsEntityInMessage {
+			if _, hasPosition := positionIDs[id]; hasPosition {
+				continue
+			}
 		}
 		stateHash := ""
 		if hashes := stateHashes[id]; len(hashes) > 0 {

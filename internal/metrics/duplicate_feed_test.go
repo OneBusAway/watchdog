@@ -1,9 +1,18 @@
 package metrics
 
 import (
+	"archive/zip"
+	"bytes"
+	"context"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
 )
@@ -54,5 +63,56 @@ func TestDuplicateFeedMetricsAndRecovery(t *testing.T) {
 	freshness.Reconcile(server)
 	if got := seriesMatching(GtfsRtFeedDuplicateID, labels); len(got) != 0 {
 		t.Fatal("duplicate metric survived source replacement")
+	}
+}
+
+func TestSynchronousStaticRefreshClearsDuplicateFailureOnRecovery(t *testing.T) {
+	var invalid bytes.Buffer
+	archive := zip.NewWriter(&invalid)
+	file, err := archive.Create("stops.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(file, "stop_id,stop_name,stop_lat,stop_lon\nS1,One,1,2\nS1,One,1,2\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	valid := readFixture(t, "gtfs.zip")
+	var broken atomic.Bool
+	broken.Store(true)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if broken.Load() {
+			_, _ = w.Write(invalid.Bytes())
+		} else {
+			_, _ = w.Write(valid)
+		}
+	}))
+	defer ts.Close()
+	server := models.ObaServer{ServerName: "synchronous-recovery", AgencyID: "40", AgencyName: "Sound Transit", ObaBaseURL: ts.URL, GtfsStaticFeeds: []string{ts.URL}}
+	store := gtfs.NewStaticStore()
+	store.SetConfiguredServers([]models.ObaServer{server})
+	service := gtfs.NewGtfsService(store, gtfs.NewRealtimeStore(), geo.NewBoundingBoxStore(), gtfs.NewRouteAgencyIndex(), slog.New(slog.NewTextHandler(io.Discard, nil)), ts.Client())
+	health := NewStaticFeedHealthStore()
+	service.SetStaticFeedRefreshObserver(health.Observe)
+	labels := map[string]string{"feed_url": ts.URL, "server_name": server.ServerName, "server_url": ts.URL}
+	service.DownloadGTFSBundles(context.Background(), []models.ObaServer{server}, 1)
+	if got, err := getMetricValue(GtfsStaticFeedFetchSuccess, labels); err != nil || got != 0 {
+		t.Fatalf("duplicate feed did not report failure: %v, %v", got, err)
+	}
+	if series := seriesMatching(GtfsStaticFeedFailureInfo, map[string]string{"server_url": ts.URL, "reason": "duplicate_id"}); len(series) != 1 {
+		t.Fatalf("missing duplicate failure series: %d", len(series))
+	}
+	broken.Store(false)
+	service.DownloadGTFSBundles(context.Background(), []models.ObaServer{server}, 1)
+	if _, ok := store.Get(server.ServerKey()); !ok {
+		t.Fatal("corrected artifact was not published")
+	}
+	if got, err := getMetricValue(GtfsStaticFeedFetchSuccess, labels); err != nil || got != 1 {
+		t.Fatalf("successful retry left the feed marked as failed: %v, %v", got, err)
+	}
+	if series := seriesMatching(GtfsStaticFeedFailureInfo, map[string]string{"server_url": ts.URL}); len(series) != 0 {
+		t.Fatal("successful retry retained a failure series")
 	}
 }

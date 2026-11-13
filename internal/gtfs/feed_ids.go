@@ -36,16 +36,17 @@ func validateStaticIDs(data []byte) error {
 	files := make(map[string]bool)
 	for _, file := range reader.File {
 		name := file.Name
-		key, relevant := keys[name]
-		if !relevant {
+		if _, needed := scheduleTables[name]; !needed {
 			continue
 		}
 		if files[name] {
 			return &duplicateIDError{kind: "table", id: name}
 		}
 		files[name] = true
-		if err := validateStaticTableIDs(file, key); err != nil {
-			return err
+		if key, hasPrimaryID := keys[name]; hasPrimaryID {
+			if err := validateStaticTableIDs(file, key); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

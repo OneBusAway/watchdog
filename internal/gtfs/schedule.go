@@ -562,6 +562,9 @@ func scheduleCSVFiles(data []byte) (map[string]csvTable, error) {
 		if _, needed := scheduleTables[name]; !needed {
 			continue
 		}
+		if _, seen := files[name]; seen {
+			return nil, &duplicateIDError{kind: "table", id: name}
+		}
 		_, streamed := streamedScheduleTables[name]
 		table, err := readCSVTable(file, name, !streamed)
 		if err != nil {

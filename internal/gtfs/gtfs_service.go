@@ -118,7 +118,11 @@ func (gs *GtfsService) reportStaticRefresh(server models.ObaServer, observation 
 func (gs *GtfsService) DownloadGTFSBundles(ctx context.Context, servers []models.ObaServer, maxRetries int) {
 	for _, result := range downloadGTFSBundles(ctx, gs.Client, servers, gs.Logger, gs.BoundingBoxStore, gs.StaticStore, gs.RouteAgencyIndex, gs.Observer, gs.MappingObserver, maxRetries) {
 		var failure *StaticFeedError
-		if errors.As(result.Err, &failure) && failure.FeedURL != "" {
+		if result.Err == nil {
+			gs.reportStaticFeedRefresh(result.Server, result.Server.GtfsStaticFeeds[0], StaticFeedRefreshObservation{
+				AttemptedAt: result.AttemptedAt, Success: true,
+			})
+		} else if errors.As(result.Err, &failure) && failure.FeedURL != "" {
 			gs.reportStaticFeedRefresh(result.Server, failure.FeedURL, StaticFeedRefreshObservation{
 				AttemptedAt: result.AttemptedAt, FailureSince: result.AttemptedAt,
 				Stage: failure.Stage, Reason: failure.Reason, ContentHash: failure.ContentHash,
