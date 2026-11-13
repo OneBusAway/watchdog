@@ -396,7 +396,11 @@ func (c *staticRefreshCoordinator) recordFailedCampaignLocked(server models.ObaS
 func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server models.ObaServer, trigger StaticRefreshTrigger, maxRetries int, policy staticRefreshRetryPolicy) {
 	if len(server.GtfsStaticFeeds) != 1 {
 		gs.Logger.Error("Expected one upstream-merged static feed; merge feeds upstream", "server_name", server.ServerName)
-		gs.StaticStore.ScheduleStore().MarkUnavailable(server)
+		gs.StaticStore.WithRefreshLock(func() {
+			if gs.StaticStore.IsConfigured(server) {
+				gs.StaticStore.ScheduleStore().MarkUnavailable(server)
+			}
+		})
 		gs.reportStaticRefresh(server, StaticRefreshObservation{AttemptedAt: time.Now().UTC(), GaveUp: true})
 		return
 	}
@@ -698,8 +702,10 @@ func (gs *GtfsService) publishStaticCampaign(ctx context.Context, server models.
 		return errStaticServerUnconfigured
 	}
 	if storeErr != nil {
-		report.ReportErrorWithSentryOptions(storeErr, report.SentryReportOptions{Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName}, Level: sentry.LevelError})
-		return &StaticFeedError{Stage: StaticFailurePublish, Reason: StaticReasonUnknown, Err: storeErr}
+		artifact, _ := cache.Get(feedURL)
+		failure := staticPublicationFailure(storeErr, feedURL, artifact.hash)
+		report.ReportErrorWithSentryOptions(failure, report.SentryReportOptions{Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName}, Level: sentry.LevelError})
+		return failure
 	}
 	return nil
 }

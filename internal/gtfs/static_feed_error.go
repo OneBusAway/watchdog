@@ -66,6 +66,18 @@ func (e *StaticFeedError) Error() string {
 
 func (e *StaticFeedError) Unwrap() error { return e.Err }
 
+// staticPublicationFailure preserves duplicate classification when the parsed
+// bundle guard, rather than the raw ID validator, rejects an artifact.
+func staticPublicationFailure(err error, feedURL, contentHash string) *StaticFeedError {
+	failure := &StaticFeedError{FeedURL: feedURL, ContentHash: contentHash, Stage: StaticFailurePublish, Reason: StaticReasonUnknown, Err: err}
+	var duplicate *duplicateIDError
+	if errors.As(err, &duplicate) {
+		failure.Stage = StaticFailureParse
+		failure.Reason = StaticReasonDuplicateID
+	}
+	return failure
+}
+
 func asStaticFeedError(err error) *StaticFeedError {
 	var failure *StaticFeedError
 	if errors.As(err, &failure) {

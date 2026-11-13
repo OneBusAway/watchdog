@@ -187,7 +187,9 @@ func downloadGTFSBundles(ctx context.Context, client *http.Client, servers []mod
 				return
 			}
 			if storeErr != nil {
-				report.ReportErrorWithSentryOptions(storeErr, report.SentryReportOptions{
+				sum := sha256.Sum256(rawData)
+				failure := staticPublicationFailure(storeErr, gtfsURL, hex.EncodeToString(sum[:]))
+				report.ReportErrorWithSentryOptions(failure, report.SentryReportOptions{
 					Tags: map[string]string{
 						"agency_id":   s.AgencyID,
 						"server_name": s.ServerName,
@@ -195,7 +197,7 @@ func downloadGTFSBundles(ctx context.Context, client *http.Client, servers []mod
 					Level: sentry.LevelError,
 				})
 				logger.Error("Failed to store GTFS bundles", "agency_id", s.AgencyID, "server_name", s.ServerName, "error", storeErr)
-				finish(storeErr)
+				finish(failure)
 				return
 			}
 			finish(nil)

@@ -20,6 +20,15 @@ func TestDuplicateFeedMetricsAndRecovery(t *testing.T) {
 	if value, err := getMetricValue(GtfsRtFeedFetchSuccess, labels); err != nil || value != 0 {
 		t.Fatalf("duplicate feed reported as successful: %v, %v", value, err)
 	}
+	otherFailure := failure
+	otherFailure.DuplicateID = false
+	freshness.Observe(server, otherFailure)
+	if value, err := getMetricValue(GtfsRtFeedDuplicateID, labels); err != nil || value != 0 {
+		t.Fatalf("a different fetch failure retained the duplicate flag: %v, %v", value, err)
+	}
+	if value, err := getMetricValue(GtfsRtFeedFetchSuccess, labels); err != nil || value != 0 {
+		t.Fatalf("a different fetch failure reported success: %v, %v", value, err)
+	}
 	recovery := failure
 	recovery.Success, recovery.DuplicateID = true, false
 	freshness.Observe(server, recovery)

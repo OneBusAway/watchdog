@@ -558,7 +558,7 @@ func scheduleCSVFiles(data []byte) (map[string]csvTable, error) {
 	}
 	files := make(map[string]csvTable)
 	for _, file := range zr.File {
-		name := strings.TrimPrefix(file.Name, "./")
+		name := file.Name
 		if _, needed := scheduleTables[name]; !needed {
 			continue
 		}

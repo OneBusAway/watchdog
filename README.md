@@ -48,6 +48,8 @@ Each entry requires exactly one URL in `gtfs_static_feeds` and one source in `gt
 
 Both feeds must already use the final IDs served by the OBA backend. A merged static feed may contain several agencies. Watchdog preserves IDs and does not merge sources or combine stops.
 
+Vehicle-position vehicle IDs must be unique across the entire merged realtime feed, including across agencies. If two source agencies each use vehicle ID `101` for different vehicles, the upstream merger must give those vehicles distinct final IDs. A trip-update entity may reference the same vehicle ID as its vehicle-position entity; that reference is not a duplicate vehicle position.
+
 To upgrade an existing multi-feed entry:
 
 1. Configure an external merger to produce the static and realtime artifacts consumed by your OBA backend.

@@ -35,7 +35,7 @@ func validateStaticIDs(data []byte) error {
 	}
 	files := make(map[string]bool)
 	for _, file := range reader.File {
-		name := strings.TrimPrefix(file.Name, "./")
+		name := file.Name
 		key, relevant := keys[name]
 		if !relevant {
 			continue

@@ -143,6 +143,28 @@ func TestValidateServerRejectsMultipleFeedSources(t *testing.T) {
 	}
 }
 
+func TestLoadConfigDropsMultiSourceEntriesAndKeepsSiblings(t *testing.T) {
+	valid := validServer()
+	multiStatic := validServer()
+	multiStatic.ObaBaseURL = "https://multi-static.example"
+	multiStatic.GtfsStaticFeeds = append(multiStatic.GtfsStaticFeeds, "https://second.example/static.zip")
+	multiRealtime := validServer()
+	multiRealtime.ObaBaseURL = "https://multi-realtime.example"
+	multiRealtime.GtfsRTFeeds = append(multiRealtime.GtfsRTFeeds, models.GtfsRTFeed{VehiclePositionURL: "https://second.example/vehicles.pb"})
+	data, err := json.Marshal([]models.ObaServer{multiStatic, valid, multiRealtime})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	servers, err := loadConfigFromFile(path, testLogger(), NewDroppedServersStore())
+	if err != nil || len(servers) != 1 || servers[0].ObaBaseURL != valid.ObaBaseURL {
+		t.Fatalf("multi-source entries affected their valid sibling: %+v, %v", servers, err)
+	}
+}
+
 func TestDecodeServerIdentityMetadataIsOptional(t *testing.T) {
 	legacyJSON := json.RawMessage(`{
 		"server_name": "Legacy Server",

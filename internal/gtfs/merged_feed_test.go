@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	remoteGtfs "github.com/OneBusAway/go-gtfs"
 	gtfsrt "github.com/OneBusAway/go-gtfs/proto"
 	"github.com/getsentry/sentry-go"
 	"google.golang.org/protobuf/proto"
@@ -219,5 +220,130 @@ func TestMergedStaticDuplicateTableIsRejected(t *testing.T) {
 	var failure *StaticFeedError
 	if !errors.As(err, &failure) || failure.Reason != StaticReasonDuplicateID {
 		t.Fatalf("duplicate table was not reported as a feed problem: %v", err)
+	}
+}
+
+func TestParsedStaticDuplicateRetainsFailureClassification(t *testing.T) {
+	for _, agencyID := range []string{"A", ""} {
+		t.Run("agency_id="+agencyID, func(t *testing.T) {
+			data := makeScheduleZip(t, basicScheduleFiles("UTC", "08:00:00", "09:00:00"))
+			server := scheduleServer(agencyID, "https://merged.example/static.zip")
+			bundle, err := parseStaticBundleData(data, server.GtfsStaticFeeds[0], agencyID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			bundle.Stops = append(bundle.Stops, bundle.Stops[0])
+			store := NewStaticStore()
+			store.SetConfiguredServers([]models.ObaServer{server})
+			key := models.ServerKey(server.ObaBaseURL, "A")
+			previous := &models.StaticData{}
+			store.Set(key, previous)
+			service := NewGtfsService(store, NewRealtimeStore(), geo.NewBoundingBoxStore(), NewRouteAgencyIndex(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+			// Simulate a parser introducing a collision after raw validation.
+			service.parseStatic = func([]byte, string, string) (*remoteGtfs.Static, error) { return bundle, nil }
+			cache, err := newStaticArtifactCache(0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer cache.Close()
+			artifact, err := cache.Put(server.GtfsStaticFeeds[0], data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = service.publishStaticCampaign(context.Background(), server, cache)
+			var failure *StaticFeedError
+			if !errors.As(err, &failure) || failure.Stage != StaticFailureParse || failure.Reason != StaticReasonDuplicateID || failure.ContentHash != artifact.hash || failure.FeedURL != artifact.url {
+				t.Fatalf("parsed duplicate lost classification or provenance: %+v", failure)
+			}
+			if current, _ := store.Get(key); current != previous {
+				t.Fatal("parsed duplicate replaced the last good snapshot")
+			}
+		})
+	}
+}
+
+func TestStaleInvalidCampaignPreservesCurrentSchedule(t *testing.T) {
+	server := scheduleServer("A", "https://merged.example/static.zip")
+	data := makeScheduleZip(t, basicScheduleFiles("UTC", "08:00:00", "09:00:00"))
+	snapshots, err := compileSchedules(server, []downloadedStaticFeed{{url: server.GtfsStaticFeeds[0], data: data}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewStaticStore()
+	store.SetConfiguredServers([]models.ObaServer{server})
+	store.ScheduleStore().Replace(server, snapshots)
+	service := NewGtfsService(store, NewRealtimeStore(), geo.NewBoundingBoxStore(), NewRouteAgencyIndex(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	stale := server
+	stale.GtfsStaticFeeds = []string{server.GtfsStaticFeeds[0], "https://old.example/static.zip"}
+	service.runStaticRefreshCampaign(context.Background(), stale, StaticRefreshStartup, 1, staticRefreshRetryPolicy{})
+	if available, active := store.ScheduleStore().Evaluate(server.ServerKey(), time.Date(2026, 9, 7, 8, 30, 0, 0, time.UTC)); !available || !active {
+		t.Fatal("obsolete invalid configuration made the current schedule unavailable")
+	}
+}
+
+func TestStaticReadersIgnoreNonRootTableNames(t *testing.T) {
+	var data bytes.Buffer
+	archive := zip.NewWriter(&data)
+	write := func(name, content string) {
+		t.Helper()
+		file, err := archive.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.WriteString(file, content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, content := range basicScheduleFiles("UTC", "08:00:00", "09:00:00") {
+		write(name, content)
+	}
+	// go-gtfs ignores these entries. Neither ID validation nor schedule
+	// compilation may treat them as replacements for the root tables.
+	write("./stops.txt", "invalid table\n")
+	write("./stop_times.txt", "invalid table\n")
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ts := serveBytes(t, data.Bytes())
+	defer ts.Close()
+	server := scheduleServer("A", ts.URL)
+	store := NewStaticStore()
+	service := NewGtfsService(store, NewRealtimeStore(), geo.NewBoundingBoxStore(), NewRouteAgencyIndex(), slog.New(slog.NewTextHandler(io.Discard, nil)), ts.Client())
+	service.DownloadGTFSBundles(context.Background(), []models.ObaServer{server}, 1)
+	if snapshot, ok := store.Get(server.ServerKey()); !ok || len(snapshot.Stops) != 2 {
+		t.Fatal("ignored archive entries affected static publication")
+	}
+	if available, active := store.ScheduleStore().Evaluate(server.ServerKey(), time.Date(2026, 9, 7, 8, 30, 0, 0, time.UTC)); !available || !active {
+		t.Fatal("ignored archive entries affected the compiled schedule")
+	}
+}
+
+func TestRealtimeTripUpdateCanReferenceVehiclePosition(t *testing.T) {
+	var feed gtfsrt.FeedMessage
+	if err := proto.Unmarshal(marshalVehicleFeed(t, "north:101", 1, 2), &feed); err != nil {
+		t.Fatal(err)
+	}
+	feed.Entity[0].Vehicle.Trip = &gtfsrt.TripDescriptor{TripId: proto.String("north:T")}
+	feed.Entity = append(feed.Entity, &gtfsrt.FeedEntity{
+		Id: proto.String("trip-update"),
+		TripUpdate: &gtfsrt.TripUpdate{
+			Trip:    &gtfsrt.TripDescriptor{TripId: proto.String("north:T")},
+			Vehicle: &gtfsrt.VehicleDescriptor{Id: proto.String("north:101")},
+		},
+	})
+	data, err := proto.Marshal(&feed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := serveBytes(t, data)
+	defer ts.Close()
+	server := models.ObaServer{GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: ts.URL}}}
+	store := NewRealtimeStore()
+	if err := fetchAndStoreGTFSRTFeed(context.Background(), server, store, ts.Client(), nil); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := store.Get(server.ServerKey())
+	if snapshot == nil || len(snapshot.Vehicles) != 1 || snapshot.Vehicles[0].Vehicle.ID.ID != "north:101" || snapshot.Vehicles[0].Vehicle.Position == nil {
+		t.Fatalf("valid shared vehicle reference changed: %+v", snapshot)
 	}
 }
