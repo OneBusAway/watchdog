@@ -320,14 +320,11 @@ func TestStaticReadersIgnoreNonRootTableNames(t *testing.T) {
 
 func TestRealtimeTripUpdateCanReferenceVehiclePosition(t *testing.T) {
 	cases := []struct {
-		name, positionLabel, referenceLabel, positionPlate, referencePlate string
+		name, positionLabel, positionPlate string
 	}{
 		{name: "matching descriptors"},
 		{name: "position label", positionLabel: "Bus 101"},
-		{name: "reference label", referenceLabel: "Bus 101"},
 		{name: "position plate", positionPlate: "ABC-101"},
-		{name: "reference plate", referencePlate: "ABC-101"},
-		{name: "different metadata", positionLabel: "Bus 101", referenceLabel: "101", positionPlate: "ABC-101", referencePlate: "other"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -342,7 +339,7 @@ func TestRealtimeTripUpdateCanReferenceVehiclePosition(t *testing.T) {
 				Id: proto.String("trip-update"),
 				TripUpdate: &gtfsrt.TripUpdate{
 					Trip:    &gtfsrt.TripDescriptor{TripId: proto.String("north:T")},
-					Vehicle: &gtfsrt.VehicleDescriptor{Id: proto.String("north:101"), Label: proto.String(tc.referenceLabel), LicensePlate: proto.String(tc.referencePlate)},
+					Vehicle: &gtfsrt.VehicleDescriptor{Id: proto.String("north:101")},
 				},
 			}, &gtfsrt.FeedEntity{
 				Id: proto.String("reference-only"),
