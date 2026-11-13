@@ -31,7 +31,8 @@ func (e ValidationError) Error() string {
 func ValidateExpression(expression Expression) error {
 	normalized := normalizeGrafanaExpression(expression.Expr)
 
-	if _, err := parser.ParseExpr(normalized); err != nil {
+	p := parser.NewParser(parser.Options{})
+	if _, err := p.ParseExpr(normalized); err != nil {
 		return ValidationError{
 			Expression: expression,
 			Err:        err,
