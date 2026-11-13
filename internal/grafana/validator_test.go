@@ -34,8 +34,96 @@ func TestValidateExpression(t *testing.T) {
 			expr: "rate(http_requests_total[$__rate_interval])",
 		},
 		{
+			name: "Grafana rate interval macro with curly braces",
+			expr: "rate(http_requests_total[${__rate_interval}])",
+		},
+		{
+			name: "Grafana interval macro in range selector",
+			expr: "rate(http_requests_total[$__interval])",
+		},
+		{
+			name: "Grafana range macro in range selector",
+			expr: "rate(http_requests_total[$__range])",
+		},
+		{
+			name: "Grafana range in seconds macro",
+			expr: "http_requests_total * $__range_s",
+		},
+		{
+			name: "Grafana range in seconds macro with curly braces and unit",
+			expr: "rate(http_requests_total[${__range_s}s])",
+		},
+		{
+			name: "Grafana range in milliseconds macro",
+			expr: "http_requests_total * $__range_ms",
+		},
+		{
+			name: "Grafana interval in milliseconds macro",
+			expr: "http_requests_total * $__interval_ms",
+		},
+		{
+			name: "Grafana interval macro in offset",
+			expr: "http_requests_total offset $__interval",
+		},
+		{
+			name: "Grafana variable in range selector",
+			expr: "rate(http_requests_total[$interval])",
+		},
+		{
+			name: "Grafana variable with curly braces in range selector",
+			expr: "rate(http_requests_total[${interval}])",
+		},
+		{
+			name: "Grafana variable with legacy brackets in range selector",
+			expr: "rate(http_requests_total[[[interval]]])",
+		},
+		{
+			name: "Grafana variable with unit in range selector",
+			expr: "rate(up[${hours}h])",
+		},
+		{
+			name: "Grafana variable in offset",
+			expr: "http_requests_total offset $offset",
+		},
+		{
+			name: "Grafana variable with curly braces in offset",
+			expr: "http_requests_total offset ${offset}",
+		},
+		{
+			name: "Grafana variable with legacy brackets in offset",
+			expr: "http_requests_total offset [[offset]]",
+		},
+		{
+			name: "Grafana variable in negative offset",
+			expr: "http_requests_total offset -$offset",
+		},
+		{
+			name: "Grafana variable in negative offset with space",
+			expr: "http_requests_total offset - $offset",
+		},
+		{
+			name: "Grafana variable in positive offset",
+			expr: "http_requests_total offset +$offset",
+		},
+		{
+			name: "Grafana variable with unit in offset",
+			expr: "http_requests_total offset ${hours}h",
+		},
+		{
+			name: "Grafana variable in subquery range and resolution",
+			expr: "rate(http_requests_total[5m])[$range:$resolution]",
+		},
+		{
+			name: "Grafana legacy variable in subquery range",
+			expr: "up[[[window]]:1m]",
+		},
+		{
+			name: "Grafana legacy variable in subquery resolution",
+			expr: "up[1h:[[step]]]",
+		},
+		{
 			name: "Grafana template variable in label matcher",
-			expr: `up{job="$job"}`,
+			expr: `up{job="$job", instance="$instance"}`,
 		},
 	}
 
