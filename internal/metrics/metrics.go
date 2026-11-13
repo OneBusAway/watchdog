@@ -30,6 +30,11 @@ var WatchdogServerInfo = tracked(promauto.NewGaugeVec(prometheus.GaugeOpts{
 	Help: "Configuration-source identity for a monitored server (always 1)",
 }, []string{"server_url", "service_slug", "environment", "organization"}))
 
+var GtfsRtFeedDuplicateID = tracked(promauto.NewGaugeVec(prometheus.GaugeOpts{
+	Name: "gtfs_rt_feed_duplicate_id",
+	Help: "Whether the latest GTFS-RT fetch was rejected for duplicate entity or vehicle IDs (1 = duplicate, 0 = no duplicate detected)",
+}, []string{"agency_id", "agency_name", "server_name", "server_url", "feed", "feed_url"}))
+
 // ObaApiStatus tracks the reachability of an OBA server's /current-time.json
 // endpoint. The ping is server-wide (the endpoint takes no agency parameter),
 // so the metric is labeled with server identity only — agency_id / agency_name

@@ -228,23 +228,6 @@ func TestCompileSchedulesAcceptsTimezoneAliases(t *testing.T) {
 	}
 }
 
-func TestCompileSchedulesAcrossFeedsComparesTimezoneRules(t *testing.T) {
-	compile := func(first, second string) error {
-		server := scheduleServer("A", "https://one.zip", "https://two.zip")
-		_, err := compileSchedules(server, []downloadedStaticFeed{
-			{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, basicScheduleFiles(first, "08:00:00", "09:00:00"))},
-			{url: server.GtfsStaticFeeds[1], data: makeScheduleZip(t, basicScheduleFiles(second, "17:00:00", "18:00:00"))},
-		})
-		return err
-	}
-	if err := compile("America/Los_Angeles", "US/Pacific"); err != nil {
-		t.Fatalf("aliased timezones across feeds must compile: %v", err)
-	}
-	if err := compile("America/Los_Angeles", "America/Tijuana"); err == nil {
-		t.Fatal("different zones across feeds must not compile")
-	}
-}
-
 func TestSameTimezoneRules(t *testing.T) {
 	tests := []struct {
 		a, b string
@@ -324,19 +307,20 @@ func syntheticZone(t *testing.T, name string, transition time.Time) *time.Locati
 	return location
 }
 
-func TestCompileSchedulesMultipleFeedsAndAtomicAvailability(t *testing.T) {
-	server := scheduleServer("A", "https://one.zip", "https://two.zip")
-	feeds := []downloadedStaticFeed{
-		{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, basicScheduleFiles("UTC", "08:00:00", "09:00:00"))},
-		{url: server.GtfsStaticFeeds[1], data: makeScheduleZip(t, basicScheduleFiles("UTC", "17:00:00", "18:00:00"))},
-	}
+func TestCompileSchedulesMergedFeedAndAtomicAvailability(t *testing.T) {
+	server := scheduleServer("A", "https://merged.zip")
+	files := basicScheduleFiles("UTC", "08:00:00", "09:00:00")
+	files["calendar.txt"] += "PM,1,1,1,1,1,1,1,20260901,20260930\n"
+	files["trips.txt"] += "R,PM,PM-T\n"
+	files["stop_times.txt"] += "PM-T,17:00:00,17:00:00,S1,1\nPM-T,18:00:00,18:00:00,S2,2\n"
+	feeds := []downloadedStaticFeed{{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, files)}}
 	snapshots, err := compileSchedules(server, feeds)
 	if err != nil {
-		t.Fatalf("compile both feeds: %v", err)
+		t.Fatalf("compile merged feed: %v", err)
 	}
 	snapshot := snapshots[server.ServerKey()]
-	if len(snapshot.feedURLs) != 2 || len(snapshot.services) != 2 {
-		t.Fatalf("provenance/services not retained compactly: %+v", snapshot)
+	if len(snapshot.feedURLs) != 1 || len(snapshot.services) != 2 {
+		t.Fatalf("provenance/services not retained: %+v", snapshot)
 	}
 
 	store := NewScheduleStore()
@@ -344,7 +328,7 @@ func TestCompileSchedulesMultipleFeedsAndAtomicAvailability(t *testing.T) {
 	if available, _ := store.Evaluate(server.ServerKey(), time.Now()); !available {
 		t.Fatal("complete replacement should be available")
 	}
-	if _, err := compileSchedules(server, feeds[:1]); err == nil {
+	if _, err := compileSchedules(server, nil); err == nil {
 		t.Fatal("partial configured-feed success must not compile")
 	}
 	store.MarkUnavailable(server)

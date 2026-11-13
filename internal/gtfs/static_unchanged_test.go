@@ -144,8 +144,8 @@ func TestRefreshPublishesWhenServerConfigurationChanges(t *testing.T) {
 			server.AgencyName = "Renamed Agency"
 			return server
 		}},
-		{"feed list", func(server models.ObaServer, feedURL string) models.ObaServer {
-			server.GtfsStaticFeeds = []string{feedURL + "/feed.zip", feedURL + "/second.zip"}
+		{"feed URL", func(server models.ObaServer, feedURL string) models.ObaServer {
+			server.GtfsStaticFeeds = []string{feedURL + "/second.zip"}
 			return server
 		}},
 	}

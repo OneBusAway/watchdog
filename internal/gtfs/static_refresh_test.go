@@ -61,51 +61,6 @@ func TestStaticArtifactCacheKeepsIdenticalFeedsIndependent(t *testing.T) {
 	}
 }
 
-func TestStaticRefreshCampaignReusesSuccessfulFeed(t *testing.T) {
-	bundle := readFixture(t, "gtfs.zip")
-	var goodRequests atomic.Int32
-	var flakyRequests atomic.Int32
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/good.zip":
-			goodRequests.Add(1)
-			_, _ = w.Write(bundle)
-		case "/flaky.zip":
-			if flakyRequests.Add(1) == 1 {
-				http.Error(w, "unavailable", http.StatusServiceUnavailable)
-				return
-			}
-			_, _ = w.Write(bundle)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer ts.Close()
-
-	server := models.ObaServer{
-		ServerName: "OBA", AgencyID: "40", AgencyName: "Sound Transit", ObaBaseURL: ts.URL,
-		GtfsStaticFeeds: []string{ts.URL + "/good.zip", ts.URL + "/flaky.zip"},
-	}
-	store := NewStaticStore()
-	store.SetConfiguredServers([]models.ObaServer{server})
-	service := NewGtfsService(store, NewRealtimeStore(), geo.NewBoundingBoxStore(), NewRouteAgencyIndex(), slog.New(slog.NewTextHandler(io.Discard, nil)), ts.Client())
-	service.runStaticRefreshCampaign(context.Background(), server, StaticRefreshStartup, 1, staticRefreshRetryPolicy{
-		initialDelay: time.Millisecond,
-		maxDelay:     time.Millisecond,
-		budget:       time.Minute,
-	})
-
-	if got := goodRequests.Load(); got != 1 {
-		t.Fatalf("successful feed requests = %d, want 1", got)
-	}
-	if got := flakyRequests.Load(); got != 2 {
-		t.Fatalf("flaky feed requests = %d, want 2", got)
-	}
-	if _, ok := store.GetFetchTime(server.ServerKey()); !ok {
-		t.Fatal("complete campaign did not publish the static snapshot")
-	}
-}
-
 func TestStaticRefreshFailurePolicy(t *testing.T) {
 	server := models.ObaServer{ObaBaseURL: "https://oba.example", AgencyID: "a"}
 	coordinator := newStaticRefreshCoordinator()
@@ -280,9 +235,8 @@ func TestStaticRefreshCampaignsDoNotParseConcurrently(t *testing.T) {
 	}
 }
 
-// A daily refresh first probes only the feeds in conservative mode; once the
-// probe succeeds it goes straight on to fetch the rest within the same attempt.
-func TestDailyConservativeProbeContinuesToRemainingFeeds(t *testing.T) {
+// A successful conservative probe publishes the upstream-merged artifact.
+func TestDailyConservativeProbePublishesMergedFeed(t *testing.T) {
 	bundle := makeScheduleZip(t, basicScheduleFiles("UTC", "08:00:00", "09:00:00"))
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(bundle)
@@ -291,7 +245,7 @@ func TestDailyConservativeProbeContinuesToRemainingFeeds(t *testing.T) {
 
 	server := models.ObaServer{
 		ServerName: "OBA", AgencyID: "A", AgencyName: "Agency A", ObaBaseURL: ts.URL,
-		GtfsStaticFeeds: []string{ts.URL + "/probed.zip", ts.URL + "/rest.zip"},
+		GtfsStaticFeeds: []string{ts.URL + "/probed.zip"},
 	}
 	store := NewStaticStore()
 	store.SetConfiguredServers([]models.ObaServer{server})

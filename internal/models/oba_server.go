@@ -49,7 +49,8 @@ func ParseServerKey(key string) (baseURL, agencyID string, ok bool) {
 // when AgencyID is absent the entry is server-scoped and Watchdog discovers the
 // agencies it serves from /api/where/metrics.json cross-referenced with each
 // static feed's agency.txt.
-// In server-mode the Operator must list every static feed the server exposes;
+// Each entry consumes one static artifact and one realtime source, already
+// merged upstream with the same final IDs used by the backend.
 // Watchdog refuses to guess agency ownership from a feed whose agency.txt is
 // empty or ambiguous (it logs to Sentry and skips the feed's pipeline).
 type ObaServer struct {

@@ -126,6 +126,23 @@ func TestValidateServer(t *testing.T) {
 	})
 }
 
+func TestValidateServerRejectsMultipleFeedSources(t *testing.T) {
+	for _, kind := range []string{"static", "realtime"} {
+		t.Run(kind, func(t *testing.T) {
+			server := validServer()
+			if kind == "static" {
+				server.GtfsStaticFeeds = append(server.GtfsStaticFeeds, "https://second.example/static.zip")
+			} else {
+				server.GtfsRTFeeds = append(server.GtfsRTFeeds, models.GtfsRTFeed{VehiclePositionURL: "https://second.example/vehicles.pb"})
+			}
+			err := ValidateServer(server)
+			if err == nil || !strings.Contains(err.Error(), "exactly one") || !strings.Contains(err.Error(), "merge feeds upstream") {
+				t.Fatalf("missing actionable migration error: %v", err)
+			}
+		})
+	}
+}
+
 func TestDecodeServerIdentityMetadataIsOptional(t *testing.T) {
 	legacyJSON := json.RawMessage(`{
 		"server_name": "Legacy Server",

@@ -43,6 +43,7 @@ const (
 	StaticReasonAmbiguousAgency   StaticFailureReason = "ambiguous_agency"
 	StaticReasonUnknownAgency     StaticFailureReason = "unknown_agency"
 	StaticReasonInvalidSchedule   StaticFailureReason = "invalid_schedule"
+	StaticReasonDuplicateID       StaticFailureReason = "duplicate_id"
 	StaticReasonUnknown           StaticFailureReason = "unknown"
 )
 

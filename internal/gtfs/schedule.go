@@ -308,97 +308,79 @@ type rawEndpoint struct {
 }
 
 func compileSchedules(server models.ObaServer, feeds []downloadedStaticFeed) (map[string]*ScheduleSnapshot, error) {
-	if len(feeds) != len(server.GtfsStaticFeeds) {
-		return nil, fmt.Errorf("only %d of %d configured static feeds succeeded", len(feeds), len(server.GtfsStaticFeeds))
+	if len(server.GtfsStaticFeeds) != 1 || len(feeds) != 1 {
+		return nil, fmt.Errorf("expected one upstream-merged static feed; merge feeds upstream")
 	}
-	compiled := make([]rawScheduleFeed, 0, len(feeds))
-	for i, feed := range feeds {
-		raw, err := parseRawScheduleFeed(feed.url, feed.data, server)
-		if err != nil {
-			return nil, fmt.Errorf("compile static feed %d (%s): %w", i, utils.SanitizeServerURL(feed.url), err)
-		}
-		compiled = append(compiled, raw)
+	raw, err := parseRawScheduleFeed(feeds[0].url, feeds[0].data, server)
+	if err != nil {
+		return nil, fmt.Errorf("compile static feed (%s): %w", utils.SanitizeServerURL(feeds[0].url), err)
 	}
-	return compileRawSchedules(server, compiled)
+	return compileRawSchedule(server, raw)
 }
 
-// compileRawSchedules compiles already-parsed raw feeds, in configured order,
-// so a caller that validated each feed individually need not reparse them.
-func compileRawSchedules(server models.ObaServer, compiled []rawScheduleFeed) (map[string]*ScheduleSnapshot, error) {
-	if len(compiled) != len(server.GtfsStaticFeeds) {
-		return nil, fmt.Errorf("only %d of %d configured static feeds succeeded", len(compiled), len(server.GtfsStaticFeeds))
-	}
-
+// compileRawSchedule compiles one artifact using its final service IDs.
+func compileRawSchedule(server models.ObaServer, feed rawScheduleFeed) (map[string]*ScheduleSnapshot, error) {
 	type builder struct {
 		timezone  *time.Location
 		services  map[string]*scheduleService
-		feeds     map[string]struct{}
 		maxOffset time.Duration
 	}
 	builders := make(map[string]*builder)
-	for feedIndex, feed := range compiled {
-		for agencyID, agency := range feed.agencies {
-			b := builders[agencyID]
-			if b == nil {
-				b = &builder{timezone: agency.location, services: make(map[string]*scheduleService), feeds: make(map[string]struct{})}
-				builders[agencyID] = b
-			} else if !sameTimezoneRules(b.timezone, agency.location) {
-				return nil, fmt.Errorf("agency %q uses mixed timezones %q and %q", agencyID, b.timezone, agency.location)
-			}
-			b.feeds[utils.SanitizeServerURL(feed.url)] = struct{}{}
+	for agencyID, agency := range feed.agencies {
+		builders[agencyID] = &builder{timezone: agency.location, services: make(map[string]*scheduleService)}
+	}
+
+	for tripID, trip := range feed.trips {
+		service := feed.services[trip.serviceID]
+		if service == nil {
+			return nil, fmt.Errorf("trip %q references unknown service %q", tripID, trip.serviceID)
 		}
-		for tripID, trip := range feed.trips {
-			service := feed.services[trip.serviceID]
-			if service == nil {
-				return nil, fmt.Errorf("trip %q references unknown service %q", tripID, trip.serviceID)
-			}
-			if !trip.hasStops || !trip.first.valid || !trip.last.valid {
-				return nil, fmt.Errorf("trip %q has missing or invalid first/last stop times", tripID)
-			}
-			start := minDuration(trip.first.arrival, trip.first.departure)
-			end := maxDuration(trip.last.arrival, trip.last.departure)
-			if end < start || end > maxScheduleOffset {
-				return nil, fmt.Errorf("trip %q has invalid endpoint range %s..%s", tripID, start, end)
-			}
-			windows := []scheduleWindow{{start: start, end: end}}
-			if len(trip.frequency) > 0 {
-				windows = windows[:0]
-				duration := end - start
-				for _, frequency := range trip.frequency {
-					if frequency.continuous {
-						frequency.end += duration
-						if frequency.end > maxScheduleOffset {
-							return nil, fmt.Errorf("trip %q frequency exceeds supported offset %s", tripID, maxScheduleOffset)
-						}
-						windows = append(windows, frequency)
-						continue
-					}
-					span := frequency.end - frequency.start
-					lastDeparture := frequency.start + ((span-time.Second)/frequency.headway)*frequency.headway
-					frequency.duration = duration
-					frequency.end = lastDeparture + duration
+		if !trip.hasStops || !trip.first.valid || !trip.last.valid {
+			return nil, fmt.Errorf("trip %q has missing or invalid first/last stop times", tripID)
+		}
+		start := minDuration(trip.first.arrival, trip.first.departure)
+		end := maxDuration(trip.last.arrival, trip.last.departure)
+		if end < start || end > maxScheduleOffset {
+			return nil, fmt.Errorf("trip %q has invalid endpoint range %s..%s", tripID, start, end)
+		}
+		windows := []scheduleWindow{{start: start, end: end}}
+		if len(trip.frequency) > 0 {
+			windows = windows[:0]
+			duration := end - start
+			for _, frequency := range trip.frequency {
+				if frequency.continuous {
+					frequency.end += duration
 					if frequency.end > maxScheduleOffset {
 						return nil, fmt.Errorf("trip %q frequency exceeds supported offset %s", tripID, maxScheduleOffset)
 					}
 					windows = append(windows, frequency)
+					continue
 				}
-			}
-			b := builders[trip.agencyID]
-			if b == nil {
-				return nil, fmt.Errorf("trip %q has unresolved agency %q", tripID, trip.agencyID)
-			}
-			serviceKey := fmt.Sprintf("%d|%s", feedIndex, trip.serviceID)
-			compact := b.services[serviceKey]
-			if compact == nil {
-				added, removed := sortedExceptions(service)
-				compact = &scheduleService{weekdays: service.weekdays, start: service.start, end: service.end, added: added, removed: removed}
-				b.services[serviceKey] = compact
-			}
-			compact.windows = append(compact.windows, windows...)
-			for _, window := range windows {
-				if window.end > b.maxOffset {
-					b.maxOffset = window.end
+				span := frequency.end - frequency.start
+				lastDeparture := frequency.start + ((span-time.Second)/frequency.headway)*frequency.headway
+				frequency.duration = duration
+				frequency.end = lastDeparture + duration
+				if frequency.end > maxScheduleOffset {
+					return nil, fmt.Errorf("trip %q frequency exceeds supported offset %s", tripID, maxScheduleOffset)
 				}
+				windows = append(windows, frequency)
+			}
+		}
+		b := builders[trip.agencyID]
+		if b == nil {
+			return nil, fmt.Errorf("trip %q has unresolved agency %q", tripID, trip.agencyID)
+		}
+		serviceKey := trip.serviceID
+		compact := b.services[serviceKey]
+		if compact == nil {
+			added, removed := sortedExceptions(service)
+			compact = &scheduleService{weekdays: service.weekdays, start: service.start, end: service.end, added: added, removed: removed}
+			b.services[serviceKey] = compact
+		}
+		compact.windows = append(compact.windows, windows...)
+		for _, window := range windows {
+			if window.end > b.maxOffset {
+				b.maxOffset = window.end
 			}
 		}
 	}
@@ -416,11 +398,6 @@ func compileRawSchedules(server models.ObaServer, compiled []rawScheduleFeed) (m
 
 	snapshots := make(map[string]*ScheduleSnapshot, len(builders))
 	for agencyID, b := range builders {
-		feeds := make([]string, 0, len(b.feeds))
-		for feedURL := range b.feeds {
-			feeds = append(feeds, feedURL)
-		}
-		sort.Strings(feeds)
 		serviceKeys := make([]string, 0, len(b.services))
 		for key := range b.services {
 			serviceKeys = append(serviceKeys, key)
@@ -434,7 +411,7 @@ func compileRawSchedules(server models.ObaServer, compiled []rawScheduleFeed) (m
 		}
 		snapshots[models.ServerKey(server.ObaBaseURL, agencyID)] = &ScheduleSnapshot{
 			timezone: b.timezone, timezoneName: b.timezone.String(), services: services,
-			feedURLs: feeds, maxOvernightOffset: b.maxOffset, complete: true,
+			feedURLs: []string{utils.SanitizeServerURL(feed.url)}, maxOvernightOffset: b.maxOffset, complete: true,
 		}
 	}
 	if len(snapshots) == 0 {

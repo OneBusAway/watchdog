@@ -2,6 +2,7 @@ package gtfs
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -116,6 +117,13 @@ func (gs *GtfsService) reportStaticRefresh(server models.ObaServer, observation 
 
 func (gs *GtfsService) DownloadGTFSBundles(ctx context.Context, servers []models.ObaServer, maxRetries int) {
 	for _, result := range downloadGTFSBundles(ctx, gs.Client, servers, gs.Logger, gs.BoundingBoxStore, gs.StaticStore, gs.RouteAgencyIndex, gs.Observer, gs.MappingObserver, maxRetries) {
+		var failure *StaticFeedError
+		if errors.As(result.Err, &failure) && failure.FeedURL != "" {
+			gs.reportStaticFeedRefresh(result.Server, failure.FeedURL, StaticFeedRefreshObservation{
+				AttemptedAt: result.AttemptedAt, FailureSince: result.AttemptedAt,
+				Stage: failure.Stage, Reason: failure.Reason, ContentHash: failure.ContentHash,
+			})
+		}
 		gs.reportStaticRefresh(result.Server, StaticRefreshObservation{AttemptedAt: result.AttemptedAt, Success: result.Err == nil})
 	}
 }

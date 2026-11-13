@@ -36,7 +36,6 @@ func buildAgencyStaticSnapshot(server models.ObaServer, bundles []*remoteGtfs.St
 	result.agencyNames[server.AgencyID] = agency.Name
 
 	selectedRoutes := make([]remoteGtfs.Route, 0)
-	seenRoutes := make(map[string]struct{})
 	selectedServices := make([]*remoteGtfs.Service, 0)
 	seenServices := make(map[*remoteGtfs.Service]struct{})
 	selectedStops := make([]*remoteGtfs.Stop, 0)
@@ -51,10 +50,6 @@ func buildAgencyStaticSnapshot(server models.ObaServer, bundles []*remoteGtfs.St
 			if route.Id == "" || effectiveRouteAgency(server, bundle, route, true) != server.AgencyID {
 				continue
 			}
-			if _, seen := seenRoutes[route.Id]; seen {
-				continue
-			}
-			seenRoutes[route.Id] = struct{}{}
 			selectedRoutes = append(selectedRoutes, *route)
 		}
 		for i := range bundle.Trips {
