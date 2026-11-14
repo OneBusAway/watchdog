@@ -177,7 +177,7 @@ func TestServerScopeAgencyChecksRunConcurrently(t *testing.T) {
 	}
 
 	start := time.Now()
-	app.collectForServerScope(context.Background(), server, serverScope)
+	app.collectForServerScope(context.Background(), context.Background(), server, serverScope)
 	elapsed := time.Since(start)
 
 	if got := rtCalls.Load(); got != 1 {
@@ -594,7 +594,7 @@ func TestCanceledServerPingPreservesBackoff(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	app.collectForServerScope(ctx, server, serverScope)
+	app.collectForServerScope(ctx, ctx, server, serverScope)
 
 	if _, exists := app.ConfigService.BackoffStore.NextRetryAt(server.ServerKey()); exists {
 		t.Fatal("canceled server ping grew backoff state")
@@ -749,7 +749,7 @@ func TestServerScopeRespectsAgencyConcurrencyBound(t *testing.T) {
 		t.Fatalf("expected ServerScope, got %T", scope)
 	}
 
-	app.collectForServerScope(context.Background(), server, serverScope)
+	app.collectForServerScope(context.Background(), context.Background(), server, serverScope)
 
 	if got := rtCalls.Load(); got != 1 {
 		t.Fatalf("expected exactly 1 RT fetch, got %d", got)

@@ -86,7 +86,7 @@ func BenchmarkLargeServerCollection(b *testing.B) {
 	}
 
 	// Warm up once so lazy init does not pollute the measurement.
-	app.collectForServerScope(context.Background(), server, serverScope)
+	app.collectForServerScope(context.Background(), context.Background(), server, serverScope)
 
 	var memBefore, memAfter runtime.MemStats
 	runtime.ReadMemStats(&memBefore)
@@ -118,7 +118,7 @@ func BenchmarkLargeServerCollection(b *testing.B) {
 	start := time.Now()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		app.collectForServerScope(context.Background(), server, serverScope)
+		app.collectForServerScope(context.Background(), context.Background(), server, serverScope)
 	}
 	b.StopTimer()
 	cycleTotal := time.Since(start)
