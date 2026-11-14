@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -44,6 +45,7 @@ const (
 	StaticRefreshDaily          StaticRefreshTrigger = "daily"
 	StaticRefreshBackendChanged StaticRefreshTrigger = "backend_changed"
 	StaticRefreshConfigChange   StaticRefreshTrigger = "config_change"
+	StaticRefreshAgencyMismatch StaticRefreshTrigger = "agency_mismatch"
 )
 
 // maxRecentBackendHashes bounds rolling-deployment suppression; daily refreshes remain independent.
@@ -76,6 +78,12 @@ type activeStaticCampaign struct {
 	cancel      context.CancelFunc
 }
 
+// agencyMismatchState is the last backend/Watchdog agency mismatch that
+// started a refresh for a server, under the static config it was observed with.
+type agencyMismatchState struct {
+	fingerprint string
+	signature   string
+}
 type staticRefreshCoordinator struct {
 	mu              sync.Mutex
 	active          map[string]activeStaticCampaign
@@ -83,6 +91,7 @@ type staticRefreshCoordinator struct {
 	backendAttempts map[string]backendHashAttempt
 	published       map[string]publishedStaticContent
 	snapshotContent map[string]publishedStaticContent
+	mismatches      map[string]agencyMismatchState
 	policy          staticRefreshRetryPolicy
 	nextGeneration  uint64
 }
@@ -95,6 +104,7 @@ func newStaticRefreshCoordinator() *staticRefreshCoordinator {
 		active:          make(map[string]activeStaticCampaign),
 		histories:       make(map[string]*staticFeedFailureHistory),
 		published:       make(map[string]publishedStaticContent),
+		mismatches:      make(map[string]agencyMismatchState),
 		policy:          dailyStaticRefreshRetryPolicy,
 	}
 }
@@ -204,6 +214,11 @@ func (c *staticRefreshCoordinator) reconcile(servers []models.ObaServer) {
 	for key := range c.histories {
 		if _, ok := configuredFeeds[key]; !ok {
 			delete(c.histories, key)
+		}
+	}
+	for key, state := range c.mismatches {
+		if configured[key] != state.fingerprint {
+			delete(c.mismatches, key)
 		}
 	}
 }
@@ -767,4 +782,70 @@ func reportStaticCampaignError(err error, server models.ObaServer) {
 		Tags:  map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
 		Level: sentry.LevelError,
 	})
+}
+
+// DiffAgencySets compares a backend's static agency coverage (agencyIDs from
+// /api/where/metrics.json) with the agencies in Watchdog's published static
+// snapshot. Both inputs are treated as sets, so ordering and duplicate IDs do
+// not affect the result. Both returned slices are sorted.
+func DiffAgencySets(backend map[string]bool, local []string) (backendOnly, localOnly []string) {
+	localSet := make(map[string]struct{}, len(local))
+	for _, id := range local {
+		localSet[id] = struct{}{}
+	}
+	for id, reported := range backend {
+		if !reported {
+			continue
+		}
+		if _, ok := localSet[id]; !ok {
+			backendOnly = append(backendOnly, id)
+		}
+	}
+	for id := range localSet {
+		if !backend[id] {
+			localOnly = append(localOnly, id)
+		}
+	}
+	sort.Strings(backendOnly)
+	sort.Strings(localOnly)
+	return backendOnly, localOnly
+}
+
+// agencyMismatchSignature returns a stable identity for a mismatch, or "" when
+// the sets agree. Inputs must be sorted (DiffAgencySets guarantees it). NUL
+// separates IDs and \x01 separates the two directions, so no agency ID can make
+// two different mismatches collide.
+func agencyMismatchSignature(backendOnly, localOnly []string) string {
+	if len(backendOnly) == 0 && len(localOnly) == 0 {
+		return ""
+	}
+	return "+" + strings.Join(backendOnly, "\x00") + "\x01-" + strings.Join(localOnly, "\x00")
+}
+
+// observeAgencyMismatch records sig as the server's current mismatch and
+// reports whether it is new. An empty sig means the sets converged and clears
+// the state, so a later recurrence triggers again.
+func (c *staticRefreshCoordinator) observeAgencyMismatch(server models.ObaServer, sig string) bool {
+	key := server.ServerKey()
+	fingerprint := staticConfigFingerprint(server)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if sig == "" {
+		delete(c.mismatches, key)
+		return false
+	}
+	if prev, ok := c.mismatches[key]; ok && prev.fingerprint == fingerprint && prev.signature == sig {
+		return false
+	}
+	c.mismatches[key] = agencyMismatchState{fingerprint: fingerprint, signature: sig}
+	return true
+}
+
+// forgetAgencyMismatch drops the recorded mismatch so the next observation can
+// trigger again. Used when a refresh could not be started.
+func (c *staticRefreshCoordinator) forgetAgencyMismatch(server models.ObaServer) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.mismatches, server.ServerKey())
 }
