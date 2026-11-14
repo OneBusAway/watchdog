@@ -14,6 +14,7 @@ type FeedObservation struct {
 	FeedID                  string
 	FeedURL                 string
 	Success                 bool
+	DuplicateID             bool
 	ObservedAt              time.Time
 	SourceTimestamp         *time.Time
 	PayloadHash             string

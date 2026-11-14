@@ -34,6 +34,7 @@ func (s *FeedFreshnessStore) Observe(server models.ObaServer, observation gtfs.F
 		"feed": observation.FeedID, "feed_url": observation.FeedURL,
 	}
 	GtfsRtFeedFetchSuccess.With(labels).Set(boolFloat(observation.Success))
+	GtfsRtFeedDuplicateID.With(labels).Set(boolFloat(observation.DuplicateID))
 	serverKey := server.ServerKey()
 	feedKey := observation.FeedID + "|" + observation.FeedURL
 	s.mu.Lock()
@@ -110,6 +111,7 @@ func (s *FeedFreshnessStore) Reconcile(server models.ObaServer) []string {
 }
 
 func deleteFeedFreshnessSeries(labels prometheus.Labels) {
+	GtfsRtFeedDuplicateID.Delete(labels)
 	GtfsRtFeedFetchSuccess.Delete(labels)
 	GtfsRtFeedLastSuccessfulFetchTimestamp.Delete(labels)
 	GtfsRtFeedSourceTimestamp.Delete(labels)

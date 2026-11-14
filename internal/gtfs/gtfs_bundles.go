@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -87,10 +88,10 @@ type StaticRefreshResult struct {
 // downloadGTFSBundles fetches and processes GTFS static bundles concurrently for a list of OBA servers.
 //
 // Each server entry spawns its own goroutine that:
-//  1. Downloads every configured GTFS static feed (with backoff retries).
+//  1. Downloads the upstream-merged static feed (with backoff retries).
 //  2. In agency-mode, builds and stores an owned agency-scoped static snapshot.
-//  3. In server-mode, merges the feeds into one StaticData per server and stores
-//     the shared pointer under every declared agency key.
+//  3. In server-mode, stores the artifact's shared StaticData under every
+//     declared agency key.
 //  4. Computes the appropriate bounding boxes for the selected mode.
 //  5. Populates RouteAgencyIndex with route_id and trip_id attribution maps.
 //
@@ -129,37 +130,28 @@ func downloadGTFSBundles(ctx context.Context, client *http.Client, servers []mod
 					}
 				})
 			}
-			bundles := make([]*remoteGtfs.Static, 0, len(s.GtfsStaticFeeds))
-			downloaded := make([]downloadedStaticFeed, 0, len(s.GtfsStaticFeeds))
-			var downloadErrors []error
-			for _, gtfsURL := range s.GtfsStaticFeeds {
-				staticBundle, rawData, err := downloadGTFSBundleData(ctx, client, gtfsURL, s.AgencyID, maxRetries)
-				if err == nil {
-					bundles = append(bundles, staticBundle)
-					downloaded = append(downloaded, downloadedStaticFeed{url: gtfsURL, data: rawData, bundle: staticBundle})
-					continue
-				}
-				report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-					Tags: map[string]string{
-						"agency_id":   s.AgencyID,
-						"server_name": s.ServerName,
-					},
-					ExtraContext: map[string]interface{}{
-						"gtfs_url": gtfsURL,
-					},
-					Level: sentry.LevelError,
-				})
-				logger.Error("Failed to download GTFS bundle", "agency_id", s.AgencyID, "server_name", s.ServerName, "gtfs_url", gtfsURL, "error", err)
-				downloadErrors = append(downloadErrors, err)
-				continue
-			}
-			if len(bundles) != len(s.GtfsStaticFeeds) {
+			if len(s.GtfsStaticFeeds) != 1 {
+				err := fmt.Errorf("expected one upstream-merged static feed; merge feeds upstream")
 				markScheduleUnavailable()
-				err := fmt.Errorf("only %d of %d configured GTFS static feeds downloaded: %v", len(bundles), len(s.GtfsStaticFeeds), downloadErrors)
-				logger.Error("Incomplete GTFS static refresh; preserving prior complete snapshot", "server_name", s.ServerName, "agency_id", s.AgencyID, "error", err)
 				finish(err)
 				return
 			}
+			gtfsURL := s.GtfsStaticFeeds[0]
+			bundle, rawData, err := downloadGTFSBundleData(ctx, client, gtfsURL, s.AgencyID, maxRetries)
+			if err != nil {
+				markScheduleUnavailable()
+				report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+					Tags:         map[string]string{"agency_id": s.AgencyID, "server_name": s.ServerName},
+					ExtraContext: map[string]interface{}{"gtfs_url": utils.SanitizeServerURL(gtfsURL)},
+					Level:        sentry.LevelError,
+				})
+				logger.Error("Failed to download GTFS bundle; preserving prior complete snapshot", "agency_id", s.AgencyID, "server_name", s.ServerName, "error", err)
+				finish(err)
+				return
+			}
+			bundles := []*remoteGtfs.Static{bundle}
+			downloaded := []downloadedStaticFeed{{url: gtfsURL, data: rawData, bundle: bundle}}
+
 			schedules, scheduleErr := compileSchedules(s, downloaded)
 			if scheduleErr != nil {
 				markScheduleUnavailable()
@@ -195,7 +187,9 @@ func downloadGTFSBundles(ctx context.Context, client *http.Client, servers []mod
 				return
 			}
 			if storeErr != nil {
-				report.ReportErrorWithSentryOptions(storeErr, report.SentryReportOptions{
+				sum := sha256.Sum256(rawData)
+				failure := staticPublicationFailure(storeErr, gtfsURL, hex.EncodeToString(sum[:]))
+				report.ReportErrorWithSentryOptions(failure, report.SentryReportOptions{
 					Tags: map[string]string{
 						"agency_id":   s.AgencyID,
 						"server_name": s.ServerName,
@@ -203,7 +197,7 @@ func downloadGTFSBundles(ctx context.Context, client *http.Client, servers []mod
 					Level: sentry.LevelError,
 				})
 				logger.Error("Failed to store GTFS bundles", "agency_id", s.AgencyID, "server_name", s.ServerName, "error", storeErr)
-				finish(storeErr)
+				finish(failure)
 				return
 			}
 			finish(nil)
@@ -294,13 +288,18 @@ func classifyStaticFeedMappings(server models.ObaServer, feeds []downloadedStati
 // publishes them under its configured server key; server-mode publishes them
 // under the empty-agency server key.
 //
-// Server-mode bounding boxes are computed from the original source bundles
-// before their stops are merged and duplicate IDs are removed. Agency-mode
-// computes its box from the retained scoped stops.
+// Server-mode bounding boxes use the upstream artifact's shared stop pool.
+// Agency-mode computes its box from the retained scoped stops.
 //
 // observer, if non-nil, is invoked once per retained (server, agency) tuple.
 // A nil bundle retires an agency removed by a complete server-scoped refresh.
 func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static, staticStore *StaticStore, boundingBoxStore *geo.BoundingBoxStore, routeAgencyIndex *RouteAgencyIndex, observer StaticBundleObserver, logger *slog.Logger) error {
+	if len(bundles) != 1 || bundles[0] == nil {
+		return fmt.Errorf("expected one upstream-merged static bundle")
+	}
+	if err := validateParsedStaticIDs(bundles[0]); err != nil {
+		return err
+	}
 	if !server.IsServerScoped() {
 		result := buildAgencyStaticSnapshot(server, bundles, logger)
 		serverKey := server.ServerKey()
@@ -339,7 +338,7 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 		return nil
 	}
 
-	mergedbundle, declaredAgencies := mergeStaticAndDiscoverAgencies(bundles)
+	staticData, declaredAgencies := staticDataAndAgencies(bundles[0])
 	computedBoxes := computeBoundingBoxes(bundles)
 
 	storageAgencies := declaredAgencies
@@ -358,10 +357,8 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 	}
 
 	// Keep the server-wide box for the server-scoped vehicle pass and as a
-	// fallback when an agency has no usable stops. Bounds are computed directly
-	// from the source feeds, before duplicate stop IDs are removed from the
-	// merged bundle, so every physical location contributes without being stored
-	// in a persistent per-agency stop index.
+	// fallback when an agency has no usable stops. Every physical location in
+	// the upstream artifact contributes without a persistent per-agency stop index.
 	unionBox, unionBoxErr := computedBoxes.union, computedBoxes.unionErr
 	agencyBoxes, agencyBoxErrors := computedBoxes.byAgency, computedBoxes.errorsByAgency
 	// Per-agency storage. The merged StaticData is pointer-shared across all
@@ -369,7 +366,7 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 	// agency, so stop storage does not grow with the number of declared agencies.
 	snapshots := make(map[string]*models.StaticData, len(storageAgencies))
 	for _, declaredAgency := range storageAgencies {
-		snapshots[models.ServerKey(server.ObaBaseURL, declaredAgency.AgencyID)] = mergedbundle
+		snapshots[models.ServerKey(server.ObaBaseURL, declaredAgency.AgencyID)] = staticData
 	}
 	removedKeys := staticStore.ReplaceServerSnapshot(server, snapshots, time.Now().UTC())
 	for _, removedKey := range removedKeys {
@@ -443,7 +440,7 @@ func storeStaticForServer(server models.ObaServer, bundles []*remoteGtfs.Static,
 				defer func() {
 					_ = recover() // observers must not bring down the download path
 				}()
-				observer(server, declaredAgency.AgencyID, declaredAgency.AgencyName, mergedbundle)
+				observer(server, declaredAgency.AgencyID, declaredAgency.AgencyName, staticData)
 			}()
 		}
 	}
@@ -477,22 +474,8 @@ type computedBoundingBoxes struct {
 	errorsByAgency map[string]error
 }
 
-// computeBoundingBoxes calculates all agency and server-wide bounds while the
-// source feeds are still separate. For each feed it first collects the agency
-// IDs declared by that feed. It then adds every stop once to the union
-// accumulator and once to each of those agency accumulators. A feed with no
-// non-empty agency_id contributes only to the union.
-//
-// This feed provenance provides the desired scoping without a persistent
-// stop-to-agency index. Separate single-agency feeds naturally produce distinct
-// boxes; one pre-merged multi-agency feed gives all of its agencies identical
-// boxes. Duplicate stop IDs at different coordinates still contribute to the
-// bounds because this pass runs over the source feeds before
-// mergeStaticAndDiscoverAgencies applies first-occurrence-wins deduplication.
-//
-// Once the walk finishes, each accumulator is finalized into either a
-// geo.BoundingBox or an error. storeStaticForServer stores successful agency
-// boxes and uses union as the fallback for agencies without usable bounds.
+// computeBoundingBoxes computes transient agency and server bounds. All
+// agencies declared in a merged feed share its stop pool in server mode.
 func computeBoundingBoxes(bundles []*remoteGtfs.Static) computedBoundingBoxes {
 	union := &geo.BoundingBoxAccumulator{}
 	byAgency := make(map[string]*geo.BoundingBoxAccumulator)
@@ -539,118 +522,21 @@ func computeBoundingBoxes(bundles []*remoteGtfs.Static) computedBoundingBoxes {
 	return result
 }
 
-// declaredAgency is the agency identity recovered from agency.txt during merge.
+// declaredAgency is the agency identity declared in the upstream artifact.
 type declaredAgency struct {
 	AgencyID   string
 	AgencyName string
 }
 
-// mergeStaticAndDiscoverAgencies merges parsed bundles into one StaticData
-// while extracting the set of declared agencies from agency.txt. Returns the
-// merged bundle (empty if no input) and the declared-agency list.
-//
-// Multi-agency feeds are accepted: if a feed's agency.txt declares agencies
-// A and B, both end up in the returned list. Duplicate (agency_id, agency_name,
-// agency_url) rows across feeds collapse silently — the first occurrence
-// wins. Collisions where the identity fields disagree are reported to Sentry
-// at warning level (see Change 2 below) but the kept entry is still the
-// first occurrence.
-//
-// Stop-id collisions (same stop_id at different lat/lon) are reported to
-// Sentry. The flattened Stops slice remains first-occurrence-wins; bounding
-// boxes are computed from the source feeds before this deduplication.
-func mergeStaticAndDiscoverAgencies(bundles []*remoteGtfs.Static) (*models.StaticData, []declaredAgency) {
-	if len(bundles) == 0 {
-		return &models.StaticData{}, nil
-	}
-	staticData := &models.StaticData{}
-	// stopID → stopLocation (first occurrence kept in flattened Stops)
-	keptLocationByID := make(map[string]stopLocation)
-	// agencyID → agencyIdentity (first occurrence kept)
-	agenciesByID := make(map[string]agencyIdentity)
-	for _, staticBundle := range bundles {
-		if staticBundle == nil {
-			continue
+// staticDataAndAgencies copies the upstream artifact without resolving IDs.
+func staticDataAndAgencies(bundle *remoteGtfs.Static) (*models.StaticData, []declaredAgency) {
+	declared := make([]declaredAgency, 0, len(bundle.Agencies))
+	for _, agency := range bundle.Agencies {
+		if agency.Id != "" {
+			declared = append(declared, declaredAgency{AgencyID: agency.Id, AgencyName: agency.Name})
 		}
-		data := models.NewStaticData(staticBundle)
-		for _, stop := range data.Stops {
-			kept, keptExists := keptLocationByID[stop.Id]
-			if !keptExists {
-				staticData.Stops = append(staticData.Stops, stop)
-				keptLocationByID[stop.Id] = stopLocation{lat: stop.Latitude, lon: stop.Longitude}
-				continue
-			}
-			if sameStopLocation(kept.lat, kept.lon, stop.Latitude, stop.Longitude) {
-				// Exact duplicate (same id, same location). Silent skip.
-				continue
-			}
-			// stop_id collision with different location: warn and keep the first
-			// occurrence in the merged bundle.
-			report.ReportErrorWithSentryOptions(
-				fmt.Errorf("static bundle has a duplicate stop_id %q at a different location; existing=(lat=%s, lon=%s), duplicate=(lat=%s, lon=%s); keeping first occurrence",
-					stop.Id,
-					formatLatLon(kept.lat), formatLatLon(kept.lon),
-					formatLatLon(stop.Latitude), formatLatLon(stop.Longitude)),
-				report.SentryReportOptions{
-					Tags: map[string]string{"stop_id": stop.Id},
-					ExtraContext: map[string]interface{}{
-						"existing_lat":  kept.lat,
-						"existing_lon":  kept.lon,
-						"duplicate_lat": stop.Latitude,
-						"duplicate_lon": stop.Longitude,
-					},
-					Level: sentry.LevelWarning,
-				},
-			)
-		}
-		for _, agency := range data.Agencies {
-			if agency.Id == "" {
-				continue
-			}
-			knownAgency, exists := agenciesByID[agency.Id]
-			if !exists {
-				agenciesByID[agency.Id] = agencyIdentity{Name: agency.Name, Url: agency.Url}
-				staticData.Agencies = append(staticData.Agencies, agency)
-				continue
-			}
-			if knownAgency.Name == agency.Name && knownAgency.Url == agency.Url {
-				// Exact duplicate (same id, name, url). Silent skip.
-				continue
-			}
-			// agency_id collision with mismatching identity — warn.
-			report.ReportErrorWithSentryOptions(
-				fmt.Errorf("static bundle has a duplicate agency_id %q with mismatching identity; existing=(name=%q, url=%q), duplicate=(name=%q, url=%q); keeping first occurrence",
-					agency.Id, knownAgency.Name, knownAgency.Url, agency.Name, agency.Url),
-				report.SentryReportOptions{
-					Tags: map[string]string{"agency_id": agency.Id},
-					ExtraContext: map[string]interface{}{
-						"existing_name":  knownAgency.Name,
-						"existing_url":   knownAgency.Url,
-						"duplicate_name": agency.Name,
-						"duplicate_url":  agency.Url,
-					},
-					Level: sentry.LevelWarning,
-				},
-			)
-			// Keep first occurrence — do NOT overwrite the map entry or the
-			// kept agency object in staticData.Agencies.
-		}
-		// Services are appended without deduplication, unlike stops and agencies above.
-		// Stops and agencies are keyed and addressed individually by ID later, so
-		// duplicates would cause collisions and must be collapsed (first occurrence wins).
-		// Service entries, by contrast, are only ever collapsed into aggregate ranges
-		// (e.g. earliest/latest service dates for bundle-expiration checks), so
-		// duplicates are a no-op — and deduplicating by service ID could actually drop a
-		// legitimately different date range from another feed of the same agency.
-		staticData.Services = append(staticData.Services, data.Services...)
-		staticData.Routes = append(staticData.Routes, data.Routes...)
 	}
-
-	declared := make([]declaredAgency, 0, len(agenciesByID))
-	for id, ident := range agenciesByID {
-		declared = append(declared, declaredAgency{AgencyID: id, AgencyName: ident.Name})
-	}
-	return staticData, declared
+	return models.NewStaticData(bundle), declared
 }
 
 // refreshGTFSBundles periodically refreshes GTFS static bundles for a list of OBA servers.
@@ -867,6 +753,15 @@ func parseDownloadedGTFSBundle(parse func(data []byte, url, agencyID string) (*r
 }
 
 func parseStaticBundleData(data []byte, url, agencyID string) (*remoteGtfs.Static, error) {
+	if err := validateStaticIDs(data); err != nil {
+		var duplicate *duplicateIDError
+		stage, reason := StaticFailureArchive, StaticReasonInvalidZIP
+		if errors.As(err, &duplicate) {
+			stage, reason = StaticFailureParse, StaticReasonDuplicateID
+		}
+		sum := sha256.Sum256(data)
+		return nil, &StaticFeedError{FeedURL: url, Stage: stage, Reason: reason, ContentHash: hex.EncodeToString(sum[:]), Err: err}
+	}
 	// Watchdog never reads shapes, and from stop_times.txt needs only which
 	// stops each trip serves (agency mode keeps those stops). Skipping the rest
 	// cuts Seattle's merged feed from ~580 MB to ~110 MB of peak heap.
@@ -925,9 +820,7 @@ func normalizeOmittedAgencyID(data []byte, bundle *remoteGtfs.Static) error {
 	return nil
 }
 
-// getStopLocationsByIDs retrieves stops by ID from the shared merged GTFS
-// bundle. The merge keeps the first occurrence of a duplicate stop ID, so each
-// requested ID resolves to at most one stop.
+// getStopLocationsByIDs resolves final stop IDs from the accepted static feed.
 func getStopLocationsByIDs(serverKey string, stopIDs []string, staticStore *StaticStore) (map[string]remoteGtfs.Stop, error) {
 	staticData, ok := staticStore.Get(serverKey)
 	if !ok || staticData == nil {
@@ -990,39 +883,29 @@ func getEarliestAndLatestServiceDates(staticData *models.StaticData) (earliestEn
 	return earliestEndDate, latestEndDate, nil
 }
 
-// fetchAndStoreGTFSRTFeed fetches the GTFS-Realtime feed(s) for a single OBA
-// server, parses the vehicle positions, and stores the merged result in the
-// RealtimeStore under server.ServerKey().
-//
-// One key, one fetch, per tick. For a server-scoped entry the key is the
-// server-scoped one (empty agency_id), because the vehicle pass reads the
-// merged feed once for the whole server and attributes each vehicle to its
-// owning agency through the route/trip attribution index. Registering the same feed
-// under every agency's key would only invite a per-agency pass, which
-// double-counts.
-//
-// A server may expose multiple GTFS-RT feeds. Each feed is treated as an
-// independent vehicle namespace: GTFS-RT vehicle IDs are only unique within
-// a single feed, so two feeds that both report vehicle "101" refer to two
-// distinct physical vehicles and are BOTH retained. Deduplication only
-// guards against repeats within one feed (a malformed feed repeating an ID).
-// Every retained vehicle is tagged with the zero-based index of the feed it
-// came from (see models.RealtimeVehicle.FeedID) so consumers can key
-// per-vehicle identity on the (feed, vehicle_id) pair.
+// fetchAndStoreGTFSRTFeed publishes one upstream-merged realtime snapshot per
+// server key. In agency mode, attribution filters vehicles before publication.
+// A failed fetch preserves the last good snapshot and gates the vehicle pass.
 func fetchAndStoreGTFSRTFeed(ctx context.Context, server models.ObaServer, realtimeStore *RealtimeStore, client *http.Client, routeAgencyIndex *RouteAgencyIndex) error {
 	realtimeStore.ReconcileConfiguration(server)
 	observedAt := time.Now().UTC()
-	merged, observations, err := parseGTFSRTFeeds(ctx, server, client, observedAt)
-	succeeded := make(map[string]bool, len(observations))
+	// Config validation requires a source. Internal removal paths still need
+	// to retire cached vehicles and let collection clear its freshness series.
+	if len(server.GtfsRTFeeds) == 0 {
+		realtimeStore.Set(server.ServerKey(), &models.RealtimeData{ObservationAt: observedAt})
+		return nil
+	}
+	snapshot, observations, err := parseGTFSRTFeed(ctx, server, client, observedAt)
+	observed := make(map[string]bool, len(observations))
 	for _, observation := range observations {
-		succeeded[observation.FeedID] = true
+		observed[observation.FeedID] = true
 		realtimeStore.Observe(server, observation)
 	}
 	if err != nil {
 		if ctx.Err() == nil {
 			for feedIdx, feed := range server.GtfsRTFeeds {
 				feedID := fmt.Sprintf("%d", feedIdx)
-				if !succeeded[feedID] {
+				if !observed[feedID] {
 					realtimeStore.Observe(server, FeedObservation{
 						FeedID: feedID, FeedURL: utils.SanitizeServerURL(feed.VehiclePositionURL),
 						Success: false, ObservedAt: observedAt,
@@ -1036,7 +919,7 @@ func fetchAndStoreGTFSRTFeed(ctx context.Context, server models.ObaServer, realt
 		// their observations either way.
 		return err
 	}
-	if merged == nil {
+	if snapshot == nil {
 		return nil
 	}
 	// Agency-mode filtering is deliberately performed before publication so all
@@ -1054,8 +937,8 @@ func fetchAndStoreGTFSRTFeed(ctx context.Context, server models.ObaServer, realt
 		// IDs missing from a stale bundle) are kept: they are exactly what
 		// the invalid-vehicle checks exist to surface.
 		keepUnresolved := attribution.AttributesOnlyTo(server.ServerKey(), server.AgencyID)
-		filtered := make([]models.RealtimeVehicle, 0, len(merged.Vehicles))
-		for _, realtimeVehicle := range merged.Vehicles {
+		filtered := make([]models.RealtimeVehicle, 0, len(snapshot.Vehicles))
+		for _, realtimeVehicle := range snapshot.Vehicles {
 			routeID, tripID := "", ""
 			if realtimeVehicle.Vehicle.Trip != nil {
 				routeID = realtimeVehicle.Vehicle.Trip.ID.RouteID
@@ -1066,28 +949,18 @@ func fetchAndStoreGTFSRTFeed(ctx context.Context, server models.ObaServer, realt
 				filtered = append(filtered, realtimeVehicle)
 			}
 		}
-		merged.Vehicles = filtered
+		snapshot.Vehicles = filtered
 	}
-	realtimeStore.Set(server.ServerKey(), merged)
+	realtimeStore.Set(server.ServerKey(), snapshot)
 	return nil
 }
 
-// parseGTFSRTFeeds performs the actual HTTP fetch + protobuf parse for every
-// RT feed the server exposes, returning the merged *models.RealtimeData.
-// Errors at any stage short-circuit and surface to the caller; the merged
-// pointer is always non-nil so the caller can register it under storeKeys
-// even on a partially-populated parse.
-//
-// A server may expose multiple GTFS-RT feeds. Each feed is treated as an
-// independent vehicle namespace: GTFS-RT vehicle IDs are only unique within
-// a single feed, so two feeds that both report vehicle "101" refer to two
-// distinct physical vehicles and are BOTH retained. Deduplication only
-// guards against repeats within one feed (a malformed feed repeating an ID).
-// Every retained vehicle is tagged with the zero-based index of the feed it
-// came from (see models.RealtimeVehicle.FeedID) so consumers can key
-// per-vehicle identity on the (feed, vehicle_id) pair.
-func parseGTFSRTFeeds(ctx context.Context, server models.ObaServer, client *http.Client, observedAt time.Time) (*models.RealtimeData, []FeedObservation, error) {
-	merged := &models.RealtimeData{ObservationAt: observedAt}
+// parseGTFSRTFeed fetches one upstream-merged source and preserves its IDs.
+func parseGTFSRTFeed(ctx context.Context, server models.ObaServer, client *http.Client, observedAt time.Time) (*models.RealtimeData, []FeedObservation, error) {
+	if len(server.GtfsRTFeeds) != 1 {
+		return nil, nil, fmt.Errorf("expected one upstream-merged realtime source; merge feeds upstream")
+	}
+	snapshot := &models.RealtimeData{ObservationAt: observedAt}
 	observations := make([]FeedObservation, 0, len(server.GtfsRTFeeds))
 	// reportFetchErr silences failures caused by cycle-deadline or shutdown
 	// cancellation: an interrupted fetch is incomplete collection, not a
@@ -1099,121 +972,147 @@ func parseGTFSRTFeeds(ctx context.Context, server models.ObaServer, client *http
 		}
 		report.ReportErrorWithSentryOptions(err, opts)
 	}
-	for feedIdx, feed := range server.GtfsRTFeeds {
-		feedID := fmt.Sprintf("%d", feedIdx)
-		sanitizedURL := utils.SanitizeServerURL(feed.VehiclePositionURL)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, feed.VehiclePositionURL, nil)
-		if err != nil {
-			err = fmt.Errorf("create GTFS-RT request: %w", err)
-			reportFetchErr(err, report.SentryReportOptions{
-				Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
-				ExtraContext: map[string]interface{}{
-					"vehicle_position_url": sanitizedURL,
-				},
-			})
-			return nil, observations, err
-		}
-		if feed.GtfsRTAPIKey != "" {
-			req.Header.Set(feed.GtfsRTAPIKey, feed.GtfsRTAPIValue)
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			err = fmt.Errorf("fetch GTFS-RT feed %s: %w", feed.VehiclePositionURL, err)
-			reportFetchErr(err, report.SentryReportOptions{
-				Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
-				ExtraContext: map[string]interface{}{
-					"vehicle_position_url": sanitizedURL,
-				},
-			})
-			return nil, observations, err
-		}
-		data, readErr := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if readErr != nil {
-			err = fmt.Errorf("read GTFS-RT feed %s: %w", feed.VehiclePositionURL, readErr)
-			reportFetchErr(err, report.SentryReportOptions{
-				Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
-				ExtraContext: map[string]interface{}{
-					"vehicle_position_url": sanitizedURL,
-				},
-			})
-			return nil, observations, err
-		}
-		if resp.StatusCode != http.StatusOK {
-			err = fmt.Errorf("GTFS-RT feed %s returned %s", feed.VehiclePositionURL, resp.Status)
-			reportFetchErr(err, report.SentryReportOptions{
-				Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
-				ExtraContext: map[string]interface{}{
-					"vehicle_position_url": sanitizedURL,
-					"status":               resp.Status,
-				},
-			})
-			return nil, observations, err
-		}
-		parsed, err := remoteGtfs.ParseRealtime(data, &remoteGtfs.ParseRealtimeOptions{})
-		if err != nil {
-			err = fmt.Errorf("parse GTFS-RT feed %s: %w", feed.VehiclePositionURL, err)
-			reportFetchErr(err, report.SentryReportOptions{
-				Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
-				ExtraContext: map[string]interface{}{
-					"vehicle_position_url": sanitizedURL,
-				},
-			})
-			return nil, observations, err
-		}
-		var raw gtfsrt.FeedMessage
-		if err := proto.Unmarshal(data, &raw); err != nil {
-			return nil, observations, fmt.Errorf("decode raw GTFS-RT feed %s: %w", feed.VehiclePositionURL, err)
-		}
-
-		payloadHash := canonicalEntityHash(raw.Entity)
-		stateHashes := vehicleStateHashes(raw.Entity)
-		vehicleEntities := 0
-		missingTimestamps := 0
-		for _, entity := range raw.Entity {
-			if entity.GetVehicle() == nil {
-				continue
-			}
-			vehicleEntities++
-			if entity.GetVehicle().Timestamp == nil {
-				missingTimestamps++
-			}
-		}
-		var sourceTimestamp *time.Time
-		if raw.Header != nil && raw.Header.Timestamp != nil {
-			timestamp := time.Unix(int64(raw.Header.GetTimestamp()), 0).UTC()
-			sourceTimestamp = &timestamp
-		}
-		observations = append(observations, FeedObservation{
-			FeedID: feedID, FeedURL: sanitizedURL, Success: true, ObservedAt: observedAt,
-			SourceTimestamp: sourceTimestamp, PayloadHash: payloadHash,
-			VehicleEntities: vehicleEntities, VehicleTimestampMissing: missingTimestamps,
+	feed := server.GtfsRTFeeds[0]
+	feedID := "0"
+	sanitizedURL := utils.SanitizeServerURL(feed.VehiclePositionURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, feed.VehiclePositionURL, nil)
+	if err != nil {
+		err = fmt.Errorf("create GTFS-RT request: %w", err)
+		reportFetchErr(err, report.SentryReportOptions{
+			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
+			ExtraContext: map[string]interface{}{
+				"vehicle_position_url": sanitizedURL,
+			},
 		})
-		merged.Feeds = append(merged.Feeds, models.RealtimeFeed{
-			FeedID: feedID, FeedURL: sanitizedURL,
-			FullDataset: raw.Header == nil || raw.Header.GetIncrementality() == gtfsrt.FeedHeader_FULL_DATASET,
+		return nil, observations, err
+	}
+	if feed.GtfsRTAPIKey != "" {
+		req.Header.Set(feed.GtfsRTAPIKey, feed.GtfsRTAPIValue)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		err = fmt.Errorf("fetch GTFS-RT feed %s: %w", feed.VehiclePositionURL, err)
+		reportFetchErr(err, report.SentryReportOptions{
+			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
+			ExtraContext: map[string]interface{}{
+				"vehicle_position_url": sanitizedURL,
+			},
 		})
-		vehicleIDs := make(map[string]struct{})
-		for _, vehicle := range parsed.Vehicles {
-			id := ""
-			if vehicle.ID != nil {
-				id = vehicle.ID.ID
-			}
-			if id != "" {
-				if _, exists := vehicleIDs[id]; exists {
-					continue
-				}
-				vehicleIDs[id] = struct{}{}
-			}
-			stateHash := ""
-			if hashes := stateHashes[id]; len(hashes) > 0 {
-				stateHash = hashes[0]
-				stateHashes[id] = hashes[1:]
-			}
-			merged.Vehicles = append(merged.Vehicles, models.RealtimeVehicle{Vehicle: vehicle, FeedID: feedID, StateHash: stateHash})
+		return nil, observations, err
+	}
+	data, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if readErr != nil {
+		err = fmt.Errorf("read GTFS-RT feed %s: %w", feed.VehiclePositionURL, readErr)
+		reportFetchErr(err, report.SentryReportOptions{
+			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
+			ExtraContext: map[string]interface{}{
+				"vehicle_position_url": sanitizedURL,
+			},
+		})
+		return nil, observations, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		err = fmt.Errorf("GTFS-RT feed %s returned %s", feed.VehiclePositionURL, resp.Status)
+		reportFetchErr(err, report.SentryReportOptions{
+			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
+			ExtraContext: map[string]interface{}{
+				"vehicle_position_url": sanitizedURL,
+				"status":               resp.Status,
+			},
+		})
+		return nil, observations, err
+	}
+	var raw gtfsrt.FeedMessage
+	if err := proto.Unmarshal(data, &raw); err != nil {
+		err = fmt.Errorf("decode raw GTFS-RT feed %s: %w", sanitizedURL, err)
+		reportFetchErr(err, report.SentryReportOptions{Tags: map[string]string{"server_name": server.ServerName, "agency_id": server.AgencyID}})
+		return nil, observations, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, observations, err
+	}
+	entities, duplicateErr := excludeDuplicateRealtimeIDs(&raw)
+	if duplicateErr != nil {
+		reportFetchErr(duplicateErr, report.SentryReportOptions{
+			Tags:         map[string]string{"server_name": server.ServerName, "agency_id": server.AgencyID},
+			ExtraContext: map[string]interface{}{"vehicle_position_url": sanitizedURL},
+		})
+		// Parse only unambiguous entities. Keep raw for source-payload health
+		// metrics; exclusion must not hide a defect in the producer's feed.
+		filtered := &gtfsrt.FeedMessage{Header: raw.Header, Entity: entities}
+		var err error
+		data, err = proto.Marshal(filtered)
+		if err != nil {
+			return nil, observations, fmt.Errorf("encode filtered GTFS-RT feed %s: %w", sanitizedURL, err)
 		}
 	}
-	return merged, observations, nil
+
+	parsed, err := remoteGtfs.ParseRealtime(data, &remoteGtfs.ParseRealtimeOptions{})
+	if err != nil {
+		err = fmt.Errorf("parse GTFS-RT feed %s: %w", sanitizedURL, err)
+		reportFetchErr(err, report.SentryReportOptions{
+			Tags:         map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
+			ExtraContext: map[string]interface{}{"vehicle_position_url": sanitizedURL},
+		})
+		return nil, observations, err
+	}
+
+	payloadHash := canonicalEntityHash(raw.Entity)
+	stateHashes := vehicleStateHashes(entities)
+	vehicleEntities := 0
+	missingTimestamps := 0
+	for _, entity := range raw.Entity {
+		if entity.GetVehicle() == nil {
+			continue
+		}
+		vehicleEntities++
+		if entity.GetVehicle().Timestamp == nil {
+			missingTimestamps++
+		}
+	}
+	var sourceTimestamp *time.Time
+	if raw.Header != nil && raw.Header.Timestamp != nil {
+		timestamp := time.Unix(int64(raw.Header.GetTimestamp()), 0).UTC()
+		sourceTimestamp = &timestamp
+	}
+	observations = append(observations, FeedObservation{
+		FeedID: feedID, FeedURL: sanitizedURL, Success: true, ObservedAt: observedAt,
+		DuplicateID:     duplicateErr != nil,
+		SourceTimestamp: sourceTimestamp, PayloadHash: payloadHash,
+		VehicleEntities: vehicleEntities, VehicleTimestampMissing: missingTimestamps,
+	})
+	snapshot.Feeds = append(snapshot.Feeds, models.RealtimeFeed{
+		FeedID: feedID, FeedURL: sanitizedURL,
+		FullDataset: raw.Header == nil || raw.Header.GetIncrementality() == gtfsrt.FeedHeader_FULL_DATASET,
+	})
+	positionIDs := make(map[string]struct{})
+	for _, vehicle := range parsed.Vehicles {
+		if vehicle.IsEntityInMessage && vehicle.ID != nil && vehicle.ID.ID != "" {
+			positionIDs[vehicle.ID.ID] = struct{}{}
+		}
+	}
+	for _, vehicle := range parsed.Vehicles {
+		id := ""
+		if vehicle.ID != nil {
+			id = vehicle.ID.ID
+		}
+		// go-gtfs keys descriptors by ID, label, and license plate. A trip
+		// update can therefore produce a second, reference-only entry for a
+		// position's vehicle. It must not consume that position's state hash.
+		if !vehicle.IsEntityInMessage {
+			if _, hasPosition := positionIDs[id]; hasPosition {
+				continue
+			}
+		}
+		stateHash := ""
+		if hashes := stateHashes[id]; len(hashes) > 0 {
+			stateHash = hashes[0]
+			stateHashes[id] = hashes[1:]
+		}
+		snapshot.Vehicles = append(snapshot.Vehicles, models.RealtimeVehicle{Vehicle: vehicle, FeedID: feedID, StateHash: stateHash})
+	}
+	return snapshot, observations, nil
 }
 
 func canonicalEntityHash(entities []*gtfsrt.FeedEntity) string {

@@ -42,6 +42,24 @@ Watchdog requires a configuration file (`config.json`) before running. Even plac
 
 The top-level `agency_id` decides what each entry observes: set it to track that agency. OBA API probes, static data, and realtime feed data are scoped to that agency; leave it out to track the server and every agency it serves. See [Two observation modes](#two-observation-modes-agency-vs-server) below for both config shapes.
 
+#### Feed contract and migration
+
+Each entry requires exactly one URL in `gtfs_static_feeds` and one source in `gtfs_rt_feeds`. The array field names remain unchanged, so existing single-feed v2 and legacy v1 configurations continue to work. A realtime source may include vehicle-position and trip-update URLs; Watchdog currently monitors vehicle positions.
+
+Both feeds must already use the final IDs served by the OBA backend. A merged static feed may contain several agencies. Watchdog preserves IDs and does not merge sources or combine stops.
+
+Vehicle-position vehicle IDs must be unique across the entire merged realtime feed, including across agencies. If two source agencies each use vehicle ID `101` for different vehicles, the upstream merger must give those vehicles distinct final IDs. A trip-update entity may reference the same vehicle ID as its vehicle-position entity; that reference is not a duplicate vehicle position.
+
+To upgrade an existing multi-feed entry:
+
+1. Configure an external merger to produce the static and realtime artifacts consumed by your OBA backend.
+2. Replace `gtfs_static_feeds` with the single merged static URL and `gtfs_rt_feeds` with the single merged realtime source, including its authentication fields.
+3. Update any configured `agency_id` to its final ID in the merged feed.
+
+Multiple sources are rejected with a migration error. Watchdog does not keep the first source automatically. Invalid entries follow the existing config-loading policy and are excluded while valid entries continue to load. Check the dropped-server diagnostics and `watchdog_configured_servers` after upgrading.
+
+Duplicate primary IDs in the static tables Watchdog consumes reject the new static snapshot, retain the last good snapshot, and produce a Sentry event and `gtfs_static_feed_failure_info{reason="duplicate_id"}`. Realtime duplicate entity IDs or vehicle-position IDs produce a Sentry event and `gtfs_rt_feed_duplicate_id=1`. Every entity carrying a conflicting ID is excluded, and the remaining entities are published as a successful fetch with `gtfs_rt_feed_fetch_success=1`. No duplicate winner is selected. Transport or decoding failures still preserve the cached realtime snapshot without processing it as a new observation.
+
 #### Ways to Provide the Config File
 
 #### 1. Local Configuration (recommended for development)
@@ -130,7 +148,7 @@ There are two ways Watchdog can observe an OBA deployment. The choice is made **
 
 **Server mode** — `agency_id` is absent. Watchdog probes `/api/where/metrics.json` every tick to learn which agencies are present in OBA's loaded static coverage, cross-references those agency IDs against the static feeds' `agency.txt` declarations, and runs the per-agency pipeline for every agency that has BOTH a static bundle AND is reported by OBA.
 
-Multi-agency static feeds are accepted in server mode: one consolidated bundle pointer-shared across the serverKeys of every agency declared in its `agency.txt`. Agency mode instead stores an owned snapshot containing only the configured agency's routes, referenced services, stops, and parent stations. Feed-to-agency mapping metrics are derived while each source feed is parsed, before feeds are merged, so they describe only relationships proven by that feed's own `agency.txt` rather than a feed-by-live-agency cross-product.
+Multi-agency static feeds are accepted in server mode: one consolidated bundle pointer-shared across the serverKeys of every agency declared in its `agency.txt`. Agency mode instead stores an owned snapshot containing only the configured agency's routes, referenced services, stops, and parent stations. Feed-to-agency mapping metrics describe the agencies declared in the upstream artifact's `agency.txt`.
 
 #### Static coverage signals
 
@@ -142,7 +160,9 @@ These metrics expose static agency coverage and source-feed mapping health:
 
 #### Vehicle attribution in server-mode
 
-In agency-mode the RT fetch resolves each vehicle by route or trip and stores only vehicles uniquely resolved to the configured `agency_id`; foreign, ambiguous, and conflicting vehicles are dropped before any metric pass. Vehicles that cannot be resolved at all (no trip, or IDs missing from the static bundle) are dropped only when the static data names another agency; in a single-agency feed they are kept so the quality checks still see them. Until the first static snapshot loads, the feed is stored unfiltered. In server-mode one RT feed may carry vehicles from multiple agencies. Watchdog retains every static candidate owner for colliding route/trip IDs and assigns a vehicle operationally only when the available evidence yields exactly one agency reported by OBA. A unique route/trip candidate-set intersection can disambiguate a collision; otherwise the vehicle stays server-scoped and is reported by bounded reason. `gtfs_rt_unattributed_vehicle_potential_agency_associations_count` reports potential owners without pretending they are assignments or distinct vehicle totals. See `docs/METRICS.md` for the resolution rules and all reason values.
+In agency mode the RT fetch resolves each vehicle by route or trip and stores only vehicles attributed to the configured `agency_id`. Foreign or conflicting vehicles are dropped before the metric pass. Vehicles that cannot be resolved are kept when the static feed names only the configured agency, so quality checks can still report them. Until the first static snapshot loads, the realtime feed is stored unfiltered.
+
+In server mode the single upstream-merged realtime feed can carry vehicles from several agencies. Watchdog attributes each vehicle using the route and trip IDs in the static feed, then checks that OBA reports the agency as live. Unknown IDs, conflicting route/trip ownership, and agencies absent from OBA coverage remain unattributed. Duplicate static primary IDs reject the new snapshot before publication.
 
 ### Backward Compatibility (v1 → v2)
 
@@ -160,7 +180,7 @@ When a v1 entry is loaded, Watchdog maps it like this:
 
 One caveat: v1 and v2 fields can't be mixed in the same entry. If an entry contains both schemas (e.g. a legacy `gtfs_url` alongside `gtfs_static_feeds`), it's rejected and reported to Sentry. Each entry must use one schema or the other.
 
-Migrating to v2 is recommended whenever convenient — it's the only way to configure multiple static or RT feeds per agency. v1 supports just one of each.
+Both v1 and v2 configurations accept one static feed and one realtime source per entry. See [Feed contract and migration](#feed-contract-and-migration) when upgrading a v2 entry that previously listed multiple feeds.
 
 ### Application Options
 

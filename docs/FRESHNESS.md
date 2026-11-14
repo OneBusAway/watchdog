@@ -20,7 +20,7 @@ Source metrics require their authoritative successful-fetch timestamp:
 | --- | --- |
 | OBA `metrics.json` | `oba_metrics_last_successful_fetch_timestamp_seconds` |
 | OBA vehicles-for-agency | `oba_vehicles_last_successful_fetch_timestamp_seconds` |
-| Complete GTFS-RT feed set | `gtfs_rt_last_successful_fetch_timestamp_seconds` |
+| Accepted GTFS-RT snapshot | `gtfs_rt_last_successful_fetch_timestamp_seconds` |
 | Individual GTFS-RT feed | `gtfs_rt_feed_last_successful_fetch_timestamp_seconds` and `gtfs_rt_feed_fetch_success` |
 
 A successful zero remains `0`. A failed or old collection must produce an absent result so charts render a gap or `No data`.
@@ -54,8 +54,7 @@ snapshot hash is unavailable.
 A persistent 0 can mean the configured feed URL differs from the backend's
 bundle source, or the backend has not loaded the latest feed. Missing or failed
 metadata responses omit the gauge and leave normal collection and API backoff
-unchanged. Backends with multiple static feeds, or different feed URLs across
-agency entries, retain daily refreshes only. The existing agency coverage
+unchanged. Backends with different static feed URLs across agency entries retain daily refreshes only. The existing agency coverage
 comparison continues to report coverage and filter agency processing; it does
 not start static refreshes.
 
@@ -66,7 +65,7 @@ not start static refreshes.
 | Expired and unusable | Agency-local today is later than the latest service end date. |
 | Missing | No complete bundle exists. |
 
-Static refresh is atomic across all configured feeds in one configuration entry. Startup, changed configuration, and the daily boundary start managed per-entry campaigns; a changed or removed entry cancels its stale campaign. Successful compressed artifacts are cached only for the campaign, retries fetch only failed feeds, and publication waits until the complete set parses, compiles, and validates. A failed campaign preserves the previous complete bundle.
+Each entry consumes one upstream-merged static artifact. Startup, changed configuration, and the daily boundary start managed per-entry campaigns; a changed or removed entry cancels its stale campaign. The compressed artifact is cached only for the campaign. Publication waits until it parses, compiles, and validates. Duplicate primary IDs reject the artifact with failure reason `duplicate_id`. A failed campaign preserves the previous complete bundle.
 
 Normal retries run for at most 12 hours using delays of 5 minutes, 10 minutes, 20 minutes, 40 minutes, 80 minutes, then at most 2 hours. HTTP 429 can extend a delay through `Retry-After`. Repeated or deterministic failures enter conservative mode without modifying user configuration: the feed receives one probe at each daily boundary, and any successful probe immediately restores normal complete-campaign behavior.
 

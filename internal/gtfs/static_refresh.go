@@ -17,6 +17,7 @@ import (
 	"github.com/getsentry/sentry-go"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
+	"watchdog.onebusaway.org/internal/utils"
 )
 
 func staticConfigFingerprint(server models.ObaServer) string {
@@ -331,7 +332,7 @@ func (c *staticRefreshCoordinator) recordFailureLocked(server models.ObaServer, 
 	switch failure.Reason {
 	case StaticReasonInvalidURL, StaticReasonUnauthorized, StaticReasonForbidden:
 		history.conservative = true
-	case StaticReasonInvalidZIP, StaticReasonMissingAgencyFile, StaticReasonEmptyAgencyFile, StaticReasonMissingAgencyID, StaticReasonAmbiguousAgency, StaticReasonUnknownAgency, StaticReasonInvalidSchedule:
+	case StaticReasonDuplicateID, StaticReasonInvalidZIP, StaticReasonMissingAgencyFile, StaticReasonEmptyAgencyFile, StaticReasonMissingAgencyID, StaticReasonAmbiguousAgency, StaticReasonUnknownAgency, StaticReasonInvalidSchedule:
 		if failure.ContentHash != "" && history.identicalFailures >= 3 {
 			history.conservative = true
 		}
@@ -345,7 +346,7 @@ func failurePolicyClass(reason StaticFailureReason) string {
 		return "transient"
 	case StaticReasonNotFound, StaticReasonGone:
 		return "missing"
-	case StaticReasonInvalidZIP, StaticReasonMissingAgencyFile, StaticReasonEmptyAgencyFile, StaticReasonMissingAgencyID, StaticReasonAmbiguousAgency, StaticReasonUnknownAgency, StaticReasonInvalidSchedule:
+	case StaticReasonDuplicateID, StaticReasonInvalidZIP, StaticReasonMissingAgencyFile, StaticReasonEmptyAgencyFile, StaticReasonMissingAgencyID, StaticReasonAmbiguousAgency, StaticReasonUnknownAgency, StaticReasonInvalidSchedule:
 		return "content"
 	default:
 		return string(reason)
@@ -393,6 +394,16 @@ func (c *staticRefreshCoordinator) recordFailedCampaignLocked(server models.ObaS
 }
 
 func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server models.ObaServer, trigger StaticRefreshTrigger, maxRetries int, policy staticRefreshRetryPolicy) {
+	if len(server.GtfsStaticFeeds) != 1 {
+		gs.Logger.Error("Expected one upstream-merged static feed; merge feeds upstream", "server_name", server.ServerName)
+		gs.StaticStore.WithRefreshLock(func() {
+			if gs.StaticStore.IsConfigured(server) {
+				gs.StaticStore.ScheduleStore().MarkUnavailable(server)
+			}
+		})
+		gs.reportStaticRefresh(server, StaticRefreshObservation{AttemptedAt: time.Now().UTC(), GaveUp: true})
+		return
+	}
 	cache, err := newStaticArtifactCache(maxStaticCampaignCacheSize)
 	if err != nil {
 		gs.Logger.Error("Failed to create GTFS static campaign cache", "server_name", server.ServerName, "error", err)
@@ -633,38 +644,36 @@ func (gs *GtfsService) confirmUnchangedStaticSnapshot(ctx context.Context, serve
 }
 
 func (gs *GtfsService) publishStaticCampaign(ctx context.Context, server models.ObaServer, cache *staticArtifactCache) error {
+	if len(server.GtfsStaticFeeds) != 1 {
+		return fmt.Errorf("expected one upstream-merged static feed; merge feeds upstream")
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	bundles := make([]*remoteGtfs.Static, 0, len(server.GtfsStaticFeeds))
-	downloaded := make([]downloadedStaticFeed, 0, len(server.GtfsStaticFeeds))
-	raws := make([]rawScheduleFeed, 0, len(server.GtfsStaticFeeds))
-	for _, feedURL := range server.GtfsStaticFeeds {
-		data, err := cache.Read(feedURL)
-		if err != nil {
-			return &StaticFeedError{Stage: StaticFailureCompleteValidate, Reason: StaticReasonUnknown, Err: err}
-		}
-		bundle, err := gs.parseStatic(data, feedURL, server.AgencyID)
-		if err != nil {
-			return err
-		}
-		if reason := validateStaticAgencyDiscovery(server, bundle); reason != "" {
-			artifact, _ := cache.Get(feedURL)
-			return &StaticFeedError{FeedURL: feedURL, Stage: StaticFailureAgencyDiscovery, Reason: reason, ContentHash: artifact.hash, Err: fmt.Errorf("static feed %s failed agency discovery: %s", feedURL, reason)}
-		}
-		raw, err := parseRawScheduleFeed(feedURL, data, server)
-		if err != nil {
-			artifact, _ := cache.Get(feedURL)
-			return &StaticFeedError{FeedURL: feedURL, Stage: StaticFailureSchedule, Reason: StaticReasonInvalidSchedule, ContentHash: artifact.hash, Err: fmt.Errorf("validate schedule in %s: %w", feedURL, err)}
-		}
-		bundles = append(bundles, bundle)
-		downloaded = append(downloaded, downloadedStaticFeed{url: feedURL, data: data, bundle: bundle})
-		raws = append(raws, raw)
+	feedURL := server.GtfsStaticFeeds[0]
+	data, err := cache.Read(feedURL)
+	if err != nil {
+		return &StaticFeedError{Stage: StaticFailureCompleteValidate, Reason: StaticReasonUnknown, Err: err}
 	}
-	schedules, err := compileRawSchedules(server, raws)
+	bundle, err := gs.parseStatic(data, feedURL, server.AgencyID)
+	if err != nil {
+		return err
+	}
+	if reason := validateStaticAgencyDiscovery(server, bundle); reason != "" {
+		artifact, _ := cache.Get(feedURL)
+		return &StaticFeedError{FeedURL: feedURL, Stage: StaticFailureAgencyDiscovery, Reason: reason, ContentHash: artifact.hash, Err: fmt.Errorf("static feed %s failed agency discovery: %s", utils.SanitizeServerURL(feedURL), reason)}
+	}
+	raw, err := parseRawScheduleFeed(feedURL, data, server)
+	if err != nil {
+		artifact, _ := cache.Get(feedURL)
+		return &StaticFeedError{FeedURL: feedURL, Stage: StaticFailureSchedule, Reason: StaticReasonInvalidSchedule, ContentHash: artifact.hash, Err: fmt.Errorf("validate schedule in %s: %w", utils.SanitizeServerURL(feedURL), err)}
+	}
+	schedules, err := compileRawSchedule(server, raw)
 	if err != nil {
 		return &StaticFeedError{Stage: StaticFailureCompleteValidate, Reason: StaticReasonInvalidSchedule, Err: err}
 	}
+	bundles := []*remoteGtfs.Static{bundle}
+	downloaded := []downloadedStaticFeed{{url: feedURL, data: data, bundle: bundle}}
 
 	configured := false
 	var storeErr error
@@ -693,8 +702,10 @@ func (gs *GtfsService) publishStaticCampaign(ctx context.Context, server models.
 		return errStaticServerUnconfigured
 	}
 	if storeErr != nil {
-		report.ReportErrorWithSentryOptions(storeErr, report.SentryReportOptions{Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName}, Level: sentry.LevelError})
-		return &StaticFeedError{Stage: StaticFailurePublish, Reason: StaticReasonUnknown, Err: storeErr}
+		artifact, _ := cache.Get(feedURL)
+		failure := staticPublicationFailure(storeErr, feedURL, artifact.hash)
+		report.ReportErrorWithSentryOptions(failure, report.SentryReportOptions{Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName}, Level: sentry.LevelError})
+		return failure
 	}
 	return nil
 }

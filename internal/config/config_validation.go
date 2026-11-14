@@ -73,6 +73,9 @@ func ValidateServer(server models.ObaServer) error {
 	if len(missing) > 0 {
 		return fmt.Errorf("server %q is missing required fields: %s", server.ServerName, strings.Join(missing, ", "))
 	}
+	if len(server.GtfsStaticFeeds) != 1 || len(server.GtfsRTFeeds) != 1 {
+		return fmt.Errorf("server %q requires exactly one gtfs_static_feeds entry and one gtfs_rt_feeds entry; merge feeds upstream and configure the same merged artifacts loaded by the OBA backend", server.ServerName)
+	}
 	return nil
 }
 
