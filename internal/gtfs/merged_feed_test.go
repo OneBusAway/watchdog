@@ -154,14 +154,15 @@ func TestMergedRealtimeDuplicatesAreExcludedAndReported(t *testing.T) {
 			if tc.kind == "vehicle_id" {
 				third := proto.Clone(other).(*gtfsrt.FeedEntity)
 				third.Id = proto.String("third")
-				feed.Entity = append(feed.Entity, third, &gtfsrt.FeedEntity{
-					Id: proto.String("duplicate-vehicle-reference"),
-					TripUpdate: &gtfsrt.TripUpdate{
-						Trip:    &gtfsrt.TripDescriptor{TripId: proto.String("north:T")},
-						Vehicle: &gtfsrt.VehicleDescriptor{Id: proto.String("north:101")},
-					},
-				})
+				feed.Entity = append(feed.Entity, third)
 			}
+			feed.Entity = append(feed.Entity, &gtfsrt.FeedEntity{
+				Id: proto.String("excluded-vehicle-reference"),
+				TripUpdate: &gtfsrt.TripUpdate{
+					Trip:    &gtfsrt.TripDescriptor{TripId: proto.String("north:T")},
+					Vehicle: &gtfsrt.VehicleDescriptor{Id: proto.String("north:101")},
+				},
+			})
 			if tc.keepGood {
 				good := proto.Clone(feed.Entity[0]).(*gtfsrt.FeedEntity)
 				good.Id = proto.String("unrelated")

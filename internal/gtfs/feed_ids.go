@@ -102,7 +102,7 @@ func validateStaticTableIDs(file *zip.File, key string) error {
 
 // excludeDuplicateRealtimeIDs drops every conflicting entity rather than
 // choosing a winner. Trip-update references do not make a vehicle ID duplicate,
-// but references to a duplicated position ID must also be excluded.
+// but must not reintroduce a position excluded by any ID conflict.
 func excludeDuplicateRealtimeIDs(feed *gtfsrt.FeedMessage) ([]*gtfsrt.FeedEntity, error) {
 	entities := make(map[string]int)
 	vehicles := make(map[string]int)
@@ -124,9 +124,17 @@ func excludeDuplicateRealtimeIDs(feed *gtfsrt.FeedMessage) ([]*gtfsrt.FeedEntity
 	if problem == nil {
 		return feed.Entity, nil
 	}
+	excludedPositions := make(map[string]struct{})
+	for _, entity := range feed.Entity {
+		id := entity.GetVehicle().GetVehicle().GetId()
+		if id != "" && (entities[entity.GetId()] > 1 || vehicles[id] > 1) {
+			excludedPositions[id] = struct{}{}
+		}
+	}
 	kept := make([]*gtfsrt.FeedEntity, 0, len(feed.Entity))
 	for _, entity := range feed.Entity {
-		if entities[entity.GetId()] > 1 || vehicles[entity.GetVehicle().GetVehicle().GetId()] > 1 || vehicles[entity.GetTripUpdate().GetVehicle().GetId()] > 1 {
+		_, referencesExcluded := excludedPositions[entity.GetTripUpdate().GetVehicle().GetId()]
+		if entities[entity.GetId()] > 1 || vehicles[entity.GetVehicle().GetVehicle().GetId()] > 1 || referencesExcluded {
 			continue
 		}
 		kept = append(kept, entity)
