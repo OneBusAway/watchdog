@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -151,7 +152,7 @@ func TestAgencyScopeFetchesRealtimeFeed(t *testing.T) {
 		t.Fatalf("expected an AgencyScope for an entry with agency_id, got %T", scope)
 	}
 
-	app.collectForScope(context.Background(), server, scope)
+	app.collectForScope(context.Background(), context.Background(), server, scope)
 
 	if atomic.LoadInt32(&hits) == 0 {
 		t.Fatal("agency-mode collection never fetched the GTFS-RT feed")
@@ -369,7 +370,7 @@ func TestServerScopeFetchesMetricsOncePerTick(t *testing.T) {
 		t.Fatalf("expected a ServerScope for an entry without agency_id, got %T", scope)
 	}
 
-	app.collectForScope(context.Background(), server, scope)
+	app.collectForScope(context.Background(), context.Background(), server, scope)
 
 	mu.Lock()
 	got := metricsCalls
@@ -426,7 +427,7 @@ func TestServerScopeGtfsRtFreshnessNotSetWithoutFeeds(t *testing.T) {
 		t.Fatalf("expected a ServerScope for an entry without agency_id, got %T", scope)
 	}
 
-	app.collectForScope(context.Background(), server, scope)
+	app.collectForScope(context.Background(), context.Background(), server, scope)
 
 	serverURL := utils.SanitizeServerURL(obasServer.URL)
 
@@ -479,7 +480,7 @@ func TestAgencyScopeGtfsRtFreshnessRemovedWhenFeedsRemoved(t *testing.T) {
 		t.Fatalf("expected an AgencyScope, got %T", scope)
 	}
 
-	app.collectForScope(context.Background(), server, scope)
+	app.collectForScope(context.Background(), context.Background(), server, scope)
 
 	serverURL := utils.SanitizeServerURL(obasServer.URL)
 	labels := map[string]string{
@@ -494,7 +495,7 @@ func TestAgencyScopeGtfsRtFreshnessRemovedWhenFeedsRemoved(t *testing.T) {
 	}
 
 	server.GtfsRTFeeds = nil
-	app.collectForScope(context.Background(), server, scope)
+	app.collectForScope(context.Background(), context.Background(), server, scope)
 
 	if _, found := gaugeValueFor(metrics.GtfsRtLastSuccessfulFetch, labels); found {
 		t.Fatal("expected freshness series to be removed after GTFS-RT feeds were removed")
@@ -545,7 +546,7 @@ func TestServerScopeGtfsRtFreshnessRemovedWhenFeedsRemoved(t *testing.T) {
 		t.Fatalf("expected a ServerScope, got %T", scope)
 	}
 
-	app.collectForScope(context.Background(), server, scope)
+	app.collectForScope(context.Background(), context.Background(), server, scope)
 
 	serverURL := utils.SanitizeServerURL(obasServer.URL)
 	labels := map[string]string{
@@ -560,7 +561,7 @@ func TestServerScopeGtfsRtFreshnessRemovedWhenFeedsRemoved(t *testing.T) {
 	}
 
 	server.GtfsRTFeeds = nil
-	app.collectForScope(context.Background(), server, scope)
+	app.collectForScope(context.Background(), context.Background(), server, scope)
 
 	if _, found := gaugeValueFor(metrics.GtfsRtLastSuccessfulFetch, labels); found {
 		t.Fatal("expected freshness series to be removed after GTFS-RT feeds were removed")
@@ -605,7 +606,7 @@ func TestServerScopeRetiresVehicleStateWhenNoAgencyIsReported(t *testing.T) {
 	})
 
 	scope := config.ResolveScope(server, app.GtfsService.StaticStore, app.GtfsService.RouteAgencyIndex)
-	app.collectForScope(context.Background(), server, scope)
+	app.collectForScope(context.Background(), context.Background(), server, scope)
 
 	if rtCalls.Load() != 0 {
 		t.Fatalf("GTFS-RT fetched with no reported agencies: %d", rtCalls.Load())
@@ -659,7 +660,7 @@ func TestServerScopePreservesVehicleStateWhenCoverageProbeFails(t *testing.T) {
 	app.MetricsService.VehicleLastSeen.Set(agency.ServerKey(), "0", "vehicle-a", metrics.LastSeen{VehicleID: "vehicle-a", FeedID: "0"})
 
 	scope := config.ResolveScope(server, app.GtfsService.StaticStore, app.GtfsService.RouteAgencyIndex)
-	app.collectForScope(context.Background(), server, scope)
+	app.collectForScope(context.Background(), context.Background(), server, scope)
 
 	if rtCalls.Load() != 0 {
 		t.Fatalf("GTFS-RT fetched after failed coverage probe: %d", rtCalls.Load())
@@ -708,7 +709,7 @@ func TestServerScopeFailedCoverageProbeDoesNotRefreshStatic(t *testing.T) {
 	app.MetricsService.VehicleLastSeen.Set(agency.ServerKey(), "0", "vehicle-a", metrics.LastSeen{VehicleID: "vehicle-a", FeedID: "0"})
 
 	scope := config.ResolveScope(server, app.GtfsService.StaticStore, app.GtfsService.RouteAgencyIndex)
-	app.collectForScope(ctx, server, scope)
+	app.collectForScope(ctx, ctx, server, scope)
 
 	// A started campaign downloads its feed right away; give it a moment.
 	time.Sleep(200 * time.Millisecond)
@@ -728,12 +729,86 @@ func TestServerScopeFailedCoverageProbeDoesNotRefreshStatic(t *testing.T) {
 	// Control: the same setup with a successful, disagreeing probe does start a
 	// refresh, so the assertions above are not vacuous.
 	probeUp.Store(true)
-	app.collectForScope(ctx, server, scope)
+	app.collectForScope(ctx, ctx, server, scope)
 	deadline := time.Now().Add(5 * time.Second)
 	for staticCalls.Load() == 0 {
 		if time.Now().After(deadline) {
 			t.Fatal("a successful probe reporting a different agency set did not start a static refresh")
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// TestServerScopeMismatchRefreshOutlivesCycle pins that a static refresh
+// started by an agency-set mismatch runs under the long-lived campaign
+// context, not the per-cycle context collectOnce cancels when it returns.
+func TestServerScopeMismatchRefreshOutlivesCycle(t *testing.T) {
+	zip, err := os.ReadFile("../../testdata/gtfs.zip")
+	if err != nil {
+		t.Fatalf("read gtfs fixture: %v", err)
+	}
+	release := make(chan struct{})
+	downloadStarted := make(chan struct{}, 1)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/static.zip":
+			select {
+			case downloadStarted <- struct{}{}:
+			default:
+			}
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return
+			}
+			w.Header().Set("Content-Type", "application/zip")
+			_, _ = w.Write(zip)
+		case "/api/where/metrics.json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"code":200,"version":2,"data":{"entry":{"agencyIDs":["agency-b"],"realtimeRecordsTotal":{}}}}`))
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"code":200,"data":{"list":[],"entry":{"readableTime":"now"}}}`))
+		}
+	}))
+	var releaseOnce sync.Once
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(release) })
+		ts.Close()
+	})
+
+	campaignCtx, cancelCampaign := context.WithCancel(context.Background())
+	t.Cleanup(cancelCampaign)
+	cycleCtx, cancelCycle := context.WithCancel(campaignCtx)
+	defer cancelCycle()
+
+	app := newTestApplication(t)
+	server := models.ObaServer{ServerName: "multi", ObaBaseURL: ts.URL, GtfsStaticFeeds: []string{ts.URL + "/static.zip"}}
+	agency := serverForAgency(server, "agency-a", "Agency A")
+	app.GtfsService.StaticStore.Set(agency.ServerKey(), &models.StaticData{})
+	app.GtfsService.RouteAgencyIndex.Replace(server.ServerKey(), map[string]string{"route-a": agency.AgencyID}, nil, map[string]string{agency.AgencyID: agency.AgencyName})
+
+	scope := config.ResolveScope(server, app.GtfsService.StaticStore, app.GtfsService.RouteAgencyIndex)
+	app.collectForScope(cycleCtx, campaignCtx, server, scope)
+	// collectOnce cancels its cycle context as soon as the cycle returns.
+	cancelCycle()
+
+	select {
+	case <-downloadStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("agency mismatch did not start a static refresh download")
+	}
+	releaseOnce.Do(func() { close(release) })
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if state, ok := app.GtfsService.StaticStore.GetRefreshState(server); ok && state.Success {
+			return
+		}
+		if time.Now().After(deadline) {
+			state, ok := app.GtfsService.StaticStore.GetRefreshState(server)
+			t.Fatalf("mismatch refresh did not succeed after the cycle ended: state=%+v attempted=%v", state, ok)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

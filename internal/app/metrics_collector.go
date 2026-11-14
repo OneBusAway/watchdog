@@ -202,7 +202,7 @@ launch:
 					}
 				})
 			}()
-			app.collectForScope(cycleCtx, t.server, t.scope)
+			app.collectForScope(cycleCtx, ctx, t.server, t.scope)
 			<-metadataDone
 		}(target)
 	}
@@ -225,7 +225,11 @@ launch:
 //     runs the GTFS-RT vehicle pass once for the whole server. Static-only
 //     agencies (present locally but not reported by OBA) get
 //     gtfs_static_agency_reported_by_oba = 0 and are left out of both.
-func (app *Application) collectForScope(ctx context.Context, server models.ObaServer, scope config.Scope) {
+//
+// ctx bounds this cycle's collection work. campaignCtx outlives the cycle and
+// parents background static refresh campaigns started from it, so they are
+// not canceled when collectOnce returns.
+func (app *Application) collectForScope(ctx, campaignCtx context.Context, server models.ObaServer, scope config.Scope) {
 	switch s := scope.(type) {
 	case config.AgencyScope:
 		app.MetricsService.ReportScheduledService(time.Now().UTC(), server)
@@ -235,7 +239,7 @@ func (app *Application) collectForScope(ctx context.Context, server models.ObaSe
 		for _, agency := range s.StaticAgencies {
 			app.MetricsService.ReportScheduledService(now, serverForAgency(server, agency.AgencyID, agency.AgencyName))
 		}
-		app.collectForServerScope(ctx, server, s)
+		app.collectForServerScope(ctx, campaignCtx, server, s)
 	default:
 		app.Logger.Error("Unknown scope type", "server_name", server.ServerName)
 	}
@@ -289,7 +293,7 @@ func (app *Application) pruneAgencyOffsets(keep func(serverKey string) bool) {
 // covers only the checks that are genuinely per-agency. Walking the feed once
 // per agency would multiply transition observations and file every vehicle
 // under every agency's last-seen slot; attribution is the pass's job.
-func (app *Application) collectForServerScope(ctx context.Context, server models.ObaServer, scope config.ServerScope) {
+func (app *Application) collectForServerScope(ctx, campaignCtx context.Context, server models.ObaServer, scope config.ServerScope) {
 	if len(scope.StaticAgencies) == 0 {
 		app.Logger.Info("Server-scope entry has no static agencies yet; skipping tick", "server_name", server.ServerName)
 		return
@@ -356,12 +360,13 @@ func (app *Application) collectForServerScope(ctx context.Context, server models
 	// Backend coverage and Watchdog's published snapshot disagree: the backend
 	// may have loaded newer static data. Refresh in the background; this does
 	// not delay the rest of the tick, and the retirement below still runs now.
+	// The campaign runs under campaignCtx so it survives the end of this cycle.
 	localAgencyIDs := make([]string, 0, len(scope.StaticAgencies))
 	for _, agency := range scope.StaticAgencies {
 		localAgencyIDs = append(localAgencyIDs, agency.AgencyID)
 	}
 	backendOnly, localOnly := gtfs.DiffAgencySets(reportedAgencies, localAgencyIDs)
-	app.GtfsService.RefreshOnAgencyMismatch(ctx, server, backendOnly, localOnly, agencyMismatchRefreshRetries)
+	app.GtfsService.RefreshOnAgencyMismatch(campaignCtx, server, backendOnly, localOnly, agencyMismatchRefreshRetries)
 
 	// Resolve the agencies reported by OBA. These entries carry the
 	// labels the vehicle pass emits, and the pass consults the route/trip index

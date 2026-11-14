@@ -126,7 +126,7 @@ func newTwoAgencyServerScope(t *testing.T) (*Application, models.ObaServer, conf
 func TestServerScopeTracksEachVehicleOncePerTick(t *testing.T) {
 	app, server, scope, _ := newTwoAgencyServerScope(t)
 
-	app.collectForScope(context.Background(), server, scope)
+	app.collectForScope(context.Background(), context.Background(), server, scope)
 
 	if got := app.MetricsService.VehicleLastSeen.Count(models.ServerKey(server.ObaBaseURL, "agency-a")); got != 1 {
 		t.Fatalf("expected one tracked agency-a vehicle, got %d", got)
@@ -139,7 +139,7 @@ func TestServerScopeTracksEachVehicleOncePerTick(t *testing.T) {
 func TestServerScopeAttributesVehiclesToOwningAgency(t *testing.T) {
 	app, server, scope, _ := newTwoAgencyServerScope(t)
 
-	app.collectForScope(context.Background(), server, scope)
+	app.collectForScope(context.Background(), context.Background(), server, scope)
 
 	lastSeen := app.MetricsService.VehicleLastSeen
 	for agencyID, vehicleID := range map[string]string{"agency-a": "va", "agency-b": "vb"} {
@@ -160,7 +160,7 @@ func TestServerScopeIdenticalTicksDoNotCreateStateChanges(t *testing.T) {
 
 	const ticks = 3
 	for i := 0; i < ticks; i++ {
-		app.collectForScope(context.Background(), server, scope)
+		app.collectForScope(context.Background(), context.Background(), server, scope)
 	}
 
 	got := readCounter(t, metrics.GtfsRtVehicleStateChanges, map[string]string{
@@ -177,7 +177,7 @@ func TestServerScopeIdenticalTicksDoNotCreateStateChanges(t *testing.T) {
 
 func TestServerScopeFailedFetchDoesNotProcessCachedSnapshot(t *testing.T) {
 	app, server, scope, failRT := newTwoAgencyServerScope(t)
-	app.collectForScope(context.Background(), server, scope)
+	app.collectForScope(context.Background(), context.Background(), server, scope)
 
 	// If the cached snapshot were processed again, this edited FULL_DATASET
 	// value would retire every tracked vehicle. The failed fetch must gate the
@@ -186,7 +186,7 @@ func TestServerScopeFailedFetchDoesNotProcessCachedSnapshot(t *testing.T) {
 	cached.Vehicles = nil
 	app.GtfsService.RealtimeStore.Set(server.ServerKey(), cached)
 	failRT.Store(true)
-	app.collectForScope(context.Background(), server, scope)
+	app.collectForScope(context.Background(), context.Background(), server, scope)
 
 	if got := app.MetricsService.VehicleLastSeen.Count(models.ServerKey(server.ObaBaseURL, "agency-a")); got != 1 {
 		t.Fatalf("failed fetch processed cached snapshot; tracked count = %d, want 1", got)

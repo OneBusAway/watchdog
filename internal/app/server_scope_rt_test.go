@@ -92,7 +92,7 @@ func TestServerScopeRTFeedFetchedOncePerTick(t *testing.T) {
 	}
 
 	// Tick the fan-out.
-	app.collectForServerScope(context.Background(), server, scope)
+	app.collectForServerScope(context.Background(), context.Background(), server, scope)
 
 	mu.Lock()
 	gotRT := rtCalls
