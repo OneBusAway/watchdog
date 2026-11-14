@@ -17,8 +17,10 @@ import (
 	_ "time/tzdata"
 
 	"github.com/getsentry/sentry-go"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"watchdog.onebusaway.org/internal/app"
 	"watchdog.onebusaway.org/internal/config"
+	"watchdog.onebusaway.org/internal/db"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
@@ -153,6 +155,14 @@ func main() {
 
 	cfg.UpdateConfig(servers)
 
+	// Connect to the optional PostgreSQL investigation store and apply any
+	// pending schema migrations. See openInvestigationDB for why a failure
+	// here never stops Watchdog.
+	investigationDB := openInvestigationDB(ctx, os.Getenv("DATABASE_URL"), logger)
+	if investigationDB != nil {
+		defer investigationDB.Close()
+	}
+
 	// At this point, we have successfully loaded the configuration
 	// and have a list of OBA servers to work with.
 
@@ -161,7 +171,7 @@ func main() {
 	// and the required dependencies.
 	// this New() function is critical in understanding how we structure the application take a look at it.
 	// and also take a look at service file in each package to see the dependencies and the exposed methods and function.
-	app := app.New(&cfg, logger, client, version, droppedStore)
+	app := app.New(&cfg, logger, client, version, droppedStore, investigationDB)
 
 	// Report the agencies Watchdog is tracking (those that passed config
 	// validation). This runs once at startup; it is re-triggered only when the
@@ -241,4 +251,39 @@ func main() {
 		logger.Error(err.Error())
 		os.Exit(1)
 	}
+}
+
+// investigationDBStartupTimeout bounds connecting and migrating at startup, so
+// an unreachable database delays metrics collection by at most this long.
+const investigationDBStartupTimeout = 30 * time.Second
+
+// openInvestigationDB returns a migrated pool for the PostgreSQL investigation
+// store, or nil when it is disabled or unavailable.
+//
+// PostgreSQL is optional (ADR 0001): Watchdog must keep collecting and
+// exporting Prometheus metrics without it. So an empty databaseURL disables
+// the store, and a connection or migration failure is logged and reported to
+// Sentry but does not stop startup. There is no reconnect yet; recording
+// PostgreSQL outages is deferred in the ADR, so a failed startup connection
+// leaves the store disabled until the next restart.
+//
+// databaseURL contains a password and is never logged.
+func openInvestigationDB(ctx context.Context, databaseURL string, logger *slog.Logger) *pgxpool.Pool {
+	if databaseURL == "" {
+		logger.Info("DATABASE_URL is not set; investigation storage is disabled")
+		return nil
+	}
+
+	openCtx, cancel := context.WithTimeout(ctx, investigationDBStartupTimeout)
+	defer cancel()
+
+	pool, err := db.Open(openCtx, databaseURL, logger)
+	if err != nil {
+		logger.Error("Investigation database unavailable; continuing without investigation storage", "err", err)
+		report.ReportError(fmt.Errorf("investigation database unavailable at startup: %w", err), sentry.LevelError)
+		return nil
+	}
+
+	logger.Info("Investigation database connected and migrated")
+	return pool
 }
