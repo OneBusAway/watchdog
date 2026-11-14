@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	gtfsrt "github.com/OneBusAway/go-gtfs/proto"
+	"google.golang.org/protobuf/proto"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
@@ -21,16 +23,16 @@ func TestDuplicateFeedMetricsAndRecovery(t *testing.T) {
 	server := models.ObaServer{ServerName: "duplicate-feed", ObaBaseURL: "https://duplicate-feed.example", GtfsStaticFeeds: []string{"https://feeds.example/static.zip"}, GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: "https://feeds.example/vehicles.pb"}}}
 	labels := map[string]string{"agency_id": "", "agency_name": "", "server_name": server.ServerName, "server_url": server.ObaBaseURL, "feed": "0", "feed_url": server.GtfsRTFeeds[0].VehiclePositionURL}
 	freshness := NewFeedFreshnessStore()
-	failure := gtfs.FeedObservation{FeedID: "0", FeedURL: labels["feed_url"], ObservedAt: time.Now().UTC(), DuplicateID: true}
+	failure := gtfs.FeedObservation{FeedID: "0", FeedURL: labels["feed_url"], ObservedAt: time.Now().UTC(), Success: true, DuplicateID: true}
 	freshness.Observe(server, failure)
 	if value, err := getMetricValue(GtfsRtFeedDuplicateID, labels); err != nil || value != 1 {
 		t.Fatalf("missing realtime duplicate metric: %v, %v", value, err)
 	}
-	if value, err := getMetricValue(GtfsRtFeedFetchSuccess, labels); err != nil || value != 0 {
-		t.Fatalf("duplicate feed reported as successful: %v, %v", value, err)
+	if value, err := getMetricValue(GtfsRtFeedFetchSuccess, labels); err != nil || value != 1 {
+		t.Fatalf("duplicate exclusion stopped successful collection: %v, %v", value, err)
 	}
 	otherFailure := failure
-	otherFailure.DuplicateID = false
+	otherFailure.Success, otherFailure.DuplicateID = false, false
 	freshness.Observe(server, otherFailure)
 	if value, err := getMetricValue(GtfsRtFeedDuplicateID, labels); err != nil || value != 0 {
 		t.Fatalf("a different fetch failure retained the duplicate flag: %v, %v", value, err)
@@ -114,5 +116,66 @@ func TestSynchronousStaticRefreshClearsDuplicateFailureOnRecovery(t *testing.T) 
 	}
 	if series := seriesMatching(GtfsStaticFeedFailureInfo, map[string]string{"server_url": ts.URL}); len(series) != 0 {
 		t.Fatal("successful retry retained a failure series")
+	}
+}
+
+func TestRealtimeDuplicatesKeepOtherVehiclesMonitored(t *testing.T) {
+	for _, mode := range []string{"agency", "server"} {
+		t.Run(mode, func(t *testing.T) {
+			feed := &gtfsrt.FeedMessage{Header: &gtfsrt.FeedHeader{GtfsRealtimeVersion: proto.String("2.0")}}
+			for _, row := range []struct{ entity, vehicle, route string }{
+				{"bad-1", "B:101", "B:R"},
+				{"good", "A:202", "A:R"},
+				{"bad-2", "B:101", "B:R"},
+			} {
+				feed.Entity = append(feed.Entity, &gtfsrt.FeedEntity{
+					Id: proto.String(row.entity),
+					Vehicle: &gtfsrt.VehiclePosition{
+						Vehicle:  &gtfsrt.VehicleDescriptor{Id: proto.String(row.vehicle)},
+						Trip:     &gtfsrt.TripDescriptor{RouteId: proto.String(row.route)},
+						Position: &gtfsrt.Position{Latitude: proto.Float32(1), Longitude: proto.Float32(2)},
+					},
+				})
+			}
+			data, err := proto.Marshal(feed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(data) }))
+			defer ts.Close()
+			server := models.ObaServer{ServerName: "duplicate-" + mode, ObaBaseURL: ts.URL, GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: ts.URL}}}
+			var agencies []models.ObaServer
+			if mode == "agency" {
+				server.AgencyID, server.AgencyName = "A", "Agency A"
+			} else {
+				a, b := server, server
+				a.AgencyID, a.AgencyName = "A", "Agency A"
+				b.AgencyID, b.AgencyName = "B", "Agency B"
+				agencies = []models.ObaServer{a, b}
+			}
+			index := gtfs.NewRouteAgencyIndex()
+			index.Replace(server.ServerKey(), map[string]string{"A:R": "A", "B:R": "B"}, nil, map[string]string{"A": "Agency A", "B": "Agency B"})
+			store := gtfs.NewRealtimeStore()
+			freshness := NewFeedFreshnessStore()
+			store.SetObserver(freshness.Observe)
+			service := gtfs.NewGtfsService(gtfs.NewStaticStore(), store, geo.NewBoundingBoxStore(), index, slog.New(slog.NewTextHandler(io.Discard, nil)), ts.Client())
+			if err := service.FetchAndStoreGTFSRTFeed(context.Background(), server); err != nil {
+				t.Fatal(err)
+			}
+			if count, err := countVehiclePositions(server, agencies, store, index); err != nil || count != 1 {
+				t.Fatalf("duplicates stopped unrelated vehicle counting: %d, %v", count, err)
+			}
+			labels := map[string]string{"agency_id": server.AgencyID, "agency_name": server.AgencyName, "server_name": server.ServerName, "server_url": ts.URL, "feed": "0", "feed_url": ts.URL}
+			if value, err := getMetricValue(GtfsRtFeedDuplicateID, labels); err != nil || value != 1 {
+				t.Fatalf("duplicates were not reported: %v, %v", value, err)
+			}
+			if value, err := getMetricValue(GtfsRtFeedFetchSuccess, labels); err != nil || value != 1 {
+				t.Fatalf("the remaining feed was not treated as successful: %v, %v", value, err)
+			}
+			agencyLabels := map[string]string{"agency_id": "A", "agency_name": "Agency A", "server_name": server.ServerName, "server_url": ts.URL}
+			if value, err := getMetricValue(RealtimeVehiclePositions, agencyLabels); err != nil || value != 1 {
+				t.Fatalf("agency A lost its unrelated vehicle metric: %v, %v", value, err)
+			}
+		})
 	}
 }

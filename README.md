@@ -58,7 +58,7 @@ To upgrade an existing multi-feed entry:
 
 Multiple sources are rejected with a migration error. Watchdog does not keep the first source automatically. Invalid entries follow the existing config-loading policy and are excluded while valid entries continue to load. Check the dropped-server diagnostics and `watchdog_configured_servers` after upgrading.
 
-Duplicate primary IDs in the static tables Watchdog consumes, or duplicate entity IDs or vehicle-position vehicle IDs in realtime, reject the new snapshot and produce a Sentry event. Static failures expose `gtfs_static_feed_failure_info{reason="duplicate_id"}`. Realtime failures expose `gtfs_rt_feed_duplicate_id=1` and `gtfs_rt_feed_fetch_success=0`. The last good snapshot is retained; a failed realtime fetch never processes it as a new observation.
+Duplicate primary IDs in the static tables Watchdog consumes reject the new static snapshot, retain the last good snapshot, and produce a Sentry event and `gtfs_static_feed_failure_info{reason="duplicate_id"}`. Realtime duplicate entity IDs or vehicle-position IDs produce a Sentry event and `gtfs_rt_feed_duplicate_id=1`. Every entity carrying a conflicting ID is excluded, and the remaining entities are published as a successful fetch with `gtfs_rt_feed_fetch_success=1`. No duplicate winner is selected. Transport or decoding failures still preserve the cached realtime snapshot without processing it as a new observation.
 
 #### Ways to Provide the Config File
 

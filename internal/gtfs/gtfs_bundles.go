@@ -1029,16 +1029,25 @@ func parseGTFSRTFeed(ctx context.Context, server models.ObaServer, client *http.
 		reportFetchErr(err, report.SentryReportOptions{Tags: map[string]string{"server_name": server.ServerName, "agency_id": server.AgencyID}})
 		return nil, observations, err
 	}
-	if err := validateRealtimeIDs(&raw); err != nil {
-		reportFetchErr(err, report.SentryReportOptions{
+	if err := ctx.Err(); err != nil {
+		return nil, observations, err
+	}
+	entities, duplicateErr := excludeDuplicateRealtimeIDs(&raw)
+	if duplicateErr != nil {
+		reportFetchErr(duplicateErr, report.SentryReportOptions{
 			Tags:         map[string]string{"server_name": server.ServerName, "agency_id": server.AgencyID},
 			ExtraContext: map[string]interface{}{"vehicle_position_url": sanitizedURL},
 		})
-		if ctx.Err() == nil {
-			observations = append(observations, FeedObservation{FeedID: feedID, FeedURL: sanitizedURL, ObservedAt: observedAt, DuplicateID: true})
+		// Parse only unambiguous entities. Keep raw for source-payload health
+		// metrics; exclusion must not hide a defect in the producer's feed.
+		filtered := &gtfsrt.FeedMessage{Header: raw.Header, Entity: entities}
+		var err error
+		data, err = proto.Marshal(filtered)
+		if err != nil {
+			return nil, observations, fmt.Errorf("encode filtered GTFS-RT feed %s: %w", sanitizedURL, err)
 		}
-		return nil, observations, err
 	}
+
 	parsed, err := remoteGtfs.ParseRealtime(data, &remoteGtfs.ParseRealtimeOptions{})
 	if err != nil {
 		err = fmt.Errorf("parse GTFS-RT feed %s: %w", sanitizedURL, err)
@@ -1050,7 +1059,7 @@ func parseGTFSRTFeed(ctx context.Context, server models.ObaServer, client *http.
 	}
 
 	payloadHash := canonicalEntityHash(raw.Entity)
-	stateHashes := vehicleStateHashes(raw.Entity)
+	stateHashes := vehicleStateHashes(entities)
 	vehicleEntities := 0
 	missingTimestamps := 0
 	for _, entity := range raw.Entity {
@@ -1069,6 +1078,7 @@ func parseGTFSRTFeed(ctx context.Context, server models.ObaServer, client *http.
 	}
 	observations = append(observations, FeedObservation{
 		FeedID: feedID, FeedURL: sanitizedURL, Success: true, ObservedAt: observedAt,
+		DuplicateID:     duplicateErr != nil,
 		SourceTimestamp: sourceTimestamp, PayloadHash: payloadHash,
 		VehicleEntities: vehicleEntities, VehicleTimestampMissing: missingTimestamps,
 	})

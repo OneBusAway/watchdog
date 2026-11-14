@@ -100,24 +100,38 @@ func validateStaticTableIDs(file *zip.File, key string) error {
 	}
 }
 
-func validateRealtimeIDs(feed *gtfsrt.FeedMessage) error {
-	entities := make(map[string]struct{})
-	vehicles := make(map[string]struct{})
+// excludeDuplicateRealtimeIDs drops every conflicting entity rather than
+// choosing a winner. Trip-update references do not make a vehicle ID duplicate,
+// but references to a duplicated position ID must also be excluded.
+func excludeDuplicateRealtimeIDs(feed *gtfsrt.FeedMessage) ([]*gtfsrt.FeedEntity, error) {
+	entities := make(map[string]int)
+	vehicles := make(map[string]int)
+	var problem error
 	for _, entity := range feed.Entity {
 		if id := entity.GetId(); id != "" {
-			if _, duplicate := entities[id]; duplicate {
-				return &duplicateIDError{kind: "entity_id", id: id}
+			entities[id]++
+			if entities[id] == 2 && problem == nil {
+				problem = &duplicateIDError{kind: "entity_id", id: id}
 			}
-			entities[id] = struct{}{}
 		}
 		if id := entity.GetVehicle().GetVehicle().GetId(); id != "" {
-			if _, duplicate := vehicles[id]; duplicate {
-				return &duplicateIDError{kind: "vehicle_id", id: id}
+			vehicles[id]++
+			if vehicles[id] == 2 && problem == nil {
+				problem = &duplicateIDError{kind: "vehicle_id", id: id}
 			}
-			vehicles[id] = struct{}{}
 		}
 	}
-	return nil
+	if problem == nil {
+		return feed.Entity, nil
+	}
+	kept := make([]*gtfsrt.FeedEntity, 0, len(feed.Entity))
+	for _, entity := range feed.Entity {
+		if entities[entity.GetId()] > 1 || vehicles[entity.GetVehicle().GetVehicle().GetId()] > 1 || vehicles[entity.GetTripUpdate().GetVehicle().GetId()] > 1 {
+			continue
+		}
+		kept = append(kept, entity)
+	}
+	return kept, problem
 }
 
 // validateParsedStaticIDs also protects callers publishing an already parsed

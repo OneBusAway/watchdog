@@ -126,21 +126,48 @@ func TestMergedStaticDuplicatesAreReportedAndNeverPublished(t *testing.T) {
 	}
 }
 
-func TestMergedRealtimeDuplicatesAreReportedAndNeverPublished(t *testing.T) {
-	for _, kind := range []string{"entity_id", "vehicle_id"} {
-		t.Run(kind, func(t *testing.T) {
+func TestMergedRealtimeDuplicatesAreExcludedAndReported(t *testing.T) {
+	cases := []struct {
+		name, kind string
+		keepGood   bool
+	}{
+		{"duplicate entities", "entity_id", true},
+		{"duplicate vehicles", "vehicle_id", true},
+		{"all entities duplicated", "entity_id", false},
+		{"all vehicles duplicated", "vehicle_id", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			events := captureDuplicateEvents(t)
 			var feed gtfsrt.FeedMessage
 			if err := proto.Unmarshal(marshalVehicleFeed(t, "north:101", 1, 2), &feed); err != nil {
 				t.Fatal(err)
 			}
 			other := proto.Clone(feed.Entity[0]).(*gtfsrt.FeedEntity)
-			if kind == "entity_id" {
+			if tc.kind == "entity_id" {
 				other.Vehicle.Vehicle.Id = proto.String("south:101")
 			} else {
 				other.Id = proto.String("second")
+				other.Vehicle.Vehicle.Label = proto.String("Different descriptor")
 			}
 			feed.Entity = append(feed.Entity, other)
+			if tc.kind == "vehicle_id" {
+				third := proto.Clone(other).(*gtfsrt.FeedEntity)
+				third.Id = proto.String("third")
+				feed.Entity = append(feed.Entity, third, &gtfsrt.FeedEntity{
+					Id: proto.String("duplicate-vehicle-reference"),
+					TripUpdate: &gtfsrt.TripUpdate{
+						Trip:    &gtfsrt.TripDescriptor{TripId: proto.String("north:T")},
+						Vehicle: &gtfsrt.VehicleDescriptor{Id: proto.String("north:101")},
+					},
+				})
+			}
+			if tc.keepGood {
+				good := proto.Clone(feed.Entity[0]).(*gtfsrt.FeedEntity)
+				good.Id = proto.String("unrelated")
+				good.Vehicle.Vehicle.Id = proto.String("unrelated:202")
+				feed.Entity = append(feed.Entity, good)
+			}
 			data, err := proto.Marshal(&feed)
 			if err != nil {
 				t.Fatal(err)
@@ -153,19 +180,31 @@ func TestMergedRealtimeDuplicatesAreReportedAndNeverPublished(t *testing.T) {
 			store.Set(server.ServerKey(), previous)
 			var observation FeedObservation
 			store.SetObserver(func(_ models.ObaServer, result FeedObservation) { observation = result })
-			err = fetchAndStoreGTFSRTFeed(context.Background(), server, store, ts.Client(), nil)
-			var duplicate *duplicateIDError
-			if !errors.As(err, &duplicate) || duplicate.kind != kind {
-				t.Fatalf("expected %s rejection, got %v", kind, err)
+			if err := fetchAndStoreGTFSRTFeed(context.Background(), server, store, ts.Client(), nil); err != nil {
+				t.Fatalf("duplicate exclusion must not fail collection: %v", err)
 			}
-			if store.Get(server.ServerKey()) != previous {
-				t.Fatal("duplicate feed replaced the last good snapshot")
+			current := store.Get(server.ServerKey())
+			want := 0
+			if tc.keepGood {
+				want = 1
 			}
-			if observation.Success || !observation.DuplicateID {
-				t.Fatalf("missing duplicate failure observation: %+v", observation)
+			if current == previous || current == nil || len(current.Vehicles) != want {
+				t.Fatalf("expected a fresh snapshot with %d unambiguous vehicles, got %+v", want, current)
+			}
+			if tc.keepGood && (current.Vehicles[0].Vehicle.GetID().ID != "unrelated:202" || current.Vehicles[0].StateHash != vehicleStateHashes(feed.Entity)["unrelated:202"][0]) {
+				t.Fatalf("unrelated vehicle or its state hash changed: %+v", current.Vehicles[0])
+			}
+			rawVehicles := 0
+			for _, entity := range feed.Entity {
+				if entity.GetVehicle() != nil {
+					rawVehicles++
+				}
+			}
+			if !observation.Success || !observation.DuplicateID || observation.VehicleEntities != rawVehicles || observation.PayloadHash != canonicalEntityHash(feed.Entity) {
+				t.Fatalf("duplicate exclusion lost source health or successful collection: %+v", observation)
 			}
 			if len(*events) == 0 {
-				t.Fatal("duplicate feed did not produce a Sentry event")
+				t.Fatal("duplicate IDs did not produce a Sentry event")
 			}
 		})
 	}
