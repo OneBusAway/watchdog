@@ -20,6 +20,8 @@ func (s *InvestigationService) registerRoutes(router *httprouter.Router) {
 	s.get(router, "/v1/agencies/:agency_id", s.getAgency)
 	s.registerLoader(kindAgency, loadAgencies)
 	s.get(router, "/v1/servers/:server_id/vehicle-position-endpoints", s.listServerVehiclePositionEndpoints)
+	s.get(router, "/v1/bounding-box-versions/:bounding_box_version_id", s.getBoundingBoxVersion)
+	s.registerLoader(kindBoundingBoxVersion, loadBoundingBoxVersions)
 }
 
 // get registers a read-only endpoint: it serves GET and HEAD requests for
