@@ -14,6 +14,8 @@ func (s *InvestigationService) Register(router *httprouter.Router) {
 // registerRoutes holds one s.get line per endpoint.
 func (s *InvestigationService) registerRoutes(router *httprouter.Router) {
 	s.get(router, "/v1/cluster-schemes/:scheme_version", s.getClusterScheme)
+	s.get(router, "/v1/unmatched-stop-episodes", s.listUnmatchedStopEpisodes)
+	s.get(router, "/v1/unmatched-stop-episodes/:episode_id", s.getUnmatchedStopEpisode)
 }
 
 // get registers a read-only endpoint: it serves GET and HEAD requests for
