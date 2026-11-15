@@ -27,6 +27,7 @@ type scheduleWindow struct {
 }
 
 type scheduleService struct {
+	id       string
 	weekdays uint8
 	start    int
 	end      int
@@ -35,13 +36,34 @@ type scheduleService struct {
 	windows  []scheduleWindow
 }
 
+// scheduleTrip is the compact per-trip record kept for trip lookup and
+// expected-schedule classification. Offsets are seconds after the service
+// day's noon-minus-12h reference.
+type scheduleTrip struct {
+	id             string
+	routeID        string
+	blockID        string
+	service        int32
+	firstDeparture int32
+	lastArrival    int32
+	frequencyBased bool
+}
+
 // ScheduleSnapshot is the compact, immutable result of compiling the schedule
-// tables of every configured static feed. It deliberately retains no trips,
-// stops, or stop times.
+// tables of the upstream-merged static feed. Besides the service-level windows
+// behind Evaluate, it keeps one compact record per trip: its route, service and
+// block IDs, its first departure and last arrival, and whether it runs from
+// frequencies.txt. It keeps no stops or stop times.
+//
+// TODO(historical-schedule-recalculation): If old incident results must be
+// recalculated under newer rules, persist a versioned per-trip schedule
+// projection keyed by GTFS snapshot. Do not persist the full schedule solely
+// for the initial expected-active/inactive/unknown classification.
 type ScheduleSnapshot struct {
 	timezone           *time.Location
 	timezoneName       string
 	services           []scheduleService
+	trips              []scheduleTrip // sorted by id
 	feedURLs           []string
 	maxOvernightOffset time.Duration
 	complete           bool
@@ -291,7 +313,9 @@ type rawService struct {
 }
 
 type rawTrip struct {
+	routeID   string
 	serviceID string
+	blockID   string
 	agencyID  string
 	first     rawEndpoint
 	last      rawEndpoint
@@ -320,11 +344,17 @@ func compileSchedules(server models.ObaServer, feeds []downloadedStaticFeed) (ma
 
 // compileRawSchedule compiles one artifact using its final service IDs.
 func compileRawSchedule(server models.ObaServer, feed rawScheduleFeed) (map[string]*ScheduleSnapshot, error) {
+	type pendingTrip struct {
+		trip       scheduleTrip
+		serviceKey string
+	}
 	type builder struct {
 		timezone  *time.Location
 		services  map[string]*scheduleService
+		trips     []pendingTrip
 		maxOffset time.Duration
 	}
+	ids := newStringInterner()
 	builders := make(map[string]*builder)
 	for agencyID, agency := range feed.agencies {
 		builders[agencyID] = &builder{timezone: agency.location, services: make(map[string]*scheduleService)}
@@ -374,7 +404,7 @@ func compileRawSchedule(server models.ObaServer, feed rawScheduleFeed) (map[stri
 		compact := b.services[serviceKey]
 		if compact == nil {
 			added, removed := sortedExceptions(service)
-			compact = &scheduleService{weekdays: service.weekdays, start: service.start, end: service.end, added: added, removed: removed}
+			compact = &scheduleService{id: ids.intern(trip.serviceID), weekdays: service.weekdays, start: service.start, end: service.end, added: added, removed: removed}
 			b.services[serviceKey] = compact
 		}
 		compact.windows = append(compact.windows, windows...)
@@ -383,6 +413,16 @@ func compileRawSchedule(server models.ObaServer, feed rawScheduleFeed) (map[stri
 				b.maxOffset = window.end
 			}
 		}
+		// parseRawScheduleFeed rejects a repeated trip_id, so each trip is
+		// recorded exactly once.
+		b.trips = append(b.trips, pendingTrip{serviceKey: serviceKey, trip: scheduleTrip{
+			id:             ids.intern(tripID),
+			routeID:        ids.intern(trip.routeID),
+			blockID:        ids.intern(trip.blockID),
+			firstDeparture: int32(trip.first.departure / time.Second),
+			lastArrival:    int32(trip.last.arrival / time.Second),
+			frequencyBased: len(trip.frequency) > 0,
+		}})
 	}
 
 	if !server.IsServerScoped() {
@@ -404,13 +444,21 @@ func compileRawSchedule(server models.ObaServer, feed rawScheduleFeed) (map[stri
 		}
 		sort.Strings(serviceKeys)
 		services := make([]scheduleService, 0, len(serviceKeys))
+		serviceIndex := make(map[string]int32, len(serviceKeys))
 		for _, key := range serviceKeys {
 			service := *b.services[key]
 			service.windows = compactWindows(service.windows)
+			serviceIndex[key] = int32(len(services))
 			services = append(services, service)
 		}
+		trips := make([]scheduleTrip, 0, len(b.trips))
+		for _, pending := range b.trips {
+			pending.trip.service = serviceIndex[pending.serviceKey]
+			trips = append(trips, pending.trip)
+		}
+		sort.Slice(trips, func(i, j int) bool { return trips[i].id < trips[j].id })
 		snapshots[models.ServerKey(server.ObaBaseURL, agencyID)] = &ScheduleSnapshot{
-			timezone: b.timezone, timezoneName: b.timezone.String(), services: services,
+			timezone: b.timezone, timezoneName: b.timezone.String(), services: services, trips: trips,
 			feedURLs: []string{utils.SanitizeServerURL(feed.url)}, maxOvernightOffset: b.maxOffset, complete: true,
 		}
 	}
@@ -508,10 +556,15 @@ func parseRawScheduleFeed(feedURL string, data []byte, server models.ObaServer) 
 	if err != nil {
 		return result, err
 	}
+	blockColumn, hasBlock := tripRows.index["block_id"]
+	if !hasBlock {
+		blockColumn = -1
+	}
 	for _, row := range tripRows.rows {
 		tripID := cell(row, tripRows.index["trip_id"])
 		routeID := cell(row, tripRows.index["route_id"])
 		serviceID := cell(row, tripRows.index["service_id"])
+		blockID := cell(row, blockColumn)
 		agencyID := result.routes[routeID]
 		if tripID == "" || agencyID == "" || result.services[serviceID] == nil {
 			return result, fmt.Errorf("trip %q has invalid route or service reference", tripID)
@@ -519,7 +572,7 @@ func parseRawScheduleFeed(feedURL string, data []byte, server models.ObaServer) 
 		if _, duplicate := result.trips[tripID]; duplicate {
 			return result, fmt.Errorf("duplicate trip_id %q", tripID)
 		}
-		result.trips[tripID] = &rawTrip{serviceID: serviceID, agencyID: agencyID, sequences: make(map[int]struct{})}
+		result.trips[tripID] = &rawTrip{routeID: routeID, serviceID: serviceID, blockID: blockID, agencyID: agencyID, sequences: make(map[int]struct{})}
 	}
 	if err := parseRawStopTimes(files, &result); err != nil {
 		return result, err
