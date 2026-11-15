@@ -12,6 +12,7 @@ import (
 
 	"github.com/getsentry/sentry-go"
 	"github.com/jackc/pgx/v5"
+	"github.com/julienschmidt/httprouter"
 	"watchdog.onebusaway.org/internal/report"
 )
 
@@ -79,9 +80,10 @@ func TestFail_SentryTagsUseRouteTemplate(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/unmatched-stop-episodes/4812", nil)
-	req = req.WithContext(withRoute(req.Context(), "/v1/unmatched-stop-episodes/:episode_id"))
-
-	fail(rec, req, errors.New("unexpected database error: secret-detail"), logger)
+	handler := withMetrics("/v1/unmatched-stop-episodes/:episode_id", func(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+		fail(w, r, errors.New("unexpected database error: secret-detail"), logger)
+	})
+	handler(rec, req, nil)
 
 	events := captured.Events()
 	if len(events) != 1 {
