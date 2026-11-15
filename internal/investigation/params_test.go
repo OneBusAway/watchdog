@@ -210,3 +210,40 @@ func TestWriteInvalidParams(t *testing.T) {
 		t.Errorf("body = %+v", body)
 	}
 }
+func TestParseQuery_MalformedQuery(t *testing.T) {
+	cases := map[string]struct {
+		rawQuery string
+		want     invalidParams
+	}{
+		"bad percent-escape": {
+			rawQuery: "agency_id=%zz",
+			want: invalidParams{
+				{Name: "query", Reason: "malformed query string"},
+			},
+		},
+		"illegal semicolon separator": {
+			rawQuery: "agency_id=3;status=open",
+			want: invalidParams{
+				{Name: "query", Reason: "malformed query string"},
+			},
+		},
+		"bad escape alongside valid param": {
+			rawQuery: "agency_id=%zz&status=open",
+			want: invalidParams{
+				{Name: "query", Reason: "malformed query string"},
+			},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/v1/test?"+tc.rawQuery, nil)
+			var bad invalidParams
+
+			parseQuery(req, &bad, "agency_id", "status")
+
+			if !reflect.DeepEqual(bad, tc.want) {
+				t.Errorf("got invalidParams = %+v, want %+v", bad, tc.want)
+			}
+		})
+	}
+}

@@ -1,6 +1,7 @@
 package investigation
 
 import (
+	"context"
 	"mime"
 	"net/http"
 	"strconv"
@@ -39,6 +40,19 @@ func (r *statusRecorder) Unwrap() http.ResponseWriter {
 	return r.ResponseWriter
 }
 
+type contextKey int
+
+const routeContextKey contextKey = iota
+
+func withRoute(ctx context.Context, route string) context.Context {
+	return context.WithValue(ctx, routeContextKey, route)
+}
+
+func routeFromContext(ctx context.Context) (string, bool) {
+	v, ok := ctx.Value(routeContextKey).(string)
+	return v, ok && v != ""
+}
+
 // withMetrics counts and times every request under route, the route template
 // (for example /v1/servers/:server_id), never the request path, so the number
 // of series stays bounded. Rejected requests are counted too.
@@ -46,6 +60,7 @@ func withMetrics(route string, next httprouter.Handle) httprouter.Handle {
 	return func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w}
+		r = r.WithContext(withRoute(r.Context(), route))
 		next(rec, r, ps)
 
 		status := rec.status

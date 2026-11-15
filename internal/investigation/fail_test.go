@@ -12,6 +12,7 @@ import (
 
 	"github.com/getsentry/sentry-go"
 	"github.com/jackc/pgx/v5"
+	"github.com/julienschmidt/httprouter"
 	"watchdog.onebusaway.org/internal/report"
 )
 
@@ -70,5 +71,25 @@ func TestFail_Mapping(t *testing.T) {
 				t.Errorf("Sentry events = %d, want 0", len(events))
 			}
 		})
+	}
+}
+func TestFail_SentryTagsUseRouteTemplate(t *testing.T) {
+	captured := report.CaptureSentry(t)
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	rec := httptest.NewRecorder()
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/unmatched-stop-episodes/4812", nil)
+	handler := withMetrics("/v1/unmatched-stop-episodes/:episode_id", func(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+		fail(w, r, errors.New("unexpected database error: secret-detail"), logger)
+	})
+	handler(rec, req, nil)
+
+	events := captured.Events()
+	if len(events) != 1 {
+		t.Fatalf("Sentry events = %d, want 1", len(events))
+	}
+	if got := events[0].Tags["path"]; got != "/v1/unmatched-stop-episodes/:episode_id" {
+		t.Errorf("Sentry path tag = %q, want route template /v1/unmatched-stop-episodes/:episode_id", got)
 	}
 }

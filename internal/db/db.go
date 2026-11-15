@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
@@ -47,6 +48,10 @@ func Open(ctx context.Context, databaseURL string, logger *slog.Logger) (*pgxpoo
 	if err != nil {
 		// pgx redacts the password from parse errors.
 		return nil, fmt.Errorf("parse database URL: %w", err)
+	}
+
+	if poolConfig.ConnConfig.ConnectTimeout == 0 {
+		poolConfig.ConnConfig.ConnectTimeout = 3 * time.Second
 	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
