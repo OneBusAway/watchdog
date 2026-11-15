@@ -487,3 +487,22 @@ var GtfsStaticBackendHashMatch = tracked(promauto.NewGaugeVec(prometheus.GaugeOp
 	Name: "gtfs_static_backend_hash_match",
 	Help: "1 if the backend static GTFS zip hash matches the published local bundle, 0 otherwise",
 }, []string{"server_name", "server_url"}))
+
+var (
+	InvestigationAPIRequests = tracked(promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "watchdog_investigation_api_requests_total",
+			Help: "Investigation API requests, by route template and response status",
+		},
+		[]string{"route", "status"},
+	))
+
+	InvestigationAPIRequestDuration = tracked(promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "watchdog_investigation_api_request_duration_seconds",
+			Help:    "Time spent serving Investigation API requests, by route template (in seconds)",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"route"},
+	))
+)
