@@ -24,6 +24,7 @@ Source metrics require their authoritative successful-fetch timestamp:
 | Individual GTFS-RT feed | `gtfs_rt_feed_last_successful_fetch_timestamp_seconds` and `gtfs_rt_feed_fetch_success` |
 
 A successful zero remains `0`. A failed or old collection must produce an absent result so charts render a gap or `No data`.
+Current-value panels must match each source's freshness timestamp (and, for GTFS-RT feeds, its latest success status), as well as the recent collection-loop completion timestamp. Aggregate GTFS-RT values require every configured feed in that scope to be successful and fresh. Per-feed vehicle values must match the same `agency_id`, `agency_name`, `server_name`, `server_url`, and `feed` labels in both feed metrics. Do not use payload-change age as a freshness gate: a successful fetch with an unchanged payload is still a current observation.
 
 ## Static GTFS
 
