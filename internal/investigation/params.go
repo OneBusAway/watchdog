@@ -31,7 +31,10 @@ func writeInvalidParams(w http.ResponseWriter, p invalidParams) {
 // unfiltered list. Problems are listed in name order, so the response is the
 // same every time.
 func parseQuery(r *http.Request, bad *invalidParams, allowed ...string) url.Values {
-	values := r.URL.Query()
+	values, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		bad.add("query", "malformed query string")
+	}
 	names := make([]string, 0, len(values))
 	for name := range values {
 		names = append(names, name)

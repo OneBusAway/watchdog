@@ -72,3 +72,22 @@ func TestFail_Mapping(t *testing.T) {
 		})
 	}
 }
+func TestFail_SentryTagsUseRouteTemplate(t *testing.T) {
+	captured := report.CaptureSentry(t)
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	rec := httptest.NewRecorder()
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/unmatched-stop-episodes/4812", nil)
+	req = req.WithContext(withRoute(req.Context(), "/v1/unmatched-stop-episodes/:episode_id"))
+
+	fail(rec, req, errors.New("unexpected database error: secret-detail"), logger)
+
+	events := captured.Events()
+	if len(events) != 1 {
+		t.Fatalf("Sentry events = %d, want 1", len(events))
+	}
+	if got := events[0].Tags["path"]; got != "/v1/unmatched-stop-episodes/:episode_id" {
+		t.Errorf("Sentry path tag = %q, want route template /v1/unmatched-stop-episodes/:episode_id", got)
+	}
+}

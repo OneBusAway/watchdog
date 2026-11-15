@@ -70,5 +70,9 @@ func fail(w http.ResponseWriter, r *http.Request, err error, logger *slog.Logger
 
 // sentryTags are the tags on every Investigation API report.
 func sentryTags(r *http.Request) map[string]string {
-	return map[string]string{"component": "investigation_api", "path": r.URL.Path}
+	path := r.URL.Path
+	if route, ok := routeFromContext(r.Context()); ok {
+		path = route
+	}
+	return map[string]string{"component": "investigation_api", "path": path}
 }
