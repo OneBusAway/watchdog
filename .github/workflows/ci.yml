@@ -65,6 +65,9 @@ jobs:
       - name: Check sqlc output is current
         run: make sqlc-check
 
+      - name: Test Prometheus rules and panel freshness
+        run: make promtool-test
+
       # make vet runs go vet with -tags=integration; see the Makefile for why
       # that tag matters and what would invalidate it.
       - name: Vet

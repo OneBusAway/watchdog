@@ -1,13 +1,20 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags="-X main.version=$(VERSION)"
 
-.PHONY: compile docker fmt fmt-check sqlc sqlc-check test test-db vet
+.PHONY: compile docker fmt fmt-check sqlc sqlc-check test test-db vet promtool-test
 
 # sqlc is run through `go run` at a pinned version so every developer and CI
 # generate identical code without a separate install. It needs cgo (the
 # PostgreSQL parser is C), which the default Go toolchain provides.
 SQLC_VERSION ?= v1.31.1
 SQLC := go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
+
+# PR #186 reports running the panel suite with prom/prometheus locally; the
+# cached image used for that run reports promtool 3.15.0.
+PROMETHEUS_VERSION ?= v3.15.0
+PROMTOOL := docker run --rm --volume "$(CURDIR):/work" --workdir /work --entrypoint=/bin/promtool prom/prometheus:$(PROMETHEUS_VERSION)
+PROMETHEUS_TEST_FILES := $(wildcard prometheus/tests/*.yml)
+PROMETHEUS_RULE_FILES := $(wildcard prometheus/rules/*.yml)
 
 compile:
 	CGO_ENABLED=0 go build -v $(LDFLAGS) -o . ./...
@@ -50,6 +57,11 @@ test-db:
 		exit 1; \
 	fi
 	go test -count=1 ./internal/db/...
+
+# Checks the Prometheus rule syntax and promtool test suite.
+promtool-test:
+	$(PROMTOOL) test rules $(PROMETHEUS_TEST_FILES)
+	$(PROMTOOL) check rules $(PROMETHEUS_RULE_FILES)
 
 # Regenerates internal/db/dbgen from internal/db/queries and the migrations.
 sqlc:

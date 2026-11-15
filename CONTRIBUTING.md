@@ -49,6 +49,12 @@ targets, so a green local run and a green CI run mean the same thing.
   make test
 ```
 
+Check Prometheus rule syntax and tests (requires Docker):
+
+```bash
+  make promtool-test
+```
+
   CI runs the suite under the race detector, which is worth doing locally
   before pushing anything that touches shared state:
 
