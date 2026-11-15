@@ -1,6 +1,7 @@
 package investigation
 
 import (
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -36,4 +37,33 @@ func doGet(t *testing.T, handler http.Handler, path string, headers map[string]s
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	return rec
+}
+
+// wantNotFound checks that rec is a 404 problem+json response.
+func wantNotFound(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body %s", rec.Code, rec.Body)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
+		t.Errorf("Content-Type = %q, want application/problem+json", got)
+	}
+}
+
+// wantInvalidParam checks that rec is a 400 whose invalid_params names exactly name.
+func wantInvalidParam(t *testing.T, rec *httptest.ResponseRecorder, name string) {
+	t.Helper()
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body %s", rec.Code, rec.Body)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
+		t.Errorf("Content-Type = %q, want application/problem+json", got)
+	}
+	var body problem
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if len(body.InvalidParams) != 1 || body.InvalidParams[0].Name != name {
+		t.Errorf("invalid_params = %+v, want one entry naming %q", body.InvalidParams, name)
+	}
 }
