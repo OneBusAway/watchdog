@@ -373,6 +373,11 @@ func TestGetReportedStop_ETag(t *testing.T) {
 	wantCached(t, router, getPath, "private, max-age=86400")
 }
 
+func TestGetReportedStop_IncludeAgencyCachesShort(t *testing.T) {
+	router, _, getPath := newReportedStopRow(t)
+	wantCached(t, router, getPath+"?include=agency", "private, max-age=30")
+}
+
 func TestListReportedStops_Head(t *testing.T) {
 	router, listPath, _ := newReportedStopRow(t)
 	wantHeadMatchesGet(t, router, listPath)

@@ -144,7 +144,11 @@ func (s *InvestigationService) getReportedStop(w http.ResponseWriter, r *http.Re
 		s.fail(w, r, err)
 		return
 	}
-	s.writeJSON(w, r, body, cacheImmutable(time.Time{}))
+	cache := cacheImmutable(time.Time{})
+	if inc.requested() {
+		cache = cacheShort()
+	}
+	s.writeJSON(w, r, body, cache)
 }
 
 // loadReportedStops is the include loader for kindReportedStop.
