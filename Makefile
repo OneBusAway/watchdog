@@ -58,8 +58,9 @@ test-db:
 	fi
 	go test -count=1 ./internal/db/...
 
-# Checks the Prometheus rule syntax and promtool test suite.
+# Checks dashboard coverage, Prometheus rule syntax and the promtool test suite.
 promtool-test:
+	go test ./internal/grafana
 	$(PROMTOOL) test rules $(PROMETHEUS_TEST_FILES)
 	$(PROMTOOL) check rules $(PROMETHEUS_RULE_FILES)
 

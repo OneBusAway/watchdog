@@ -22,6 +22,7 @@ type Panel struct {
 
 type Target struct {
 	Expr       string          `json:"expr"`
+	RefID      string          `json:"refId"`
 	Datasource json.RawMessage `json:"datasource"`
 }
 
@@ -30,6 +31,7 @@ type Expression struct {
 	PanelTitle string
 	PanelID    int
 	Target     int
+	RefID      string
 	Expr       string
 }
 
@@ -76,6 +78,7 @@ func ExtractExpressions(path string) ([]Expression, error) {
 					PanelTitle: panel.Title,
 					PanelID:    panel.ID,
 					Target:     i,
+					RefID:      target.RefID,
 					Expr:       expr,
 				})
 			}

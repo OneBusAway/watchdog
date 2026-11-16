@@ -34,7 +34,7 @@ func TestExtractExpressions(t *testing.T) {
 						"id": 2,
 						"title": "Nested panel",
 						"targets": [
-							{"expr": "process_cpu_seconds_total"}
+							{"refId": "A", "expr": "process_cpu_seconds_total"}
 						]
 					}
 				]
@@ -76,7 +76,7 @@ func TestExtractExpressions(t *testing.T) {
 	}
 
 	if got[2].Expr != "process_cpu_seconds_total" ||
-		got[2].PanelID != 2 {
+		got[2].PanelID != 2 || got[2].RefID != "A" {
 		t.Errorf("nested panel expression not extracted correctly: %+v", got[2])
 	}
 
