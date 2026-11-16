@@ -9,6 +9,19 @@ import (
 	"context"
 )
 
+const getVehicle = `-- name: GetVehicle :one
+SELECT vehicle_entity_id, endpoint_id, external_vehicle_id
+FROM vehicle_entity
+WHERE vehicle_entity_id = $1
+`
+
+func (q *Queries) GetVehicle(ctx context.Context, vehicleEntityID int64) (VehicleEntity, error) {
+	row := q.db.QueryRow(ctx, getVehicle, vehicleEntityID)
+	var i VehicleEntity
+	err := row.Scan(&i.VehicleEntityID, &i.EndpointID, &i.ExternalVehicleID)
+	return i, err
+}
+
 const listVehicles = `-- name: ListVehicles :many
 SELECT v.vehicle_entity_id, v.endpoint_id, v.external_vehicle_id
 FROM vehicle_entity v
@@ -27,6 +40,34 @@ type ListVehiclesParams struct {
 
 func (q *Queries) ListVehicles(ctx context.Context, arg ListVehiclesParams) ([]VehicleEntity, error) {
 	rows, err := q.db.Query(ctx, listVehicles, arg.ExternalVehicleID, arg.EndpointID, arg.ServerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VehicleEntity
+	for rows.Next() {
+		var i VehicleEntity
+		if err := rows.Scan(&i.VehicleEntityID, &i.EndpointID, &i.ExternalVehicleID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVehiclesByIDs = `-- name: ListVehiclesByIDs :many
+SELECT vehicle_entity_id, endpoint_id, external_vehicle_id
+FROM vehicle_entity
+WHERE vehicle_entity_id = ANY($1::bigint[])
+ORDER BY vehicle_entity_id
+`
+
+// Every vehicle in the given IDs, for the include loader's single batched read.
+func (q *Queries) ListVehiclesByIDs(ctx context.Context, vehicleEntityIds []int64) ([]VehicleEntity, error) {
+	rows, err := q.db.Query(ctx, listVehiclesByIDs, vehicleEntityIds)
 	if err != nil {
 		return nil, err
 	}

@@ -1,6 +1,7 @@
 package investigation
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -258,5 +259,196 @@ func TestListVehicles_IncludeEndpointRejectedWithoutLoader(t *testing.T) {
 	rec := doGet(t, router, "/v1/vehicles?vehicle_id=1&endpoint_id=1&include=endpoint", nil)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400; body %s", rec.Code, rec.Body)
+	}
+}
+
+// newVehicleDetailRouter mounts E21 and E22 on a bare router, skipping the
+// pipeline's fail-closed authenticate; registration is covered by
+// TestVehicles_Registered.
+func newVehicleDetailRouter(t *testing.T, pool *pgxpool.Pool) http.Handler {
+	t.Helper()
+	s, _ := newTestService(t)
+	s.Pool = pool
+	router := httprouter.New()
+	router.GET("/v1/vehicles/:vehicle_entity_id", s.getVehicle)
+	router.HEAD("/v1/vehicles/:vehicle_entity_id", s.getVehicle)
+	return router
+}
+
+func vehiclePath(id int64) string {
+	return "/v1/vehicles/" + strconv.FormatInt(id, 10)
+}
+
+func TestGetVehicle_Registered(t *testing.T) {
+	_, router := newTestService(t)
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		if h, _, _ := router.Lookup(method, "/v1/vehicles/7"); h == nil {
+			t.Errorf("%s /v1/vehicles/:vehicle_entity_id is not registered", method)
+		}
+	}
+}
+
+func TestGetVehicle_ReturnsRepresentation(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	serverID := insertVehicleServer(t, pool, "https://example.com/api")
+	endpointID := insertVehicleEndpoint(t, pool, serverID, "https://example.com/vp.pb")
+	id := insertVehicle(t, pool, endpointID, "8049")
+
+	router := newVehicleDetailRouter(t, pool)
+	rec := doGet(t, router, vehiclePath(id), nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body)
+	}
+	var got vehicle
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v; body %s", err, rec.Body)
+	}
+	if got.VehicleEntityID != id || got.EndpointID != endpointID || got.VehicleID != "8049" {
+		t.Errorf("body = %+v, want ids %d/%d and vehicle_id 8049", got, id, endpointID)
+	}
+	self := vehiclePath(id)
+	want := links{
+		"self":             self,
+		"endpoint":         "/v1/vehicle-position-endpoints/" + strconv.FormatInt(endpointID, 10),
+		"anomaly_episodes": self + "/anomaly-episodes",
+	}
+	if !reflect.DeepEqual(got.Links, want) {
+		t.Errorf("links = %v, want %v", got.Links, want)
+	}
+	// The detail body carries no included key unless include was given.
+	if body := rec.Body.String(); strings.Contains(body, `"included"`) {
+		t.Errorf("included must be absent without ?include; got %s", body)
+	}
+}
+
+func TestGetVehicle_UnknownIDReturns404(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	router := newVehicleDetailRouter(t, pool)
+	rec := doGet(t, router, vehiclePath(999), nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body %s", rec.Code, rec.Body)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
+		t.Errorf("Content-Type = %q, want application/problem+json", got)
+	}
+}
+
+func TestGetVehicle_MalformedIDReturns404(t *testing.T) {
+	// A malformed path ID never reaches the database, so no pool is needed.
+	router := newVehicleDetailRouter(t, nil)
+	for _, id := range []string{"abc", "0", "-1", "01", "+1"} {
+		if rec := doGet(t, router, "/v1/vehicles/"+id, nil); rec.Code != http.StatusNotFound {
+			t.Errorf("id %q: status = %d, want 404; body %s", id, rec.Code, rec.Body)
+		}
+	}
+}
+
+func TestGetVehicle_RejectsUnknownParameter(t *testing.T) {
+	router := newVehicleDetailRouter(t, nil)
+	wantInvalidParam(t, doGet(t, router, vehiclePath(7)+"?foo=1", nil), "foo")
+}
+
+func TestGetVehicle_IncludeEndpointRejectedWithoutLoader(t *testing.T) {
+	router := newVehicleDetailRouter(t, nil)
+	wantInvalidParam(t, doGet(t, router, vehiclePath(7)+"?include=endpoint", nil), "include")
+}
+
+func TestGetVehicle_ETag(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	serverID := insertVehicleServer(t, pool, "https://example.com/api")
+	endpointID := insertVehicleEndpoint(t, pool, serverID, "https://example.com/vp.pb")
+	id := insertVehicle(t, pool, endpointID, "8049")
+
+	router := newVehicleDetailRouter(t, pool)
+	first := doGet(t, router, vehiclePath(id), nil)
+	etag := first.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("no ETag header")
+	}
+	if got := first.Header().Get("Cache-Control"); got != "private, max-age=86400" {
+		t.Errorf("Cache-Control = %q, want private, max-age=86400", got)
+	}
+	if got := first.Header().Get("Last-Modified"); got != "" {
+		t.Errorf("Last-Modified = %q, want none", got)
+	}
+
+	second := doGet(t, router, vehiclePath(id), map[string]string{"If-None-Match": etag})
+	if second.Code != http.StatusNotModified {
+		t.Fatalf("status = %d, want 304; body %s", second.Code, second.Body)
+	}
+	if second.Body.Len() != 0 {
+		t.Errorf("304 body = %q, want empty", second.Body)
+	}
+}
+
+func TestGetVehicle_Head(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	serverID := insertVehicleServer(t, pool, "https://example.com/api")
+	endpointID := insertVehicleEndpoint(t, pool, serverID, "https://example.com/vp.pb")
+	id := insertVehicle(t, pool, endpointID, "8049")
+
+	router := newVehicleDetailRouter(t, pool)
+	get := doGet(t, router, vehiclePath(id), nil)
+	head := httptest.NewRecorder()
+	router.ServeHTTP(head, httptest.NewRequest(http.MethodHead, vehiclePath(id), nil))
+
+	if head.Code != get.Code {
+		t.Errorf("HEAD status = %d, GET status = %d", head.Code, get.Code)
+	}
+	// net/http drops a HEAD body itself, so only the headers are compared here.
+	if !reflect.DeepEqual(head.Header(), get.Header()) {
+		t.Errorf("HEAD headers = %v, GET headers = %v", head.Header(), get.Header())
+	}
+	if get.Body.Len() == 0 {
+		t.Error("GET body is empty")
+	}
+}
+
+func TestVehicleLoader(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	serverID := insertVehicleServer(t, pool, "https://example.com/api")
+	endpointID := insertVehicleEndpoint(t, pool, serverID, "https://example.com/vp.pb")
+	ids := []int64{
+		insertVehicle(t, pool, endpointID, "8049"),
+		insertVehicle(t, pool, endpointID, "8050"),
+		insertVehicle(t, pool, endpointID, "8051"),
+	}
+
+	s, _ := newTestService(t)
+	s.Pool = pool
+	detail := newVehicleDetailRouter(t, pool)
+
+	// One query is structural rather than asserted here: loadVehicles makes a
+	// single ListVehiclesByIDs read over an ID array, with no per-ID loop.
+	var reps map[int64]any
+	err := s.read(context.Background(), func(ctx context.Context, q *dbgen.Queries) error {
+		var err error
+		reps, err = s.loadVehicles(ctx, q, ids)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("loadVehicles: %v", err)
+	}
+	if len(reps) != len(ids) {
+		t.Fatalf("loaded %d vehicles, want %d", len(reps), len(ids))
+	}
+
+	// Each loaded value must equal what GET on that vehicle returns.
+	for _, id := range ids {
+		loaded, err := encodeJSON(reps[id])
+		if err != nil {
+			t.Fatalf("encode loaded %d: %v", id, err)
+		}
+		var want vehicle
+		if err := json.Unmarshal(doGet(t, detail, vehiclePath(id), nil).Body.Bytes(), &want); err != nil {
+			t.Fatalf("decode GET %d: %v", id, err)
+		}
+		wantJSON, err := encodeJSON(want)
+		if err != nil {
+			t.Fatalf("encode want %d: %v", id, err)
+		}
+		if string(loaded) != string(wantJSON) {
+			t.Errorf("vehicle %d loaded as\n%s\nwant\n%s", id, loaded, wantJSON)
+		}
 	}
 }
