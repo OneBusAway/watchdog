@@ -51,11 +51,15 @@ const (
 // reported it steadily for both a minimum duration and a minimum number of
 // observations, so a deployment in progress does not trigger downloads. A
 // longer gap between observations restarts the run. While the same mismatch
-// persists, the campaign is retried at most once per backendHashRetryEvery.
+// persists, the campaign is retried at most once per backendHashRetryEvery,
+// even across runs. The mismatch is over once the backend has reported a
+// different hash for backendHashSettledFor, which a load balancer picking
+// nodes at random practically never produces.
 const (
 	backendHashStableFor   = 90 * time.Second
 	backendHashStableTicks = 3
 	backendHashRetryEvery  = time.Hour
+	backendHashSettledFor  = 10 * time.Minute
 )
 
 const maxStaticCampaignCacheSize = int64(2 << 30)
@@ -92,16 +96,17 @@ type agencyMismatchState struct {
 	signature   string
 }
 type staticRefreshCoordinator struct {
-	mu              sync.Mutex
-	active          map[string]activeStaticCampaign
-	histories       map[string]*staticFeedFailureHistory
-	backendRuns     map[string]backendHashRun
-	published       map[string]publishedStaticContent
-	snapshotContent map[string]publishedStaticContent
-	mismatches      map[string]agencyMismatchState
-	policy          staticRefreshRetryPolicy
-	nextGeneration  uint64
-	now             func() time.Time
+	mu               sync.Mutex
+	active           map[string]activeStaticCampaign
+	histories        map[string]*staticFeedFailureHistory
+	backendRuns      map[string]backendHashRun
+	backendCampaigns map[backendCampaignKey]backendCampaign
+	published        map[string]publishedStaticContent
+	snapshotContent  map[string]publishedStaticContent
+	mismatches       map[string]agencyMismatchState
+	policy           staticRefreshRetryPolicy
+	nextGeneration   uint64
+	now              func() time.Time
 	// checkInterval is the collection fetch interval, which sets how long a
 	// gap between backend hash observations may be before a run restarts.
 	checkInterval time.Duration
@@ -110,15 +115,16 @@ type staticRefreshCoordinator struct {
 // newStaticRefreshCoordinator initializes campaign, published-content, and backend-run tracking.
 func newStaticRefreshCoordinator() *staticRefreshCoordinator {
 	return &staticRefreshCoordinator{
-		snapshotContent: make(map[string]publishedStaticContent),
-		backendRuns:     make(map[string]backendHashRun),
-		active:          make(map[string]activeStaticCampaign),
-		histories:       make(map[string]*staticFeedFailureHistory),
-		published:       make(map[string]publishedStaticContent),
-		mismatches:      make(map[string]agencyMismatchState),
-		policy:          dailyStaticRefreshRetryPolicy,
-		now:             time.Now,
-		checkInterval:   30 * time.Second,
+		snapshotContent:  make(map[string]publishedStaticContent),
+		backendRuns:      make(map[string]backendHashRun),
+		backendCampaigns: make(map[backendCampaignKey]backendCampaign),
+		active:           make(map[string]activeStaticCampaign),
+		histories:        make(map[string]*staticFeedFailureHistory),
+		published:        make(map[string]publishedStaticContent),
+		mismatches:       make(map[string]agencyMismatchState),
+		policy:           dailyStaticRefreshRetryPolicy,
+		now:              time.Now,
+		checkInterval:    30 * time.Second,
 	}
 }
 
@@ -193,6 +199,11 @@ func (c *staticRefreshCoordinator) reconcile(servers []models.ObaServer) {
 	for key, run := range c.backendRuns {
 		if configured[key] != run.fingerprint {
 			delete(c.backendRuns, key)
+		}
+	}
+	for key := range c.backendCampaigns {
+		if configured[key.server] != key.fingerprint {
+			delete(c.backendCampaigns, key)
 		}
 	}
 	for key, content := range c.snapshotContent {

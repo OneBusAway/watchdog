@@ -260,9 +260,9 @@ func TestBackendHashRollbackAfterDeployment(t *testing.T) {
 	h.run(t, h.server, StaticRefreshDaily)
 	h.ticks(t, 6, 30*time.Second)
 	h.wantDownloads(t, 3, "one campaign while the backend lags")
-	// The redeploy finishes on B.
+	// The redeploy finishes on B, which runs for a while.
 	h.hash.Store(bundleHash(bundleB))
-	h.ticks(t, 4, 30*time.Second)
+	h.ticks(t, int(backendHashSettledFor/(30*time.Second))+1, 30*time.Second)
 	h.wantMatch(t, true, "deployment B")
 	// B is broken and A is rolled back.
 	h.body.Store(bundleA)
