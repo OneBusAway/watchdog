@@ -43,7 +43,8 @@ configuration change, or a gap longer than 90 seconds or 3 fetch intervals
 (whichever is longer) starts the wait again. Ticks without a hash neither end
 nor extend it. Nodes alternating between bundle versions behind a load
 balancer therefore rarely start a campaign, and a rollback to an earlier
-bundle is refreshed like any other change.
+bundle is refreshed like any other change, except for the quick rollback
+described below.
 
 Each stable mismatch starts one campaign. If the backend keeps reporting the
 same hash afterwards, Watchdog logs a warning that the backend and the
@@ -54,8 +55,10 @@ starts again for the same backend hash, local bundle and configuration, for
 example when a node stuck on an old bundle answers behind a load balancer, or
 after a metadata outage. It ends once the backend has reported another hash
 for 10 minutes, so a rollback after a deployment that ran that long refreshes
-right away, and a quicker rollback waits for the hourly retry. Daily refreshes
-continue independently. The shared metadata request is skipped
+right away. A rollback sooner than that, to a bundle that already started a
+campaign within the last hour, cannot be told apart from a stale node behind a
+load balancer, so it waits for the hourly retry (at most one hour) or the daily
+refresh. Daily refreshes continue independently. The shared metadata request is skipped
 when every entry for a backend is in collection backoff; it resumes when any
 entry is ready. A skipped request leaves the last hash-match observation intact.
 
