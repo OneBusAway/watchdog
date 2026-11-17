@@ -4,7 +4,9 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/julienschmidt/httprouter"
 	"watchdog.onebusaway.org/internal/db/dbgen"
 )
@@ -15,7 +17,7 @@ var vehicleIncludable = map[string]resourceKind{
 	"endpoint": "vehicle_position_endpoint",
 }
 
-// vehicle is the representation of one vehicle identity (E21).
+// vehicle is the representation of one vehicle identity (E21, E22).
 type vehicle struct {
 	VehicleEntityID int64  `json:"vehicle_entity_id"`
 	EndpointID      int64  `json:"endpoint_id"`
@@ -28,6 +30,13 @@ type vehiclesBody struct {
 	Items    []vehicle `json:"items"`
 	Links    links     `json:"links"`
 	Included included  `json:"included,omitzero"`
+}
+
+// vehicleBody is the E22 response: one vehicle, with the same fields and links
+// it carries as a list item.
+type vehicleBody struct {
+	vehicle
+	Included included `json:"included,omitzero"`
 }
 
 // vehicleLinks builds one vehicle's links. Every one of them always exists:
@@ -115,4 +124,58 @@ func (s *InvestigationService) listVehicles(w http.ResponseWriter, r *http.Reque
 	}
 
 	s.writeJSON(w, r, body, cacheShort())
+}
+
+// getVehicle serves GET /v1/vehicles/:vehicle_entity_id: one vehicle identity.
+// A path ID that is not a positive integer is a 404 rather than a 400, because
+// no such vehicle can exist.
+func (s *InvestigationService) getVehicle(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	id, ok := pathID(ps, "vehicle_entity_id")
+	if !ok {
+		s.fail(w, r, pgx.ErrNoRows)
+		return
+	}
+
+	var bad invalidParams
+	values := parseQuery(r, &bad, "include")
+	inc := s.parseInclude(values, vehicleIncludable, &bad)
+	if len(bad) > 0 {
+		writeInvalidParams(w, bad)
+		return
+	}
+
+	var body vehicleBody
+	err := s.read(r.Context(), func(ctx context.Context, q *dbgen.Queries) error {
+		row, err := q.GetVehicle(ctx, id)
+		if err != nil {
+			return err
+		}
+		l := vehicleLinks(row)
+		body.vehicle = vehicleRepresentation(row, l)
+		body.Included, err = s.loadIncluded(ctx, q, []itemLinks{l}, inc)
+		return err
+	})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+
+	// A vehicle identity is immutable once recorded: all three fields come
+	// from columns that are never updated, so there is no Last-Modified.
+	s.writeJSON(w, r, body, cacheImmutable(time.Time{}))
+}
+
+// loadVehicles is the batched loader behind include=vehicle on the endpoints
+// that link here. It reads every requested ID in one query and returns exactly
+// this endpoint's representation for each.
+func (s *InvestigationService) loadVehicles(ctx context.Context, q *dbgen.Queries, ids []int64) (map[int64]any, error) {
+	rows, err := q.ListVehiclesByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	reps := make(map[int64]any, len(rows))
+	for _, row := range rows {
+		reps[row.VehicleEntityID] = vehicleRepresentation(row, vehicleLinks(row))
+	}
+	return reps, nil
 }
