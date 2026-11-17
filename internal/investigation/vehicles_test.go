@@ -381,6 +381,52 @@ func TestGetVehicle_ETag(t *testing.T) {
 	}
 }
 
+func TestGetVehicle_IncludeCacheControl(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	serverID := insertVehicleServer(t, pool, "https://example.com/api")
+	endpointID := insertVehicleEndpoint(t, pool, serverID, "https://example.com/vp.pb")
+	id := insertVehicle(t, pool, endpointID, "8049")
+
+	s, _ := newTestService(t)
+	s.Pool = pool
+	// Stand in for the endpoint loader until E07 registers the real one.
+	s.registerLoader("vehicle_position_endpoint", func(_ context.Context, _ *dbgen.Queries, ids []int64) (map[int64]any, error) {
+		reps := make(map[int64]any, len(ids))
+		for _, id := range ids {
+			reps[id] = map[string]any{"endpoint_id": id, "configured": true}
+		}
+		return reps, nil
+	})
+	router := httprouter.New()
+	router.GET("/v1/vehicles/:vehicle_entity_id", s.getVehicle)
+	router.HEAD("/v1/vehicles/:vehicle_entity_id", s.getVehicle)
+
+	for _, tc := range []struct {
+		query string
+		want  string
+	}{
+		{"", "private, max-age=86400"},
+		{"?include=endpoint", "private, max-age=30"},
+	} {
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			t.Run(method+tc.query, func(t *testing.T) {
+				path := vehiclePath(id) + tc.query
+				rec := httptest.NewRecorder()
+				router.ServeHTTP(rec, httptest.NewRequest(method, path, nil))
+				if rec.Code != http.StatusOK {
+					t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body)
+				}
+				if got := rec.Header().Get("Cache-Control"); got != tc.want {
+					t.Errorf("Cache-Control = %q, want %q", got, tc.want)
+				}
+				if method == http.MethodGet && tc.query != "" && !strings.Contains(rec.Body.String(), `"configured":true`) {
+					t.Errorf("missing included endpoint: %s", rec.Body)
+				}
+			})
+		}
+	}
+}
+
 func TestGetVehicle_Head(t *testing.T) {
 	pool := dbtest.NewMigratedPool(t)
 	serverID := insertVehicleServer(t, pool, "https://example.com/api")

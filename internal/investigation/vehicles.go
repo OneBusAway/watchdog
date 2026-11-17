@@ -160,9 +160,14 @@ func (s *InvestigationService) getVehicle(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// A vehicle identity is immutable once recorded: all three fields come
-	// from columns that are never updated, so there is no Last-Modified.
-	s.writeJSON(w, r, body, cacheImmutable(time.Time{}))
+	// A vehicle identity is immutable once recorded, but included resources
+	// can change. The identity has no Last-Modified because its columns are
+	// never updated.
+	cache := cacheShort()
+	if !inc.requested() {
+		cache = cacheImmutable(time.Time{})
+	}
+	s.writeJSON(w, r, body, cache)
 }
 
 // loadVehicles is the batched loader behind include=vehicle on the endpoints
