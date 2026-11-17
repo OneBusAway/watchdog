@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,142 +18,306 @@ import (
 	"watchdog.onebusaway.org/internal/models"
 )
 
-func TestBackendHashRefresh(t *testing.T) {
-	h := newUnchangedFeedHarness(t)
-	var campaignLogs bytes.Buffer
-	h.service.Logger = slog.New(slog.NewJSONHandler(&campaignLogs, nil))
-	var hash atomic.Value
-	var downloads atomic.Int32
-	hash.Store("")
+// lockedBuffer collects logs written by both the test and campaign goroutines.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) contains(s string) bool { return b.count(s) > 0 }
+
+func (b *lockedBuffer) count(s string) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return strings.Count(b.buf.String(), s)
+}
+
+// backendHashHarness serves backend metadata and the feed from one server and
+// drives collection ticks against a controllable clock.
+type backendHashHarness struct {
+	*unchangedFeedHarness
+	hash      atomic.Value
+	downloads atomic.Int32
+	observed  *bool
+	clock     time.Time
+	logs      *lockedBuffer
+	ctx       context.Context
+}
+
+func newBackendHashHarness(t *testing.T) *backendHashHarness {
+	t.Helper()
+	h := &backendHashHarness{unchangedFeedHarness: newUnchangedFeedHarness(t), logs: &lockedBuffer{}, clock: time.Unix(1_700_000_000, 0)}
+	h.hash.Store("")
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v2/metadata.json" {
 			if r.URL.Query().Get("key") != "test-key" {
 				t.Error("missing API key")
 			}
-			fmt.Fprintf(w, `{"staticGtfsHash":%q}`, hash.Load().(string))
-		} else {
-			downloads.Add(1)
-			w.Write(h.body.Load().([]byte))
+			fmt.Fprintf(w, `{"staticGtfsHash":%q}`, h.hash.Load().(string))
+			return
 		}
+		h.downloads.Add(1)
+		w.Write(h.body.Load().([]byte))
 	}))
-	defer ts.Close()
+	t.Cleanup(ts.Close)
 	h.server.ObaBaseURL = ts.URL
 	h.server.ObaApiKey = "test-key"
 	h.server.GtfsStaticFeeds = []string{ts.URL + "/feed.zip"}
 	h.store.SetConfiguredServers([]models.ObaServer{h.server})
+	h.service.Logger = slog.New(slog.NewJSONHandler(h.logs, nil))
+	h.service.refreshCoordinator.now = func() time.Time { return h.clock }
 	h.run(t, h.server, StaticRefreshStartup)
-	sum := sha256.Sum256(h.body.Load().([]byte))
-	localHash := hex.EncodeToString(sum[:])
-	var observed *bool
-	h.service.BackendHashObserver = func(_ models.ObaServer, match *bool) { observed = match }
+	h.service.BackendHashObserver = func(_ models.ObaServer, match *bool) { h.observed = match }
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	check := func() { h.service.CheckBackendBundles(ctx, ctx, []models.ObaServer{h.server}) }
-	wait := func() {
-		t.Helper()
-		deadline := time.Now().Add(5 * time.Second)
-		for time.Now().Before(deadline) {
-			h.service.refreshCoordinator.mu.Lock()
-			n := len(h.service.refreshCoordinator.active)
-			h.service.refreshCoordinator.mu.Unlock()
-			if n == 0 {
-				return
-			}
-			time.Sleep(time.Millisecond)
+	t.Cleanup(cancel)
+	h.ctx = ctx
+	return h
+}
+
+// bundleHash returns the SHA-256 of a feed body, as a backend would report it.
+func bundleHash(body []byte) string {
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:])
+}
+
+// tick advances the clock by interval, runs one backend check, and waits for any campaign it started.
+func (h *backendHashHarness) tick(t *testing.T, interval time.Duration) {
+	t.Helper()
+	h.clock = h.clock.Add(interval)
+	h.service.CheckBackendBundles(h.ctx, h.ctx, []models.ObaServer{h.server})
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		h.service.refreshCoordinator.mu.Lock()
+		n := len(h.service.refreshCoordinator.active)
+		h.service.refreshCoordinator.mu.Unlock()
+		if n == 0 {
+			return
 		}
-		t.Fatal("refresh did not finish")
+		time.Sleep(time.Millisecond)
 	}
-	hash.Store(localHash)
-	check()
-	if observed == nil || !*observed || downloads.Load() != 1 {
-		t.Fatal("matching hash triggered refresh or reported mismatch")
+	t.Fatal("refresh did not finish")
+}
+
+// ticks runs n ticks at the given interval.
+func (h *backendHashHarness) ticks(t *testing.T, n int, interval time.Duration) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		h.tick(t, interval)
 	}
-	hash.Store(strings.Repeat("a", 64))
-	// A startup/daily campaign already in flight must not consume this hash's attempt.
+}
+
+func (h *backendHashHarness) wantDownloads(t *testing.T, want int32, msg string) {
+	t.Helper()
+	if got := h.downloads.Load(); got != want {
+		t.Fatalf("%s: downloads = %d, want %d", msg, got, want)
+	}
+}
+
+func (h *backendHashHarness) wantMatch(t *testing.T, want bool, msg string) {
+	t.Helper()
+	if h.observed == nil || *h.observed != want {
+		t.Fatalf("%s: observed match = %v, want %v", msg, h.observed, want)
+	}
+}
+
+const (
+	campaignStartLog = `"trigger":"backend_changed"`
+	mismatchWarnLog  = `"msg":"Backend static GTFS bundle still differs from the configured feed after refresh"`
+)
+
+// TestBackendHashWaitsForStableRun covers a real bundle change: no campaign
+// starts until the new hash has held for both the duration and the tick count.
+func TestBackendHashWaitsForStableRun(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		interval time.Duration
+	}{{"default_interval", 30 * time.Second}, {"short_interval", 1500 * time.Millisecond}, {"long_interval", 2 * time.Minute}} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newBackendHashHarness(t)
+			h.service.SetBackendCheckInterval(tc.interval)
+			h.hash.Store(bundleHash(h.body.Load().([]byte)))
+			h.tick(t, tc.interval)
+			h.wantMatch(t, true, "matching backend")
+			h.body.Store(withExtraZipEntry(t, h.body.Load().([]byte)))
+			h.hash.Store(bundleHash(h.body.Load().([]byte)))
+			// A run starts on the first observation, so the campaign may start
+			// once the stable duration has elapsed since then.
+			n := int(backendHashStableFor / tc.interval)
+			if n < backendHashStableTicks-1 {
+				n = backendHashStableTicks - 1
+			}
+			h.ticks(t, n, tc.interval)
+			h.wantDownloads(t, 1, "before the run was stable")
+			h.tick(t, tc.interval)
+			h.wantDownloads(t, 2, "stable new hash")
+			h.tick(t, tc.interval)
+			h.wantMatch(t, true, "after refresh")
+			if got := h.logs.count(campaignStartLog); got != 1 {
+				t.Fatalf("campaign-start logs = %d, want 1", got)
+			}
+			if h.logs.count(mismatchWarnLog) != 0 {
+				t.Fatal("matching refresh logged a mismatch warning")
+			}
+		})
+	}
+}
+
+// TestBackendHashAlternatingNodes covers load-balanced nodes answering on alternate ticks.
+func TestBackendHashAlternatingNodes(t *testing.T) {
+	for _, withMatch := range []bool{true, false} {
+		t.Run(fmt.Sprintf("one_matches_%t", withMatch), func(t *testing.T) {
+			h := newBackendHashHarness(t)
+			first := strings.Repeat("a", 64)
+			if withMatch {
+				first = bundleHash(h.body.Load().([]byte))
+			}
+			second := strings.Repeat("b", 64)
+			for i := 0; i < 40; i++ {
+				h.hash.Store([]string{first, second}[i%2])
+				h.tick(t, 30*time.Second)
+			}
+			h.wantDownloads(t, 1, "alternating hashes")
+		})
+	}
+}
+
+// TestBackendHashPersistentMismatch covers a backend that settles on a hash
+// the feed URL does not serve: one campaign, one warning, then an hourly retry.
+func TestBackendHashPersistentMismatch(t *testing.T) {
+	h := newBackendHashHarness(t)
+	// A startup or daily campaign in flight must not count as this run's campaign.
 	c := h.service.refreshCoordinator
 	c.active[h.server.ServerKey()] = activeStaticCampaign{fingerprint: staticConfigFingerprint(h.server), cancel: func() {}}
-	check()
-	if len(c.backendAttempts) != 0 || downloads.Load() != 1 {
-		t.Fatal("active campaign consumed backend transition")
-	}
+	h.hash.Store(strings.Repeat("a", 64))
+	h.service.CheckBackendBundles(h.ctx, h.ctx, []models.ObaServer{h.server})
+	h.clock = h.clock.Add(30 * time.Second)
+	h.service.CheckBackendBundles(h.ctx, h.ctx, []models.ObaServer{h.server})
+	h.clock = h.clock.Add(30 * time.Second)
+	h.service.CheckBackendBundles(h.ctx, h.ctx, []models.ObaServer{h.server})
+	h.clock = h.clock.Add(30 * time.Second)
+	h.service.CheckBackendBundles(h.ctx, h.ctx, []models.ObaServer{h.server})
+	h.wantDownloads(t, 1, "active campaign")
 	delete(c.active, h.server.ServerKey())
-	check()
-	wait()
-	check()
-	if observed == nil || *observed || downloads.Load() != 2 {
-		t.Fatalf("persistent mismatch: observed=%v downloads=%d", observed, downloads.Load())
+	h.tick(t, 30*time.Second)
+	h.wantDownloads(t, 2, "stable mismatch")
+	h.ticks(t, 10, 30*time.Second)
+	h.wantMatch(t, false, "persistent mismatch")
+	h.wantDownloads(t, 2, "same run before the retry interval")
+	if got := h.logs.count(mismatchWarnLog); got != 1 {
+		t.Fatalf("mismatch warnings = %d, want 1", got)
 	}
-	// A second backend version gets another attempt, even after an unresolved mismatch.
-	hash.Store(strings.Repeat("b", 64))
-	check()
-	wait()
-	if downloads.Load() != 3 {
-		t.Fatal("new backend hash did not trigger refresh")
+	if !h.logs.contains(`"backend_hash":"`+strings.Repeat("a", 64)) || h.logs.contains("test-key") {
+		t.Fatal("warning is missing the backend hash or exposed the API key")
 	}
-	// Load-balanced nodes may alternate versions after campaigns finish.
-	for _, version := range []string{"a", "b", "a", "b"} {
-		hash.Store(strings.Repeat(version, 64))
-		check()
-		wait()
-		if downloads.Load() != 3 {
-			t.Fatal("alternating backend hashes downloaded again")
-		}
+	h.ticks(t, int(backendHashRetryEvery/(30*time.Second))-10, 30*time.Second)
+	h.wantDownloads(t, 3, "hourly retry")
+	h.tick(t, 30*time.Second)
+	if got := h.logs.count(mismatchWarnLog); got != 2 {
+		t.Fatalf("mismatch warnings = %d, want one per campaign", got)
 	}
-	// A daily refresh remains independent of backend attempt suppression.
-	h.body.Store(withExtraZipEntry(t, h.body.Load().([]byte)))
-	sum = sha256.Sum256(h.body.Load().([]byte))
-	hash.Store(hex.EncodeToString(sum[:]))
-	check()
-	wait()
-	check()
-	if observed == nil || !*observed {
-		t.Fatal("successful refresh did not resolve mismatch")
-	}
-	h.run(t, h.server, StaticRefreshDaily)
-	if downloads.Load() != 5 {
-		t.Fatalf("daily refresh did not run: %d", downloads.Load())
-	}
-	if got := strings.Count(campaignLogs.String(), `"trigger":"backend_changed"`); got != 3 {
-		t.Fatalf("campaign-start logs = %d, want 3 actual starts", got)
-	}
-	// Publish A, deploy B, then roll back to A. An attempt against an older
-	// local snapshot must not suppress that rollback.
+}
+
+// TestBackendHashRevertedFeed covers a feed URL that is corrected while the
+// backend keeps reporting the same hash: the hourly retry recovers it.
+func TestBackendHashRevertedFeed(t *testing.T) {
+	h := newBackendHashHarness(t)
 	bundleA := h.body.Load().([]byte)
-	hashA := hash.Load().(string)
+	h.hash.Store(bundleHash(bundleA))
+	h.tick(t, 30*time.Second)
+	// The wrong bundle reaches the feed URL and a daily refresh picks it up.
 	h.body.Store(withExtraZipEntry(t, bundleA))
-	sumB := sha256.Sum256(h.body.Load().([]byte))
-	hash.Store(hex.EncodeToString(sumB[:]))
-	check()
-	wait()
-	check()
-	if observed == nil || !*observed {
-		t.Fatal("deployment B did not publish")
-	}
-	beforeRollback := downloads.Load()
+	h.run(t, h.server, StaticRefreshDaily)
+	h.ticks(t, 4, 30*time.Second)
+	h.wantDownloads(t, 3, "one campaign for the mismatch")
+	// The feed URL is put back; the backend never changed.
 	h.body.Store(bundleA)
-	hash.Store(hashA)
-	check()
-	wait()
-	check()
-	if downloads.Load() != beforeRollback+1 || observed == nil || !*observed {
-		t.Fatal("backend rollback to previously attempted A was suppressed")
-	}
-	// History is bounded; an evicted version can be retried later.
-	for i := 0; i < maxRecentBackendHashes; i++ {
-		hash.Store(fmt.Sprintf("%064x", i+100))
-		check()
-		wait()
-	}
-	if got := len(c.backendAttempts[h.server.ServerKey()].hashes); got != maxRecentBackendHashes {
-		t.Fatalf("history length = %d", got)
-	}
-	before := downloads.Load()
-	hash.Store(strings.Repeat("a", 64))
-	check()
-	wait()
-	if downloads.Load() != before+1 {
-		t.Fatal("evicted hash was not eligible for refresh")
-	}
+	h.ticks(t, 10, 30*time.Second)
+	h.wantMatch(t, false, "before the retry")
+	h.ticks(t, int(backendHashRetryEvery/(30*time.Second)), 30*time.Second)
+	h.tick(t, 30*time.Second)
+	h.wantMatch(t, true, "after the hourly retry")
+	h.wantDownloads(t, 4, "one retry")
+}
+
+// TestBackendHashRollbackAfterDeployment is the sequence from #317: a refresh
+// lands while a redeploy is in progress, and a later rollback must still refresh.
+func TestBackendHashRollbackAfterDeployment(t *testing.T) {
+	h := newBackendHashHarness(t)
+	bundleA := h.body.Load().([]byte)
+	hashA := bundleHash(bundleA)
+	h.hash.Store(hashA)
+	h.tick(t, 30*time.Second)
+	// B is published to the feed URL; the backend still runs A during its
+	// redeploy, and a daily refresh lands in that window.
+	bundleB := withExtraZipEntry(t, bundleA)
+	h.body.Store(bundleB)
+	h.run(t, h.server, StaticRefreshDaily)
+	h.ticks(t, 6, 30*time.Second)
+	h.wantDownloads(t, 3, "one campaign while the backend lags")
+	// The redeploy finishes on B.
+	h.hash.Store(bundleHash(bundleB))
+	h.ticks(t, 4, 30*time.Second)
+	h.wantMatch(t, true, "deployment B")
+	// B is broken and A is rolled back.
+	h.body.Store(bundleA)
+	h.hash.Store(hashA)
+	h.ticks(t, 4, 30*time.Second)
+	h.wantDownloads(t, 4, "rollback")
+	h.tick(t, 30*time.Second)
+	h.wantMatch(t, true, "rolled back to A")
+}
+
+// TestBackendHashFeedAheadOfBackend covers a refresh that picks up a new
+// bundle before the backend's redeploy finishes. The backend had matched for a
+// long time, but its hash must hold against the new local bundle before a
+// campaign starts, so a redeploy that finishes in time causes no download.
+func TestBackendHashFeedAheadOfBackend(t *testing.T) {
+	h := newBackendHashHarness(t)
+	bundleA := h.body.Load().([]byte)
+	h.hash.Store(bundleHash(bundleA))
+	h.ticks(t, 20, 30*time.Second)
+	bundleB := withExtraZipEntry(t, bundleA)
+	h.body.Store(bundleB)
+	h.run(t, h.server, StaticRefreshDaily)
+	h.ticks(t, 2, 30*time.Second)
+	h.wantMatch(t, false, "backend still on A")
+	h.hash.Store(bundleHash(bundleB))
+	h.ticks(t, 4, 30*time.Second)
+	h.wantMatch(t, true, "redeploy finished")
+	h.wantDownloads(t, 2, "only the startup and daily downloads")
+}
+
+// TestBackendHashGapsAndMissingHashes checks that a tick without a hash
+// neither ends nor extends a run, and that a long gap restarts it.
+func TestBackendHashGapsAndMissingHashes(t *testing.T) {
+	h := newBackendHashHarness(t)
+	h.body.Store(withExtraZipEntry(t, h.body.Load().([]byte)))
+	newHash := bundleHash(h.body.Load().([]byte))
+	h.hash.Store(newHash)
+	h.tick(t, 30*time.Second)
+	h.hash.Store("")
+	h.tick(t, 30*time.Second)
+	h.hash.Store(newHash)
+	h.tick(t, 30*time.Second)
+	h.wantDownloads(t, 1, "two observations")
+	h.tick(t, 30*time.Second)
+	h.wantDownloads(t, 2, "a missing hash broke the run")
+
+	// After a gap such as a collection backoff, stability must be shown again.
+	h = newBackendHashHarness(t)
+	h.hash.Store(strings.Repeat("a", 64))
+	h.tick(t, 30*time.Second)
+	h.clock = h.clock.Add(5 * time.Minute)
+	h.ticks(t, 3, 30*time.Second)
+	h.wantDownloads(t, 1, "run spanning a gap")
+	h.tick(t, 30*time.Second)
+	h.wantDownloads(t, 2, "restarted run")
 }
 
 func TestBackendHashUnavailableAndMultiFeed(t *testing.T) {
@@ -194,7 +359,7 @@ func TestBackendHashUnavailableAndMultiFeed(t *testing.T) {
 			if tc.multi && requests.Load() != 0 {
 				t.Fatal("multi-feed backend queried")
 			}
-			if len(h.service.refreshCoordinator.backendAttempts) != 0 || len(h.service.refreshCoordinator.active) != 0 {
+			if len(h.service.refreshCoordinator.backendRuns) != 0 || len(h.service.refreshCoordinator.active) != 0 {
 				t.Fatal("unavailable hash triggered campaign")
 			}
 		})
@@ -204,7 +369,7 @@ func TestBackendHashUnavailableAndMultiFeed(t *testing.T) {
 func TestBackendHashConfigurationReconciliation(t *testing.T) {
 	h := newUnchangedFeedHarness(t)
 	c := h.service.refreshCoordinator
-	c.backendAttempts[h.server.ServerKey()] = backendHashAttempt{fingerprint: staticConfigFingerprint(h.server), hashes: []string{strings.Repeat("a", 64)}}
+	c.backendRuns[h.server.ServerKey()] = backendHashRun{fingerprint: staticConfigFingerprint(h.server), hash: strings.Repeat("a", 64)}
 	changed := h.server
 	changed.GtfsStaticFeeds = []string{"one.zip", "two.zip"}
 	h.store.SetConfiguredServers([]models.ObaServer{changed})
@@ -216,12 +381,12 @@ func TestBackendHashConfigurationReconciliation(t *testing.T) {
 		}
 	}
 	h.service.ReconcileStaticRefreshCampaigns([]models.ObaServer{changed})
-	if !called || len(c.backendAttempts) != 0 {
+	if !called || len(c.backendRuns) != 0 {
 		t.Fatal("configuration change retained backend state")
 	}
-	c.backendAttempts[changed.ServerKey()] = backendHashAttempt{fingerprint: staticConfigFingerprint(changed), hashes: []string{strings.Repeat("b", 64)}}
+	c.backendRuns[changed.ServerKey()] = backendHashRun{fingerprint: staticConfigFingerprint(changed), hash: strings.Repeat("b", 64)}
 	h.service.ReconcileStaticRefreshCampaigns(nil)
-	if len(c.backendAttempts) != 0 {
+	if len(c.backendRuns) != 0 {
 		t.Fatal("removed server retained backend state")
 	}
 }
@@ -337,10 +502,10 @@ func TestBackendHashConfigChangesDuringRequest(t *testing.T) {
 	c.mu.Unlock()
 	close(release)
 	<-done
-	if c.start(context.Background(), h.service, h.server, StaticRefreshBackendChanged, 1, strings.Repeat("b", 64)) {
+	if c.start(context.Background(), h.service, h.server, StaticRefreshBackendChanged, 1) {
 		t.Fatal("stale campaign registered")
 	}
-	if canceled || len(c.backendAttempts) != 0 {
+	if canceled || len(c.backendRuns) != 0 {
 		t.Fatal("stale check changed current campaign state")
 	}
 }

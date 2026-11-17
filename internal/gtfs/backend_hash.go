@@ -14,9 +14,22 @@ import (
 	"watchdog.onebusaway.org/internal/utils"
 )
 
-type backendHashAttempt struct {
+// backendHashRun is the hash a backend has reported on consecutive
+// observations for one configured entry, together with the static
+// configuration and local snapshot hash it was compared against. A change in
+// any of these, or a gap between observations longer than the stable duration
+// or three fetch intervals (whichever is longer), starts a new run.
+type backendHashRun struct {
 	fingerprint string
-	hashes      []string
+	hash        string
+	localHash   string
+	firstSeen   time.Time
+	lastSeen    time.Time
+	ticks       int
+	// campaignAt is when this run last started a backend_changed campaign.
+	campaignAt time.Time
+	// warned records that the mismatch after that campaign was logged.
+	warned bool
 }
 
 // CheckBackendBundles checks one deployment, including any agency-scoped entries
@@ -50,17 +63,25 @@ func (gs *GtfsService) CheckBackendBundles(ctx, campaignCtx context.Context, ser
 			}
 			c.mu.Lock()
 			content, ok := c.snapshotContent[server.ServerKey()]
+			localHash := ""
 			if ok && content.fingerprint == fingerprint && len(content.hashes) == 1 {
-				value := content.hashes[0] == hash
+				localHash = content.hashes[0]
+				value := localHash == hash
 				match = &value
 			}
+			run, startCampaign, warn := c.observeBackendRunLocked(server, fingerprint, hash, localHash, match)
 			c.mu.Unlock()
 			gs.StaticStore.mu.RUnlock()
-			if match == nil || !*match {
-				if c.start(campaignCtx, gs, server, StaticRefreshBackendChanged, 5, hash) {
-					gs.Logger.Info("Starting backend-changed static GTFS refresh campaign", "server_name", server.ServerName,
-						"server_url", utils.SanitizeServerURL(server.ObaBaseURL), "trigger", StaticRefreshBackendChanged, "agency_id", server.AgencyID, "agency_name", server.AgencyName)
-				}
+			if warn {
+				gs.Logger.Warn("Backend static GTFS bundle still differs from the configured feed after refresh",
+					"server_name", server.ServerName, "server_url", utils.SanitizeServerURL(server.ObaBaseURL),
+					"feed_url", utils.SanitizeServerURL(server.GtfsStaticFeeds[0]), "agency_id", server.AgencyID,
+					"backend_hash", hash, "local_hash", localHash)
+			}
+			if startCampaign && c.start(campaignCtx, gs, server, StaticRefreshBackendChanged, 5) {
+				c.markBackendCampaign(server, run)
+				gs.Logger.Info("Starting backend-changed static GTFS refresh campaign", "server_name", server.ServerName,
+					"server_url", utils.SanitizeServerURL(server.ObaBaseURL), "trigger", StaticRefreshBackendChanged, "agency_id", server.AgencyID, "agency_name", server.AgencyName)
 			}
 		}
 		prior, seen := results[key]
@@ -76,6 +97,49 @@ func (gs *GtfsService) CheckBackendBundles(ctx, campaignCtx context.Context, ser
 	for key, match := range results {
 		gs.observeBackendHash(representatives[key], match)
 	}
+}
+
+// observeBackendRunLocked records one backend hash observation and decides
+// whether it starts a campaign or logs that a finished campaign left the
+// backend and the configured feed disagreeing. c.mu must be held.
+func (c *staticRefreshCoordinator) observeBackendRunLocked(server models.ObaServer, fingerprint, hash, localHash string, match *bool) (backendHashRun, bool, bool) {
+	key := server.ServerKey()
+	now := c.now()
+	run := c.backendRuns[key]
+	// Tolerate a couple of missed ticks, but never less than the stable
+	// duration, so a fetch interval longer than it can still form a run.
+	maxGap := max(backendHashStableFor, backendHashStableTicks*c.checkInterval)
+	if run.fingerprint != fingerprint || run.hash != hash || run.localHash != localHash || now.Sub(run.lastSeen) > maxGap {
+		// Without continuous observations, a hash seen before and after a gap
+		// says nothing about what the backend reported in between.
+		run = backendHashRun{fingerprint: fingerprint, hash: hash, localHash: localHash, firstSeen: now}
+	}
+	run.lastSeen = now
+	run.ticks++
+	startCampaign, warn := false, false
+	if match == nil || !*match {
+		_, active := c.active[key]
+		if match != nil && !run.campaignAt.IsZero() && !run.warned && !active {
+			run.warned, warn = true, true
+		}
+		startCampaign = run.ticks >= backendHashStableTicks && now.Sub(run.firstSeen) >= backendHashStableFor &&
+			(run.campaignAt.IsZero() || now.Sub(run.campaignAt) >= backendHashRetryEvery)
+	}
+	c.backendRuns[key] = run
+	return run, startCampaign, warn
+}
+
+// markBackendCampaign records a started campaign on the run that requested it, if that run is still current.
+func (c *staticRefreshCoordinator) markBackendCampaign(server models.ObaServer, run backendHashRun) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key := server.ServerKey()
+	current, ok := c.backendRuns[key]
+	if !ok || current.fingerprint != run.fingerprint || current.hash != run.hash || current.localHash != run.localHash || !current.firstSeen.Equal(run.firstSeen) {
+		return
+	}
+	current.campaignAt, current.warned = run.lastSeen, false
+	c.backendRuns[key] = current
 }
 
 // backendHashEligible reports whether all entries for a backend

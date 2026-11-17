@@ -33,18 +33,30 @@ Static GTFS refreshes daily and does not use the realtime window.
 For backends whose configured entries all reference the same single static feed,
 each collection tick also checks
 `/api/v2/metadata.json`. If the backend's `staticGtfsHash` differs from the
-SHA-256 of Watchdog's published zip, Watchdog starts a `backend_changed`
-refresh campaign. Watchdog remembers the last eight backend hashes that started
-campaigns for each configured entry, so nodes alternating between recent bundle versions do
-not cause repeated downloads. An unseen or evicted hash can start a new
-campaign. Publishing a different local bundle or changing static configuration
-clears this history so a backend rollback can trigger a refresh. Daily refreshes
+SHA-256 of Watchdog's published zip, Watchdog treats it as a possible bundle
+change. Because the hash a deployment reports can briefly disagree with the
+feed URL while a redeploy is in progress, Watchdog waits until the backend has
+reported the same mismatching hash for at least 90 seconds and at least 3
+collection ticks before starting a `backend_changed` refresh campaign. A
+different hash, a change in Watchdog's own published bundle, a static
+configuration change, or a gap longer than 90 seconds or 3 fetch intervals
+(whichever is longer) starts the wait again. Ticks without a hash neither end
+nor extend it. Nodes alternating between bundle versions behind a load
+balancer therefore rarely start a campaign, and a rollback to an earlier
+bundle is refreshed like any other change.
+
+Each stable mismatch starts one campaign. If the backend keeps reporting the
+same hash afterwards, Watchdog logs a warning that the backend and the
+configured feed still disagree, and retries the campaign at most once an hour
+while the mismatch lasts, which recovers a feed that was corrected without a
+redeploy or a download that failed. Daily refreshes
 continue independently. The shared metadata request is skipped
 when every entry for a backend is in collection backoff; it resumes when any
 entry is ready. A skipped request leaves the last hash-match observation intact.
 
 Malformed metadata and unexpected request failures are logged at debug level,
-and backend-triggered campaign starts at info level. Missing hashes and HTTP
+backend-triggered campaign starts at info level, and a mismatch that outlasts
+its campaign at warn level, once per campaign. Missing hashes and HTTP
 404/503 responses remain quiet.
 
 `gtfs_static_backend_hash_match` reports 1 for a match and 0 for a mismatch.

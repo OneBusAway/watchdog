@@ -85,6 +85,7 @@ func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version s
 	gtfsService := gtfs.NewGtfsService(staticStore, realtimeStore, boundingBoxStore, routeAgencyIndex, logger, client)
 	metricsService := metrics.NewMetricsService(staticStore, realtimeStore, boundingBoxStore, routeAgencyIndex, vehicleLastSeen, unmatchedStopTracker, logger, client, obaSDKClientCache.For)
 	metricsService.ReportCollectionInterval(time.Duration(cfg.FetchInterval) * time.Second)
+	gtfsService.SetBackendCheckInterval(time.Duration(cfg.FetchInterval) * time.Second)
 	metricsService.ReportServerInfo(cfg.GetServers())
 
 	// Wire static bundle and backend hash metrics through callbacks so
