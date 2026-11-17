@@ -16,7 +16,9 @@ func TestAuthenticate_Accepts(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	s, router := newServiceWithTokens(t, []string{testToken, nextToken}, logger)
 	called := false
-	s.route(router, "/v1/test", okHandler(&called))
+	// authenticate alone: s.get would add the database check, which returns
+	// 503 here because the test service has no pool.
+	router.GET("/v1/test", s.authenticate(okHandler(&called)))
 
 	tests := []struct {
 		name   string
@@ -45,7 +47,7 @@ func TestAuthenticate_Accepts(t *testing.T) {
 func TestAuthenticate_Rejects(t *testing.T) {
 	s, router := newTestService(t)
 	called := false
-	s.route(router, "/v1/test", okHandler(&called))
+	s.get(router, "/v1/test", okHandler(&called))
 
 	tests := []struct {
 		name    string
@@ -92,7 +94,7 @@ func TestAuthenticate_DoesNotLogToken(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	s, router := newServiceWithTokens(t, []string{testToken, nextToken}, logger)
 	called := false
-	s.route(router, "/v1/test", okHandler(&called))
+	s.get(router, "/v1/test", okHandler(&called))
 
 	const wrongToken = "wrong-secret-value"
 	for _, header := range []string{

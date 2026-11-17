@@ -148,13 +148,25 @@ func TestWithMetrics_DefaultsToOK(t *testing.T) {
 }
 
 func TestRoute_TokenCheckedBeforeDatabase(t *testing.T) {
-	s, router := newTestService(t) // no pool, and no token check until #197
+	s, router := newTestService(t) // no pool
 	called := false
 	s.get(router, "/v1/test", okHandler(&called))
 
 	rec := doGet(t, router, "/v1/test", map[string]string{"Accept": "text/html"})
-
 	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want %d: the token check must run before the database and Accept checks", rec.Code, http.StatusUnauthorized)
+		t.Errorf("without a token: status = %d, want %d: the token check must run before the database and Accept checks", rec.Code, http.StatusUnauthorized)
+	}
+
+	// With a valid token the request gets past authenticate and stops at the
+	// database check, which proves the token check accepted it.
+	rec = doGet(t, router, "/v1/test", map[string]string{
+		"Accept":        "text/html",
+		"Authorization": "Bearer " + testToken,
+	})
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("with a valid token: status = %d, want %d: the database check must run after the token check", rec.Code, http.StatusServiceUnavailable)
+	}
+	if called {
+		t.Error("handler ran with no database")
 	}
 }
