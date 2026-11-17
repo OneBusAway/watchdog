@@ -70,6 +70,17 @@ func NewGtfsService(staticStore *StaticStore, realtimeStore *RealtimeStore, boun
 	}
 }
 
+// SetBackendCheckInterval tells the backend hash check how often collection
+// ticks run, so a missed observation can be told apart from the normal spacing.
+func (gs *GtfsService) SetBackendCheckInterval(interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	gs.refreshCoordinator.mu.Lock()
+	defer gs.refreshCoordinator.mu.Unlock()
+	gs.refreshCoordinator.checkInterval = interval
+}
+
 // SetBackendHashObserver registers deployment-level hash comparison metrics.
 func (gs *GtfsService) SetBackendHashObserver(observer func(models.ObaServer, *bool)) {
 	gs.BackendHashObserver = observer

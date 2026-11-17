@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -48,8 +47,16 @@ const (
 	StaticRefreshAgencyMismatch StaticRefreshTrigger = "agency_mismatch"
 )
 
-// maxRecentBackendHashes bounds rolling-deployment suppression; daily refreshes remain independent.
-const maxRecentBackendHashes = 8
+// A backend hash starts a backend_changed campaign only once the backend has
+// reported it steadily for both a minimum duration and a minimum number of
+// observations, so a deployment in progress does not trigger downloads. A
+// longer gap between observations restarts the run. While the same mismatch
+// persists, the campaign is retried at most once per backendHashRetryEvery.
+const (
+	backendHashStableFor   = 90 * time.Second
+	backendHashStableTicks = 3
+	backendHashRetryEvery  = time.Hour
+)
 
 const maxStaticCampaignCacheSize = int64(2 << 30)
 const maxStaticFeedDownloadSize = int64(512 << 20)
@@ -88,24 +95,30 @@ type staticRefreshCoordinator struct {
 	mu              sync.Mutex
 	active          map[string]activeStaticCampaign
 	histories       map[string]*staticFeedFailureHistory
-	backendAttempts map[string]backendHashAttempt
+	backendRuns     map[string]backendHashRun
 	published       map[string]publishedStaticContent
 	snapshotContent map[string]publishedStaticContent
 	mismatches      map[string]agencyMismatchState
 	policy          staticRefreshRetryPolicy
 	nextGeneration  uint64
+	now             func() time.Time
+	// checkInterval is the collection fetch interval, which sets how long a
+	// gap between backend hash observations may be before a run restarts.
+	checkInterval time.Duration
 }
 
-// newStaticRefreshCoordinator initializes campaign, published-content, and backend-attempt tracking.
+// newStaticRefreshCoordinator initializes campaign, published-content, and backend-run tracking.
 func newStaticRefreshCoordinator() *staticRefreshCoordinator {
 	return &staticRefreshCoordinator{
 		snapshotContent: make(map[string]publishedStaticContent),
-		backendAttempts: make(map[string]backendHashAttempt),
+		backendRuns:     make(map[string]backendHashRun),
 		active:          make(map[string]activeStaticCampaign),
 		histories:       make(map[string]*staticFeedFailureHistory),
 		published:       make(map[string]publishedStaticContent),
 		mismatches:      make(map[string]agencyMismatchState),
 		policy:          dailyStaticRefreshRetryPolicy,
+		now:             time.Now,
+		checkInterval:   30 * time.Second,
 	}
 }
 
@@ -113,8 +126,8 @@ func staticFeedHistoryKey(server models.ObaServer, feedURL string) string {
 	return server.ServerKey() + "|" + feedURL
 }
 
-// start registers a campaign only for current configuration, suppressing active campaigns and repeated backend hashes.
-func (c *staticRefreshCoordinator) start(ctx context.Context, service *GtfsService, server models.ObaServer, trigger StaticRefreshTrigger, maxRetries int, backendHash ...string) bool {
+// start registers a campaign only for current configuration, suppressing a second active campaign.
+func (c *staticRefreshCoordinator) start(ctx context.Context, service *GtfsService, server models.ObaServer, trigger StaticRefreshTrigger, maxRetries int) bool {
 	// Keep configuration validation atomic with campaign registration. This
 	// short read lock does not wait on the static publication refresh lock.
 	service.StaticStore.mu.RLock()
@@ -127,14 +140,6 @@ func (c *staticRefreshCoordinator) start(ctx context.Context, service *GtfsServi
 	campaignCtx, cancel := context.WithCancel(ctx)
 
 	c.mu.Lock()
-	if len(backendHash) > 0 {
-		attempt := c.backendAttempts[key]
-		if attempt.fingerprint == fingerprint && slices.Contains(attempt.hashes, backendHash[0]) {
-			c.mu.Unlock()
-			cancel()
-			return false
-		}
-	}
 	c.nextGeneration++
 	generation := c.nextGeneration
 	if active, ok := c.active[key]; ok {
@@ -151,17 +156,6 @@ func (c *staticRefreshCoordinator) start(ctx context.Context, service *GtfsServi
 				delete(c.histories, historyKey)
 			}
 		}
-	}
-	if len(backendHash) > 0 {
-		attempt := c.backendAttempts[key]
-		if attempt.fingerprint != fingerprint {
-			attempt = backendHashAttempt{fingerprint: fingerprint}
-		}
-		attempt.hashes = append(attempt.hashes, backendHash[0])
-		if len(attempt.hashes) > maxRecentBackendHashes {
-			attempt.hashes = attempt.hashes[1:]
-		}
-		c.backendAttempts[key] = attempt
 	}
 	c.active[key] = activeStaticCampaign{fingerprint: fingerprint, generation: generation, cancel: cancel}
 	c.mu.Unlock()
@@ -196,9 +190,9 @@ func (c *staticRefreshCoordinator) reconcile(servers []models.ObaServer) {
 			delete(c.active, key)
 		}
 	}
-	for key, attempt := range c.backendAttempts {
-		if configured[key] != attempt.fingerprint {
-			delete(c.backendAttempts, key)
+	for key, run := range c.backendRuns {
+		if configured[key] != run.fingerprint {
+			delete(c.backendRuns, key)
 		}
 	}
 	for key, content := range c.snapshotContent {
@@ -248,12 +242,6 @@ func (c *staticRefreshCoordinator) recordPublished(ctx context.Context, server m
 		return false
 	}
 	content := publishedStaticContent{fingerprint: staticConfigFingerprint(server), hashes: hashes}
-	previous := c.snapshotContent[server.ServerKey()]
-	if previous.fingerprint != content.fingerprint || !slices.Equal(previous.hashes, hashes) {
-		// Attempts describe mismatches against the old local bundle. A new
-		// publication must allow retries of prior backend versions, including rollbacks.
-		delete(c.backendAttempts, server.ServerKey())
-	}
 	c.published[server.ServerKey()] = content
 	// Retain the identity of the snapshot still in use if a later refresh
 	// fails and invalidates only the unchanged-download optimization.
