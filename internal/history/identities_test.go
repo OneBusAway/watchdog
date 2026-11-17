@@ -328,21 +328,3 @@ func TestEnsureServer_ConcurrentFirstInsert(t *testing.T) {
 		t.Fatalf("onebusaway_server table has %d rows, want 1", got)
 	}
 }
-
-func TestEnsureServer_DisplayNameStability(t *testing.T) {
-	// Tests that two agency-mode entries sharing one base URL do not flip display_name.
-	baseURL := "http://shared.example.com/api"
-	s1 := models.ObaServer{ServerName: "Primary Agency", ObaBaseURL: baseURL}
-	s2 := models.ObaServer{ServerName: "Secondary Agency", ObaBaseURL: baseURL}
-
-	// First configured name wins
-	name1 := canonicalServerName(baseURL, s1.ServerName)
-	name2 := canonicalServerName(baseURL, s2.ServerName)
-
-	if name1 != "Primary Agency" {
-		t.Errorf("name1 = %q, want 'Primary Agency'", name1)
-	}
-	if name2 != "Primary Agency" {
-		t.Errorf("name2 = %q, want 'Primary Agency' (first configured entry should win)", name2)
-	}
-}

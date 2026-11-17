@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 
 	"github.com/jackc/pgx/v5"
 
@@ -29,17 +28,6 @@ import (
 // not an identity, and storing it would merge unrelated observations.
 var errEmptyID = errors.New("empty external ID")
 
-// configuredServerNames tracks the first configured display name seen per base URL
-// so multiple agency-mode entries sharing one base URL do not flip display_name.
-var configuredServerNames sync.Map
-
-// canonicalServerName returns the stable server name for a base URL, keeping the
-// first configured name seen during the process lifetime.
-func canonicalServerName(baseURL, serverName string) string {
-	actual, _ := configuredServerNames.LoadOrStore(baseURL, serverName)
-	return actual.(string)
-}
-
 // retryOnNoRows retries a query once if pgx.ErrNoRows is returned. Under READ COMMITTED,
 // when two transactions insert the same new identity simultaneously, the losing transaction's
 // statement snapshot may not see the winner's newly committed row, returning ErrNoRows.
@@ -54,17 +42,16 @@ func retryOnNoRows[T any](fn func() (T, error)) (T, error) {
 }
 
 // ensureServer returns the ID of the server's row. display_name follows the
-// configured server name and is preserved across multiple agency-mode writes.
+// configured server name and is updated when it changes.
 func ensureServer(ctx context.Context, q *dbgen.Queries, server models.ObaServer) (int64, error) {
 	baseURL := utils.SanitizeServerURL(server.ObaBaseURL)
 	if baseURL == "" {
 		return 0, fmt.Errorf("server %q: base URL cannot be normalized", server.ServerName)
 	}
-	displayName := canonicalServerName(baseURL, server.ServerName)
 	id, err := retryOnNoRows(func() (int64, error) {
 		return q.EnsureOneBusAwayServer(ctx, dbgen.EnsureOneBusAwayServerParams{
 			NormalizedBaseUrl: baseURL,
-			DisplayName:       displayName,
+			DisplayName:       server.ServerName,
 		})
 	})
 	if err != nil {
