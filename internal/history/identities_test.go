@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -285,5 +286,63 @@ func TestEnsureAgency_RejectsEmptyID(t *testing.T) {
 	})
 	if !errors.Is(err, errEmptyID) {
 		t.Fatalf("err = %v, want errEmptyID", err)
+	}
+}
+func TestEnsureServer_ConcurrentFirstInsert(t *testing.T) {
+	pool := newMigratedPool(t)
+
+	const concurrency = 10
+	ids := make([]int64, concurrency)
+	errs := make([]error, concurrency)
+
+	var wg sync.WaitGroup
+	wg.Add(concurrency)
+
+	for i := 0; i < concurrency; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			err := runInTx(ctx, pool, func(q *dbgen.Queries) error {
+				id, err := ensureServer(ctx, q, testServer)
+				ids[idx] = id
+				return err
+			})
+			errs[idx] = err
+		}(i)
+	}
+
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("goroutine %d failed: %v", i, err)
+		}
+	}
+
+	for i := 1; i < concurrency; i++ {
+		if ids[i] != ids[0] {
+			t.Fatalf("goroutine %d returned ID %d, want %d", i, ids[i], ids[0])
+		}
+	}
+
+	if got := count(t, pool, "onebusaway_server"); got != 1 {
+		t.Fatalf("onebusaway_server table has %d rows, want 1", got)
+	}
+}
+
+func TestEnsureServer_DisplayNameStability(t *testing.T) {
+	// Tests that two agency-mode entries sharing one base URL do not flip display_name.
+	baseURL := "http://shared.example.com/api"
+	s1 := models.ObaServer{ServerName: "Primary Agency", ObaBaseURL: baseURL}
+	s2 := models.ObaServer{ServerName: "Secondary Agency", ObaBaseURL: baseURL}
+
+	// First configured name wins
+	name1 := canonicalServerName(baseURL, s1.ServerName)
+	name2 := canonicalServerName(baseURL, s2.ServerName)
+
+	if name1 != "Primary Agency" {
+		t.Errorf("name1 = %q, want 'Primary Agency'", name1)
+	}
+	if name2 != "Primary Agency" {
+		t.Errorf("name2 = %q, want 'Primary Agency' (first configured entry should win)", name2)
 	}
 }

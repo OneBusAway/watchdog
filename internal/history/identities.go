@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+
+	"github.com/jackc/pgx/v5"
 
 	"watchdog.onebusaway.org/internal/db/dbgen"
 	"watchdog.onebusaway.org/internal/models"
@@ -26,16 +29,43 @@ import (
 // not an identity, and storing it would merge unrelated observations.
 var errEmptyID = errors.New("empty external ID")
 
+// configuredServerNames tracks the first configured display name seen per base URL
+// so multiple agency-mode entries sharing one base URL do not flip display_name.
+var configuredServerNames sync.Map
+
+// canonicalServerName returns the stable server name for a base URL, keeping the
+// first configured name seen during the process lifetime.
+func canonicalServerName(baseURL, serverName string) string {
+	actual, _ := configuredServerNames.LoadOrStore(baseURL, serverName)
+	return actual.(string)
+}
+
+// retryOnNoRows retries a query once if pgx.ErrNoRows is returned. Under READ COMMITTED,
+// when two transactions insert the same new identity simultaneously, the losing transaction's
+// statement snapshot may not see the winner's newly committed row, returning ErrNoRows.
+// Retrying with a new statement within the transaction allows the new statement snapshot
+// to see the winner's committed row.
+func retryOnNoRows[T any](fn func() (T, error)) (T, error) {
+	val, err := fn()
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fn()
+	}
+	return val, err
+}
+
 // ensureServer returns the ID of the server's row. display_name follows the
-// configured server name and is updated when it changes.
+// configured server name and is preserved across multiple agency-mode writes.
 func ensureServer(ctx context.Context, q *dbgen.Queries, server models.ObaServer) (int64, error) {
 	baseURL := utils.SanitizeServerURL(server.ObaBaseURL)
 	if baseURL == "" {
 		return 0, fmt.Errorf("server %q: base URL cannot be normalized", server.ServerName)
 	}
-	id, err := q.EnsureOneBusAwayServer(ctx, dbgen.EnsureOneBusAwayServerParams{
-		NormalizedBaseUrl: baseURL,
-		DisplayName:       server.ServerName,
+	displayName := canonicalServerName(baseURL, server.ServerName)
+	id, err := retryOnNoRows(func() (int64, error) {
+		return q.EnsureOneBusAwayServer(ctx, dbgen.EnsureOneBusAwayServerParams{
+			NormalizedBaseUrl: baseURL,
+			DisplayName:       displayName,
+		})
 	})
 	if err != nil {
 		return 0, fmt.Errorf("server %q: ensure server: %w", server.ServerName, err)
@@ -53,10 +83,12 @@ func ensureAgency(ctx context.Context, q *dbgen.Queries, serverID int64, serverN
 	if name != "" {
 		currentName = &name
 	}
-	id, err := q.EnsureAgency(ctx, dbgen.EnsureAgencyParams{
-		ServerID:         serverID,
-		ExternalAgencyID: externalAgencyID,
-		CurrentName:      currentName,
+	id, err := retryOnNoRows(func() (int64, error) {
+		return q.EnsureAgency(ctx, dbgen.EnsureAgencyParams{
+			ServerID:         serverID,
+			ExternalAgencyID: externalAgencyID,
+			CurrentName:      currentName,
+		})
 	})
 	if err != nil {
 		return 0, fmt.Errorf("server %q: ensure agency %q: %w", serverName, externalAgencyID, err)
@@ -70,9 +102,11 @@ func ensureEndpoint(ctx context.Context, q *dbgen.Queries, serverID int64, serve
 	if feedURL == "" {
 		return 0, fmt.Errorf("server %q: vehicle-position URL cannot be normalized", serverName)
 	}
-	id, err := q.EnsureVehiclePositionEndpoint(ctx, dbgen.EnsureVehiclePositionEndpointParams{
-		ServerID:                     serverID,
-		NormalizedVehiclePositionUrl: feedURL,
+	id, err := retryOnNoRows(func() (int64, error) {
+		return q.EnsureVehiclePositionEndpoint(ctx, dbgen.EnsureVehiclePositionEndpointParams{
+			ServerID:                     serverID,
+			NormalizedVehiclePositionUrl: feedURL,
+		})
 	})
 	if err != nil {
 		return 0, fmt.Errorf("server %q: ensure vehicle-position endpoint: %w", serverName, err)
@@ -86,9 +120,11 @@ func ensureStaticSource(ctx context.Context, q *dbgen.Queries, serverID int64, s
 	if normalized == "" {
 		return 0, fmt.Errorf("server %q: static GTFS source URL cannot be normalized", serverName)
 	}
-	id, err := q.EnsureStaticGTFSSource(ctx, dbgen.EnsureStaticGTFSSourceParams{
-		ServerID:            serverID,
-		NormalizedSourceUrl: normalized,
+	id, err := retryOnNoRows(func() (int64, error) {
+		return q.EnsureStaticGTFSSource(ctx, dbgen.EnsureStaticGTFSSourceParams{
+			ServerID:            serverID,
+			NormalizedSourceUrl: normalized,
+		})
 	})
 	if err != nil {
 		return 0, fmt.Errorf("server %q: ensure static GTFS source: %w", serverName, err)
@@ -101,9 +137,11 @@ func ensureVehicle(ctx context.Context, q *dbgen.Queries, endpointID int64, exte
 	if externalVehicleID == "" {
 		return 0, fmt.Errorf("ensure vehicle on endpoint %d: %w", endpointID, errEmptyID)
 	}
-	id, err := q.EnsureVehicleEntity(ctx, dbgen.EnsureVehicleEntityParams{
-		EndpointID:        endpointID,
-		ExternalVehicleID: externalVehicleID,
+	id, err := retryOnNoRows(func() (int64, error) {
+		return q.EnsureVehicleEntity(ctx, dbgen.EnsureVehicleEntityParams{
+			EndpointID:        endpointID,
+			ExternalVehicleID: externalVehicleID,
+		})
 	})
 	if err != nil {
 		return 0, fmt.Errorf("ensure vehicle %q on endpoint %d: %w", externalVehicleID, endpointID, err)
@@ -117,9 +155,11 @@ func ensureReportedStop(ctx context.Context, q *dbgen.Queries, agencyID int64, o
 	if obaStopID == "" {
 		return 0, fmt.Errorf("ensure reported stop for agency %d: %w", agencyID, errEmptyID)
 	}
-	id, err := q.EnsureReportedStop(ctx, dbgen.EnsureReportedStopParams{
-		AgencyID:  agencyID,
-		ObaStopID: obaStopID,
+	id, err := retryOnNoRows(func() (int64, error) {
+		return q.EnsureReportedStop(ctx, dbgen.EnsureReportedStopParams{
+			AgencyID:  agencyID,
+			ObaStopID: obaStopID,
+		})
 	})
 	if err != nil {
 		return 0, fmt.Errorf("ensure reported stop %q for agency %d: %w", obaStopID, agencyID, err)
@@ -133,9 +173,11 @@ func ensureReportedTrip(ctx context.Context, q *dbgen.Queries, agencyID int64, o
 	if obaTripID == "" {
 		return 0, fmt.Errorf("ensure reported trip for agency %d: %w", agencyID, errEmptyID)
 	}
-	id, err := q.EnsureReportedTrip(ctx, dbgen.EnsureReportedTripParams{
-		AgencyID:  agencyID,
-		ObaTripID: obaTripID,
+	id, err := retryOnNoRows(func() (int64, error) {
+		return q.EnsureReportedTrip(ctx, dbgen.EnsureReportedTripParams{
+			AgencyID:  agencyID,
+			ObaTripID: obaTripID,
+		})
 	})
 	if err != nil {
 		return 0, fmt.Errorf("ensure reported trip %q for agency %d: %w", obaTripID, agencyID, err)

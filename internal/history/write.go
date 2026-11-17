@@ -89,8 +89,13 @@ func runInTx(ctx context.Context, db txBeginner, fn func(*dbgen.Queries) error) 
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
-	// Rollback after a successful Commit is a no-op.
-	defer func() { _ = tx.Rollback(context.Background()) }()
+	// Rollback after a successful Commit is a no-op. Use a short bounded timeout
+	// on a detached context so a non-responsive DB cannot hang past writeTimeout.
+	defer func() {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 1*time.Second)
+		defer cancel()
+		_ = tx.Rollback(rollbackCtx)
+	}()
 
 	if err := fn(dbgen.New(tx)); err != nil {
 		return err
