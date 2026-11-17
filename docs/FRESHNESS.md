@@ -49,7 +49,12 @@ Each stable mismatch starts one campaign. If the backend keeps reporting the
 same hash afterwards, Watchdog logs a warning that the backend and the
 configured feed still disagree, and retries the campaign at most once an hour
 while the mismatch lasts, which recovers a feed that was corrected without a
-redeploy or a download that failed. Daily refreshes
+redeploy or a download that failed. The hourly limit holds when the wait
+starts again for the same backend hash, local bundle and configuration, for
+example when a node stuck on an old bundle answers behind a load balancer, or
+after a metadata outage. It ends once the backend has reported another hash
+for 10 minutes, so a rollback after a deployment that ran that long refreshes
+right away, and a quicker rollback waits for the hourly retry. Daily refreshes
 continue independently. The shared metadata request is skipped
 when every entry for a backend is in collection backoff; it resumes when any
 entry is ready. A skipped request leaves the last hash-match observation intact.

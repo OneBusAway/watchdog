@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -223,6 +224,62 @@ func TestBackendHashPersistentMismatch(t *testing.T) {
 	}
 }
 
+// TestBackendHashRetryLimitAcrossRuns covers a run that restarts while the
+// same mismatch persists: the hourly retry limit and the single warning
+// carry over to the new run.
+func TestBackendHashRetryLimitAcrossRuns(t *testing.T) {
+	t.Run("random_nodes", func(t *testing.T) {
+		// One node is stuck on an old bundle and a load balancer picks
+		// nodes at random, so the stale hash keeps forming new runs.
+		h := newBackendHashHarness(t)
+		pick := []string{strings.Repeat("a", 64), bundleHash(h.body.Load().([]byte))}
+		rng := rand.New(rand.NewPCG(320, 0))
+		for i := 0; i < int(2*backendHashRetryEvery/(30*time.Second)); i++ {
+			h.hash.Store(pick[rng.IntN(2)])
+			h.tick(t, 30*time.Second)
+		}
+		// The startup download plus at most one campaign per hour.
+		if got := h.downloads.Load(); got > 3 {
+			t.Fatalf("downloads over two hours = %d, want at most 3", got)
+		}
+	})
+	t.Run("metadata_outage", func(t *testing.T) {
+		h := newBackendHashHarness(t)
+		h.hash.Store(strings.Repeat("a", 64))
+		h.ticks(t, 5, 30*time.Second)
+		h.wantDownloads(t, 2, "stable mismatch")
+		h.hash.Store("")
+		h.ticks(t, 10, 30*time.Second)
+		h.hash.Store(strings.Repeat("a", 64))
+		h.ticks(t, 10, 30*time.Second)
+		h.wantDownloads(t, 2, "same mismatch after the outage")
+		if got := h.logs.count(mismatchWarnLog); got != 1 {
+			t.Fatalf("mismatch warnings = %d, want 1", got)
+		}
+	})
+	t.Run("quick_rollback", func(t *testing.T) {
+		// A rollback minutes after a deployment looks like a node flapping
+		// behind a load balancer, so it waits for the hourly retry.
+		h := newBackendHashHarness(t)
+		bundleA := h.body.Load().([]byte)
+		h.hash.Store(bundleHash(bundleA))
+		h.tick(t, 30*time.Second)
+		h.body.Store(withExtraZipEntry(t, bundleA))
+		h.run(t, h.server, StaticRefreshDaily)
+		h.ticks(t, 6, 30*time.Second)
+		h.wantDownloads(t, 3, "one campaign while the backend lags")
+		h.hash.Store(bundleHash(h.body.Load().([]byte)))
+		h.ticks(t, 4, 30*time.Second)
+		h.body.Store(bundleA)
+		h.hash.Store(bundleHash(bundleA))
+		h.ticks(t, 4, 30*time.Second)
+		h.wantDownloads(t, 3, "rollback inside the retry interval")
+		h.ticks(t, int(backendHashRetryEvery/(30*time.Second)), 30*time.Second)
+		h.tick(t, 30*time.Second)
+		h.wantMatch(t, true, "rolled back to A after the retry")
+	})
+}
+
 // TestBackendHashRevertedFeed covers a feed URL that is corrected while the
 // backend keeps reporting the same hash: the hourly retry recovers it.
 func TestBackendHashRevertedFeed(t *testing.T) {
@@ -260,9 +317,9 @@ func TestBackendHashRollbackAfterDeployment(t *testing.T) {
 	h.run(t, h.server, StaticRefreshDaily)
 	h.ticks(t, 6, 30*time.Second)
 	h.wantDownloads(t, 3, "one campaign while the backend lags")
-	// The redeploy finishes on B.
+	// The redeploy finishes on B, which runs for a while.
 	h.hash.Store(bundleHash(bundleB))
-	h.ticks(t, 4, 30*time.Second)
+	h.ticks(t, int(backendHashSettledFor/(30*time.Second))+1, 30*time.Second)
 	h.wantMatch(t, true, "deployment B")
 	// B is broken and A is rolled back.
 	h.body.Store(bundleA)

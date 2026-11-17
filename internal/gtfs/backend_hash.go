@@ -26,8 +26,19 @@ type backendHashRun struct {
 	firstSeen   time.Time
 	lastSeen    time.Time
 	ticks       int
-	// campaignAt is when this run last started a backend_changed campaign.
-	campaignAt time.Time
+}
+
+// backendCampaignKey identifies one mismatch: a configured entry, its static
+// configuration, the hash its backend reported, and the local snapshot hash.
+type backendCampaignKey struct {
+	server, fingerprint, hash, localHash string
+}
+
+// backendCampaign is the last backend_changed campaign started for a mismatch.
+// It lives outside the run, so a run restarted by nodes answering with
+// different hashes or by a metadata outage keeps the hourly retry limit.
+type backendCampaign struct {
+	at time.Time
 	// warned records that the mismatch after that campaign was logged.
 	warned bool
 }
@@ -76,7 +87,7 @@ func (gs *GtfsService) CheckBackendBundles(ctx, campaignCtx context.Context, ser
 				gs.Logger.Warn("Backend static GTFS bundle still differs from the configured feed after refresh",
 					"server_name", server.ServerName, "server_url", utils.SanitizeServerURL(server.ObaBaseURL),
 					"feed_url", utils.SanitizeServerURL(server.GtfsStaticFeeds[0]), "agency_id", server.AgencyID,
-					"backend_hash", hash, "local_hash", localHash)
+					"agency_name", server.AgencyName, "backend_hash", hash, "local_hash", localHash)
 			}
 			if startCampaign && c.start(campaignCtx, gs, server, StaticRefreshBackendChanged, 5) {
 				c.markBackendCampaign(server, run)
@@ -116,30 +127,45 @@ func (c *staticRefreshCoordinator) observeBackendRunLocked(server models.ObaServ
 	}
 	run.lastSeen = now
 	run.ticks++
+	if now.Sub(run.firstSeen) >= backendHashSettledFor {
+		for campaignKey := range c.backendCampaigns {
+			if campaignKey.server == key && campaignKey.hash != hash {
+				delete(c.backendCampaigns, campaignKey)
+			}
+		}
+	}
 	startCampaign, warn := false, false
 	if match == nil || !*match {
 		_, active := c.active[key]
-		if match != nil && !run.campaignAt.IsZero() && !run.warned && !active {
-			run.warned, warn = true, true
+		campaignKey := backendCampaignKey{key, fingerprint, hash, localHash}
+		campaign := c.backendCampaigns[campaignKey]
+		if match != nil && !campaign.at.IsZero() && !campaign.warned && !active {
+			campaign.warned, warn = true, true
+			c.backendCampaigns[campaignKey] = campaign
 		}
 		startCampaign = run.ticks >= backendHashStableTicks && now.Sub(run.firstSeen) >= backendHashStableFor &&
-			(run.campaignAt.IsZero() || now.Sub(run.campaignAt) >= backendHashRetryEvery)
+			(campaign.at.IsZero() || now.Sub(campaign.at) >= backendHashRetryEvery)
 	}
 	c.backendRuns[key] = run
 	return run, startCampaign, warn
 }
 
-// markBackendCampaign records a started campaign on the run that requested it, if that run is still current.
+// markBackendCampaign records a started campaign for the mismatch its run
+// observed, unless the entry's configuration changed in the meantime.
 func (c *staticRefreshCoordinator) markBackendCampaign(server models.ObaServer, run backendHashRun) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	key := server.ServerKey()
-	current, ok := c.backendRuns[key]
-	if !ok || current.fingerprint != run.fingerprint || current.hash != run.hash || current.localHash != run.localHash || !current.firstSeen.Equal(run.firstSeen) {
+	if current, ok := c.backendRuns[key]; !ok || current.fingerprint != run.fingerprint {
 		return
 	}
-	current.campaignAt, current.warned = run.lastSeen, false
-	c.backendRuns[key] = current
+	// A campaign older than the retry interval no longer limits anything.
+	for campaignKey, campaign := range c.backendCampaigns {
+		if run.lastSeen.Sub(campaign.at) >= backendHashRetryEvery {
+			delete(c.backendCampaigns, campaignKey)
+		}
+	}
+	c.backendCampaigns[backendCampaignKey{key, run.fingerprint, run.hash, run.localHash}] = backendCampaign{at: run.lastSeen}
 }
 
 // backendHashEligible reports whether all entries for a backend
