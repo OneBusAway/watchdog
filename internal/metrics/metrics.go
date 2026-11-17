@@ -35,6 +35,16 @@ var GtfsRtFeedDuplicateID = tracked(promauto.NewGaugeVec(prometheus.GaugeOpts{
 	Help: "Whether duplicate entity or vehicle-position IDs were excluded from the latest GTFS-RT fetch (1 = duplicates excluded, 0 = no duplicate detected)",
 }, []string{"agency_id", "agency_name", "server_name", "server_url", "feed", "feed_url"}))
 
+// InvestigationHistoryWriteFailures counts history writes to the PostgreSQL
+// investigation store that failed. Recording never stops collection, so
+// without this counter a gap in the history would look the same as a period
+// with no problems. step names the recording step; server_url lets
+// DeleteSeriesForServer retire the series when the server is removed.
+var InvestigationHistoryWriteFailures = tracked(promauto.NewCounterVec(prometheus.CounterOpts{
+	Name: "watchdog_investigation_history_write_failures_total",
+	Help: "Failed writes to the PostgreSQL investigation history, by recording step and server",
+}, []string{"step", "server_name", "server_url"}))
+
 // ObaApiStatus tracks the reachability of an OBA server's /current-time.json
 // endpoint. The ping is server-wide (the endpoint takes no agency parameter),
 // so the metric is labeled with server identity only — agency_id / agency_name

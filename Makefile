@@ -48,7 +48,7 @@ fmt-check:
 test:
 	go test ./...
 
-# Runs the PostgreSQL tests in internal/db, which skip unless
+# Runs the PostgreSQL tests in internal/db and internal/history, which skip unless
 # WATCHDOG_TEST_DATABASE_URL points at a database they may create schemas in.
 # Each test migrates its own temporary schema and drops it afterwards.
 test-db:
@@ -56,7 +56,7 @@ test-db:
 		echo "Set WATCHDOG_TEST_DATABASE_URL, e.g. postgres://watchdog:watchdog@localhost:5432/watchdog?sslmode=disable"; \
 		exit 1; \
 	fi
-	go test -count=1 ./internal/db/...
+	go test -count=1 ./internal/db/... ./internal/history/...
 
 # Checks dashboard coverage, Prometheus rule syntax and the promtool test suite.
 promtool-test:
