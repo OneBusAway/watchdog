@@ -46,6 +46,10 @@ func (app *Application) OnConfigUpdated(ctx context.Context, updated []models.Ob
 
 	app.MetricsService.ReportConfiguredServers(len(updated))
 
+	if app.HistoryService != nil {
+		app.HistoryService.SetServers(updated)
+	}
+
 	var newcomers []models.ObaServer
 	app.GtfsService.StaticStore.WithRefreshLock(func() {
 		app.GtfsService.StaticStore.SetConfiguredServers(updated)
