@@ -45,6 +45,8 @@ func newEpisodesRouter(t *testing.T, pool *pgxpool.Pool, kinds ...resourceKind) 
 	router.HEAD("/v1/unmatched-stop-episodes", s.listUnmatchedStopEpisodes)
 	router.GET("/v1/unmatched-stop-episodes/:episode_id", s.getUnmatchedStopEpisode)
 	router.HEAD("/v1/unmatched-stop-episodes/:episode_id", s.getUnmatchedStopEpisode)
+	router.GET("/v1/unmatched-stop-episodes/:episode_id/static-contexts", s.listUnmatchedStopEpisodeStaticContexts)
+	router.HEAD("/v1/unmatched-stop-episodes/:episode_id/static-contexts", s.listUnmatchedStopEpisodeStaticContexts)
 	return router, calls
 }
 
@@ -196,7 +198,7 @@ func wantEpisodeHead(t *testing.T, router http.Handler, path string) {
 
 func TestUnmatchedStopEpisodes_Registered(t *testing.T) {
 	_, router := newTestService(t)
-	for _, path := range []string{"/v1/unmatched-stop-episodes", "/v1/unmatched-stop-episodes/1"} {
+	for _, path := range []string{"/v1/unmatched-stop-episodes", "/v1/unmatched-stop-episodes/1", "/v1/unmatched-stop-episodes/1/static-contexts"} {
 		for _, method := range []string{http.MethodGet, http.MethodHead} {
 			if h, _, _ := router.Lookup(method, path); h == nil {
 				t.Errorf("%s %s is not registered", method, path)
@@ -621,4 +623,147 @@ func TestListUnmatchedStopEpisodes_IncludeStaticContexts(t *testing.T) {
 func TestListUnmatchedStopEpisodes_BadCloseReason(t *testing.T) {
 	router, _ := newEpisodesRouter(t, nil)
 	wantInvalidParam(t, doGet(t, router, episodesPath+"?close_reason=matched", nil), "close_reason")
+}
+
+func staticContextsPath(id int64) string {
+	return episodePath(id) + "/static-contexts"
+}
+
+// staticContextItems returns the items of GET staticContextsPath(id).
+func staticContextItems(t *testing.T, router http.Handler, id int64) []any {
+	t.Helper()
+	return decodeEpisodeBody(t, doGet(t, router, staticContextsPath(id), nil))["items"].([]any)
+}
+
+func TestListUnmatchedStopEpisodeStaticContexts_RejectsUnknownParameter(t *testing.T) {
+	router, _ := newEpisodesRouter(t, nil)
+	wantInvalidParam(t, doGet(t, router, staticContextsPath(1)+"?foo=1", nil), "foo")
+}
+
+func TestListUnmatchedStopEpisodeStaticContexts_Head(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	s := newStop(t, pool)
+	id := s.episode(t, episodesNow.Add(-time.Hour), time.Time{})
+	s.linkStatic(t, id, episodesNow.Add(-2*time.Hour), true)
+	router, _ := newEpisodesRouter(t, pool)
+	wantEpisodeHead(t, router, staticContextsPath(id))
+}
+
+func TestListUnmatchedStopEpisodeStaticContexts_AppliesRule(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	s := newStop(t, pool)
+	opened, during, closed := episodesNow.Add(-3*time.Hour), episodesNow.Add(-2*time.Hour), episodesNow.Add(-time.Hour)
+	closedID := s.episode(t, opened, closed)
+	other := addStop(t, pool, s.serverID, s.agencyID, "1_75404")
+	openID := other.episode(t, opened, time.Time{})
+	for _, st := range []struct {
+		stop stop
+		id   int64
+	}{{s, closedID}, {other, openID}} {
+		st.stop.linkStatic(t, st.id, opened.Add(-24*time.Hour), true)
+		st.stop.linkStatic(t, st.id, during, true)
+	}
+	router, _ := newEpisodesRouter(t, pool)
+
+	format := func(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
+	for _, tc := range []struct {
+		id        int64
+		lastUntil any
+	}{{closedID, format(closed)}, {openID, nil}} {
+		items := staticContextItems(t, router, tc.id)
+		if len(items) != 2 {
+			t.Fatalf("episode %d: %d items, want 2", tc.id, len(items))
+		}
+		first, second := items[0].(map[string]any), items[1].(map[string]any)
+		if first["applies_from"] != format(opened) || first["applies_until"] != format(during) {
+			t.Errorf("episode %d: first applies %v to %v, want %s to %s",
+				tc.id, first["applies_from"], first["applies_until"], format(opened), format(during))
+		}
+		if second["applies_from"] != format(during) || second["applies_until"] != tc.lastUntil {
+			t.Errorf("episode %d: second applies %v to %v, want %s to %v",
+				tc.id, second["applies_from"], second["applies_until"], format(during), tc.lastUntil)
+		}
+	}
+}
+
+func TestListUnmatchedStopEpisodeStaticContexts_NotFoundRow(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	s := newStop(t, pool)
+	id := s.episode(t, episodesNow.Add(-2*time.Hour), episodesNow.Add(-time.Hour))
+	s.linkStatic(t, id, episodesNow.Add(-3*time.Hour), false)
+	router, _ := newEpisodesRouter(t, pool)
+
+	item := staticContextItems(t, router, id)[0].(map[string]any)
+	if item["static_stop_found"] != false || item["source"] != "watchdog_static_gtfs" {
+		t.Errorf("static_stop_found = %v, source = %v", item["static_stop_found"], item["source"])
+	}
+	for _, field := range []string{"stop_name", "latitude", "longitude", "parent_station_id", "location_type"} {
+		if v, ok := item[field]; !ok || v != nil {
+			t.Errorf("%s = %v (present %v), want null", field, v, ok)
+		}
+	}
+}
+
+func TestListUnmatchedStopEpisodeStaticContexts_Empty(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	id := newStop(t, pool).episode(t, episodesNow.Add(-time.Hour), time.Time{})
+	router, _ := newEpisodesRouter(t, pool)
+
+	body := decodeEpisodeBody(t, doGet(t, router, staticContextsPath(id), nil))
+	if items, ok := body["items"].([]any); !ok || len(items) != 0 {
+		t.Errorf("items = %v, want []", body["items"])
+	}
+	want := map[string]any{"self": staticContextsPath(id), "episode": episodePath(id)}
+	if !reflect.DeepEqual(body["links"], want) {
+		t.Errorf("links = %v, want %v", body["links"], want)
+	}
+}
+
+func TestListUnmatchedStopEpisodeStaticContexts_UnknownEpisode(t *testing.T) {
+	router, _ := newEpisodesRouter(t, dbtest.NewMigratedPool(t))
+	for _, id := range []string{"999", "abc", "0"} {
+		t.Run(id, func(t *testing.T) {
+			wantNotFound(t, doGet(t, router, "/v1/unmatched-stop-episodes/"+id+"/static-contexts", nil))
+		})
+	}
+}
+
+func TestStopStaticContextsLoader(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	s := newStop(t, pool)
+	ids := []int64{
+		s.episode(t, episodesNow.Add(-5*time.Hour), episodesNow.Add(-4*time.Hour)),
+		s.episode(t, episodesNow.Add(-3*time.Hour), episodesNow.Add(-2*time.Hour)),
+		s.episode(t, episodesNow.Add(-time.Hour), time.Time{}),
+	}
+	s.linkStatic(t, ids[0], episodesNow.Add(-6*time.Hour), true)
+	s.linkStatic(t, ids[0], episodesNow.Add(-270*time.Minute), false)
+	s.linkStatic(t, ids[2], episodesNow.Add(-2*time.Hour), true)
+	router, _ := newEpisodesRouter(t, pool)
+
+	svc, _ := newTestService(t)
+	db := &countingDB{DBTX: pool}
+	got, err := svc.loaders[kindUnmatchedStopStaticContexts](context.Background(), dbgen.New(db), ids)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if db.queries != 1 {
+		t.Errorf("loader ran %d queries, want 1", db.queries)
+	}
+	if len(got) != len(ids) {
+		t.Errorf("loader returned %d episodes, want %d", len(got), len(ids))
+	}
+	for _, id := range ids {
+		data, err := encodeJSON(got[id])
+		if err != nil {
+			t.Fatalf("encode episode %d: %v", id, err)
+		}
+		rec := doGet(t, router, staticContextsPath(id), nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET episode %d: status = %d", id, rec.Code)
+		}
+		if string(data) != rec.Body.String() {
+			t.Errorf("episode %d: loaded\n%s\nGET returned\n%s", id, data, rec.Body)
+		}
+	}
 }
