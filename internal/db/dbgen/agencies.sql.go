@@ -9,6 +9,59 @@ import (
 	"context"
 )
 
+const getAgency = `-- name: GetAgency :one
+SELECT agency_id, server_id, external_agency_id, current_name
+FROM agency
+WHERE agency_id = $1
+`
+
+// One agency by ID.
+func (q *Queries) GetAgency(ctx context.Context, agencyID int64) (Agency, error) {
+	row := q.db.QueryRow(ctx, getAgency, agencyID)
+	var i Agency
+	err := row.Scan(
+		&i.AgencyID,
+		&i.ServerID,
+		&i.ExternalAgencyID,
+		&i.CurrentName,
+	)
+	return i, err
+}
+
+const listAgenciesByIDs = `-- name: ListAgenciesByIDs :many
+SELECT agency_id, server_id, external_agency_id, current_name
+FROM agency
+WHERE agency_id = ANY($1::bigint[])
+ORDER BY agency_id
+`
+
+// The agencies with the given IDs, for the include loader. IDs with no row
+// are left out.
+func (q *Queries) ListAgenciesByIDs(ctx context.Context, agencyIds []int64) ([]Agency, error) {
+	rows, err := q.db.Query(ctx, listAgenciesByIDs, agencyIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Agency
+	for rows.Next() {
+		var i Agency
+		if err := rows.Scan(
+			&i.AgencyID,
+			&i.ServerID,
+			&i.ExternalAgencyID,
+			&i.CurrentName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listServerAgencies = `-- name: ListServerAgencies :many
 SELECT agency_id, server_id, external_agency_id, current_name
 FROM agency
