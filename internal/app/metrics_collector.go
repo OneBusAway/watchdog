@@ -230,12 +230,16 @@ launch:
 func (app *Application) collectForScope(ctx, campaignCtx context.Context, server models.ObaServer, scope config.Scope) {
 	switch s := scope.(type) {
 	case config.AgencyScope:
-		app.MetricsService.ReportScheduledService(time.Now().UTC(), server)
+		now := time.Now().UTC()
+		app.observeBundleExpiry(server, now)
+		app.MetricsService.ReportScheduledService(now, server)
 		app.CollectMetricsForServer(ctx, server)
 	case config.ServerScope:
 		now := time.Now().UTC()
 		for _, agency := range s.StaticAgencies {
-			app.MetricsService.ReportScheduledService(now, serverForAgency(server, agency.AgencyID, agency.AgencyName))
+			entry := serverForAgency(server, agency.AgencyID, agency.AgencyName)
+			app.observeBundleExpiry(entry, now)
+			app.MetricsService.ReportScheduledService(now, entry)
 		}
 		app.collectForServerScope(ctx, campaignCtx, server, s)
 	default:
@@ -490,9 +494,18 @@ agencyLaunch:
 	// loop above would re-walk the same merged feed once per agency, which
 	// inflates transition counters and files every vehicle under every agency's
 	// last-seen slot. Never process the cached store after a failed fetch.
-	if rtFetchSucceeded {
-		app.collectVehicleMetrics(server, reportedAgencyEntries)
+	if !rtFetchSucceeded {
+		return
 	}
+	// The pass is shared by every agency of the merged bundle, so only a
+	// bundle expired for all of them withholds it.
+	if app.staticBundlesExpired(reportedAgencyEntries, time.Now().UTC()) {
+		for _, entry := range reportedAgencyEntries {
+			app.MetricsService.RetireStaticDerivedVehicleSeries(entry)
+		}
+		return
+	}
+	app.collectVehicleMetrics(server, reportedAgencyEntries)
 }
 
 // CollectMetricsForServer performs all metric collection and validation logic
@@ -548,6 +561,12 @@ func (app *Application) CollectMetricsForServer(ctx context.Context, server mode
 		)
 	}
 
+	// Vehicles are attributed and bounds-checked with the static bundle, so
+	// an expired one withholds the pass rather than report stale results.
+	if app.MetricsService.StaticBundleExpired(server, time.Now().UTC()) {
+		app.MetricsService.RetireStaticDerivedVehicleSeries(server)
+		return
+	}
 	// nil agencies: the fetch has already filtered the store to vehicles
 	// resolved to this configured agency.
 	app.collectVehicleMetrics(server, nil)

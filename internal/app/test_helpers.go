@@ -99,6 +99,7 @@ func newTestApplication(t testing.TB) *Application {
 		MetricsService:    metrics.NewMetricsService(staticStore, realtimeStore, boundingBoxStore, routeAgencyIndex, vehicleLastSeen, unmatchedStopTracker, logger, client, obaSDKClientCache.For),
 		KnownServers:      NewKnownServerSet(cfg.GetServers()),
 		StaticBundleWatch: NewStaticBundleWatch(time.Duration(cfg.FetchInterval) * time.Second),
+		BundleExpiry:      NewBundleExpiryReporter(),
 		Version:           "1.0.0",
 		Logger:            logger,
 	}

@@ -50,7 +50,7 @@ func TestStaticBundleWatchMetadataBackoff(t *testing.T) {
 }
 
 func TestStaticBundleWatchFallback(t *testing.T) {
-	for _, every := range []time.Duration{gtfs.StaticFallbackEvery} {
+	for _, every := range []time.Duration{gtfs.StaticFallbackEvery, gtfs.StaticFallbackEveryExpired} {
 		t.Run(every.String(), func(t *testing.T) {
 			start := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 			const key = "https://oba.example"
@@ -79,6 +79,35 @@ func TestStaticBundleWatchFallback(t *testing.T) {
 				t.Fatal("no fallback one period after the previous one")
 			}
 		})
+	}
+}
+
+// TestStaticBundleWatchExpiryShortensFallback checks that a bundle expiring
+// while the hash is unusable moves the next fallback from a day to 2 hours.
+func TestStaticBundleWatchExpiryShortensFallback(t *testing.T) {
+	start := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	const key = "https://oba.example"
+	w := NewStaticBundleWatch(30 * time.Second)
+	w.claimFallback(key, start, gtfs.StaticFallbackEvery)
+
+	at := start.Add(gtfs.StaticFallbackEveryExpired)
+	if w.claimFallback(key, at, gtfs.StaticFallbackEvery) {
+		t.Fatal("an unexpired bundle was downloaded after 2 hours")
+	}
+	if !w.claimFallback(key, at, gtfs.StaticFallbackEveryExpired) {
+		t.Fatal("an expired bundle waited longer than 2 hours")
+	}
+}
+
+func TestBundleExpiryReporterDeploymentExpired(t *testing.T) {
+	r := NewBundleExpiryReporter()
+	r.transition(models.ServerKey("https://a.example", "x"), true)
+	r.transition(models.ServerKey("https://b.example", "y"), false)
+	if !r.deploymentExpired("https://a.example") {
+		t.Fatal("deployment with an expired agency not reported expired")
+	}
+	if r.deploymentExpired("https://b.example") || r.deploymentExpired("https://c.example") {
+		t.Fatal("deployment without an expired agency reported expired")
 	}
 }
 

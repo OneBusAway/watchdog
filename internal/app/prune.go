@@ -87,6 +87,7 @@ func (app *Application) PruneStaleServers(servers []models.ObaServer) {
 
 	// Metadata backoff and fallback timing are per deployment.
 	app.StaticBundleWatch.Prune(servers)
+	app.BundleExpiry.Prune(keep)
 
 	// Retire the metric series. A server that left entirely loses everything
 	// under its server_url; an agency that left a server which is still

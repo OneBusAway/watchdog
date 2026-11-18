@@ -23,8 +23,13 @@ const (
 
 // While the backend metadata hash is unusable, a fallback download runs once
 // the hash has not worked for StaticFallbackEvery, and again every
-// StaticFallbackEvery while it stays unusable.
-const StaticFallbackEvery = 24 * time.Hour
+// StaticFallbackEvery while it stays unusable. Once the deployment's bundle has
+// expired, a newer one is needed urgently, so the period shortens to
+// StaticFallbackEveryExpired.
+const (
+	StaticFallbackEvery        = 24 * time.Hour
+	StaticFallbackEveryExpired = 2 * time.Hour
+)
 
 // staticTriggerPolicy is what a trigger permits when its campaign fails.
 //

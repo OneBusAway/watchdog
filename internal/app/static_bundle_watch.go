@@ -33,9 +33,10 @@ const fallbackMaxRetries = 5
 //  2. A failed read backs off in its own BackoffStore, separate from the API
 //     ping backoff: a broken metadata endpoint must never stop the rest of
 //     the deployment's collection.
-//  3. If the hash has not worked for gtfs.StaticFallbackEvery (a day),
-//     download the bundle anyway with the fallback trigger, at most once per
-//     that period.
+//  3. If the hash has not worked for a fallback period, download the bundle
+//     anyway with the fallback trigger, at most once per period. The period
+//     is gtfs.StaticFallbackEvery (a day), or gtfs.StaticFallbackEveryExpired
+//     (2 hours) once the deployment's bundle has expired.
 //
 // A deployment is one OBA base URL. Entries sharing it share one check.
 type StaticBundleWatch struct {
@@ -136,6 +137,9 @@ func (app *Application) checkDeploymentStaticBundle(ctx, campaignCtx context.Con
 		watch.recordMetadata(key, status, time.Now().UTC())
 	}
 	every := gtfs.StaticFallbackEvery
+	if app.BundleExpiry.deploymentExpired(key) {
+		every = gtfs.StaticFallbackEveryExpired
+	}
 	if ctx.Err() != nil || !watch.claimFallback(key, time.Now().UTC(), every) {
 		return
 	}

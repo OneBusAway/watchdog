@@ -143,14 +143,27 @@ func (s *ScheduleStore) Evaluate(serverKey string, now time.Time) (available, ac
 // It intentionally ignores state.available: a failed refresh can make the
 // snapshot non-current while the retained complete bundle remains usable.
 func (s *ScheduleStore) CoversDate(serverKey string, now time.Time) bool {
-	s.mu.RLock()
-	state, ok := s.data[serverKey]
-	s.mu.RUnlock()
-	if !ok || state.snapshot == nil || !state.snapshot.complete || state.snapshot.timezone == nil {
-		return false
-	}
+	today, latest, ok := s.agencyDateAndLatestService(serverKey, now)
+	return ok && today <= latest
+}
 
-	latest := 0
+// Expired reports whether the retained schedule's latest service date is
+// before the agency-local date of now. Unlike !CoversDate it is false when
+// there is no complete schedule to judge: a missing bundle is not an expired one.
+func (s *ScheduleStore) Expired(serverKey string, now time.Time) bool {
+	today, latest, ok := s.agencyDateAndLatestService(serverKey, now)
+	return ok && today > latest
+}
+
+// agencyDateAndLatestService returns now's agency-local date and the latest
+// date the retained complete schedule covers, both as YYYYMMDD numbers.
+func (s *ScheduleStore) agencyDateAndLatestService(serverKey string, now time.Time) (today, latest int, ok bool) {
+	s.mu.RLock()
+	state, exists := s.data[serverKey]
+	s.mu.RUnlock()
+	if !exists || state.snapshot == nil || !state.snapshot.complete || state.snapshot.timezone == nil {
+		return 0, 0, false
+	}
 	for _, service := range state.snapshot.services {
 		if service.end > latest {
 			latest = service.end
@@ -159,7 +172,10 @@ func (s *ScheduleStore) CoversDate(serverKey string, now time.Time) bool {
 			latest = service.added[len(service.added)-1]
 		}
 	}
-	return latest > 0 && dateNumber(now.In(state.snapshot.timezone)) <= latest
+	if latest == 0 {
+		return 0, 0, false
+	}
+	return dateNumber(now.In(state.snapshot.timezone)), latest, true
 }
 
 // ServiceDateRange returns the earliest regular service end date and the
