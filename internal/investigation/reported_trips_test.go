@@ -83,7 +83,7 @@ func TestListReportedTrips_RequiresBoth(t *testing.T) {
 
 func TestListReportedTrips_RejectsIncludeWithoutLoader(t *testing.T) {
 	s, r := newReportedTripsRouter(t, nil)
-	delete(s.loaders, "agency")
+	delete(s.loaders, kindAgency)
 	wantInvalidParam(t, doGet(t, r, "/v1/reported-trips?agency_id=1&trip_id=T&include=agency", nil), "include")
 }
 
@@ -174,10 +174,10 @@ func TestListReportedTrips_Head(t *testing.T) {
 func TestListReportedTrips_IncludeAgency(t *testing.T) {
 	pool, agency, _ := reportedTripFixture(t)
 	s, r := newReportedTripsRouter(t, pool)
-	delete(s.loaders, "agency")
+	delete(s.loaders, kindAgency)
 	calls := 0
 	rep := map[string]any{"agency_id": agency}
-	s.registerLoader("agency", func(_ context.Context, _ *dbgen.Queries, ids []int64) (map[int64]any, error) {
+	s.registerLoader(kindAgency, func(_ context.Context, _ *dbgen.Queries, ids []int64) (map[int64]any, error) {
 		calls++
 		if !reflect.DeepEqual(ids, []int64{agency}) {
 			t.Errorf("loader IDs %v", ids)
