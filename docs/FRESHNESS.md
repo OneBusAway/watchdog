@@ -28,7 +28,28 @@ Current-value panels must match each source's freshness timestamp (and, for GTFS
 
 ## Static GTFS
 
-Static GTFS refreshes daily and does not use the realtime window.
+Static GTFS does not use the realtime window. There is no scheduled daily
+download. Each collection tick decides, once per backend, how the bundle is kept
+current:
+
+1. Read the backend metadata hash, unless an earlier failure put the read in
+   backoff. A hash that differs from Watchdog's bundle starts a download
+   (described below). A matching hash confirms the bundle current without a
+   download.
+2. A failed read backs off on its own, separately from the API ping backoff, so
+   a broken metadata endpoint never stops the rest of collection. A transient
+   failure (network error, timeout, 408, 429 or 5xx) backs off exponentially
+   from the fetch interval up to 10 minutes. A backend with no usable hash
+   (404, another 4xx, malformed JSON, a missing or invalid hash) is not asked
+   again for an hour.
+3. If the hash has not worked for a day, Watchdog downloads the bundle anyway
+   with the `fallback` trigger, and repeats that daily while the hash stays
+   unusable. Once the bundle has expired, a newer one is needed urgently, so the
+   period shortens to 2 hours. A byte-identical download confirms the bundle
+   without re-parsing it.
+
+Startup, a configuration change and an agency-coverage mismatch still start a
+download at once.
 
 For backends whose configured entries all reference the same single static feed,
 each collection tick also checks
@@ -57,10 +78,9 @@ after a metadata outage. It ends once the backend has reported another hash
 for 10 minutes, so a rollback after a deployment that ran that long refreshes
 right away. A rollback sooner than that, to a bundle that already started a
 campaign within the last hour, cannot be told apart from a stale node behind a
-load balancer, so it waits for the hourly retry (at most one hour) or the daily
-refresh. Daily refreshes continue independently. The shared metadata request is skipped
+load balancer, so it waits for the hourly retry (at most one hour). The shared metadata request is skipped
 when every entry for a backend is in collection backoff; it resumes when any
-entry is ready. A skipped request leaves the last hash-match observation intact.
+entry is ready, and while the metadata read is in backoff. A skipped request leaves the last hash-match observation intact. Neither skip delays the fallback download, which reads the feed URL rather than the backend.
 
 Malformed metadata and unexpected request failures are logged at debug level,
 backend-triggered campaign starts at info level, and a mismatch that outlasts
@@ -75,20 +95,22 @@ snapshot hash is unavailable.
 A persistent 0 can mean the configured feed URL differs from the backend's
 bundle source, or the backend has not loaded the latest feed. Missing or failed
 metadata responses omit the gauge and leave normal collection and API backoff
-unchanged. Backends with different static feed URLs across agency entries retain daily refreshes only. The existing agency coverage
+unchanged. Backends with different static feed URLs across agency entries have no usable hash, so they rely on the fallback download. The existing agency coverage
 comparison continues to report coverage and filter agency processing; it does
 not start static refreshes.
 
 | State | Definition |
 | --- | --- |
-| Current | Complete refresh succeeded within 26 hours and the bundle is usable. |
+| Current | The bundle is usable, the latest refresh succeeded, and within 26 hours it was downloaded or confirmed by a matching backend hash. |
 | Retained stale | A complete, unexpired bundle remains, but refresh is old or the latest attempt failed. |
 | Expired and unusable | Agency-local today is later than the latest service end date. |
 | Missing | No complete bundle exists. |
 
-Each entry consumes one upstream-merged static artifact. Startup, changed configuration, and the daily boundary start managed per-entry campaigns; a changed or removed entry cancels its stale campaign. The compressed artifact is cached only for the campaign. Publication waits until it parses, compiles, and validates. Duplicate primary IDs reject the artifact with failure reason `duplicate_id`. A failed campaign preserves the previous complete bundle.
+Each entry consumes one upstream-merged static artifact. Startup, changed configuration, a backend hash change, an agency-coverage mismatch and the fallback start managed per-entry campaigns; a changed or removed entry cancels its stale campaign. The compressed artifact is cached only for the campaign. Publication waits until it parses, compiles, and validates. Duplicate primary IDs reject the artifact with failure reason `duplicate_id`. A failed campaign preserves the previous complete bundle.
 
-Normal retries run for at most 12 hours using delays of 5 minutes, 10 minutes, 20 minutes, 40 minutes, 80 minutes, then at most 2 hours. HTTP 429 can extend a delay through `Retry-After`. Repeated or deterministic failures enter conservative mode without modifying user configuration: the feed receives one probe at each daily boundary, and any successful probe immediately restores normal complete-campaign behavior.
+Normal retries run for at most 12 hours using delays of 5 minutes, 10 minutes, 20 minutes, 40 minutes, 80 minutes, then at most 2 hours. HTTP 429 can extend a delay through `Retry-After`. Repeated or deterministic failures enter conservative mode without modifying user configuration: each fallback download gives the feed a single attempt, and any successful probe immediately restores normal complete-campaign behavior. Only fallback campaigns count toward conservative mode (see `staticTriggerPolicies`): one-off triggers say nothing about how a feed behaves over time.
+
+When the agency-local date passes a bundle's latest service date, the bundle has expired. Watchdog then reports the schedule as unknown (`gtfs_schedule_available` 0), skips the vehicle pass, which attributes vehicles and checks bounds with the bundle, and deletes its series. In server mode the pass is shared by the merged bundle, so it is skipped only once every reported agency has expired. API ping, OBA API metrics, GTFS-RT fetch status and the expiration gauges keep reporting. Sentry receives one `fatal` event when a bundle expires, tagged `cause=refresh_failing` (the last refresh failed) or `cause=no_newer_bundle` (the last refresh succeeded, so the agency has not published a newer bundle), and one `info` event when it recovers.
 
 ## Computed Vehicle Speed
 
