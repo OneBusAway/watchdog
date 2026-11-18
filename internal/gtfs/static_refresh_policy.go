@@ -33,9 +33,12 @@ const (
 
 // staticTriggerPolicy is what a trigger permits when its campaign fails.
 //
-// The rules below apply only to recurring triggers. A one-off trigger
-// (startup, config change, a single backend mismatch) says nothing about how
-// a feed behaves over time, so it never marks a feed conservative on its own.
+// The campaign-count rules below apply only to recurring triggers. A one-off
+// trigger (startup, config change, a single backend mismatch) says nothing
+// about how a feed behaves over time, so its failed campaigns are not counted.
+// Single-attempt rules (an invalid URL, 401/403, the same invalid content
+// three times) are separate: recordFailureLocked applies them in every
+// campaign, whatever the trigger.
 type staticTriggerPolicy struct {
 	// escalates makes a failed campaign count toward classifying the feed as
 	// conservative: a NotFound/Gone failure classifies it at once, and
