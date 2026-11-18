@@ -9,6 +9,19 @@ import (
 	"context"
 )
 
+const getReportedTrip = `-- name: GetReportedTrip :one
+SELECT reported_trip_id, agency_id, oba_trip_id
+FROM reported_trip
+WHERE reported_trip_id = $1
+`
+
+func (q *Queries) GetReportedTrip(ctx context.Context, reportedTripID int64) (ReportedTrip, error) {
+	row := q.db.QueryRow(ctx, getReportedTrip, reportedTripID)
+	var i ReportedTrip
+	err := row.Scan(&i.ReportedTripID, &i.AgencyID, &i.ObaTripID)
+	return i, err
+}
+
 const listReportedTrips = `-- name: ListReportedTrips :many
 SELECT reported_trip_id, agency_id, oba_trip_id
 FROM reported_trip
@@ -22,6 +35,35 @@ type ListReportedTripsParams struct {
 
 func (q *Queries) ListReportedTrips(ctx context.Context, arg ListReportedTripsParams) ([]ReportedTrip, error) {
 	rows, err := q.db.Query(ctx, listReportedTrips, arg.AgencyID, arg.ObaTripID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReportedTrip
+	for rows.Next() {
+		var i ReportedTrip
+		if err := rows.Scan(&i.ReportedTripID, &i.AgencyID, &i.ObaTripID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listReportedTripsByIDs = `-- name: ListReportedTripsByIDs :many
+SELECT reported_trip_id, agency_id, oba_trip_id
+FROM reported_trip
+WHERE reported_trip_id = ANY($1::bigint[])
+ORDER BY reported_trip_id
+`
+
+// The reported trips with the given IDs, for the include loader. IDs with no
+// row are left out.
+func (q *Queries) ListReportedTripsByIDs(ctx context.Context, reportedTripIds []int64) ([]ReportedTrip, error) {
+	rows, err := q.db.Query(ctx, listReportedTripsByIDs, reportedTripIds)
 	if err != nil {
 		return nil, err
 	}
