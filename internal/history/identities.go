@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/jackc/pgx/v5"
 
@@ -11,6 +12,58 @@ import (
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/utils"
 )
+
+// ServerNameResolver deterministically resolves the canonical display name for
+// a base URL from the active configuration. When multiple agency-mode entries
+// share one base URL, the first configured entry wins, preventing display_name
+// from flipping on alternating writes while still allowing genuine renames to propagate.
+type ServerNameResolver struct {
+	mu    sync.RWMutex
+	names map[string]string // normalizedBaseURL -> canonicalServerName
+}
+
+// NewServerNameResolver constructs a resolver from a slice of configured servers.
+func NewServerNameResolver(servers []models.ObaServer) *ServerNameResolver {
+	r := &ServerNameResolver{
+		names: make(map[string]string),
+	}
+	r.Update(servers)
+	return r
+}
+
+// Update re-indexes the canonical names from the current configuration.
+func (r *ServerNameResolver) Update(servers []models.ObaServer) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.names = make(map[string]string, len(servers))
+	for _, s := range servers {
+		base := utils.SanitizeServerURL(s.ObaBaseURL)
+		if base == "" {
+			continue
+		}
+		if _, exists := r.names[base]; !exists {
+			r.names[base] = s.ServerName
+		}
+	}
+}
+
+// Resolve returns the canonical display name for a base URL, falling back to
+// fallbackName if the base URL is not in the configuration.
+func (r *ServerNameResolver) Resolve(baseURL, fallbackName string) string {
+	if r == nil {
+		return fallbackName
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if name, ok := r.names[baseURL]; ok && name != "" {
+		return name
+	}
+	return fallbackName
+}
 
 // The ensure functions return the ID of an identity row, creating it when it
 // does not exist yet. They run inside write, so their errors become write
@@ -42,16 +95,23 @@ func retryOnNoRows[T any](fn func() (T, error)) (T, error) {
 }
 
 // ensureServer returns the ID of the server's row. display_name follows the
-// configured server name and is updated when it changes.
-func ensureServer(ctx context.Context, q *dbgen.Queries, server models.ObaServer) (int64, error) {
+// configured server name, using resolver to resolve canonical names when multiple
+// entries share a base URL.
+func ensureServer(ctx context.Context, q *dbgen.Queries, server models.ObaServer, resolver *ServerNameResolver) (int64, error) {
 	baseURL := utils.SanitizeServerURL(server.ObaBaseURL)
 	if baseURL == "" {
 		return 0, fmt.Errorf("server %q: base URL cannot be normalized", server.ServerName)
 	}
+
+	displayName := server.ServerName
+	if resolver != nil {
+		displayName = resolver.Resolve(baseURL, server.ServerName)
+	}
+
 	id, err := retryOnNoRows(func() (int64, error) {
 		return q.EnsureOneBusAwayServer(ctx, dbgen.EnsureOneBusAwayServerParams{
 			NormalizedBaseUrl: baseURL,
-			DisplayName:       server.ServerName,
+			DisplayName:       displayName,
 		})
 	})
 	if err != nil {

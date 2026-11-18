@@ -124,7 +124,7 @@ func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version s
 		KnownServers:         NewKnownServerSet(cfg.GetServers()),
 		InvestigationDB:      investigationDB,
 		InvestigationService: investigationService,
-		HistoryService:       history.NewHistoryService(investigationDB, logger, version),
+		HistoryService:       history.NewHistoryService(investigationDB, logger, version, cfg.GetServers()),
 		Logger:               logger,
 		Version:              version,
 	}

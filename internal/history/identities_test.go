@@ -20,7 +20,7 @@ func mustEnsureServer(t *testing.T, pool *pgxpool.Pool, server models.ObaServer)
 	var id int64
 	inTx(t, pool, func(q *dbgen.Queries) error {
 		var err error
-		id, err = ensureServer(ctx, q, server)
+		id, err = ensureServer(ctx, q, server, nil)
 		return err
 	})
 	return id
@@ -111,7 +111,7 @@ func TestEnsureServer_UnnormalizableURL(t *testing.T) {
 	bad := models.ObaServer{ServerName: "Broken", ObaBaseURL: "https://user:secret@/"}
 
 	err := runInTx(ctx, pool, func(q *dbgen.Queries) error {
-		_, err := ensureServer(ctx, q, bad)
+		_, err := ensureServer(ctx, q, bad, nil)
 		return err
 	})
 	if err == nil {
@@ -302,7 +302,7 @@ func TestEnsureServer_ConcurrentFirstInsert(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			err := runInTx(ctx, pool, func(q *dbgen.Queries) error {
-				id, err := ensureServer(ctx, q, testServer)
+				id, err := ensureServer(ctx, q, testServer, nil)
 				ids[idx] = id
 				return err
 			})
@@ -326,5 +326,116 @@ func TestEnsureServer_ConcurrentFirstInsert(t *testing.T) {
 
 	if got := count(t, pool, "onebusaway_server"); got != 1 {
 		t.Fatalf("onebusaway_server table has %d rows, want 1", got)
+	}
+}
+
+func TestServerNameResolver_DeterministicAndRename(t *testing.T) {
+	baseURL := "http://example.com/api"
+	entry1 := models.ObaServer{ServerName: "Primary Agency", ObaBaseURL: baseURL}
+	entry2 := models.ObaServer{ServerName: "Secondary Agency", ObaBaseURL: baseURL}
+
+	// 1. First configured entry wins across shared base URL
+	resolver := NewServerNameResolver([]models.ObaServer{entry1, entry2})
+	if got := resolver.Resolve(baseURL, "Fallback"); got != "Primary Agency" {
+		t.Fatalf("Resolve() = %q, want 'Primary Agency'", got)
+	}
+
+	// 2. Genuine config rename propagates
+	entry1Renamed := models.ObaServer{ServerName: "Renamed Agency", ObaBaseURL: baseURL}
+	resolver.Update([]models.ObaServer{entry1Renamed, entry2})
+	if got := resolver.Resolve(baseURL, "Fallback"); got != "Renamed Agency" {
+		t.Fatalf("Resolve() after rename = %q, want 'Renamed Agency'", got)
+	}
+}
+
+func TestEnsureServer_SharedBaseURL_DisplayNameStable(t *testing.T) {
+	pool := newMigratedPool(t)
+
+	baseURL := "http://shared.example.com/api"
+	entry1 := models.ObaServer{ServerName: "Primary Agency", ObaBaseURL: baseURL, AgencyID: "A1"}
+	entry2 := models.ObaServer{ServerName: "Secondary Agency", ObaBaseURL: baseURL, AgencyID: "A2"}
+
+	// Resolver initialized with entry1 as first configured entry
+	resolver := NewServerNameResolver([]models.ObaServer{entry1, entry2})
+
+	// Write entry1 first
+	var id1 int64
+	inTx(t, pool, func(q *dbgen.Queries) error {
+		var err error
+		id1, err = ensureServer(ctx, q, entry1, resolver)
+		return err
+	})
+
+	// Write entry2 next with different ServerName
+	var id2 int64
+	inTx(t, pool, func(q *dbgen.Queries) error {
+		var err error
+		id2, err = ensureServer(ctx, q, entry2, resolver)
+		return err
+	})
+
+	if id1 != id2 {
+		t.Fatalf("expected same server ID, got %d and %d", id1, id2)
+	}
+
+	// Verify that display_name remained stable as "Primary Agency"
+	var name string
+	if err := pool.QueryRow(ctx, "SELECT display_name FROM onebusaway_server WHERE server_id = $1", id1).Scan(&name); err != nil {
+		t.Fatal(err)
+	}
+	if name != "Primary Agency" {
+		t.Fatalf("display_name = %q, want 'Primary Agency' (first configured entry should win)", name)
+	}
+
+	// Alternating write with entry1 then entry2 again must keep display_name stable
+	inTx(t, pool, func(q *dbgen.Queries) error {
+		_, err := ensureServer(ctx, q, entry1, resolver)
+		return err
+	})
+	inTx(t, pool, func(q *dbgen.Queries) error {
+		_, err := ensureServer(ctx, q, entry2, resolver)
+		return err
+	})
+
+	if err := pool.QueryRow(ctx, "SELECT display_name FROM onebusaway_server WHERE server_id = $1", id1).Scan(&name); err != nil {
+		t.Fatal(err)
+	}
+	if name != "Primary Agency" {
+		t.Fatalf("display_name = %q after repeated entry2 write, want 'Primary Agency'", name)
+	}
+}
+
+func TestEnsureServer_SharedBaseURL_RenamePropagates(t *testing.T) {
+	pool := newMigratedPool(t)
+
+	baseURL := "http://shared-rename.example.com/api"
+	entry1 := models.ObaServer{ServerName: "Old Transit", ObaBaseURL: baseURL, AgencyID: "A1"}
+	entry2 := models.ObaServer{ServerName: "Secondary Transit", ObaBaseURL: baseURL, AgencyID: "A2"}
+
+	resolver := NewServerNameResolver([]models.ObaServer{entry1, entry2})
+
+	var id int64
+	inTx(t, pool, func(q *dbgen.Queries) error {
+		var err error
+		id, err = ensureServer(ctx, q, entry1, resolver)
+		return err
+	})
+
+	// Simulate a genuine config rename: entry1 is renamed to "New Transit"
+	entry1Renamed := models.ObaServer{ServerName: "New Transit", ObaBaseURL: baseURL, AgencyID: "A1"}
+	resolver.Update([]models.ObaServer{entry1Renamed, entry2})
+
+	// Next write must propagate the rename to display_name
+	inTx(t, pool, func(q *dbgen.Queries) error {
+		_, err := ensureServer(ctx, q, entry1Renamed, resolver)
+		return err
+	})
+
+	var name string
+	if err := pool.QueryRow(ctx, "SELECT display_name FROM onebusaway_server WHERE server_id = $1", id).Scan(&name); err != nil {
+		t.Fatal(err)
+	}
+	if name != "New Transit" {
+		t.Fatalf("display_name = %q, want 'New Transit' after config rename", name)
 	}
 }
