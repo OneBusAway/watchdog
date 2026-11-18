@@ -75,8 +75,8 @@ func (gs *GtfsService) CheckBackendBundles(ctx, campaignCtx context.Context, ser
 			c.mu.Lock()
 			content, ok := c.snapshotContent[server.ServerKey()]
 			localHash := ""
-			if ok && content.fingerprint == fingerprint && len(content.hashes) == 1 {
-				localHash = content.hashes[0]
+			if ok && content.fingerprint == fingerprint {
+				localHash = content.hash
 				value := localHash == hash
 				match = &value
 			}

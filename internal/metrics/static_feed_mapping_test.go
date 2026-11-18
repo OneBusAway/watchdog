@@ -13,8 +13,7 @@ func TestStaticFeedMappingStoreReconcilesSuccessfulResults(t *testing.T) {
 	feedURL := "https://feeds.example.com/static.zip"
 	store := NewStaticFeedMappingStore()
 	store.Observe(server, gtfs.StaticFeedMappingObservation{
-		ConfiguredFeedURLs: []string{feedURL},
-		Results:            []gtfs.StaticFeedMappingResult{{FeedURL: feedURL, Mappings: []gtfs.StaticFeedAgencyMapping{{AgencyID: "old", AgencyName: "Old"}}}},
+		FeedURL: feedURL, Mappings: []gtfs.StaticFeedAgencyMapping{{AgencyID: "old", AgencyName: "Old"}},
 	})
 	oldLabels := prometheus.Labels{"feed_url": feedURL, "agency_id": "old", "agency_name": "Old", "server_name": server.ServerName, "server_url": server.ObaBaseURL}
 	if !seriesExists(GtfsStaticFeedAgencyMappingInfo, oldLabels) {
@@ -22,8 +21,7 @@ func TestStaticFeedMappingStoreReconcilesSuccessfulResults(t *testing.T) {
 	}
 
 	store.Observe(server, gtfs.StaticFeedMappingObservation{
-		ConfiguredFeedURLs: []string{feedURL},
-		Results:            []gtfs.StaticFeedMappingResult{{FeedURL: feedURL, Failures: []gtfs.StaticFeedMappingFailure{{Reason: "unknown_agency"}}}},
+		FeedURL: feedURL, Failures: []gtfs.StaticFeedMappingFailure{{Reason: "unknown_agency"}},
 	})
 	if seriesExists(GtfsStaticFeedAgencyMappingInfo, oldLabels) {
 		t.Fatal("expected changed relationship to retire the old info series")
@@ -33,16 +31,17 @@ func TestStaticFeedMappingStoreReconcilesSuccessfulResults(t *testing.T) {
 		t.Fatal("expected replacement failure series")
 	}
 
-	// No result means this configured feed failed to refresh. Keep its last
-	// successfully parsed classification rather than inventing a mapping error.
-	store.Observe(server, gtfs.StaticFeedMappingObservation{ConfiguredFeedURLs: []string{feedURL}})
-	if !seriesExists(GtfsStaticFeedAgencyMappingFailure, failureLabels) {
-		t.Fatal("expected a failed download to preserve the last parsed classification")
-	}
-
-	store.Observe(server, gtfs.StaticFeedMappingObservation{})
+	// A new feed URL replaces the old one, so the old feed's series retire.
+	newFeedURL := "https://feeds.example.com/static-v2.zip"
+	store.Observe(server, gtfs.StaticFeedMappingObservation{
+		FeedURL: newFeedURL, Mappings: []gtfs.StaticFeedAgencyMapping{{AgencyID: "new", AgencyName: "New"}},
+	})
 	if seriesExists(GtfsStaticFeedAgencyMappingFailure, failureLabels) {
-		t.Fatal("expected a feed removed from config to retire its failure series")
+		t.Fatal("expected a feed replaced in config to retire its failure series")
+	}
+	newLabels := prometheus.Labels{"feed_url": newFeedURL, "agency_id": "new", "agency_name": "New", "server_name": server.ServerName, "server_url": server.ObaBaseURL}
+	if !seriesExists(GtfsStaticFeedAgencyMappingInfo, newLabels) {
+		t.Fatal("expected the new feed's mapping series")
 	}
 }
 
@@ -51,8 +50,7 @@ func TestStaticFeedMappingStorePruneRetiresFailureWithoutAgencyLabel(t *testing.
 	feedURL := "https://feeds.example.com/prune.zip"
 	store := NewStaticFeedMappingStore()
 	store.Observe(server, gtfs.StaticFeedMappingObservation{
-		ConfiguredFeedURLs: []string{feedURL},
-		Results:            []gtfs.StaticFeedMappingResult{{FeedURL: feedURL, Failures: []gtfs.StaticFeedMappingFailure{{Reason: "ambiguous_agency"}}}},
+		FeedURL: feedURL, Failures: []gtfs.StaticFeedMappingFailure{{Reason: "ambiguous_agency"}},
 	})
 	labels := prometheus.Labels{"feed_url": feedURL, "server_name": server.ServerName, "server_url": server.ObaBaseURL, "reason": "ambiguous_agency"}
 	store.Prune(func(string) bool { return false })

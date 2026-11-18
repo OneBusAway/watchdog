@@ -500,13 +500,13 @@ func TestBackendHashSharedDeploymentAggregation(t *testing.T) {
 			entries := []models.ObaServer{h.server, sibling}
 			h.store.SetConfiguredServers(entries)
 			c := h.service.refreshCoordinator
-			c.recordPublished(context.Background(), h.server, []string{hash})
+			c.recordPublished(context.Background(), h.server, hash)
 			siblingHash := hash
 			if kind == "mismatch" {
 				siblingHash = strings.Repeat("b", 64)
 			}
 			if kind != "unknown" {
-				c.recordPublished(context.Background(), sibling, []string{siblingHash})
+				c.recordPublished(context.Background(), sibling, siblingHash)
 			}
 			calls := 0
 			var observed *bool

@@ -79,7 +79,7 @@ func TestStaticRefreshFailurePolicy(t *testing.T) {
 
 	missingURL := "https://feeds.example/missing.zip"
 	coordinator.recordFailure(server, missingURL, &StaticFeedError{Stage: StaticFailureHTTP, Reason: StaticReasonNotFound}, now)
-	coordinator.recordFailedCampaign(server, []string{missingURL}, StaticRefreshDaily)
+	coordinator.recordFailedCampaign(server, missingURL, StaticRefreshDaily)
 	if !coordinator.isConservative(server, missingURL) {
 		t.Fatal("404 did not enter conservative mode after one failed daily campaign")
 	}
@@ -99,7 +99,7 @@ func TestStaticRefreshFailurePolicy(t *testing.T) {
 	transientURL := "https://feeds.example/transient.zip"
 	for run := 1; run <= 7; run++ {
 		coordinator.recordFailure(server, transientURL, &StaticFeedError{Stage: StaticFailureHTTP, Reason: StaticReasonServerError}, now)
-		coordinator.recordFailedCampaign(server, []string{transientURL}, StaticRefreshDaily)
+		coordinator.recordFailedCampaign(server, transientURL, StaticRefreshDaily)
 		if got := coordinator.isConservative(server, transientURL); got != (run == 7) {
 			t.Fatalf("daily failure %d conservative = %t", run, got)
 		}

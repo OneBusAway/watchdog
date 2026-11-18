@@ -331,13 +331,10 @@ type rawEndpoint struct {
 	valid     bool
 }
 
-func compileSchedules(server models.ObaServer, feeds []downloadedStaticFeed) (map[string]*ScheduleSnapshot, error) {
-	if len(server.GtfsStaticFeeds) != 1 || len(feeds) != 1 {
-		return nil, fmt.Errorf("expected one upstream-merged static feed; merge feeds upstream")
-	}
-	raw, err := parseRawScheduleFeed(feeds[0].url, feeds[0].data, server)
+func compileSchedules(server models.ObaServer, feed downloadedStaticFeed) (map[string]*ScheduleSnapshot, error) {
+	raw, err := parseRawScheduleFeed(feed.url, feed.data, server)
 	if err != nil {
-		return nil, fmt.Errorf("compile static feed (%s): %w", utils.SanitizeServerURL(feeds[0].url), err)
+		return nil, fmt.Errorf("compile static feed (%s): %w", utils.SanitizeServerURL(feed.url), err)
 	}
 	return compileRawSchedule(server, raw)
 }

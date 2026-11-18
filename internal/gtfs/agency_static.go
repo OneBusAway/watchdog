@@ -22,8 +22,8 @@ type agencyStaticResult struct {
 // buildAgencyStaticSnapshot walks the parser graph while it is still available
 // and returns an owned, agency-scoped static snapshot. Trips and stop times are
 // used only to select services and stops; they are not retained in the result.
-func buildAgencyStaticSnapshot(server models.ObaServer, bundles []*remoteGtfs.Static, logger *slog.Logger) agencyStaticResult {
-	routeIDs, tripIDs := buildAttributionMaps(server, bundles, true, logger)
+func buildAgencyStaticSnapshot(server models.ObaServer, bundle *remoteGtfs.Static, logger *slog.Logger) agencyStaticResult {
+	routeIDs, tripIDs := buildAttributionMaps(server, bundle, true, logger)
 	result := agencyStaticResult{
 		data:        &models.StaticData{},
 		routeIDs:    routeIDs,
@@ -31,7 +31,7 @@ func buildAgencyStaticSnapshot(server models.ObaServer, bundles []*remoteGtfs.St
 		agencyNames: make(map[string]string),
 	}
 
-	agency := configuredAgency(server, bundles)
+	agency := configuredAgency(server, bundle)
 	result.data.Agencies = []remoteGtfs.Agency{agency}
 	result.agencyNames[server.AgencyID] = agency.Name
 
@@ -41,10 +41,7 @@ func buildAgencyStaticSnapshot(server models.ObaServer, bundles []*remoteGtfs.St
 	selectedStops := make([]*remoteGtfs.Stop, 0)
 	seenStops := make(map[string]struct{})
 
-	for _, bundle := range bundles {
-		if bundle == nil {
-			continue
-		}
+	if bundle != nil {
 		for i := range bundle.Routes {
 			route := &bundle.Routes[i]
 			if route.Id == "" || effectiveRouteAgency(server, bundle, route, true) != server.AgencyID {
@@ -105,68 +102,56 @@ func stopParentCycle(parent, child *remoteGtfs.Stop) bool {
 	return false
 }
 
-func configuredAgency(server models.ObaServer, bundles []*remoteGtfs.Static) remoteGtfs.Agency {
-	for _, bundle := range bundles {
-		if bundle == nil {
-			continue
-		}
-		for _, agency := range bundle.Agencies {
-			if agency.Id == server.AgencyID && agency.Id != "" {
-				if agency.Name == "" {
-					agency.Name = server.AgencyName
-				}
-				return agency
-			}
-		}
+func configuredAgency(server models.ObaServer, bundle *remoteGtfs.Static) remoteGtfs.Agency {
+	if bundle == nil {
+		return remoteGtfs.Agency{Id: server.AgencyID, Name: server.AgencyName}
 	}
-	for _, bundle := range bundles {
-		if bundle != nil && len(bundle.Agencies) == 1 && bundle.Agencies[0].Id == "" {
-			agency := bundle.Agencies[0]
-			agency.Id = server.AgencyID
+	for _, agency := range bundle.Agencies {
+		if agency.Id == server.AgencyID && agency.Id != "" {
 			if agency.Name == "" {
 				agency.Name = server.AgencyName
 			}
 			return agency
 		}
 	}
+	if len(bundle.Agencies) == 1 && bundle.Agencies[0].Id == "" {
+		agency := bundle.Agencies[0]
+		agency.Id = server.AgencyID
+		if agency.Name == "" {
+			agency.Name = server.AgencyName
+		}
+		return agency
+	}
 	return remoteGtfs.Agency{Id: server.AgencyID, Name: server.AgencyName}
 }
 
-func buildAttributionMaps(server models.ObaServer, bundles []*remoteGtfs.Static, agencyMode bool, logger *slog.Logger) (map[string][]string, map[string][]string) {
+func buildAttributionMaps(server models.ObaServer, bundle *remoteGtfs.Static, agencyMode bool, logger *slog.Logger) (map[string][]string, map[string][]string) {
 	routes := make(map[string][]string)
-	for _, bundle := range bundles {
-		if bundle == nil {
-			continue
-		}
-		for i := range bundle.Routes {
-			route := &bundle.Routes[i]
-			if route.Id == "" {
-				continue
-			}
-			agencyID := effectiveRouteAgency(server, bundle, route, agencyMode)
-			if agencyID == "" {
-				continue
-			}
-			addAttribution(routes, route.Id, agencyID, "route", server, logger)
-		}
-	}
-
 	trips := make(map[string][]string)
-	for _, bundle := range bundles {
-		if bundle == nil {
+	if bundle == nil {
+		return routes, trips
+	}
+	for i := range bundle.Routes {
+		route := &bundle.Routes[i]
+		if route.Id == "" {
 			continue
 		}
-		for i := range bundle.Trips {
-			trip := &bundle.Trips[i]
-			if trip.ID == "" || trip.Route == nil || trip.Route.Id == "" {
-				continue
-			}
-			agencyID := effectiveRouteAgency(server, bundle, trip.Route, agencyMode)
-			if agencyID == "" {
-				continue
-			}
-			addAttribution(trips, trip.ID, agencyID, "trip", server, logger)
+		agencyID := effectiveRouteAgency(server, bundle, route, agencyMode)
+		if agencyID == "" {
+			continue
 		}
+		addAttribution(routes, route.Id, agencyID, "route", server, logger)
+	}
+	for i := range bundle.Trips {
+		trip := &bundle.Trips[i]
+		if trip.ID == "" || trip.Route == nil || trip.Route.Id == "" {
+			continue
+		}
+		agencyID := effectiveRouteAgency(server, bundle, trip.Route, agencyMode)
+		if agencyID == "" {
+			continue
+		}
+		addAttribution(trips, trip.ID, agencyID, "trip", server, logger)
 	}
 	return routes, trips
 }
