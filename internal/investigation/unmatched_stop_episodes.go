@@ -217,3 +217,140 @@ func (s *InvestigationService) listUnmatchedStopEpisodes(w http.ResponseWriter, 
 	}
 	s.writeJSON(w, r, body, cacheShort())
 }
+
+// stopStaticContextIncludable accepts gtfs_static_version once its loader is registered.
+var stopStaticContextIncludable = map[string]resourceKind{
+	"gtfs_static_version": "gtfs_static_version",
+}
+
+// stopStaticContext is one item of E16: what Watchdog's static GTFS said about the stop for part of the episode.
+type stopStaticContext struct {
+	StopMetadataVersionID int64    `json:"stop_metadata_version_id"`
+	Source                string   `json:"source"`
+	StaticStopFound       bool     `json:"static_stop_found"`
+	StopName              *string  `json:"stop_name"`
+	Latitude              *float64 `json:"latitude"`
+	Longitude             *float64 `json:"longitude"`
+	ParentStationID       *string  `json:"parent_station_id"`
+	LocationType          *int16   `json:"location_type"`
+	AppliesFrom           apiTime  `json:"applies_from"`
+	AppliesUntil          *apiTime `json:"applies_until"`
+	Links                 links    `json:"links"`
+}
+
+// stopStaticContexts is the E16 representation, which the static_contexts loader also returns.
+type stopStaticContexts struct {
+	Items []stopStaticContext `json:"items"`
+	Links links               `json:"links"`
+}
+
+// stopStaticContextsBody is the E16 response.
+type stopStaticContextsBody struct {
+	stopStaticContexts
+	Included included `json:"included,omitzero"`
+}
+
+// stopStaticContextList maps one episode's rows, oldest published first, to E16 and each item's links.
+func stopStaticContextList(episodeID int64, rows []dbgen.ListUnmatchedStopEpisodeStaticContextsRow) (stopStaticContexts, []itemLinks) {
+	episode := "/v1/unmatched-stop-episodes/" + strconv.FormatInt(episodeID, 10)
+	list := stopStaticContexts{
+		Items: make([]stopStaticContext, 0, len(rows)),
+		Links: links{"self": episode + "/static-contexts", "episode": episode},
+	}
+	related := make([]itemLinks, 0, len(rows))
+	for i, row := range rows {
+		l := itemLinks{"gtfs_static_version": {
+			Kind: "gtfs_static_version",
+			ID:   row.GtfsStaticVersionID,
+			URL:  "/v1/gtfs-static-versions/" + strconv.FormatInt(row.GtfsStaticVersionID, 10),
+		}}
+		until := row.ClosedAt
+		if i+1 < len(rows) {
+			next := appliesFrom(rows[i+1])
+			until = &next
+		}
+		list.Items = append(list.Items, stopStaticContext{
+			StopMetadataVersionID: row.StopMetadataVersionID,
+			Source:                "watchdog_static_gtfs",
+			StaticStopFound:       row.StaticStopFound,
+			StopName:              row.StopName,
+			Latitude:              row.Latitude,
+			Longitude:             row.Longitude,
+			ParentStationID:       row.ParentStationID,
+			LocationType:          row.LocationType,
+			AppliesFrom:           newAPITime(appliesFrom(row)),
+			AppliesUntil:          newOptionalAPITime(until),
+			Links:                 l.links(),
+		})
+		related = append(related, l)
+	}
+	return list, related
+}
+
+// appliesFrom is the later of the static version's publication and the episode's opening.
+func appliesFrom(row dbgen.ListUnmatchedStopEpisodeStaticContextsRow) time.Time {
+	if row.PublishedAt.After(row.OpenedAt) {
+		return row.PublishedAt
+	}
+	return row.OpenedAt
+}
+
+// loadStopStaticContexts returns E16 for each episode in ids, in one query.
+func loadStopStaticContexts(ctx context.Context, q *dbgen.Queries, ids []int64) (map[int64]any, error) {
+	rows, err := q.ListUnmatchedStopEpisodeStaticContexts(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	byEpisode := make(map[int64][]dbgen.ListUnmatchedStopEpisodeStaticContextsRow, len(ids))
+	for _, row := range rows {
+		byEpisode[row.UnmatchedStopEpisodeID] = append(byEpisode[row.UnmatchedStopEpisodeID], row)
+	}
+	out := make(map[int64]any, len(ids))
+	for _, id := range ids {
+		out[id], _ = stopStaticContextList(id, byEpisode[id])
+	}
+	return out, nil
+}
+
+// listUnmatchedStopEpisodeStaticContexts serves GET /v1/unmatched-stop-episodes/:episode_id/static-contexts.
+func (s *InvestigationService) listUnmatchedStopEpisodeStaticContexts(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	id, ok := pathID(ps, "episode_id")
+	if !ok {
+		writeNotFound(w)
+		return
+	}
+	var bad invalidParams
+	values := parseQuery(r, &bad, "include")
+	inc := s.parseInclude(values, stopStaticContextIncludable, &bad)
+	if len(bad) > 0 {
+		writeInvalidParams(w, bad)
+		return
+	}
+
+	var body stopStaticContextsBody
+	var closedAt *time.Time
+	err := s.read(r.Context(), func(ctx context.Context, q *dbgen.Queries) error {
+		episode, err := q.GetUnmatchedStopEpisode(ctx, id)
+		if err != nil {
+			return err
+		}
+		closedAt = episode.ClosedAt
+		rows, err := q.ListUnmatchedStopEpisodeStaticContexts(ctx, []int64{id})
+		if err != nil {
+			return err
+		}
+		var related []itemLinks
+		body.stopStaticContexts, related = stopStaticContextList(id, rows)
+		body.Included, err = s.loadIncluded(ctx, q, related, inc)
+		return err
+	})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	cache := cacheShort()
+	if closedAt != nil && !inc.requested() {
+		cache = cacheImmutable(*closedAt)
+	}
+	s.writeJSON(w, r, body, cache)
+}
