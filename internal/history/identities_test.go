@@ -20,7 +20,7 @@ func mustEnsureServer(t *testing.T, pool *pgxpool.Pool, server models.ObaServer)
 	var id int64
 	inTx(t, pool, func(q *dbgen.Queries) error {
 		var err error
-		id, err = ensureServer(ctx, q, server)
+		id, err = ensureServer(ctx, q, server, nil)
 		return err
 	})
 	return id
@@ -111,7 +111,7 @@ func TestEnsureServer_UnnormalizableURL(t *testing.T) {
 	bad := models.ObaServer{ServerName: "Broken", ObaBaseURL: "https://user:secret@/"}
 
 	err := runInTx(ctx, pool, func(q *dbgen.Queries) error {
-		_, err := ensureServer(ctx, q, bad)
+		_, err := ensureServer(ctx, q, bad, nil)
 		return err
 	})
 	if err == nil {
@@ -302,7 +302,7 @@ func TestEnsureServer_ConcurrentFirstInsert(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			err := runInTx(ctx, pool, func(q *dbgen.Queries) error {
-				id, err := ensureServer(ctx, q, testServer)
+				id, err := ensureServer(ctx, q, testServer, nil)
 				ids[idx] = id
 				return err
 			})
@@ -388,6 +388,10 @@ func TestEnsureServer_SharedBaseURL_DisplayNameStable(t *testing.T) {
 	}
 
 	// Alternating write with entry1 then entry2 again must keep display_name stable
+	inTx(t, pool, func(q *dbgen.Queries) error {
+		_, err := ensureServer(ctx, q, entry1, resolver)
+		return err
+	})
 	inTx(t, pool, func(q *dbgen.Queries) error {
 		_, err := ensureServer(ctx, q, entry2, resolver)
 		return err

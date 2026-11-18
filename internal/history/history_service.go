@@ -1,3 +1,13 @@
+// Package history records Watchdog's observations in the optional PostgreSQL
+// investigation store, so problems can be investigated after the current
+// upstream snapshot has moved on.
+//
+// Recording follows the design in docs/investigation-api.md, Section 6: it
+// runs synchronously right after a collection step, only when the database is
+// configured, and never stops collection (D18, D30). Watchdog writes only when
+// something changes (D31), so the identity functions in identities.go run only
+// inside a write that opens or closes an episode or records a new static
+// version.
 package history
 
 import (
@@ -23,17 +33,15 @@ type HistoryService struct {
 }
 
 // NewHistoryService builds the service from the investigation pool (which may
-// be nil), the logger, the Watchdog build version, and optional initial servers.
-func NewHistoryService(pool *pgxpool.Pool, logger *slog.Logger, version string, servers ...[]models.ObaServer) *HistoryService {
-	var initial []models.ObaServer
-	if len(servers) > 0 {
-		initial = servers[0]
-	}
+// be nil), the logger, the Watchdog build version, and configured servers for
+// canonical display name resolution. The version is recorded with history that
+// depends on how Watchdog parsed its input.
+func NewHistoryService(pool *pgxpool.Pool, logger *slog.Logger, version string, servers []models.ObaServer) *HistoryService {
 	return &HistoryService{
 		pool:     pool,
 		logger:   logger,
 		version:  version,
-		resolver: NewServerNameResolver(initial),
+		resolver: NewServerNameResolver(servers),
 	}
 }
 

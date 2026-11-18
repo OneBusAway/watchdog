@@ -95,17 +95,17 @@ func retryOnNoRows[T any](fn func() (T, error)) (T, error) {
 }
 
 // ensureServer returns the ID of the server's row. display_name follows the
-// configured server name, using the resolver if provided to resolve canonical names
-// when multiple entries share a base URL.
-func ensureServer(ctx context.Context, q *dbgen.Queries, server models.ObaServer, resolver ...*ServerNameResolver) (int64, error) {
+// configured server name, using resolver to resolve canonical names when multiple
+// entries share a base URL.
+func ensureServer(ctx context.Context, q *dbgen.Queries, server models.ObaServer, resolver *ServerNameResolver) (int64, error) {
 	baseURL := utils.SanitizeServerURL(server.ObaBaseURL)
 	if baseURL == "" {
 		return 0, fmt.Errorf("server %q: base URL cannot be normalized", server.ServerName)
 	}
 
 	displayName := server.ServerName
-	if len(resolver) > 0 && resolver[0] != nil {
-		displayName = resolver[0].Resolve(baseURL, server.ServerName)
+	if resolver != nil {
+		displayName = resolver.Resolve(baseURL, server.ServerName)
 	}
 
 	id, err := retryOnNoRows(func() (int64, error) {
