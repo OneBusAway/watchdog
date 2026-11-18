@@ -204,7 +204,7 @@
           "datasource": {
             "name": "Prometheus"
           },
-          "legendFormat": "{{agency_id}} - Earliest"
+          "legendFormat": "{{server_url}} - {{agency_id}} - Earliest"
         },
         {
           "expr": "(gtfs_bundle_days_until_latest_expiration{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}) * 86400",
@@ -212,7 +212,7 @@
           "datasource": {
             "name": "Prometheus"
           },
-          "legendFormat": "{{agency_id}} - Latest"
+          "legendFormat": "{{server_url}} - {{agency_id}} - Latest"
         }
       ],
       "title": "2.1 Feed Expiration",
@@ -480,14 +480,16 @@
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
-          }
+          },
+          "legendFormat": "Source age - {{server_name}} (feed {{feed}})"
         },
         {
           "expr": "(time() - gtfs_rt_feed_payload_last_changed_timestamp_seconds{server_url=~\"$server_url\"}) and on (agency_id, agency_name, server_name, server_url, feed, feed_url) (gtfs_rt_feed_fetch_success{server_url=~\"$server_url\"} == 1)",
           "refId": "B",
           "datasource": {
             "name": "Prometheus"
-          }
+          },
+          "legendFormat": "Payload age - {{server_name}} (feed {{feed}})"
         }
       ],
       "title": "3.2 Feed Freshness",
@@ -696,7 +698,7 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: oba_stops_matched_count, oba_stops_unmatched_count, oba_stop_match_ratio\nQuestion answered: \"Are stop mappings degrading?\"\n\nVisualization: Bar Gauge\nRationale: A ranking bar gauge sorted by worst agencies first allows operators to immediately triage the most problematic feeds. The gradient color (green to red) makes it visually obvious which stops need attention.",
+      "description": "Metrics: oba_stops_matched_count, oba_stops_unmatched_count, oba_stop_match_ratio\nQuestion answered: \"Are stop mappings degrading?\"\n\nVisualization: Bar Gauge\nRationale: A bar gauge surfaces stop match health across agencies, with color thresholds highlighting the most problematic feeds. The color gradient makes it visually obvious which stop mappings need attention.",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -1007,8 +1009,8 @@
         "overrides": [
           {
             "matcher": {
-              "id": "byRegexp",
-              "options": ".*age.*"
+              "id": "byFrameRefID",
+              "options": "B"
             },
             "properties": [
               {
