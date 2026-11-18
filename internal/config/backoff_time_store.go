@@ -28,12 +28,29 @@ type backoffData struct {
 type BackoffStore struct {
 	mu       sync.RWMutex
 	backoffs map[string]backoffData
+	// base is the first delay and max caps every delay.
+	base, max time.Duration
 }
 
-// NewBackoffStore creates and returns a new BackoffStore instance.
+// NewBackoffStore creates a BackoffStore with the API-ping limits,
+// BASE_BACKOFF and MAX_BACKOFF.
 func NewBackoffStore() *BackoffStore {
+	return NewBackoffStoreWithLimits(BASE_BACKOFF, MAX_BACKOFF)
+}
+
+// NewBackoffStoreWithLimits creates a BackoffStore whose delays start at base
+// and never exceed max.
+func NewBackoffStoreWithLimits(base, max time.Duration) *BackoffStore {
+	if base <= 0 {
+		base = BASE_BACKOFF
+	}
+	if max < base {
+		max = base
+	}
 	return &BackoffStore{
 		backoffs: make(map[string]backoffData),
+		base:     base,
+		max:      max,
 	}
 }
 
@@ -49,21 +66,29 @@ func (s *BackoffStore) NextRetryAt(serverKey string) (time.Time, bool) {
 }
 
 // UpdateBackoff updates the backoff delay and next retry time for the given server key.
-// If no backoff exists for the server, it initializes one with BASE_BACKOFF.
+// If no backoff exists for the server, it initializes one with the store's base delay.
 func (s *BackoffStore) UpdateBackoff(serverKey string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if backoff, exists := s.backoffs[serverKey]; exists {
-		backoff.BackoffDelay = utils.CalculateNewBackoffDelay(backoff.BackoffDelay)
-		backoff.NextRetryAt = utils.CalculateNextRetryAt(backoff.BackoffDelay)
-		s.backoffs[serverKey] = backoff
-	} else {
-		s.backoffs[serverKey] = backoffData{
-			BackoffDelay: BASE_BACKOFF,
-			NextRetryAt:  utils.CalculateNextRetryAt(BASE_BACKOFF),
-		}
+	delay := s.base
+	if backoff, exists := s.backoffs[serverKey]; exists && backoff.BackoffDelay >= s.base {
+		delay = utils.NextBackoffDelayWithCap(backoff.BackoffDelay, s.max)
 	}
+	s.backoffs[serverKey] = backoffData{
+		BackoffDelay: delay,
+		NextRetryAt:  utils.NextRetryAtWithCap(delay, s.max),
+	}
+}
+
+// DeferUntil sets a fixed next retry time for the given key, for a failure
+// that will not clear up on its own soon. A later UpdateBackoff starts again
+// from the base delay.
+func (s *BackoffStore) DeferUntil(serverKey string, retryAt time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.backoffs[serverKey] = backoffData{NextRetryAt: retryAt.UTC()}
 }
 
 // ResetBackoff removes any existing backoff data for the given server key.
