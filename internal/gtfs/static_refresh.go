@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -37,16 +36,6 @@ func staticConfigFingerprint(server models.ObaServer) string {
 // cached artifacts and re-download feeds for a snapshot that cannot publish.
 var errStaticServerUnconfigured = errors.New("static refresh server is no longer configured")
 
-type StaticRefreshTrigger string
-
-const (
-	StaticRefreshStartup        StaticRefreshTrigger = "startup"
-	StaticRefreshDaily          StaticRefreshTrigger = "daily"
-	StaticRefreshBackendChanged StaticRefreshTrigger = "backend_changed"
-	StaticRefreshConfigChange   StaticRefreshTrigger = "config_change"
-	StaticRefreshAgencyMismatch StaticRefreshTrigger = "agency_mismatch"
-)
-
 // A backend hash starts a backend_changed campaign only once the backend has
 // reported it steadily for both a minimum duration and a minimum number of
 // observations, so a deployment in progress does not trigger downloads. A
@@ -66,13 +55,15 @@ const maxStaticCampaignCacheSize = int64(2 << 30)
 const maxStaticFeedDownloadSize = int64(512 << 20)
 
 type staticFeedFailureHistory struct {
-	failureSince      time.Time
-	failedDailyRuns   int
-	identicalFailures int
-	lastContentHash   string
-	conservative      bool
-	lastStage         StaticFailureStage
-	lastReason        StaticFailureReason
+	failureSince time.Time
+	// failedEscalatingCampaigns counts failed campaigns whose trigger
+	// escalates (see staticTriggerPolicy).
+	failedEscalatingCampaigns int
+	identicalFailures         int
+	lastContentHash           string
+	conservative              bool
+	lastStage                 StaticFailureStage
+	lastReason                StaticFailureReason
 }
 
 // publishedStaticContent is what a server's last successful publish was built
@@ -121,7 +112,7 @@ func newStaticRefreshCoordinator() *staticRefreshCoordinator {
 		histories:        make(map[string]*staticFeedFailureHistory),
 		published:        make(map[string]publishedStaticContent),
 		mismatches:       make(map[string]agencyMismatchState),
-		policy:           dailyStaticRefreshRetryPolicy,
+		policy:           defaultStaticRefreshRetryPolicy,
 		now:              time.Now,
 		checkInterval:    30 * time.Second,
 	}
@@ -332,7 +323,7 @@ func (c *staticRefreshCoordinator) recordFailureLocked(server models.ObaServer, 
 		c.histories[key] = history
 	}
 	if failurePolicyClass(history.lastReason) != failurePolicyClass(failure.Reason) {
-		history.failedDailyRuns = 0
+		history.failedEscalatingCampaigns = 0
 		history.identicalFailures = 0
 		history.lastContentHash = ""
 	}
@@ -368,8 +359,10 @@ func failurePolicyClass(reason StaticFailureReason) string {
 	}
 }
 
+// recordFailedCampaign counts a failed campaign toward the conservative
+// classification when its trigger escalates.
 func (c *staticRefreshCoordinator) recordFailedCampaign(server models.ObaServer, feedURL string, trigger StaticRefreshTrigger) {
-	if trigger != StaticRefreshDaily {
+	if !trigger.policy().escalates {
 		return
 	}
 	c.mu.Lock()
@@ -378,7 +371,7 @@ func (c *staticRefreshCoordinator) recordFailedCampaign(server models.ObaServer,
 }
 
 func (c *staticRefreshCoordinator) recordCampaignExhaustion(ctx context.Context, server models.ObaServer, feedURL string, trigger StaticRefreshTrigger) bool {
-	if trigger != StaticRefreshDaily {
+	if !trigger.policy().escalates {
 		return ctx.Err() == nil
 	}
 	c.mu.Lock()
@@ -395,12 +388,12 @@ func (c *staticRefreshCoordinator) recordFailedCampaignLocked(server models.ObaS
 	if history == nil {
 		return
 	}
-	history.failedDailyRuns++
+	history.failedEscalatingCampaigns++
 	switch history.lastReason {
 	case StaticReasonNotFound, StaticReasonGone:
 		history.conservative = true
 	default:
-		if history.failedDailyRuns >= 7 {
+		if history.failedEscalatingCampaigns >= conservativeAfterFailedCampaigns {
 			history.conservative = true
 		}
 	}
@@ -428,9 +421,9 @@ func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server mode
 	}
 	defer cache.Close()
 
-	// A daily refresh of a feed already classified as conservative gets one
-	// attempt: a failure ends the campaign instead of retrying.
-	conservativeProbe := trigger == StaticRefreshDaily && gs.refreshCoordinator.isConservative(server, feedURL)
+	// A trigger that probes conservative feeds gives one already classified
+	// as conservative a single attempt: a failure ends the campaign.
+	conservativeProbe := trigger.policy().probeOnceWhenConservative && gs.refreshCoordinator.isConservative(server, feedURL)
 	pending := true
 
 	started := time.Now()
@@ -698,21 +691,6 @@ func validateStaticAgencyDiscovery(server models.ObaServer, bundle *remoteGtfs.S
 		return StaticReasonUnknownAgency
 	}
 	return ""
-}
-
-func startDailyStaticRefreshes(ctx context.Context, service *GtfsService, servers func() []models.ObaServer, logger *slog.Logger, interval time.Duration, maxRetries int) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			configured := servers()
-			logger.Info("Starting daily GTFS static refresh campaigns", "server_count", len(configured))
-			service.StartStaticRefreshCampaigns(ctx, configured, StaticRefreshDaily, maxRetries)
-		}
-	}
 }
 
 // Static refresh errors are reported at their origin. This helper exists so a

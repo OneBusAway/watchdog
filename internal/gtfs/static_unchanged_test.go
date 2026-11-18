@@ -97,7 +97,7 @@ func (h *unchangedFeedHarness) published(t *testing.T) *models.StaticData {
 	return data
 }
 
-// A daily refresh that downloads byte-identical feeds must not re-parse and
+// A fallback refresh that downloads byte-identical feeds must not re-parse and
 // re-publish them: that parse costs hundreds of MB on production feeds and
 // replaces every static store for no change. It still counts as a successful
 // refresh, so the bundle keeps reporting as current.
@@ -108,7 +108,7 @@ func TestDailyRefreshOfUnchangedFeedsSkipsPublish(t *testing.T) {
 	stale := time.Now().UTC().Add(-time.Hour)
 	h.store.SetFetchTime(h.server.ServerKey(), stale)
 
-	h.run(t, h.server, StaticRefreshDaily)
+	h.run(t, h.server, StaticRefreshFallback)
 
 	if h.published(t) != before {
 		t.Fatal("unchanged feeds were re-published")
@@ -128,7 +128,7 @@ func TestRefreshPublishesWhenFeedContentChanges(t *testing.T) {
 	before := h.published(t)
 
 	h.body.Store(withExtraZipEntry(t, smallStaticFeed(t)))
-	h.run(t, h.server, StaticRefreshDaily)
+	h.run(t, h.server, StaticRefreshFallback)
 
 	if h.published(t) == before {
 		t.Fatal("changed feed content was not published")
@@ -157,7 +157,7 @@ func TestRefreshPublishesWhenServerConfigurationChanges(t *testing.T) {
 
 			changed := tc.mutate(h.server, h.ts.URL)
 			h.store.SetConfiguredServers([]models.ObaServer{changed})
-			h.run(t, changed, StaticRefreshDaily)
+			h.run(t, changed, StaticRefreshFallback)
 
 			if h.published(t) == before {
 				t.Fatal("a configuration change with identical feed bytes was not published")
@@ -197,7 +197,7 @@ func TestReconcileForgetsPublishedContentOfRemovedServers(t *testing.T) {
 	before := h.published(t)
 
 	h.service.ReconcileStaticRefreshCampaigns(nil)
-	h.run(t, h.server, StaticRefreshDaily)
+	h.run(t, h.server, StaticRefreshFallback)
 
 	if h.published(t) == before {
 		t.Fatal("a re-added server's unchanged feeds were not re-published")
@@ -228,7 +228,7 @@ func TestDailyRefreshOfUnchangedFeedsRenewsEveryServerScopedAgency(t *testing.T)
 		h.store.SetFetchTime(key, stale)
 	}
 
-	h.run(t, server, StaticRefreshDaily)
+	h.run(t, server, StaticRefreshFallback)
 
 	for key, data := range before {
 		if current, _ := h.store.Get(key); current != data {

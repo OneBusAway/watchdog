@@ -27,7 +27,8 @@ func TestCollectionChecksMetadataOncePerBackend(t *testing.T) {
 			return
 		}
 		requests.Add(1)
-		http.NotFound(w, r)
+		// A healthy backend: a usable hash never puts metadata in backoff.
+		fmt.Fprintf(w, `{"staticGtfsHash":%q}`, strings.Repeat("ab", 32))
 	}))
 	defer ts.Close()
 	app := newEmptyApplication(t)

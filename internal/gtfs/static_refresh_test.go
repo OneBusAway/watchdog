@@ -79,9 +79,9 @@ func TestStaticRefreshFailurePolicy(t *testing.T) {
 
 	missingURL := "https://feeds.example/missing.zip"
 	coordinator.recordFailure(server, missingURL, &StaticFeedError{Stage: StaticFailureHTTP, Reason: StaticReasonNotFound}, now)
-	coordinator.recordFailedCampaign(server, missingURL, StaticRefreshDaily)
+	coordinator.recordFailedCampaign(server, missingURL, StaticRefreshFallback)
 	if !coordinator.isConservative(server, missingURL) {
-		t.Fatal("404 did not enter conservative mode after one failed daily campaign")
+		t.Fatal("404 did not enter conservative mode after one failed fallback campaign")
 	}
 
 	invalid := &StaticFeedError{Stage: StaticFailureArchive, Reason: StaticReasonInvalidZIP, ContentHash: "same"}
@@ -97,12 +97,34 @@ func TestStaticRefreshFailurePolicy(t *testing.T) {
 	}
 
 	transientURL := "https://feeds.example/transient.zip"
-	for run := 1; run <= 7; run++ {
+	for run := 1; run <= conservativeAfterFailedCampaigns; run++ {
 		coordinator.recordFailure(server, transientURL, &StaticFeedError{Stage: StaticFailureHTTP, Reason: StaticReasonServerError}, now)
-		coordinator.recordFailedCampaign(server, transientURL, StaticRefreshDaily)
-		if got := coordinator.isConservative(server, transientURL); got != (run == 7) {
-			t.Fatalf("daily failure %d conservative = %t", run, got)
+		coordinator.recordFailedCampaign(server, transientURL, StaticRefreshFallback)
+		if got := coordinator.isConservative(server, transientURL); got != (run == conservativeAfterFailedCampaigns) {
+			t.Fatalf("fallback failure %d conservative = %t", run, got)
 		}
+	}
+}
+
+// TestOnlyEscalatingTriggersMarkFeedsConservative pins the trigger policy
+// table: a failed campaign counts toward the conservative classification only
+// when its trigger escalates.
+func TestOnlyEscalatingTriggersMarkFeedsConservative(t *testing.T) {
+	server := models.ObaServer{ObaBaseURL: "https://oba.example", AgencyID: "a"}
+	for _, trigger := range []StaticRefreshTrigger{
+		StaticRefreshStartup, StaticRefreshBackendChanged, StaticRefreshFallback,
+		StaticRefreshConfigChange, StaticRefreshAgencyMismatch,
+	} {
+		t.Run(string(trigger), func(t *testing.T) {
+			coordinator := newStaticRefreshCoordinator()
+			feedURL := "https://feeds.example/missing.zip"
+			coordinator.recordFailure(server, feedURL, &StaticFeedError{Stage: StaticFailureHTTP, Reason: StaticReasonNotFound}, time.Now().UTC())
+			coordinator.recordFailedCampaign(server, feedURL, trigger)
+			want := trigger == StaticRefreshFallback
+			if got := coordinator.isConservative(server, feedURL); got != want {
+				t.Fatalf("404 campaign under %s conservative = %t, want %t", trigger, got, want)
+			}
+		})
 	}
 }
 
@@ -116,7 +138,7 @@ func TestSuccessfulCompleteCampaignClearsConservativeMode(t *testing.T) {
 	service := NewGtfsService(store, NewRealtimeStore(), geo.NewBoundingBoxStore(), NewRouteAgencyIndex(), slog.New(slog.NewTextHandler(io.Discard, nil)), ts.Client())
 	service.refreshCoordinator.recordFailure(server, server.GtfsStaticFeeds[0], &StaticFeedError{Stage: StaticFailureHTTP, Reason: StaticReasonUnauthorized}, time.Now())
 
-	service.runStaticRefreshCampaign(context.Background(), server, StaticRefreshDaily, 1, staticRefreshRetryPolicy{initialDelay: time.Millisecond, maxDelay: time.Millisecond, budget: time.Minute})
+	service.runStaticRefreshCampaign(context.Background(), server, StaticRefreshFallback, 1, staticRefreshRetryPolicy{initialDelay: time.Millisecond, maxDelay: time.Millisecond, budget: time.Minute})
 
 	if service.refreshCoordinator.isConservative(server, server.GtfsStaticFeeds[0]) {
 		t.Fatal("complete successful recovery did not clear conservative mode")
@@ -181,7 +203,7 @@ func TestParseRetryAfter(t *testing.T) {
 }
 
 // Every campaign fully parses its feeds, and a production merged feed costs
-// hundreds of MB of heap to parse. Startup and the daily refresh start a
+// hundreds of MB of heap to parse. Startup and the fallback refresh start a
 // campaign for every configured server at once; letting their parses overlap
 // stacked those peaks past Watchdog's memory limit.
 func TestStaticRefreshCampaignsDoNotParseConcurrently(t *testing.T) {
@@ -256,7 +278,7 @@ func TestDailyConservativeProbePublishesMergedFeed(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	service.runStaticRefreshCampaign(ctx, server, StaticRefreshDaily, 1, staticRefreshRetryPolicy{
+	service.runStaticRefreshCampaign(ctx, server, StaticRefreshFallback, 1, staticRefreshRetryPolicy{
 		initialDelay: time.Millisecond,
 		maxDelay:     time.Millisecond,
 		budget:       time.Minute,

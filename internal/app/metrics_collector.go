@@ -156,7 +156,7 @@ func (app *Application) collectOnce(ctx context.Context) {
 	}
 	sem := make(chan struct{}, limit)
 	var wg sync.WaitGroup
-	// Entries sharing a backend share one metadata request per tick.
+	// Entries sharing a backend share one static bundle check per tick.
 	metadataChecks := make(map[string]*sync.Once)
 	metadataAllowed := make(map[string]bool)
 	metadataNow := time.Now().UTC()
@@ -197,9 +197,7 @@ launch:
 				defer close(metadataDone)
 				key := utils.SanitizeServerURL(t.server.ObaBaseURL)
 				metadataChecks[key].Do(func() {
-					if metadataAllowed[key] {
-						app.GtfsService.CheckBackendBundles(cycleCtx, ctx, backendEntries[key])
-					}
+					app.checkDeploymentStaticBundle(cycleCtx, ctx, backendEntries[key], metadataAllowed[key])
 				})
 			}()
 			app.collectForScope(cycleCtx, ctx, t.server, t.scope)

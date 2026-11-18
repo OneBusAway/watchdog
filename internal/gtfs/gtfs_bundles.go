@@ -527,18 +527,6 @@ func staticDataAndAgencies(bundle *remoteGtfs.Static) (*models.StaticData, []dec
 // change while the routine runs (--config-url). Capturing the boot-time slice
 // meant a server added later never had its bundle downloaded at all, and one
 // removed later kept being fetched.
-type staticRefreshRetryPolicy struct {
-	initialDelay time.Duration
-	maxDelay     time.Duration
-	budget       time.Duration
-}
-
-var dailyStaticRefreshRetryPolicy = staticRefreshRetryPolicy{
-	initialDelay: 5 * time.Minute,
-	maxDelay:     2 * time.Hour,
-	budget:       12 * time.Hour,
-}
-
 func refreshGTFSBundles(ctx context.Context, client *http.Client, servers func() []models.ObaServer, logger *slog.Logger, interval time.Duration, boundingBoxstore *geo.BoundingBoxStore, staticStore *StaticStore, routeAgencyIndex *RouteAgencyIndex, observer StaticBundleObserver, mappingObserver StaticFeedMappingObserver, refreshObserver StaticRefreshObserver, maxRetries int) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -549,7 +537,7 @@ func refreshGTFSBundles(ctx context.Context, client *http.Client, servers func()
 			return
 		case <-ticker.C:
 			logger.Info("Refreshing GTFS bundles")
-			runStaticRefreshCampaign(ctx, client, servers, logger, boundingBoxstore, staticStore, routeAgencyIndex, observer, mappingObserver, refreshObserver, maxRetries, dailyStaticRefreshRetryPolicy)
+			runStaticRefreshCampaign(ctx, client, servers, logger, boundingBoxstore, staticStore, routeAgencyIndex, observer, mappingObserver, refreshObserver, maxRetries, defaultStaticRefreshRetryPolicy)
 		}
 	}
 }

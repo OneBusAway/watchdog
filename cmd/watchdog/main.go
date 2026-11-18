@@ -201,10 +201,9 @@ func main() {
 	// and collects metrics from all configured OBA servers.
 	app.StartMetricsCollection(ctx)
 
-	// Cron job to download GTFS bundles for all servers every 24 hours
-	// Read the server list on every tick rather than capturing it here: with
-	// --config-url the set of servers changes while we run.
-	go app.GtfsService.RefreshGTFSBundles(ctx, app.ConfigService.Config.GetServers, 24*time.Hour, 5)
+	// There is no scheduled bundle download. Each collection tick reads the
+	// backend metadata hash and downloads on a change, falling back to a
+	// download every 2 hours while the hash is unusable (app.StaticBundleWatch).
 
 	// Cron job to delete the data of vehicles that has not sent updates for 1 hour
 	go app.MetricsService.VehicleLastSeen.ClearRoutine(ctx, 15*time.Minute, time.Hour)

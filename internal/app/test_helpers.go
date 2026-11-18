@@ -94,12 +94,13 @@ func newTestApplication(t testing.TB) *Application {
 	backoffStore := config.NewBackoffStore()
 	obaSDKClientCache := NewObaSDKClientCache(client)
 	return &Application{
-		ConfigService:  config.NewConfigService(logger, client, cfg, backoffStore, config.NewDroppedServersStore()),
-		GtfsService:    gtfs.NewGtfsService(staticStore, realtimeStore, boundingBoxStore, routeAgencyIndex, logger, client),
-		MetricsService: metrics.NewMetricsService(staticStore, realtimeStore, boundingBoxStore, routeAgencyIndex, vehicleLastSeen, unmatchedStopTracker, logger, client, obaSDKClientCache.For),
-		KnownServers:   NewKnownServerSet(cfg.GetServers()),
-		Version:        "1.0.0",
-		Logger:         logger,
+		ConfigService:     config.NewConfigService(logger, client, cfg, backoffStore, config.NewDroppedServersStore()),
+		GtfsService:       gtfs.NewGtfsService(staticStore, realtimeStore, boundingBoxStore, routeAgencyIndex, logger, client),
+		MetricsService:    metrics.NewMetricsService(staticStore, realtimeStore, boundingBoxStore, routeAgencyIndex, vehicleLastSeen, unmatchedStopTracker, logger, client, obaSDKClientCache.For),
+		KnownServers:      NewKnownServerSet(cfg.GetServers()),
+		StaticBundleWatch: NewStaticBundleWatch(time.Duration(cfg.FetchInterval) * time.Second),
+		Version:           "1.0.0",
+		Logger:            logger,
 	}
 }
 

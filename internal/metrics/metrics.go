@@ -269,7 +269,7 @@ var (
 
 	GtfsStaticRefreshGaveUp = tracked(promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "gtfs_static_refresh_gave_up",
-		Help: "Whether the current daily static GTFS refresh campaign exhausted its 12-hour retry budget",
+		Help: "Whether the current static GTFS refresh campaign exhausted its 12-hour retry budget",
 	}, []string{"server_name", "server_url"}))
 
 	GtfsStaticFeedFetchSuccess = tracked(promauto.NewGaugeVec(prometheus.GaugeOpts{
@@ -294,7 +294,7 @@ var (
 
 	GtfsStaticFeedConservativeMode = tracked(promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "gtfs_static_feed_conservative_mode",
-		Help: "Whether retries for a repeatedly failing GTFS static feed are limited to the daily recovery probe",
+		Help: "Whether retries for a repeatedly failing GTFS static feed are limited to one attempt per fallback refresh",
 	}, []string{"feed_url", "server_name", "server_url"}))
 
 	GtfsStaticFeedFailureInfo = tracked(promauto.NewGaugeVec(prometheus.GaugeOpts{

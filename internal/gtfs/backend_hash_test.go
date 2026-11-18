@@ -192,7 +192,7 @@ func TestBackendHashAlternatingNodes(t *testing.T) {
 // the feed URL does not serve: one campaign, one warning, then an hourly retry.
 func TestBackendHashPersistentMismatch(t *testing.T) {
 	h := newBackendHashHarness(t)
-	// A startup or daily campaign in flight must not count as this run's campaign.
+	// A startup or fallback campaign in flight must not count as this run's campaign.
 	c := h.service.refreshCoordinator
 	c.active[h.server.ServerKey()] = activeStaticCampaign{fingerprint: staticConfigFingerprint(h.server), cancel: func() {}}
 	h.hash.Store(strings.Repeat("a", 64))
@@ -265,7 +265,7 @@ func TestBackendHashRetryLimitAcrossRuns(t *testing.T) {
 		h.hash.Store(bundleHash(bundleA))
 		h.tick(t, 30*time.Second)
 		h.body.Store(withExtraZipEntry(t, bundleA))
-		h.run(t, h.server, StaticRefreshDaily)
+		h.run(t, h.server, StaticRefreshFallback)
 		h.ticks(t, 6, 30*time.Second)
 		h.wantDownloads(t, 3, "one campaign while the backend lags")
 		h.hash.Store(bundleHash(h.body.Load().([]byte)))
@@ -287,9 +287,9 @@ func TestBackendHashRevertedFeed(t *testing.T) {
 	bundleA := h.body.Load().([]byte)
 	h.hash.Store(bundleHash(bundleA))
 	h.tick(t, 30*time.Second)
-	// The wrong bundle reaches the feed URL and a daily refresh picks it up.
+	// The wrong bundle reaches the feed URL and a fallback refresh picks it up.
 	h.body.Store(withExtraZipEntry(t, bundleA))
-	h.run(t, h.server, StaticRefreshDaily)
+	h.run(t, h.server, StaticRefreshFallback)
 	h.ticks(t, 4, 30*time.Second)
 	h.wantDownloads(t, 3, "one campaign for the mismatch")
 	// The feed URL is put back; the backend never changed.
@@ -311,10 +311,10 @@ func TestBackendHashRollbackAfterDeployment(t *testing.T) {
 	h.hash.Store(hashA)
 	h.tick(t, 30*time.Second)
 	// B is published to the feed URL; the backend still runs A during its
-	// redeploy, and a daily refresh lands in that window.
+	// redeploy, and a fallback refresh lands in that window.
 	bundleB := withExtraZipEntry(t, bundleA)
 	h.body.Store(bundleB)
-	h.run(t, h.server, StaticRefreshDaily)
+	h.run(t, h.server, StaticRefreshFallback)
 	h.ticks(t, 6, 30*time.Second)
 	h.wantDownloads(t, 3, "one campaign while the backend lags")
 	// The redeploy finishes on B, which runs for a while.
@@ -341,13 +341,13 @@ func TestBackendHashFeedAheadOfBackend(t *testing.T) {
 	h.ticks(t, 20, 30*time.Second)
 	bundleB := withExtraZipEntry(t, bundleA)
 	h.body.Store(bundleB)
-	h.run(t, h.server, StaticRefreshDaily)
+	h.run(t, h.server, StaticRefreshFallback)
 	h.ticks(t, 2, 30*time.Second)
 	h.wantMatch(t, false, "backend still on A")
 	h.hash.Store(bundleHash(bundleB))
 	h.ticks(t, 4, 30*time.Second)
 	h.wantMatch(t, true, "redeploy finished")
-	h.wantDownloads(t, 2, "only the startup and daily downloads")
+	h.wantDownloads(t, 2, "only the startup and fallback downloads")
 }
 
 // TestBackendHashGapsAndMissingHashes checks that a tick without a hash
@@ -587,11 +587,16 @@ func TestBackendMetadataLogging(t *testing.T) {
 		name         string
 		status       int
 		body, reason string
+		want         BackendHashStatus
 	}{
-		{"missing_endpoint", 404, "", ""}, {"unavailable", 503, "", ""}, {"no_hash", 200, `{}`, ""},
-		{"malformed", 200, `{not-json`, "malformed_json"},
-		{"invalid_hash", 200, `{"staticGtfsHash":"private-response"}`, "invalid_hash"},
-		{"unauthorized", 401, "", `"status":401`},
+		{"missing_endpoint", 404, "", "", BackendHashUnsupported},
+		{"unavailable", 503, "", "", BackendHashTransient},
+		{"no_hash", 200, `{}`, "", BackendHashUnsupported},
+		{"malformed", 200, `{not-json`, "malformed_json", BackendHashUnsupported},
+		{"invalid_hash", 200, `{"staticGtfsHash":"private-response"}`, "invalid_hash", BackendHashUnsupported},
+		{"unauthorized", 401, "", `"status":401`, BackendHashUnsupported},
+		{"server_error", 500, "", `"status":500`, BackendHashTransient},
+		{"throttled", 429, "", `"status":429`, BackendHashTransient},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newUnchangedFeedHarness(t)
@@ -601,8 +606,12 @@ func TestBackendMetadataLogging(t *testing.T) {
 			defer ts.Close()
 			h.server.ObaBaseURL = ts.URL
 			h.server.ObaApiKey = "private-key"
-			if hash := h.service.fetchBackendHash(context.Background(), h.server); hash != "" {
+			hash, status := h.service.fetchBackendHash(context.Background(), h.server)
+			if hash != "" {
 				t.Fatal("invalid response returned a hash")
+			}
+			if status != tc.want {
+				t.Fatalf("status = %s, want %s", status, tc.want)
 			}
 			got := logs.String()
 			if tc.reason == "" && got != "" {
@@ -633,11 +642,48 @@ func TestBackendMetadataRequestDiagnostics(t *testing.T) {
 			if cancelCaller {
 				cancel()
 			}
-			h.service.fetchBackendHash(ctx, h.server)
+			_, status := h.service.fetchBackendHash(ctx, h.server)
 			logged := strings.Contains(logs.String(), "request_failed")
 			if logged == cancelCaller {
 				t.Fatalf("request failure logged=%v for caller canceled=%v", logged, cancelCaller)
 			}
+			// A canceled caller says nothing about the backend; a timeout does.
+			want := BackendHashTransient
+			if cancelCaller {
+				want = BackendHashNotChecked
+			}
+			if status != want {
+				t.Fatalf("status = %s, want %s", status, want)
+			}
 		})
+	}
+}
+
+// TestMatchingBackendHashConfirmsSnapshotCurrent covers the replacement for
+// the daily download: a backend that reports the hash of the bundle Watchdog
+// holds confirms it current without a download.
+func TestMatchingBackendHashConfirmsSnapshotCurrent(t *testing.T) {
+	h := newBackendHashHarness(t)
+	stale := time.Now().UTC().Add(-48 * time.Hour)
+	h.store.SetFetchTime(h.server.ServerKey(), stale)
+	downloads := h.downloads.Load()
+
+	h.hash.Store(bundleHash(h.body.Load().([]byte)))
+	if status := h.service.CheckBackendBundles(h.ctx, h.ctx, []models.ObaServer{h.server}); status != BackendHashOK {
+		t.Fatalf("status = %s, want ok", status)
+	}
+	if fetched, _ := h.store.GetFetchTime(h.server.ServerKey()); !fetched.After(stale) {
+		t.Fatal("a matching backend hash did not renew the snapshot's fetch time")
+	}
+	if h.downloads.Load() != downloads {
+		t.Fatal("a matching backend hash downloaded the feed")
+	}
+
+	// A mismatch confirms nothing.
+	h.store.SetFetchTime(h.server.ServerKey(), stale)
+	h.hash.Store(strings.Repeat("cd", 32))
+	h.service.CheckBackendBundles(h.ctx, h.ctx, []models.ObaServer{h.server})
+	if fetched, _ := h.store.GetFetchTime(h.server.ServerKey()); !fetched.Equal(stale) {
+		t.Fatal("a differing backend hash renewed the snapshot's fetch time")
 	}
 }
