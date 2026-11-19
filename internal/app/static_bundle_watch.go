@@ -33,28 +33,33 @@ const fallbackMaxRetries = 5
 //  2. A failed read backs off in its own BackoffStore, separate from the API
 //     ping backoff: a broken metadata endpoint must never stop the rest of
 //     the deployment's collection.
-//  3. If the hash has not worked for a fallback period, download the bundle
-//     anyway with the fallback trigger, at most once per period. The period
-//     is gtfs.StaticFallbackEvery (a day).
+//  3. Every deployment's feed URL is downloaded at least once a day, whatever
+//     the hash says. If no download of the feed URL has started for
+//     gtfs.StaticFallbackEvery (a day), whatever started the last one, a
+//     download with the fallback trigger starts. A good hash does not put it
+//     off: the hash only shows that Watchdog and the backend agree, not that
+//     either is current, and a daily download is what recovers a schedule
+//     left unavailable by a failed campaign, a failed startup download, or a
+//     backend that never loads a newer bundle. A byte-identical download is
+//     only hashed, not parsed or published again.
 //  4. Once the deployment's bundle has expired, download it at once and then
-//     every gtfs.StaticFallbackEveryExpired (2 hours), even while the hash
-//     matches: Watchdog and the backend agreeing on an expired bundle does
-//     not show whether the agency has published a newer one.
+//     every gtfs.StaticFallbackEveryExpired (2 hours).
 //
 // A deployment is one OBA base URL. Entries sharing it share one check.
 type StaticBundleWatch struct {
 	metadataBackoff *config.BackoffStore
 
 	mu sync.Mutex
-	// coveredAt is, per deployment, the last time its bundle was known to be
-	// covered: when it was first seen (the startup or newcomer download covers
-	// it), the last good hash, or the last fallback start. While the bundle
-	// is expired a good hash no longer covers it: a backend serving the same
-	// expired bundle says nothing about whether the agency published a newer
-	// one, so only a download of the feed URL can tell.
-	coveredAt map[string]time.Time
+	// downloadedAt is, per deployment, when a download of its feed URL last
+	// started: the first time the deployment was seen (the startup or
+	// newcomer download covers it), the last fallback start, or the last
+	// feed download from any other trigger (noteDownload).
+	downloadedAt map[string]time.Time
 	// expired records the deployments last seen with an expired bundle.
 	expired map[string]bool
+	// checkNow records deployments whose bundle has just expired, so the next
+	// claimFallback starts a download whatever the clock says.
+	checkNow map[string]bool
 }
 
 // NewStaticBundleWatch creates a watch whose transient metadata backoff starts
@@ -62,8 +67,9 @@ type StaticBundleWatch struct {
 func NewStaticBundleWatch(fetchInterval time.Duration) *StaticBundleWatch {
 	return &StaticBundleWatch{
 		metadataBackoff: config.NewBackoffStoreWithLimits(fetchInterval, metadataTransientMaxBackoff),
-		coveredAt:       make(map[string]time.Time),
+		downloadedAt:    make(map[string]time.Time),
 		expired:         make(map[string]bool),
+		checkNow:        make(map[string]bool),
 	}
 }
 
@@ -78,16 +84,12 @@ func (w *StaticBundleWatch) metadataDue(key string, now time.Time) bool {
 	return !backingOff || !now.Before(retryAt)
 }
 
-// recordMetadata applies the result of one metadata read.
+// recordMetadata applies the result of one metadata read to the metadata
+// backoff. It never moves the daily download: see StaticBundleWatch.
 func (w *StaticBundleWatch) recordMetadata(key string, status gtfs.BackendHashStatus, now time.Time) {
 	switch status {
 	case gtfs.BackendHashOK:
 		w.metadataBackoff.ResetBackoff(key)
-		w.mu.Lock()
-		if !w.expired[key] {
-			w.coveredAt[key] = now
-		}
-		w.mu.Unlock()
 	case gtfs.BackendHashTransient:
 		w.metadataBackoff.UpdateBackoff(key)
 	case gtfs.BackendHashUnsupported:
@@ -109,25 +111,41 @@ func (w *StaticBundleWatch) observeExpiry(key string, expired bool) {
 	}
 	if !w.expired[key] {
 		w.expired[key] = true
-		w.coveredAt[key] = time.Time{}
+		w.checkNow[key] = true
+	}
+}
+
+// noteDownload records that a download of the deployment's feed URL started
+// at, whatever started it, so the daily download counts from it.
+func (w *StaticBundleWatch) noteDownload(key string, at time.Time) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if at.After(w.downloadedAt[key]) {
+		w.downloadedAt[key] = at
 	}
 }
 
 // claimFallback reports whether a fallback download is due for the
-// deployment, whose bundle has not been covered for every, and if so records
-// it as started now. The first call for a deployment only starts its clock.
+// deployment, whose feed URL has not been downloaded for every (or whose
+// bundle has just expired), and if so records it as started now. The first
+// call for a deployment only starts its clock.
 func (w *StaticBundleWatch) claimFallback(key string, now time.Time, every time.Duration) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	coveredAt, seen := w.coveredAt[key]
+	if w.checkNow[key] {
+		delete(w.checkNow, key)
+		w.downloadedAt[key] = now
+		return true
+	}
+	downloadedAt, seen := w.downloadedAt[key]
 	if !seen {
-		w.coveredAt[key] = now
+		w.downloadedAt[key] = now
 		return false
 	}
-	if now.Sub(coveredAt) < every {
+	if now.Sub(downloadedAt) < every {
 		return false
 	}
-	w.coveredAt[key] = now
+	w.downloadedAt[key] = now
 	return true
 }
 
@@ -141,14 +159,16 @@ func (w *StaticBundleWatch) Prune(servers []models.ObaServer) {
 	w.metadataBackoff.Prune(keep)
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	for key := range w.coveredAt {
-		if !keep(key) {
-			delete(w.coveredAt, key)
+	for _, m := range []map[string]bool{w.expired, w.checkNow} {
+		for key := range m {
+			if !keep(key) {
+				delete(m, key)
+			}
 		}
 	}
-	for key := range w.expired {
+	for key := range w.downloadedAt {
 		if !keep(key) {
-			delete(w.expired, key)
+			delete(w.downloadedAt, key)
 		}
 	}
 }
@@ -164,11 +184,17 @@ func (app *Application) checkDeploymentStaticBundle(ctx, campaignCtx context.Con
 	}
 	watch := app.StaticBundleWatch
 	key := deploymentKey(servers[0])
-	expired := app.BundleExpiry.deploymentExpired(key)
+	expired := app.BundleExpiry.deploymentExpired(key, app.hasStaticSnapshot)
 	watch.observeExpiry(key, expired)
 	if metadataAllowed && watch.metadataDue(key, time.Now().UTC()) {
 		status := app.GtfsService.CheckBackendBundles(ctx, campaignCtx, servers)
 		watch.recordMetadata(key, status, time.Now().UTC())
+	}
+	// A download any other trigger started (startup, backend_changed, a
+	// configuration change) counts toward the daily one. The oldest entry
+	// counts, so every entry of the deployment is checked daily.
+	if at, ok := app.oldestFeedDownload(servers); ok {
+		watch.noteDownload(key, at)
 	}
 	every := gtfs.StaticFallbackEvery
 	if expired {
@@ -181,8 +207,32 @@ func (app *Application) checkDeploymentStaticBundle(ctx, campaignCtx context.Con
 		app.Logger.Info("Static GTFS bundle expired; checking the feed URL with a fallback static refresh",
 			"server_url", key, "every", every, "trigger", gtfs.StaticRefreshFallback)
 	} else {
-		app.Logger.Info("Backend static GTFS hash unusable; starting fallback static refresh",
-			"server_url", key, "unusable_for_at_least", every, "trigger", gtfs.StaticRefreshFallback)
+		app.Logger.Info("Daily static GTFS check; downloading the feed URL",
+			"server_url", key, "not_downloaded_for_at_least", every, "trigger", gtfs.StaticRefreshFallback)
 	}
 	app.GtfsService.StartStaticRefreshCampaigns(campaignCtx, servers, gtfs.StaticRefreshFallback, fallbackMaxRetries)
+}
+
+// oldestFeedDownload returns the oldest of the entries' last feed downloads.
+// Entries without one yet are skipped: the deployment's first sighting starts
+// their clock.
+func (app *Application) oldestFeedDownload(servers []models.ObaServer) (time.Time, bool) {
+	var oldest time.Time
+	found := false
+	for _, server := range servers {
+		check, ok := app.GtfsService.LastStaticFeedCheck(server)
+		if !ok {
+			continue
+		}
+		if !found || check.At.Before(oldest) {
+			oldest, found = check.At, true
+		}
+	}
+	return oldest, found
+}
+
+// hasStaticSnapshot reports whether a static snapshot is stored under the key.
+func (app *Application) hasStaticSnapshot(serverKey string) bool {
+	_, ok := app.GtfsService.StaticStore.Get(serverKey)
+	return ok
 }

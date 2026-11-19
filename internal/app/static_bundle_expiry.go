@@ -132,16 +132,28 @@ func (r *BundleExpiryReporter) entry(serverKey string) withheldEntry {
 }
 
 // deploymentExpired reports whether any agency entry of the deployment (a
-// sanitized base URL) held an expired bundle when last observed.
-func (r *BundleExpiryReporter) deploymentExpired(deployment string) bool {
+// sanitized base URL) held an expired bundle when last observed. An entry
+// whose snapshot is gone (present reports false) is dropped instead: an
+// expired agency removed from a merged bundle is never observed again, and
+// its record must not keep the whole deployment on the 2-hour schedule.
+func (r *BundleExpiryReporter) deploymentExpired(deployment string, present func(serverKey string) bool) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	expired := false
 	for key, entry := range r.entries {
-		if baseURL, _, ok := models.ParseServerKey(key); ok && baseURL == deployment && entry.kind == withholdExpired {
-			return true
+		baseURL, _, ok := models.ParseServerKey(key)
+		if !ok || baseURL != deployment {
+			continue
+		}
+		if !present(key) {
+			delete(r.entries, key)
+			continue
+		}
+		if entry.kind == withholdExpired {
+			expired = true
 		}
 	}
-	return false
+	return expired
 }
 
 // Prune drops the state of entries the keep predicate rejects.

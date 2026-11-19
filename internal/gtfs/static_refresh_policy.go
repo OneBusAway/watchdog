@@ -11,8 +11,9 @@ const (
 	// StaticRefreshBackendChanged follows a backend metadata hash that differs
 	// from the local snapshot. This is the normal way a bundle is refreshed.
 	StaticRefreshBackendChanged StaticRefreshTrigger = "backend_changed"
-	// StaticRefreshFallback downloads the feed while the backend metadata hash
-	// has been unusable for too long. See StaticFallbackEvery.
+	// StaticRefreshFallback downloads the feed when no download of it has
+	// started for StaticFallbackEvery, whatever the backend hash says, and
+	// when the bundle expires. See StaticFallbackEvery.
 	StaticRefreshFallback StaticRefreshTrigger = "fallback"
 	// StaticRefreshConfigChange follows a change to the entry's static configuration.
 	StaticRefreshConfigChange StaticRefreshTrigger = "config_change"
@@ -21,11 +22,11 @@ const (
 	StaticRefreshAgencyMismatch StaticRefreshTrigger = "agency_mismatch"
 )
 
-// While the backend metadata hash is unusable, a fallback download runs once
-// the hash has not worked for StaticFallbackEvery, and again every
-// StaticFallbackEvery while it stays unusable. Once the deployment's bundle has
-// expired, a newer one is needed urgently, so the period shortens to
-// StaticFallbackEveryExpired.
+// Every feed URL is downloaded at least once per StaticFallbackEvery, counted
+// from its last download of any kind, so no state of the backend hash can keep
+// Watchdog from checking the feed for longer. Once the deployment's bundle has
+// expired, a newer one is needed urgently: the feed is downloaded at once and
+// then every StaticFallbackEveryExpired.
 const (
 	StaticFallbackEvery        = 24 * time.Hour
 	StaticFallbackEveryExpired = 2 * time.Hour

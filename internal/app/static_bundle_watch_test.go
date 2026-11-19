@@ -59,31 +59,35 @@ func TestStaticBundleWatchFallback(t *testing.T) {
 			if w.claimFallback(key, start, every) {
 				t.Fatal("first sight of a deployment started a fallback; startup already downloads it")
 			}
-			// A working hash keeps pushing the fallback back.
-			lastGood := start.Add(every - time.Minute)
-			w.recordMetadata(key, gtfs.BackendHashOK, lastGood)
-			if w.claimFallback(key, start.Add(every+time.Minute), every) {
-				t.Fatal("fallback ran although the hash worked within the period")
+			// A working hash does not put the download off (#346).
+			w.recordMetadata(key, gtfs.BackendHashOK, start.Add(every-time.Minute))
+			if !w.claimFallback(key, start.Add(every), every) {
+				t.Fatal("a good hash put off the periodic download")
 			}
-			// The hash stops working: one period after its last success, a fallback runs.
-			w.recordMetadata(key, gtfs.BackendHashTransient, lastGood.Add(time.Minute))
-			if !w.claimFallback(key, lastGood.Add(every), every) {
-				t.Fatal("no fallback one period after the hash stopped working")
-			}
-			// At most one fallback per period while the hash stays unusable.
-			fallbackAt := lastGood.Add(every)
+			// At most one fallback per period.
+			fallbackAt := start.Add(every)
 			if w.claimFallback(key, fallbackAt.Add(time.Minute), every) {
 				t.Fatal("a second fallback ran inside the same period")
 			}
-			if !w.claimFallback(key, fallbackAt.Add(every), every) {
-				t.Fatal("no fallback one period after the previous one")
+			// A download from another trigger restarts the clock.
+			w.noteDownload(key, fallbackAt.Add(every/2))
+			if w.claimFallback(key, fallbackAt.Add(every), every) {
+				t.Fatal("fallback ran although another trigger downloaded the feed within the period")
+			}
+			if !w.claimFallback(key, fallbackAt.Add(every/2+every), every) {
+				t.Fatal("no fallback one period after the last download")
+			}
+			// An older download never moves the clock back.
+			w.noteDownload(key, start)
+			if w.claimFallback(key, fallbackAt.Add(every/2+every+time.Minute), every) {
+				t.Fatal("an older download moved the clock back")
 			}
 		})
 	}
 }
 
-// TestStaticBundleWatchExpiryShortensFallback checks that a bundle expiring
-// while the hash is unusable moves the next fallback from a day to 2 hours.
+// TestStaticBundleWatchExpiryShortensFallback checks that an expired bundle
+// is downloaded every 2 hours instead of daily.
 func TestStaticBundleWatchExpiryShortensFallback(t *testing.T) {
 	start := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	const key = "https://oba.example"
@@ -99,46 +103,57 @@ func TestStaticBundleWatchExpiryShortensFallback(t *testing.T) {
 	}
 }
 
-// TestStaticBundleWatchExpiryChecksFeedDespiteMatchingHash covers the review
-// of #334: a backend reporting the same expired bundle as Watchdog says
-// nothing about whether the agency published a newer one, so an expiry
-// downloads the feed URL at once and then every 2 hours, hash or no hash.
-func TestStaticBundleWatchExpiryChecksFeedDespiteMatchingHash(t *testing.T) {
+// TestStaticBundleWatchExpiryChecksFeedAtOnce covers the review of #334: an
+// expiry downloads the feed URL at once, even right after another download,
+// and then every 2 hours, hash or no hash.
+func TestStaticBundleWatchExpiryChecksFeedAtOnce(t *testing.T) {
 	start := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	const key = "https://oba.example"
 	w := NewStaticBundleWatch(30 * time.Second)
 	w.claimFallback(key, start, gtfs.StaticFallbackEvery)
-	w.recordMetadata(key, gtfs.BackendHashOK, start)
+	w.noteDownload(key, start.Add(time.Minute))
 
 	w.observeExpiry(key, true)
-	if !w.claimFallback(key, start.Add(time.Second), gtfs.StaticFallbackEveryExpired) {
+	w.noteDownload(key, start.Add(2*time.Minute)) // a download before the expiry check must not cancel it
+	if !w.claimFallback(key, start.Add(3*time.Minute), gtfs.StaticFallbackEveryExpired) {
 		t.Fatal("an expiry did not check the feed URL at once")
 	}
-	// A matching hash no longer pushes the next check back.
-	w.recordMetadata(key, gtfs.BackendHashOK, start.Add(time.Hour))
-	w.observeExpiry(key, true)
-	if !w.claimFallback(key, start.Add(gtfs.StaticFallbackEveryExpired+time.Second), gtfs.StaticFallbackEveryExpired) {
-		t.Fatal("a matching hash held back the 2-hour check of an expired bundle")
+	w.observeExpiry(key, true) // still expired: no second immediate check
+	if w.claimFallback(key, start.Add(4*time.Minute), gtfs.StaticFallbackEveryExpired) {
+		t.Fatal("a continuing expiry checked the feed again at once")
 	}
-	// Once current again, a good hash covers the bundle as before.
-	w.observeExpiry(key, false)
-	w.recordMetadata(key, gtfs.BackendHashOK, start.Add(3*time.Hour))
-	if w.claimFallback(key, start.Add(4*time.Hour), gtfs.StaticFallbackEvery) {
-		t.Fatal("fallback ran although the hash worked and the bundle is current")
+	w.recordMetadata(key, gtfs.BackendHashOK, start.Add(time.Hour))
+	if !w.claimFallback(key, start.Add(3*time.Minute+gtfs.StaticFallbackEveryExpired), gtfs.StaticFallbackEveryExpired) {
+		t.Fatal("a matching hash held back the 2-hour check of an expired bundle")
 	}
 }
 
 func TestBundleExpiryReporterDeploymentExpired(t *testing.T) {
 	r := NewBundleExpiryReporter()
 	now := time.Now().UTC()
+	present := func(string) bool { return true }
 	r.update(models.ServerKey("https://a.example", "x"), withholdExpired, now)
 	r.update(models.ServerKey("https://b.example", "y"), withholdNone, now)
 	r.update(models.ServerKey("https://c.example", "z"), withholdBackendBehind, now)
-	if !r.deploymentExpired("https://a.example") {
+	if !r.deploymentExpired("https://a.example", present) {
 		t.Fatal("deployment with an expired agency not reported expired")
 	}
-	if r.deploymentExpired("https://b.example") || r.deploymentExpired("https://c.example") || r.deploymentExpired("https://d.example") {
+	if r.deploymentExpired("https://b.example", present) || r.deploymentExpired("https://c.example", present) || r.deploymentExpired("https://d.example", present) {
 		t.Fatal("deployment without an expired agency reported expired")
+	}
+}
+
+// TestBundleExpiryReporterForgetsRemovedAgency checks that an expired agency
+// that left the merged bundle no longer keeps its deployment expired.
+func TestBundleExpiryReporterForgetsRemovedAgency(t *testing.T) {
+	r := NewBundleExpiryReporter()
+	gone := models.ServerKey("https://a.example", "gone")
+	r.update(gone, withholdExpired, time.Now().UTC())
+	if r.deploymentExpired("https://a.example", func(key string) bool { return key != gone }) {
+		t.Fatal("an agency without a snapshot kept the deployment expired")
+	}
+	if r.entry(gone).kind != withholdNone {
+		t.Fatal("the removed agency's record was kept")
 	}
 }
 
@@ -155,7 +170,7 @@ func TestStaticBundleWatchPrune(t *testing.T) {
 	if !w.metadataDue(deploymentKey(gone), now) {
 		t.Fatal("a departed deployment kept its metadata backoff")
 	}
-	if _, ok := w.coveredAt[deploymentKey(gone)]; ok {
+	if _, ok := w.downloadedAt[deploymentKey(gone)]; ok {
 		t.Fatal("a departed deployment kept its fallback clock")
 	}
 	if w.metadataDue(deploymentKey(kept), now) {
