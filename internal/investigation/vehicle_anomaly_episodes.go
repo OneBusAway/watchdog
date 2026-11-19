@@ -17,7 +17,7 @@ const (
 )
 
 // vehicleAnomalyCodes are the seeded vehicle_anomaly_type codes, the values anomaly_type accepts.
-var vehicleAnomalyCodes = []string{"stale_source_timestamp", "invalid_coordinate", "stopped_out_of_bounds"}
+var vehicleAnomalyCodes = []string{episodeTypeStaleSource, episodeTypeInvalidCoordinate, episodeTypeStoppedOutOfBounds}
 
 // vehicleAnomalyEpisodeIncludable uses "vehicle_response" for both responses, the kind the vehicle-position-response endpoint registers.
 var vehicleAnomalyEpisodeIncludable = map[string]resourceKind{
@@ -49,6 +49,13 @@ type vehicleAnomalyEpisode struct {
 type vehicleAnomalyEpisodeBody struct {
 	vehicleAnomalyEpisode
 	Included included `json:"included,omitzero"`
+}
+
+// vehicleAnomalyEpisodesBody is the E23 and E24 response.
+type vehicleAnomalyEpisodesBody struct {
+	Items    []vehicleAnomalyEpisode `json:"items"`
+	Links    links                   `json:"links"`
+	Included included                `json:"included,omitzero"`
 }
 
 // vehicleAnomalyEpisodeLinks builds an episode's links; closing_response and opening_evidence only exist when their rows do.
@@ -160,4 +167,74 @@ func (s *InvestigationService) getVehicleAnomalyEpisode(w http.ResponseWriter, r
 		cache = cacheImmutable(*closedAt)
 	}
 	s.writeJSON(w, r, body, cache)
+}
+
+// vehicleAnomalyEpisodePage reads one page of ListVehicleAnomalyEpisodes for E24 and E23.
+// The items are never nil, so an empty page encodes as [] rather than null.
+func (s *InvestigationService) vehicleAnomalyEpisodePage(ctx context.Context, q *dbgen.Queries, r *http.Request,
+	params dbgen.ListVehicleAnomalyEpisodesParams, p page, inc include) (vehicleAnomalyEpisodesBody, error) {
+	var body vehicleAnomalyEpisodesBody
+	rows, err := q.ListVehicleAnomalyEpisodes(ctx, params)
+	if err != nil {
+		return body, err
+	}
+	rows, hasMore := trimPage(rows, p)
+	body.Items = make([]vehicleAnomalyEpisode, 0, len(rows))
+	all := make([]itemLinks, 0, len(rows))
+	for _, row := range rows {
+		l := vehicleAnomalyEpisodeLinks(row.VehicleAnomalyEpisodeView, row.OpeningEvidenceID)
+		all = append(all, l)
+		body.Items = append(body.Items, vehicleAnomalyEpisodeRepresentation(row.VehicleAnomalyEpisodeView, l))
+	}
+	var lastID int64
+	if len(rows) > 0 {
+		lastID = rows[len(rows)-1].VehicleAnomalyEpisodeView.VehicleAnomalyEpisodeID
+	}
+	body.Links = pageLinks(r, lastID, hasMore)
+	body.Included, err = s.loadIncluded(ctx, q, all, inc)
+	return body, err
+}
+
+// listVehicleAnomalyEpisodes serves GET /v1/vehicle-anomaly-episodes. Without
+// a window it covers the last 24 hours, except with status=open, where open
+// episodes need no window.
+func (s *InvestigationService) listVehicleAnomalyEpisodes(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	var bad invalidParams
+	values := parseQuery(r, &bad, "server_id", "agency_id", "endpoint_id", "vehicle_id", "anomaly_type", "status",
+		"active_from", "active_to", "close_reason", "include", "page_size", "cursor")
+	params := dbgen.ListVehicleAnomalyEpisodesParams{
+		ServerID:          paramID(values, "server_id", &bad),
+		AgencyID:          paramID(values, "agency_id", &bad),
+		EndpointID:        paramID(values, "endpoint_id", &bad),
+		ExternalVehicleID: paramString(values, "vehicle_id", &bad),
+		AnomalyCode:       paramEnum(values, "anomaly_type", vehicleAnomalyCodes, &bad),
+		Status:            paramEnum(values, "status", []string{"open", "closed"}, &bad),
+		CloseReason:       paramEnum(values, "close_reason", vehicleCloseReasons, &bad),
+	}
+	// A feed vehicle ID is only unique within one endpoint, so it needs a scope.
+	if values.Has("vehicle_id") && !values.Has("endpoint_id") && !values.Has("server_id") {
+		bad.add("vehicle_id", "requires endpoint_id or server_id")
+	}
+	statusOpen := params.Status != nil && *params.Status == "open"
+	win := s.parseWindow(values, activeWindowOptions(statusOpen, false), &bad)
+	inc := s.parseInclude(values, vehicleAnomalyEpisodeIncludable, &bad)
+	p := parsePage(values, &bad)
+	if len(bad) > 0 {
+		writeInvalidParams(w, bad)
+		return
+	}
+	params.ActiveFrom, params.ActiveTo = win.From, win.To
+	params.AfterID, params.PageLimit = p.AfterID, p.Limit()
+
+	var body vehicleAnomalyEpisodesBody
+	err := s.read(r.Context(), func(ctx context.Context, q *dbgen.Queries) error {
+		var err error
+		body, err = s.vehicleAnomalyEpisodePage(ctx, q, r, params, p, inc)
+		return err
+	})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.writeJSON(w, r, body, cacheShort())
 }

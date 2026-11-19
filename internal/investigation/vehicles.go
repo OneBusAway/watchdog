@@ -170,27 +170,6 @@ func (s *InvestigationService) getVehicle(w http.ResponseWriter, r *http.Request
 	s.writeJSON(w, r, body, cache)
 }
 
-// vehicleAnomalyEpisodesBody is the E23 response.
-type vehicleAnomalyEpisodesBody struct {
-	Items    []vehicleAnomalyEpisode `json:"items"`
-	Links    links                   `json:"links"`
-	Included included                `json:"included,omitzero"`
-}
-
-// vehicleAnomalyEpisodeItems maps rows to their E25 representations, and
-// returns each item's links alongside them for loadIncluded. The items are
-// never nil, so an empty list encodes as [] rather than null.
-func vehicleAnomalyEpisodeItems(rows []dbgen.ListVehicleAnomalyEpisodesRow) ([]vehicleAnomalyEpisode, []itemLinks) {
-	items := make([]vehicleAnomalyEpisode, 0, len(rows))
-	all := make([]itemLinks, 0, len(rows))
-	for _, row := range rows {
-		l := vehicleAnomalyEpisodeLinks(row.VehicleAnomalyEpisodeView, row.OpeningEvidenceID)
-		all = append(all, l)
-		items = append(items, vehicleAnomalyEpisodeRepresentation(row.VehicleAnomalyEpisodeView, l))
-	}
-	return items, all
-}
-
 // listVehicleAnomalyEpisodesForVehicle serves
 // GET /v1/vehicles/:vehicle_entity_id/anomaly-episodes: every retained anomaly
 // episode of one vehicle, newest first. It is scoped to one identity, so the
@@ -223,19 +202,8 @@ func (s *InvestigationService) listVehicleAnomalyEpisodesForVehicle(w http.Respo
 		if _, err := q.GetVehicle(ctx, id); err != nil {
 			return err
 		}
-		rows, err := q.ListVehicleAnomalyEpisodes(ctx, params)
-		if err != nil {
-			return err
-		}
-		rows, hasMore := trimPage(rows, p)
-		var all []itemLinks
-		body.Items, all = vehicleAnomalyEpisodeItems(rows)
-		var lastID int64
-		if len(rows) > 0 {
-			lastID = rows[len(rows)-1].VehicleAnomalyEpisodeView.VehicleAnomalyEpisodeID
-		}
-		body.Links = pageLinks(r, lastID, hasMore)
-		body.Included, err = s.loadIncluded(ctx, q, all, inc)
+		var err error
+		body, err = s.vehicleAnomalyEpisodePage(ctx, q, r, params, p, inc)
 		return err
 	})
 	if err != nil {
