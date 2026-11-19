@@ -231,15 +231,15 @@ func (app *Application) collectForScope(ctx, campaignCtx context.Context, server
 	switch s := scope.(type) {
 	case config.AgencyScope:
 		now := time.Now().UTC()
-		app.observeBundleExpiry(server, now)
-		app.MetricsService.ReportScheduledService(now, server)
+		app.observeStaticBundle(server, now)
+		app.MetricsService.ReportScheduledService(now, server, app.staticMetricsWithheld(server, now))
 		app.CollectMetricsForServer(ctx, server)
 	case config.ServerScope:
 		now := time.Now().UTC()
 		for _, agency := range s.StaticAgencies {
 			entry := serverForAgency(server, agency.AgencyID, agency.AgencyName)
-			app.observeBundleExpiry(entry, now)
-			app.MetricsService.ReportScheduledService(now, entry)
+			app.observeStaticBundle(entry, now)
+			app.MetricsService.ReportScheduledService(now, entry, app.staticMetricsWithheld(entry, now))
 		}
 		app.collectForServerScope(ctx, campaignCtx, server, s)
 	default:
@@ -497,9 +497,9 @@ agencyLaunch:
 	if !rtFetchSucceeded {
 		return
 	}
-	// The pass is shared by every agency of the merged bundle, so only a
-	// bundle expired for all of them withholds it.
-	if app.staticBundlesExpired(reportedAgencyEntries, time.Now().UTC()) {
+	// The pass is shared by every agency of the merged bundle, so it is
+	// withheld only when every one of them is (expired or backend behind).
+	if app.staticMetricsWithheldForAll(reportedAgencyEntries, time.Now().UTC()) {
 		for _, entry := range reportedAgencyEntries {
 			app.MetricsService.RetireStaticDerivedVehicleSeries(entry)
 		}
@@ -562,8 +562,9 @@ func (app *Application) CollectMetricsForServer(ctx context.Context, server mode
 	}
 
 	// Vehicles are attributed and bounds-checked with the static bundle, so
-	// an expired one withholds the pass rather than report stale results.
-	if app.MetricsService.StaticBundleExpired(server, time.Now().UTC()) {
+	// an expired bundle, or one the backend does not serve yet, withholds the
+	// pass rather than report results from the wrong bundle.
+	if app.staticMetricsWithheld(server, time.Now().UTC()) {
 		app.MetricsService.RetireStaticDerivedVehicleSeries(server)
 		return
 	}

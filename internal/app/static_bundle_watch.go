@@ -35,8 +35,11 @@ const fallbackMaxRetries = 5
 //     the deployment's collection.
 //  3. If the hash has not worked for a fallback period, download the bundle
 //     anyway with the fallback trigger, at most once per period. The period
-//     is gtfs.StaticFallbackEvery (a day), or gtfs.StaticFallbackEveryExpired
-//     (2 hours) once the deployment's bundle has expired.
+//     is gtfs.StaticFallbackEvery (a day).
+//  4. Once the deployment's bundle has expired, download it at once and then
+//     every gtfs.StaticFallbackEveryExpired (2 hours), even while the hash
+//     matches: Watchdog and the backend agreeing on an expired bundle does
+//     not show whether the agency has published a newer one.
 //
 // A deployment is one OBA base URL. Entries sharing it share one check.
 type StaticBundleWatch struct {
@@ -45,8 +48,13 @@ type StaticBundleWatch struct {
 	mu sync.Mutex
 	// coveredAt is, per deployment, the last time its bundle was known to be
 	// covered: when it was first seen (the startup or newcomer download covers
-	// it), the last good hash, or the last fallback start.
+	// it), the last good hash, or the last fallback start. While the bundle
+	// is expired a good hash no longer covers it: a backend serving the same
+	// expired bundle says nothing about whether the agency published a newer
+	// one, so only a download of the feed URL can tell.
 	coveredAt map[string]time.Time
+	// expired records the deployments last seen with an expired bundle.
+	expired map[string]bool
 }
 
 // NewStaticBundleWatch creates a watch whose transient metadata backoff starts
@@ -55,6 +63,7 @@ func NewStaticBundleWatch(fetchInterval time.Duration) *StaticBundleWatch {
 	return &StaticBundleWatch{
 		metadataBackoff: config.NewBackoffStoreWithLimits(fetchInterval, metadataTransientMaxBackoff),
 		coveredAt:       make(map[string]time.Time),
+		expired:         make(map[string]bool),
 	}
 }
 
@@ -75,7 +84,9 @@ func (w *StaticBundleWatch) recordMetadata(key string, status gtfs.BackendHashSt
 	case gtfs.BackendHashOK:
 		w.metadataBackoff.ResetBackoff(key)
 		w.mu.Lock()
-		w.coveredAt[key] = now
+		if !w.expired[key] {
+			w.coveredAt[key] = now
+		}
 		w.mu.Unlock()
 	case gtfs.BackendHashTransient:
 		w.metadataBackoff.UpdateBackoff(key)
@@ -83,6 +94,22 @@ func (w *StaticBundleWatch) recordMetadata(key string, status gtfs.BackendHashSt
 		w.metadataBackoff.DeferUntil(key, now.Add(metadataUnsupportedRetryAfter))
 	case gtfs.BackendHashNotChecked:
 		// Nothing was learned about the backend.
+	}
+}
+
+// observeExpiry records whether the deployment's bundle is expired. When it
+// has just expired, the next claimFallback is due at once, so the feed URL is
+// checked before the expiry is reported.
+func (w *StaticBundleWatch) observeExpiry(key string, expired bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !expired {
+		delete(w.expired, key)
+		return
+	}
+	if !w.expired[key] {
+		w.expired[key] = true
+		w.coveredAt[key] = time.Time{}
 	}
 }
 
@@ -119,6 +146,11 @@ func (w *StaticBundleWatch) Prune(servers []models.ObaServer) {
 			delete(w.coveredAt, key)
 		}
 	}
+	for key := range w.expired {
+		if !keep(key) {
+			delete(w.expired, key)
+		}
+	}
 }
 
 // checkDeploymentStaticBundle runs the watch for one deployment. ctx bounds
@@ -132,18 +164,25 @@ func (app *Application) checkDeploymentStaticBundle(ctx, campaignCtx context.Con
 	}
 	watch := app.StaticBundleWatch
 	key := deploymentKey(servers[0])
+	expired := app.BundleExpiry.deploymentExpired(key)
+	watch.observeExpiry(key, expired)
 	if metadataAllowed && watch.metadataDue(key, time.Now().UTC()) {
 		status := app.GtfsService.CheckBackendBundles(ctx, campaignCtx, servers)
 		watch.recordMetadata(key, status, time.Now().UTC())
 	}
 	every := gtfs.StaticFallbackEvery
-	if app.BundleExpiry.deploymentExpired(key) {
+	if expired {
 		every = gtfs.StaticFallbackEveryExpired
 	}
 	if ctx.Err() != nil || !watch.claimFallback(key, time.Now().UTC(), every) {
 		return
 	}
-	app.Logger.Info("Backend static GTFS hash unusable; starting fallback static refresh",
-		"server_url", key, "unusable_for_at_least", every, "trigger", gtfs.StaticRefreshFallback)
+	if expired {
+		app.Logger.Info("Static GTFS bundle expired; checking the feed URL with a fallback static refresh",
+			"server_url", key, "every", every, "trigger", gtfs.StaticRefreshFallback)
+	} else {
+		app.Logger.Info("Backend static GTFS hash unusable; starting fallback static refresh",
+			"server_url", key, "unusable_for_at_least", every, "trigger", gtfs.StaticRefreshFallback)
+	}
 	app.GtfsService.StartStaticRefreshCampaigns(campaignCtx, servers, gtfs.StaticRefreshFallback, fallbackMaxRetries)
 }

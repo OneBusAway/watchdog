@@ -99,14 +99,45 @@ func TestStaticBundleWatchExpiryShortensFallback(t *testing.T) {
 	}
 }
 
+// TestStaticBundleWatchExpiryChecksFeedDespiteMatchingHash covers the review
+// of #334: a backend reporting the same expired bundle as Watchdog says
+// nothing about whether the agency published a newer one, so an expiry
+// downloads the feed URL at once and then every 2 hours, hash or no hash.
+func TestStaticBundleWatchExpiryChecksFeedDespiteMatchingHash(t *testing.T) {
+	start := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	const key = "https://oba.example"
+	w := NewStaticBundleWatch(30 * time.Second)
+	w.claimFallback(key, start, gtfs.StaticFallbackEvery)
+	w.recordMetadata(key, gtfs.BackendHashOK, start)
+
+	w.observeExpiry(key, true)
+	if !w.claimFallback(key, start.Add(time.Second), gtfs.StaticFallbackEveryExpired) {
+		t.Fatal("an expiry did not check the feed URL at once")
+	}
+	// A matching hash no longer pushes the next check back.
+	w.recordMetadata(key, gtfs.BackendHashOK, start.Add(time.Hour))
+	w.observeExpiry(key, true)
+	if !w.claimFallback(key, start.Add(gtfs.StaticFallbackEveryExpired+time.Second), gtfs.StaticFallbackEveryExpired) {
+		t.Fatal("a matching hash held back the 2-hour check of an expired bundle")
+	}
+	// Once current again, a good hash covers the bundle as before.
+	w.observeExpiry(key, false)
+	w.recordMetadata(key, gtfs.BackendHashOK, start.Add(3*time.Hour))
+	if w.claimFallback(key, start.Add(4*time.Hour), gtfs.StaticFallbackEvery) {
+		t.Fatal("fallback ran although the hash worked and the bundle is current")
+	}
+}
+
 func TestBundleExpiryReporterDeploymentExpired(t *testing.T) {
 	r := NewBundleExpiryReporter()
-	r.transition(models.ServerKey("https://a.example", "x"), true)
-	r.transition(models.ServerKey("https://b.example", "y"), false)
+	now := time.Now().UTC()
+	r.update(models.ServerKey("https://a.example", "x"), withholdExpired, now)
+	r.update(models.ServerKey("https://b.example", "y"), withholdNone, now)
+	r.update(models.ServerKey("https://c.example", "z"), withholdBackendBehind, now)
 	if !r.deploymentExpired("https://a.example") {
 		t.Fatal("deployment with an expired agency not reported expired")
 	}
-	if r.deploymentExpired("https://b.example") || r.deploymentExpired("https://c.example") {
+	if r.deploymentExpired("https://b.example") || r.deploymentExpired("https://c.example") || r.deploymentExpired("https://d.example") {
 		t.Fatal("deployment without an expired agency reported expired")
 	}
 }

@@ -1,72 +1,143 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/getsentry/sentry-go"
+	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
 	"watchdog.onebusaway.org/internal/utils"
 )
 
-// What an expired static bundle means for collection:
+// When collection withholds the metrics derived from the static bundle:
 //
-//   - The schedule gauges report unknown (available=0, active=0), because an
-//     expired bundle schedules nothing (metrics.ReportScheduledService).
+//   - The bundle has expired: the agency-local date is past its latest
+//     service date. An expired bundle schedules nothing and no longer
+//     describes the vehicles the realtime feed reports.
+//   - The backend is behind: Watchdog has already moved to a newer bundle and
+//     the backend still serves the one it replaced. Data from one bundle must
+//     not be validated against another.
+//
+// While withheld:
+//
+//   - The schedule gauges report unknown (available=0, active=0).
 //   - The vehicle pass, which attributes vehicles and checks bounds with the
 //     static bundle, is skipped and its series are retired. In server mode the
 //     pass is shared by every agency of the merged bundle, so it is skipped
-//     only once every reported agency has expired.
+//     only once every reported agency is withheld.
 //   - Everything that does not read the bundle keeps reporting: API ping,
 //     OBA API metrics, GTFS-RT fetch status, and the expiration gauges.
-//   - Sentry hears about it once when the bundle expires and once when it
-//     recovers, never on every tick.
+//   - Sentry hears about it once (a fatal event, tagged with its cause) and
+//     once more when it is over (an info event), never on every tick.
+//
+// An expired bundle's cause is decided only after Watchdog has checked the
+// feed URL since the expiry (StaticBundleWatch downloads it at once), so the
+// event never blames the agency or the backend from stale information.
 
-// Why an expired bundle is still in use.
+// Why static-derived metrics are withheld. The Sentry event carries it as the
+// cause tag.
 const (
-	// expiryCauseRefreshFailing: the last refresh failed, so a newer bundle
-	// may exist that Watchdog could not download or validate.
-	expiryCauseRefreshFailing = "refresh_failing"
-	// expiryCauseNoNewerBundle: the last refresh succeeded and still produced
-	// this bundle, so the agency has not published a newer one.
-	expiryCauseNoNewerBundle = "no_newer_bundle"
+	// withholdCauseNoNewerBundle: the feed URL was checked after the expiry
+	// and still serves an expired bundle. Watchdog and the backend are both
+	// on it because the agency has not published a current one.
+	withholdCauseNoNewerBundle = "no_newer_bundle"
+	// withholdCauseFeedUnreachable: the feed URL check after the expiry
+	// failed (the reason tag says how), and the backend serves the same
+	// expired bundle or its hash is unknown. Neither side can get a current
+	// bundle.
+	withholdCauseFeedUnreachable = "feed_unreachable"
+	// withholdCauseRefreshFailing: the feed URL check after the expiry failed
+	// (the reason tag says how) while the backend serves a different bundle.
+	// Watchdog cannot load the bundle the backend uses.
+	withholdCauseRefreshFailing = "refresh_failing"
+	// withholdCauseBackendStale: Watchdog holds a newer bundle from the feed
+	// URL, and the backend still serves the one it replaced.
+	withholdCauseBackendStale = "backend_stale"
+	// withholdCauseFeedNotChecked: no feed URL check finished within
+	// expiryCauseWait of the expiry, so the cause is unknown.
+	withholdCauseFeedNotChecked = "feed_not_checked"
 )
 
-// BundleExpiryReporter remembers which entries currently hold an expired
-// static bundle, so a change in that state is reported exactly once.
+// expiryCauseWait is how long an expiry waits for a feed URL check to finish
+// before it is reported without a known cause.
+const expiryCauseWait = time.Hour
+
+// feedCheckClockSkew lets a check that started in the same tick that noticed
+// the expiry, a moment before the expiry was recorded, still count. A
+// variable so tests can make an earlier check not count.
+var feedCheckClockSkew = time.Minute
+
+type withholdKind int
+
+const (
+	withholdNone withholdKind = iota
+	withholdExpired
+	withholdBackendBehind
+)
+
+type withheldEntry struct {
+	kind  withholdKind
+	since time.Time
+	// reported records that the fatal event was sent, with its cause and reason.
+	reported      bool
+	cause, reason string
+}
+
+// BundleExpiryReporter remembers which entries currently withhold their
+// static-derived metrics, and why, so each change is reported exactly once.
 type BundleExpiryReporter struct {
 	mu      sync.Mutex
-	expired map[string]bool
+	entries map[string]withheldEntry
 }
 
 func NewBundleExpiryReporter() *BundleExpiryReporter {
-	return &BundleExpiryReporter{expired: make(map[string]bool)}
+	return &BundleExpiryReporter{entries: make(map[string]withheldEntry)}
 }
 
-// transition records the entry's state and reports whether it changed.
-func (r *BundleExpiryReporter) transition(serverKey string, expired bool) bool {
+// update records the entry's kind and returns its state before and after.
+func (r *BundleExpiryReporter) update(serverKey string, kind withholdKind, now time.Time) (before withheldEntry, after withheldEntry) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.expired[serverKey] == expired {
-		return false
+	before = r.entries[serverKey]
+	if kind == withholdNone {
+		delete(r.entries, serverKey)
+		return before, withheldEntry{}
 	}
-	if expired {
-		r.expired[serverKey] = true
-	} else {
-		delete(r.expired, serverKey)
+	after = before
+	if before.kind != kind {
+		after = withheldEntry{kind: kind, since: now}
 	}
-	return true
+	r.entries[serverKey] = after
+	return before, after
+}
+
+func (r *BundleExpiryReporter) markReported(serverKey, cause, reason string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if entry, ok := r.entries[serverKey]; ok {
+		entry.reported, entry.cause, entry.reason = true, cause, reason
+		r.entries[serverKey] = entry
+	}
+}
+
+// entry returns the entry's current state.
+func (r *BundleExpiryReporter) entry(serverKey string) withheldEntry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.entries[serverKey]
 }
 
 // deploymentExpired reports whether any agency entry of the deployment (a
-// sanitized base URL) was expired when last observed.
+// sanitized base URL) held an expired bundle when last observed.
 func (r *BundleExpiryReporter) deploymentExpired(deployment string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for key := range r.expired {
-		if baseURL, _, ok := models.ParseServerKey(key); ok && baseURL == deployment {
+	for key, entry := range r.entries {
+		if baseURL, _, ok := models.ParseServerKey(key); ok && baseURL == deployment && entry.kind == withholdExpired {
 			return true
 		}
 	}
@@ -77,51 +148,117 @@ func (r *BundleExpiryReporter) deploymentExpired(deployment string) bool {
 func (r *BundleExpiryReporter) Prune(keep func(serverKey string) bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for key := range r.expired {
+	for key := range r.entries {
 		if !keep(key) {
-			delete(r.expired, key)
+			delete(r.entries, key)
 		}
 	}
 }
 
-// observeBundleExpiry reports a change in whether the agency entry's static
-// bundle has expired. Call it once per agency entry per tick.
-func (app *Application) observeBundleExpiry(server models.ObaServer, now time.Time) {
-	expired := app.MetricsService.StaticBundleExpired(server, now)
-	if !app.BundleExpiry.transition(server.ServerKey(), expired) {
-		return
+// staticWithholdKind decides whether the entry's static-derived metrics are
+// withheld now, and why.
+func (app *Application) staticWithholdKind(server models.ObaServer, now time.Time) withholdKind {
+	if app.MetricsService.StaticBundleExpired(server, now) {
+		return withholdExpired
 	}
+	if app.GtfsService.BackendBundleRelation(server) == gtfs.BackendBundleBehind {
+		return withholdBackendBehind
+	}
+	return withholdNone
+}
+
+// staticMetricsWithheld reports whether the entry's static-derived metrics
+// are withheld now.
+func (app *Application) staticMetricsWithheld(server models.ObaServer, now time.Time) bool {
+	return app.staticWithholdKind(server, now) != withholdNone
+}
+
+// staticMetricsWithheldForAll reports whether every given agency entry
+// withholds its static-derived metrics. It is false for an empty list.
+func (app *Application) staticMetricsWithheldForAll(entries []models.ObaServer, now time.Time) bool {
+	for _, entry := range entries {
+		if !app.staticMetricsWithheld(entry, now) {
+			return false
+		}
+	}
+	return len(entries) > 0
+}
+
+// observeStaticBundle reports a change in whether the agency entry withholds
+// its static-derived metrics. Call it once per agency entry per tick.
+func (app *Application) observeStaticBundle(server models.ObaServer, now time.Time) {
+	kind := app.staticWithholdKind(server, now)
+	before, after := app.BundleExpiry.update(server.ServerKey(), kind, now)
 	tags := map[string]string{
 		"agency_id":   server.AgencyID,
 		"agency_name": server.AgencyName,
 		"server_name": server.ServerName,
 	}
 	serverURL := utils.SanitizeServerURL(server.ObaBaseURL)
-	if !expired {
-		app.Logger.Info("Static GTFS bundle is no longer expired; resuming schedule and vehicle metrics",
+	if kind == withholdNone {
+		if before.kind == withholdNone {
+			return
+		}
+		app.Logger.Info("Static GTFS bundle is current and matches the backend; resuming schedule and vehicle metrics",
 			"agency_id", server.AgencyID, "server_name", server.ServerName, "server_url", serverURL)
-		report.ReportErrorWithSentryOptions(fmt.Errorf("static GTFS bundle for %s agency %s is no longer expired", serverURL, server.AgencyID),
-			report.SentryReportOptions{Tags: tags, Level: sentry.LevelInfo})
+		if before.reported {
+			report.ReportErrorWithSentryOptions(fmt.Errorf("static GTFS bundle for %s agency %s is usable again", serverURL, server.AgencyID),
+				report.SentryReportOptions{Tags: tags, Level: sentry.LevelInfo})
+		}
 		return
 	}
-	cause := expiryCauseRefreshFailing
-	if state, ok := app.GtfsService.StaticStore.GetRefreshState(server); ok && state.Success {
-		cause = expiryCauseNoNewerBundle
+	if after.reported {
+		return
 	}
+	cause, reason, decided := app.withholdCause(server, after, now)
+	if !decided {
+		if before.kind != kind {
+			app.Logger.Warn("Static GTFS bundle has expired; withholding schedule and vehicle metrics while the feed URL is checked",
+				"agency_id", server.AgencyID, "server_name", server.ServerName, "server_url", serverURL)
+		}
+		return
+	}
+	app.BundleExpiry.markReported(server.ServerKey(), cause, reason)
 	tags["cause"] = cause
-	app.Logger.Error("Static GTFS bundle has expired; withholding schedule and vehicle metrics",
-		"agency_id", server.AgencyID, "server_name", server.ServerName, "server_url", serverURL, "cause", cause)
-	report.ReportErrorWithSentryOptions(fmt.Errorf("static GTFS bundle for %s agency %s has expired (%s)", serverURL, server.AgencyID, cause),
+	logArgs := []any{"agency_id", server.AgencyID, "server_name", server.ServerName, "server_url", serverURL, "cause", cause}
+	if reason != "" {
+		tags["reason"] = reason
+		logArgs = append(logArgs, "reason", reason)
+	}
+	summary := "has expired"
+	if kind == withholdBackendBehind {
+		summary = "is newer than the backend's"
+	}
+	app.Logger.Error("Static GTFS bundle "+summary+"; withholding schedule and vehicle metrics", logArgs...)
+	message := fmt.Sprintf("static GTFS bundle for %s agency %s %s (%s)", serverURL, server.AgencyID, summary, cause)
+	if reason != "" {
+		message = fmt.Sprintf("static GTFS bundle for %s agency %s %s (%s: %s)", serverURL, server.AgencyID, summary, cause, reason)
+	}
+	report.ReportErrorWithSentryOptions(errors.New(message),
 		report.SentryReportOptions{Tags: tags, ExtraContext: map[string]interface{}{"oba_base_url": serverURL}, Level: sentry.LevelFatal})
 }
 
-// staticBundlesExpired reports whether every given agency entry holds an
-// expired static bundle. It is false for an empty list.
-func (app *Application) staticBundlesExpired(entries []models.ObaServer, now time.Time) bool {
-	for _, entry := range entries {
-		if !app.MetricsService.StaticBundleExpired(entry, now) {
-			return false
-		}
+// withholdCause decides why the entry is withheld. decided is false while an
+// expired bundle still waits for a feed URL check that started after it
+// expired.
+func (app *Application) withholdCause(server models.ObaServer, entry withheldEntry, now time.Time) (cause, reason string, decided bool) {
+	if entry.kind == withholdBackendBehind {
+		return withholdCauseBackendStale, "", true
 	}
-	return len(entries) > 0
+	check, ok := app.GtfsService.LastStaticFeedCheck(server)
+	if !ok || check.At.Before(entry.since.Add(-feedCheckClockSkew)) {
+		// Every check so far predates the expiry: it cannot say whether the
+		// agency has published a newer bundle since.
+		if now.Sub(entry.since) < expiryCauseWait {
+			return "", "", false
+		}
+		return withholdCauseFeedNotChecked, "", true
+	}
+	if check.Success {
+		return withholdCauseNoNewerBundle, "", true
+	}
+	if app.GtfsService.BackendBundleRelation(server) == gtfs.BackendBundleDiffers {
+		return withholdCauseRefreshFailing, string(check.Reason), true
+	}
+	return withholdCauseFeedUnreachable, string(check.Reason), true
 }

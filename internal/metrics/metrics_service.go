@@ -124,12 +124,14 @@ func (ms *MetricsService) ReconcileStaticFeedHealth(servers []models.ObaServer) 
 
 // ReportScheduledService evaluates the compact immutable schedule snapshot at
 // collection time. It never reparses static data.
-func (ms *MetricsService) ReportScheduledService(now time.Time, server models.ObaServer) {
+//
+// withheld reports the schedule as unknown: the caller withholds metrics
+// derived from the bundle because it has expired (it schedules nothing, which
+// would read as "no service right now") or the backend serves another bundle.
+func (ms *MetricsService) ReportScheduledService(now time.Time, server models.ObaServer, withheld bool) {
 	ms.reportStaticBundleState(now, server)
 	available, active := ms.StaticStore.ScheduleStore().Evaluate(server.ServerKey(), now)
-	if ms.StaticBundleExpired(server, now) {
-		// An expired bundle schedules nothing, which would read as "no
-		// service right now". Report the schedule as unknown instead.
+	if withheld {
 		available, active = false, false
 	}
 	labels := []string{server.AgencyID, server.AgencyName, server.ServerName, utils.SanitizeServerURL(server.ObaBaseURL)}

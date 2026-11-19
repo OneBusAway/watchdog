@@ -12,7 +12,7 @@ func TestReportScheduledServiceEmitsUnavailableInsteadOfOutsideService(t *testin
 	server := models.ObaServer{ServerName: "schedule-test", AgencyID: "agency-schedule", AgencyName: "Schedule Agency", ObaBaseURL: "https://schedule-metrics.example"}
 	service := &MetricsService{StaticStore: gtfs.NewStaticStore()}
 
-	service.ReportScheduledService(time.Now(), server)
+	service.ReportScheduledService(time.Now(), server, false)
 	labels := map[string]string{
 		"agency_id": server.AgencyID, "agency_name": server.AgencyName,
 		"server_name": server.ServerName, "server_url": server.ObaBaseURL,
