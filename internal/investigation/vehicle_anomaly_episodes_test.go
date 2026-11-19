@@ -122,6 +122,45 @@ func TestGetVehicleAnomalyEpisode_ReturnsRepresentation(t *testing.T) {
 	}
 }
 
+func TestGetVehicleAnomalyEpisode_OpenEpisodeRepresentation(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc := newAnomalyVehicle(t, pool)
+	opened := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	id := openAnomalyEpisode(t, vc, opened)
+	router, _ := newVehicleAnomalyEpisodesRouter(t, pool)
+
+	var ruleVersionID, openingResponseID int64
+	if err := pool.QueryRow(context.Background(),
+		`SELECT rule_version_id, opening_response_id FROM vehicle_anomaly_episode WHERE vehicle_anomaly_episode_id = $1`, id).
+		Scan(&ruleVersionID, &openingResponseID); err != nil {
+		t.Fatalf("read related IDs: %v", err)
+	}
+	self := vehicleAnomalyEpisodePath(id)
+	want := map[string]any{
+		"vehicle_anomaly_episode_id": float64(id),
+		"status":                     "open",
+		"anomaly_type":               "stale_source_timestamp",
+		"vehicle_id":                 "veh-1",
+		"opened_at":                  "2026-10-01T00:00:00Z",
+		"closed_at":                  nil,
+		"duration_seconds":           nil,
+		"close_reason":               nil,
+		"previous_episode_count":     float64(0),
+		"previous_closed_at":         nil,
+		"links": map[string]any{
+			"self":             self,
+			"vehicle":          fmt.Sprintf("/v1/vehicles/%d", vc.vehicleEntity),
+			"endpoint":         fmt.Sprintf("/v1/vehicle-position-endpoints/%d", vc.endpointID),
+			"rule_version":     fmt.Sprintf("/v1/vehicle-anomaly-rule-versions/%d", ruleVersionID),
+			"opening_response": fmt.Sprintf("/v1/vehicle-position-responses/%d", openingResponseID),
+			"evidence":         self + "/evidence",
+		},
+	}
+	if got := decodeEpisodeBody(t, doGet(t, router, self, nil)); !reflect.DeepEqual(got, want) {
+		t.Errorf("body =\n%v\nwant\n%v", got, want)
+	}
+}
+
 func TestGetVehicleAnomalyEpisode_UnknownIDReturns404(t *testing.T) {
 	router, _ := newVehicleAnomalyEpisodesRouter(t, dbtest.NewMigratedPool(t))
 	wantNotFound(t, doGet(t, router, vehicleAnomalyEpisodePath(999), nil))
