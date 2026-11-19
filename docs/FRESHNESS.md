@@ -47,10 +47,15 @@ current:
    again for an hour.
 3. If the hash has not worked for a day, Watchdog downloads the bundle anyway
    with the `fallback` trigger, and repeats that daily while the hash stays
-   unusable. Once the bundle has expired, a newer one is needed urgently, so the
-   period shortens to 2 hours. In server mode one expired agency is enough to
-   shorten the period for the whole backend, because the agencies share one
-   feed. A byte-identical download confirms the bundle without re-parsing it.
+   unusable. A byte-identical download confirms the bundle without re-parsing
+   it.
+4. Once the bundle has expired, Watchdog downloads the feed URL at once with
+   the `fallback` trigger, and then every 2 hours, even while the backend hash
+   matches. A backend that reports the same expired bundle as Watchdog says
+   nothing about whether the agency has published a newer one: the backend may
+   simply not have loaded it. Only the feed URL can tell. In server mode one
+   expired agency is enough to start these downloads for the whole backend,
+   because the agencies share one feed.
 
    The day is counted from the last time the hash worked, whether it matched
    or not. The clock starts when Watchdog first sees the backend and restarts
@@ -87,7 +92,18 @@ after a metadata outage. It ends once the backend has reported another hash
 for 10 minutes, so a rollback after a deployment that ran that long refreshes
 right away. A rollback sooner than that, to a bundle that already started a
 campaign within the last hour, cannot be told apart from a stale node behind a
-load balancer, so it waits for the hourly retry (at most one hour). The shared metadata request is skipped
+load balancer, so it waits for the hourly retry (at most one hour).
+
+When the backend reports the hash of the bundle that Watchdog's current bundle
+replaced, Watchdog is ahead of the backend: it already holds the newer bundle,
+for example after step 4 found one the backend has not loaded. Downloading the
+feed again would only fetch the same newer bundle, so no campaign starts at
+once. The hourly retry still runs, because the newer bundle may have been a
+mistake the agency has since reverted on the feed URL. Watchdog logs this once
+at warn level, and withholds static-derived metrics until the backend catches
+up (see [Expired or mismatched bundles](#expired-or-mismatched-bundles)). Once
+the backend has served Watchdog's current bundle, a later return to the older
+hash is a rollback and is followed like any other change. The shared metadata request is skipped
 while every entry for a backend is in collection backoff, and while the
 metadata read itself is in backoff. It resumes once an entry is ready and the
 metadata backoff has passed. A skipped request leaves the last hash-match observation intact. Neither skip delays the fallback download, which reads the feed URL rather than the backend.
@@ -129,7 +145,33 @@ A feed that is clearly broken enters conservative mode, without any change to us
 
 The last two rules count failed campaigns, and only fallback campaigns count toward them (see `staticTriggerPolicies`), because a one-off trigger such as startup or a configuration change says nothing about how a feed behaves over time. The first two rules look at single attempts, so they apply whatever started the campaign. Once a feed is conservative, every campaign ends after its first failed attempt, so a fallback download gives it a single try. Any successful attempt clears the state and restores the normal retry loop.
 
-When the agency-local date passes a bundle's latest service date, the bundle has expired. Watchdog then reports the schedule as unknown (`gtfs_schedule_available` 0), skips the vehicle pass, which attributes vehicles and checks bounds with the bundle, and deletes the gauges that pass writes: `realtime_vehicle_positions_count_gtfs_rt`, `gtfs_rt_tracked_vehicles_count`, `gtfs_rt_invalid_vehicle_coordinates`, `gtfs_rt_stopped_out_of_bounds_vehicles`, `gtfs_rt_vehicle_computed_speed`, `gtfs_rt_vehicle_speed_discrepancy_ratio`, `gtfs_rt_vehicle_source_timestamp_seconds`, `gtfs_rt_vehicle_speed_last_computed_timestamp_seconds` and `gtfs_rt_vehicle_state_last_changed_timestamp_seconds`. Counters are kept and simply stop increasing. In server mode the pass is shared by the merged bundle, so it is skipped only once every reported agency has expired, while the faster fallback starts as soon as one agency has expired. API ping, OBA API metrics, GTFS-RT fetch status and the expiration gauges (`gtfs_bundle_days_until_earliest_expiration` and `gtfs_bundle_days_until_latest_expiration`) keep reporting. Sentry receives one `fatal` event when a bundle expires, tagged `cause=refresh_failing` (the last refresh failed) or `cause=no_newer_bundle` (the last refresh succeeded, so the agency has not published a newer bundle), and one `info` event when it recovers.
+### Expired or mismatched bundles
+
+Watchdog withholds the metrics it derives from the static bundle in two cases:
+
+- **The bundle has expired:** the agency-local date has passed its latest
+  service date. An expired bundle schedules nothing, so its schedule would read
+  as "no service right now", and the realtime feed has usually moved on to the
+  trip and stop IDs of a newer bundle. This applies even when Watchdog and the
+  backend hold the same expired bundle: agreeing on it does not make it
+  current.
+- **The backend is behind:** Watchdog holds a newer bundle and the backend
+  still serves the one it replaced. Vehicles from the backend must not be
+  checked against a different bundle.
+
+While withheld, Watchdog reports the schedule as unknown (`gtfs_schedule_available` 0), skips the vehicle pass, which attributes vehicles and checks bounds with the bundle, and deletes the gauges that pass writes: `realtime_vehicle_positions_count_gtfs_rt`, `gtfs_rt_tracked_vehicles_count`, `gtfs_rt_invalid_vehicle_coordinates`, `gtfs_rt_stopped_out_of_bounds_vehicles`, `gtfs_rt_vehicle_computed_speed`, `gtfs_rt_vehicle_speed_discrepancy_ratio`, `gtfs_rt_vehicle_source_timestamp_seconds`, `gtfs_rt_vehicle_speed_last_computed_timestamp_seconds` and `gtfs_rt_vehicle_state_last_changed_timestamp_seconds`. Counters are kept and simply stop increasing. In server mode the pass is shared by the merged bundle, so it is skipped only once every reported agency is withheld. API ping, OBA API metrics, GTFS-RT fetch status and the expiration gauges (`gtfs_bundle_days_until_earliest_expiration` and `gtfs_bundle_days_until_latest_expiration`) keep reporting.
+
+Sentry receives one `fatal` event when metrics are withheld and one `info` event when they resume. The event's `cause` tag says which side has the problem. For an expired bundle the cause is decided only after a feed URL download that started after the expiry has finished (step 4 starts one at once), so it never rests on an old download:
+
+| `cause` | Situation | Who should act |
+|---|---|---|
+| `no_newer_bundle` | The feed URL still serves an expired bundle. Watchdog and the backend are both on it. | The agency |
+| `feed_unreachable` | The feed URL download failed, and the backend serves the same bundle or its hash is unknown. Neither side can get a current bundle. The `reason` tag says how it failed (for example `not_found`, `forbidden`, `timeout`, `invalid_zip`). | The agency, or whoever hosts the feed |
+| `refresh_failing` | The feed URL download failed while the backend serves a different bundle. Watchdog cannot load the bundle the backend uses. `reason` as above. | Watchdog's operator, or the feed host |
+| `backend_stale` | Watchdog downloaded a newer bundle and the backend still serves the one it replaced. | The backend's operator |
+| `feed_not_checked` | No feed URL download finished within an hour of the expiry. | Watchdog's operator |
+
+An expiry followed by Watchdog finding a newer bundle first reports `backend_stale` if the backend has not loaded it. If the backend already serves it, nothing is reported, because metrics resume as soon as both sides match.
 
 ## Computed Vehicle Speed
 
