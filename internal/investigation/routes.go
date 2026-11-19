@@ -23,6 +23,7 @@ func (s *InvestigationService) registerRoutes(router *httprouter.Router) {
 	s.get(router, "/v1/unmatched-stop-episodes/:episode_id", s.getUnmatchedStopEpisode)
 	s.get(router, "/v1/unmatched-stop-episodes/:episode_id/static-contexts", s.listUnmatchedStopEpisodeStaticContexts)
 	s.registerLoader(kindUnmatchedStopStaticContexts, loadStopStaticContexts)
+	s.get(router, "/v1/unmatched-trip-episodes/:episode_id", s.getUnmatchedTripEpisode)
 	s.get(router, "/v1/vehicles", s.listVehicles)
 	s.get(router, "/v1/vehicles/:vehicle_entity_id", s.getVehicle)
 	s.get(router, "/v1/vehicles/:vehicle_entity_id/anomaly-episodes", s.listVehicleAnomalyEpisodesForVehicle)
