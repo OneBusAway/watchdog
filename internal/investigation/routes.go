@@ -31,6 +31,9 @@ func (s *InvestigationService) registerRoutes(router *httprouter.Router) {
 	s.registerLoader(kindAgency, loadAgencies)
 	s.get(router, "/v1/servers/:server_id/vehicle-position-endpoints", s.listServerVehiclePositionEndpoints)
 	s.get(router, "/v1/episode-counts", s.getEpisodeCounts)
+	s.get(router, "/v1/reported-stops", s.listReportedStops)
+	s.get(router, "/v1/reported-stops/:reported_stop_id", s.getReportedStop)
+	s.registerLoader(kindReportedStop, loadReportedStops)
 }
 
 // get registers a read-only endpoint: it serves GET and HEAD requests for
