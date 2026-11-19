@@ -33,6 +33,7 @@ func (s *InvestigationService) registerRoutes(router *httprouter.Router) {
 	s.get(router, "/v1/episode-counts", s.getEpisodeCounts)
 	s.get(router, "/v1/reported-stops", s.listReportedStops)
 	s.get(router, "/v1/reported-stops/:reported_stop_id", s.getReportedStop)
+	s.get(router, "/v1/reported-stops/:reported_stop_id/unmatched-stop-episodes", s.listReportedStopEpisodes)
 	s.registerLoader(kindReportedStop, loadReportedStops)
 }
 

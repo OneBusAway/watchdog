@@ -123,6 +123,31 @@ func unmatchedStopEpisodeRepresentation(row dbgen.UnmatchedStopEpisodeView, l it
 	return ep
 }
 
+// unmatchedStopEpisodePage reads one page of ListUnmatchedStopEpisodes for E14 and E10.
+func (s *InvestigationService) unmatchedStopEpisodePage(ctx context.Context, q *dbgen.Queries, r *http.Request,
+	params dbgen.ListUnmatchedStopEpisodesParams, p page, inc include) (unmatchedStopEpisodesBody, error) {
+	var body unmatchedStopEpisodesBody
+	rows, err := q.ListUnmatchedStopEpisodes(ctx, params)
+	if err != nil {
+		return body, err
+	}
+	rows, hasMore := trimPage(rows, p)
+	body.Items = make([]unmatchedStopEpisode, 0, len(rows))
+	all := make([]itemLinks, 0, len(rows))
+	for _, row := range rows {
+		l := unmatchedStopEpisodeLinks(row)
+		all = append(all, l)
+		body.Items = append(body.Items, unmatchedStopEpisodeRepresentation(row, l))
+	}
+	var lastID int64
+	if len(rows) > 0 {
+		lastID = rows[len(rows)-1].UnmatchedStopEpisodeID
+	}
+	body.Links = pageLinks(r, lastID, hasMore)
+	body.Included, err = s.loadIncluded(ctx, q, all, inc)
+	return body, err
+}
+
 // getUnmatchedStopEpisode serves GET /v1/unmatched-stop-episodes/:episode_id.
 func (s *InvestigationService) getUnmatchedStopEpisode(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	id, ok := pathID(ps, "episode_id")
@@ -191,24 +216,8 @@ func (s *InvestigationService) listUnmatchedStopEpisodes(w http.ResponseWriter, 
 
 	var body unmatchedStopEpisodesBody
 	err := s.read(r.Context(), func(ctx context.Context, q *dbgen.Queries) error {
-		rows, err := q.ListUnmatchedStopEpisodes(ctx, params)
-		if err != nil {
-			return err
-		}
-		rows, hasMore := trimPage(rows, p)
-		body.Items = make([]unmatchedStopEpisode, 0, len(rows))
-		all := make([]itemLinks, 0, len(rows))
-		for _, row := range rows {
-			l := unmatchedStopEpisodeLinks(row)
-			all = append(all, l)
-			body.Items = append(body.Items, unmatchedStopEpisodeRepresentation(row, l))
-		}
-		var lastID int64
-		if len(rows) > 0 {
-			lastID = rows[len(rows)-1].UnmatchedStopEpisodeID
-		}
-		body.Links = pageLinks(r, lastID, hasMore)
-		body.Included, err = s.loadIncluded(ctx, q, all, inc)
+		var err error
+		body, err = s.unmatchedStopEpisodePage(ctx, q, r, params, p, inc)
 		return err
 	})
 	if err != nil {
