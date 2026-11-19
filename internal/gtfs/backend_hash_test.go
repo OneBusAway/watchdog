@@ -267,13 +267,13 @@ func TestBackendHashRetryLimitAcrossRuns(t *testing.T) {
 		h.body.Store(withExtraZipEntry(t, bundleA))
 		h.run(t, h.server, StaticRefreshFallback)
 		h.ticks(t, 6, 30*time.Second)
-		h.wantDownloads(t, 3, "one campaign while the backend lags")
+		h.wantDownloads(t, 2, "no campaign while the backend lags")
 		h.hash.Store(bundleHash(h.body.Load().([]byte)))
 		h.ticks(t, 4, 30*time.Second)
 		h.body.Store(bundleA)
 		h.hash.Store(bundleHash(bundleA))
 		h.ticks(t, 4, 30*time.Second)
-		h.wantDownloads(t, 3, "rollback inside the retry interval")
+		h.wantDownloads(t, 2, "rollback inside the retry interval")
 		h.ticks(t, int(backendHashRetryEvery/(30*time.Second)), 30*time.Second)
 		h.tick(t, 30*time.Second)
 		h.wantMatch(t, true, "rolled back to A after the retry")
@@ -291,7 +291,9 @@ func TestBackendHashRevertedFeed(t *testing.T) {
 	h.body.Store(withExtraZipEntry(t, bundleA))
 	h.run(t, h.server, StaticRefreshFallback)
 	h.ticks(t, 4, 30*time.Second)
-	h.wantDownloads(t, 3, "one campaign for the mismatch")
+	// The backend serves A, the bundle Watchdog replaced, so Watchdog waits
+	// for it instead of downloading again at once.
+	h.wantDownloads(t, 2, "no immediate campaign while Watchdog is ahead")
 	// The feed URL is put back; the backend never changed.
 	h.body.Store(bundleA)
 	h.ticks(t, 10, 30*time.Second)
@@ -299,7 +301,7 @@ func TestBackendHashRevertedFeed(t *testing.T) {
 	h.ticks(t, int(backendHashRetryEvery/(30*time.Second)), 30*time.Second)
 	h.tick(t, 30*time.Second)
 	h.wantMatch(t, true, "after the hourly retry")
-	h.wantDownloads(t, 4, "one retry")
+	h.wantDownloads(t, 3, "one retry")
 }
 
 // TestBackendHashRollbackAfterDeployment is the sequence from #317: a refresh
@@ -316,7 +318,12 @@ func TestBackendHashRollbackAfterDeployment(t *testing.T) {
 	h.body.Store(bundleB)
 	h.run(t, h.server, StaticRefreshFallback)
 	h.ticks(t, 6, 30*time.Second)
-	h.wantDownloads(t, 3, "one campaign while the backend lags")
+	// The backend still reports A, the bundle B replaced: Watchdog is ahead,
+	// so it waits for the backend instead of downloading B again.
+	h.wantDownloads(t, 2, "no campaign while the backend lags")
+	if got := h.service.BackendBundleRelation(h.server); got != BackendBundleBehind {
+		t.Fatalf("relation while the backend lags = %v, want behind", got)
+	}
 	// The redeploy finishes on B, which runs for a while.
 	h.hash.Store(bundleHash(bundleB))
 	h.ticks(t, int(backendHashSettledFor/(30*time.Second))+1, 30*time.Second)
@@ -325,7 +332,8 @@ func TestBackendHashRollbackAfterDeployment(t *testing.T) {
 	h.body.Store(bundleA)
 	h.hash.Store(hashA)
 	h.ticks(t, 4, 30*time.Second)
-	h.wantDownloads(t, 4, "rollback")
+	// The backend had caught up with B, so A is now a rollback to follow.
+	h.wantDownloads(t, 3, "rollback")
 	h.tick(t, 30*time.Second)
 	h.wantMatch(t, true, "rolled back to A")
 }

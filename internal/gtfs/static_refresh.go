@@ -94,9 +94,17 @@ type staticRefreshCoordinator struct {
 	published        map[string]publishedStaticContent
 	snapshotContent  map[string]publishedStaticContent
 	mismatches       map[string]agencyMismatchState
-	policy           staticRefreshRetryPolicy
-	nextGeneration   uint64
-	now              func() time.Time
+	// superseded is, per server, the snapshot that its current snapshot
+	// replaced, so a backend still serving it is recognised as behind.
+	superseded map[string]publishedStaticContent
+	// relations is, per server, how the backend's bundle related to the
+	// snapshot at the last usable hash comparison.
+	relations map[string]backendRelationState
+	// feedChecks is, per server, the result of the last completed feed attempt.
+	feedChecks     map[string]feedCheckState
+	policy         staticRefreshRetryPolicy
+	nextGeneration uint64
+	now            func() time.Time
 	// checkInterval is the collection fetch interval, which sets how long a
 	// gap between backend hash observations may be before a run restarts.
 	checkInterval time.Duration
@@ -112,6 +120,9 @@ func newStaticRefreshCoordinator() *staticRefreshCoordinator {
 		histories:        make(map[string]*staticFeedFailureHistory),
 		published:        make(map[string]publishedStaticContent),
 		mismatches:       make(map[string]agencyMismatchState),
+		superseded:       make(map[string]publishedStaticContent),
+		relations:        make(map[string]backendRelationState),
+		feedChecks:       make(map[string]feedCheckState),
 		policy:           defaultStaticRefreshRetryPolicy,
 		now:              time.Now,
 		checkInterval:    30 * time.Second,
@@ -226,6 +237,21 @@ func (c *staticRefreshCoordinator) reconcile(servers []models.ObaServer) {
 			delete(c.mismatches, key)
 		}
 	}
+	for key, content := range c.superseded {
+		if configured[key] != content.fingerprint {
+			delete(c.superseded, key)
+		}
+	}
+	for key, state := range c.relations {
+		if configured[key] != state.fingerprint {
+			delete(c.relations, key)
+		}
+	}
+	for key, state := range c.feedChecks {
+		if configured[key] != state.fingerprint {
+			delete(c.feedChecks, key)
+		}
+	}
 }
 
 // unchanged reports whether hash and the server's static configuration
@@ -244,11 +270,21 @@ func (c *staticRefreshCoordinator) recordPublished(ctx context.Context, server m
 	if ctx.Err() != nil {
 		return false
 	}
+	key := server.ServerKey()
 	content := publishedStaticContent{fingerprint: staticConfigFingerprint(server), hash: hash}
-	c.published[server.ServerKey()] = content
+	if previous, ok := c.snapshotContent[key]; ok && previous.fingerprint == content.fingerprint && previous.hash != hash {
+		// A newer bundle replaced the snapshot. A backend still reporting the
+		// old one's hash is behind Watchdog, not ahead of it.
+		c.superseded[key] = previous
+		delete(c.relations, key)
+	} else if !ok || previous.fingerprint != content.fingerprint {
+		delete(c.superseded, key)
+		delete(c.relations, key)
+	}
+	c.published[key] = content
 	// Retain the identity of the snapshot still in use if a later refresh
 	// fails and invalidates only the unchanged-download optimization.
-	c.snapshotContent[server.ServerKey()] = content
+	c.snapshotContent[key] = content
 	return true
 }
 
@@ -474,6 +510,7 @@ func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server mode
 				if !recorded {
 					return
 				}
+				gs.refreshCoordinator.recordFeedCheck(server, attemptedAt, failure)
 				gs.reportStaticFeedRefresh(server, feedURL, StaticFeedRefreshObservation{AttemptedAt: attemptedAt, FailureSince: history.failureSince, Stage: failure.Stage, Reason: failure.Reason, Conservative: history.conservative})
 				maxRetryAfter = failure.RetryAfter
 			}
@@ -494,6 +531,7 @@ func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server mode
 				if !gs.refreshCoordinator.recordCampaignSuccess(ctx, server, feedURL) {
 					return
 				}
+				gs.refreshCoordinator.recordFeedCheck(server, attemptedAt, nil)
 				gs.reportStaticFeedRefresh(server, feedURL, StaticFeedRefreshObservation{AttemptedAt: attemptedAt, Success: true, ContentHash: hash})
 				gs.reportStaticRefresh(server, StaticRefreshObservation{AttemptedAt: attemptedAt, Success: true})
 			}
@@ -526,6 +564,7 @@ func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server mode
 			if !recorded {
 				return
 			}
+			gs.refreshCoordinator.recordFeedCheck(server, attemptedAt, &failure)
 			gs.reportStaticFeedRefresh(server, feedURL, StaticFeedRefreshObservation{AttemptedAt: attemptedAt, FailureSince: history.failureSince, Stage: failure.Stage, Reason: failure.Reason, Conservative: history.conservative})
 			lastFailure = &failure
 			cache.Delete(feedURL)

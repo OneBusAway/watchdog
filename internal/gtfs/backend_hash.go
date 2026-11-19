@@ -109,18 +109,49 @@ func (gs *GtfsService) CheckBackendBundles(ctx, campaignCtx context.Context, ser
 			c.mu.Lock()
 			content, ok := c.snapshotContent[server.ServerKey()]
 			localHash := ""
+			relation := BackendBundleUnknown
 			if ok && content.fingerprint == fingerprint {
 				localHash = content.hash
 				value := localHash == hash
 				match = &value
+				switch {
+				case value:
+					relation = BackendBundleMatch
+					// The backend caught up. From now on, the replaced bundle's
+					// hash means a rollback, which is a real change to follow.
+					delete(c.superseded, server.ServerKey())
+				case c.supersedesLocked(server.ServerKey(), fingerprint, hash):
+					relation = BackendBundleBehind
+				default:
+					relation = BackendBundleDiffers
+				}
 			}
 			run, startCampaign, warn := c.observeBackendRunLocked(server, fingerprint, hash, localHash, match)
+			if relation == BackendBundleBehind {
+				// Watchdog already replaced the bundle the backend serves, so
+				// downloading the feed now would fetch the same newer bundle
+				// again: wait for the backend to load it. The hourly retry
+				// still runs, because the newer bundle may have been a mistake
+				// that the agency has since reverted on the feed URL.
+				campaignKey := backendCampaignKey{server.ServerKey(), fingerprint, hash, localHash}
+				if startCampaign && c.backendCampaigns[campaignKey].at.IsZero() {
+					c.backendCampaigns[campaignKey] = backendCampaign{at: run.lastSeen}
+					startCampaign = false
+				}
+				warn = false
+			}
+			relationChanged := c.setRelationLocked(server.ServerKey(), fingerprint, relation)
 			c.mu.Unlock()
 			gs.StaticStore.mu.RUnlock()
 			if match != nil && *match {
 				// The backend serves the bundle Watchdog holds, so the
 				// snapshot is confirmed current without downloading it.
 				gs.StaticStore.TouchServerSnapshot(server, time.Now().UTC())
+			}
+			if relationChanged && relation == BackendBundleBehind {
+				gs.Logger.Warn("Backend still serves the static GTFS bundle Watchdog replaced; waiting for it to load the newer one",
+					"server_name", server.ServerName, "server_url", utils.SanitizeServerURL(server.ObaBaseURL),
+					"agency_id", server.AgencyID, "agency_name", server.AgencyName, "backend_hash", hash, "local_hash", localHash)
 			}
 			if warn {
 				gs.Logger.Warn("Backend static GTFS bundle still differs from the configured feed after refresh",
