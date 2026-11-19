@@ -18,7 +18,7 @@ const (
 
 // unmatchedStopEpisodeIncludable uses the kinds the agency, server and reported-stop endpoints register.
 var unmatchedStopEpisodeIncludable = map[string]resourceKind{
-	"reported_stop":    "reported_stop",
+	"reported_stop":    kindReportedStop,
 	"agency":           kindAgency,
 	"server":           kindServer,
 	"opening_response": kindOBAMetricsResponse,
@@ -62,7 +62,7 @@ func unmatchedStopEpisodeLinks(row dbgen.UnmatchedStopEpisodeView) itemLinks {
 	l := itemLinks{
 		"self": {URL: self},
 		"reported_stop": {
-			Kind: "reported_stop",
+			Kind: kindReportedStop,
 			ID:   row.ReportedStopID,
 			URL:  "/v1/reported-stops/" + strconv.FormatInt(row.ReportedStopID, 10),
 		},

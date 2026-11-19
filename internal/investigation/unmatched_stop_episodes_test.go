@@ -51,7 +51,7 @@ func newEpisodesRouter(t *testing.T, pool *pgxpool.Pool, kinds ...resourceKind) 
 }
 
 // allEpisodeKinds are the kinds behind every includable episode link.
-var allEpisodeKinds = []resourceKind{"reported_stop", kindAgency, kindServer, kindOBAMetricsResponse, kindUnmatchedStopStaticContexts}
+var allEpisodeKinds = []resourceKind{kindReportedStop, kindAgency, kindServer, kindOBAMetricsResponse, kindUnmatchedStopStaticContexts}
 
 // stop is one reported stop and the agency and server it belongs to.
 type stop struct {
