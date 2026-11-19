@@ -28,9 +28,10 @@ Current-value panels must match each source's freshness timestamp (and, for GTFS
 
 ## Static GTFS
 
-Static GTFS does not use the realtime window. There is no scheduled daily
-download. Each collection tick decides, once per backend, how the bundle is kept
-current:
+Static GTFS does not use the realtime window. Every feed URL is downloaded at
+least once a day, whatever the backend reports, and more often when the backend
+hash shows a change or the bundle has expired. Each collection tick decides,
+once per backend, how the bundle is kept current:
 
 1. Read the backend metadata hash, unless an earlier failure put the read in
    backoff. Only backends whose entries all share one static feed have a
@@ -41,26 +42,29 @@ current:
    below).
 2. A failed read backs off on its own, separately from the API ping backoff, so
    a broken metadata endpoint never stops the rest of collection. A transient
-   failure (network error, timeout, 408, 429 or 5xx) backs off exponentially
+   failure (network error, timeout, a response body that stops arriving, 408,
+   429 or 5xx) backs off exponentially
    from the fetch interval up to 10 minutes. A backend with no usable hash
    (404, another 4xx, malformed JSON, a missing or invalid hash) is not asked
    again for an hour.
-3. If the hash has not worked for a day, Watchdog downloads the bundle anyway
-   with the `fallback` trigger, and repeats that daily while the hash stays
-   unusable. A byte-identical download confirms the bundle without re-parsing
-   it.
+3. If the feed URL has not been downloaded for a day, Watchdog downloads it
+   with the `fallback` trigger, whatever the hash says. The day counts from
+   the last download of the feed URL, whatever started it (startup, a
+   `backend_changed` campaign, a configuration change, an earlier fallback),
+   so a recent download is not repeated. A good hash does not put it off: a
+   matching hash only shows that Watchdog and the backend agree, not that the
+   agency has not published a newer bundle, and this daily download is what
+   recovers a schedule left unavailable by a failed campaign, a failed startup
+   download, or a backend that never loads a newer bundle. A byte-identical
+   download confirms the bundle without re-parsing it.
 4. Once the bundle has expired, Watchdog downloads the feed URL at once with
    the `fallback` trigger, and then every 2 hours, even while the backend hash
    matches. A backend that reports the same expired bundle as Watchdog says
    nothing about whether the agency has published a newer one: the backend may
    simply not have loaded it. Only the feed URL can tell. In server mode one
    expired agency is enough to start these downloads for the whole backend,
-   because the agencies share one feed.
-
-   The day is counted from the last time the hash worked, whether it matched
-   or not. The clock starts when Watchdog first sees the backend and restarts
-   at each fallback start. A successful download started by another trigger
-   does not restart it.
+   because the agencies share one feed. An agency that has left the merged
+   bundle no longer counts.
 
 Startup, a configuration change and an agency-coverage mismatch still start a
 download at once.
