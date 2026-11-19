@@ -151,6 +151,45 @@ func (s *InvestigationService) getReportedStop(w http.ResponseWriter, r *http.Re
 	s.writeJSON(w, r, body, cache)
 }
 
+// listReportedStopEpisodes serves GET /v1/reported-stops/:reported_stop_id/unmatched-stop-episodes.
+func (s *InvestigationService) listReportedStopEpisodes(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	id, ok := pathID(ps, "reported_stop_id")
+	if !ok {
+		writeNotFound(w)
+		return
+	}
+	var bad invalidParams
+	values := parseQuery(r, &bad, "status", "active_from", "active_to", "page_size", "cursor", "include")
+	params := dbgen.ListUnmatchedStopEpisodesParams{
+		ReportedStopID: &id,
+		Status:         paramEnum(values, "status", []string{"open", "closed"}, &bad),
+	}
+	win := s.parseWindow(values, unboundedWindowOptions("active_from", "active_to"), &bad)
+	inc := s.parseInclude(values, unmatchedStopEpisodeIncludable, &bad)
+	p := parsePage(values, &bad)
+	if len(bad) > 0 {
+		writeInvalidParams(w, bad)
+		return
+	}
+	params.ActiveFrom, params.ActiveTo = win.From, win.To
+	params.AfterID, params.PageLimit = p.AfterID, p.Limit()
+
+	var body unmatchedStopEpisodesBody
+	err := s.read(r.Context(), func(ctx context.Context, q *dbgen.Queries) error {
+		if _, err := q.GetReportedStop(ctx, id); err != nil {
+			return err
+		}
+		var err error
+		body, err = s.unmatchedStopEpisodePage(ctx, q, r, params, p, inc)
+		return err
+	})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.writeJSON(w, r, body, cacheShort())
+}
+
 // loadReportedStops is the include loader for kindReportedStop.
 func loadReportedStops(ctx context.Context, q *dbgen.Queries, ids []int64) (map[int64]any, error) {
 	rows, err := q.ListReportedStopsByIDs(ctx, ids)
