@@ -212,7 +212,9 @@ func (s *InvestigationService) listVehicleAnomalyEpisodes(w http.ResponseWriter,
 		CloseReason:       paramEnum(values, "close_reason", vehicleCloseReasons, &bad),
 	}
 	// A feed vehicle ID is only unique within one endpoint, so it needs a scope.
-	if values.Has("vehicle_id") && !values.Has("endpoint_id") && !values.Has("server_id") {
+	// An empty vehicle_id is already reported by paramString, so it is not
+	// reported a second time here.
+	if params.ExternalVehicleID != nil && !values.Has("endpoint_id") && !values.Has("server_id") {
 		bad.add("vehicle_id", "requires endpoint_id or server_id")
 	}
 	statusOpen := params.Status != nil && *params.Status == "open"

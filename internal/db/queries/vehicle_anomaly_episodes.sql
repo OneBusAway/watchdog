@@ -8,7 +8,7 @@ WHERE v.vehicle_anomaly_episode_id = $1;
 
 -- name: ListVehicleAnomalyEpisodes :many
 -- One page of vehicle anomaly episodes, newest first. E24 uses every filter;
--- E23 sets vehicle_entity_id and leaves the window unbounded.
+-- E23 sets vehicle_entity_id, with an optional window that has no default or maximum.
 SELECT sqlc.embed(v), opening_link.vehicle_position_evidence_id AS opening_evidence_id
 FROM vehicle_anomaly_episode_view v
 LEFT JOIN vehicle_anomaly_episode_evidence opening_link

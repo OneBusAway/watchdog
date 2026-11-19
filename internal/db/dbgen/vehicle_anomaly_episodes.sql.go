@@ -100,7 +100,7 @@ type ListVehicleAnomalyEpisodesRow struct {
 }
 
 // One page of vehicle anomaly episodes, newest first. E24 uses every filter;
-// E23 sets vehicle_entity_id and leaves the window unbounded.
+// E23 sets vehicle_entity_id, with an optional window that has no default or maximum.
 func (q *Queries) ListVehicleAnomalyEpisodes(ctx context.Context, arg ListVehicleAnomalyEpisodesParams) ([]ListVehicleAnomalyEpisodesRow, error) {
 	rows, err := q.db.Query(ctx, listVehicleAnomalyEpisodes,
 		arg.ServerID,
