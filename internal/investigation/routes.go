@@ -25,6 +25,7 @@ func (s *InvestigationService) registerRoutes(router *httprouter.Router) {
 	s.registerLoader(kindUnmatchedStopStaticContexts, loadStopStaticContexts)
 	s.get(router, "/v1/vehicles", s.listVehicles)
 	s.get(router, "/v1/vehicles/:vehicle_entity_id", s.getVehicle)
+	s.get(router, "/v1/vehicles/:vehicle_entity_id/anomaly-episodes", s.listVehicleAnomalyEpisodesForVehicle)
 	s.registerLoader("vehicle", s.loadVehicles)
 	s.get(router, "/v1/vehicle-anomaly-episodes/:episode_id", s.getVehicleAnomalyEpisode)
 	s.get(router, "/v1/investigation", s.getInvestigationRoot)

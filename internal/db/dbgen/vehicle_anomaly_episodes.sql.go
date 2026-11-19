@@ -7,6 +7,7 @@ package dbgen
 
 import (
 	"context"
+	"time"
 )
 
 const getVehicleAnomalyEpisode = `-- name: GetVehicleAnomalyEpisode :one
@@ -52,4 +53,107 @@ func (q *Queries) GetVehicleAnomalyEpisode(ctx context.Context, vehicleAnomalyEp
 		&i.OpeningEvidenceID,
 	)
 	return i, err
+}
+
+const listVehicleAnomalyEpisodes = `-- name: ListVehicleAnomalyEpisodes :many
+SELECT v.vehicle_anomaly_episode_id, v.vehicle_entity_id, v.anomaly_type_id, v.rule_version_id, v.opening_response_id, v.closing_response_id, v.close_reason, v.server_id, v.opened_at, v.closed_at, v.vehicle_id, v.endpoint_id, v.anomaly_code, v.agency_id, v.attribution_reason, v.position_validation_reason, v.expected_schedule_state, v.route_id, v.gtfs_static_version_id, v.bounding_box_version_id, v.previous_episode_count, v.previous_closed_at, opening_link.vehicle_position_evidence_id AS opening_evidence_id
+FROM vehicle_anomaly_episode_view v
+LEFT JOIN vehicle_anomaly_episode_evidence opening_link
+    ON opening_link.vehicle_anomaly_episode_id = v.vehicle_anomaly_episode_id
+   AND opening_link.evidence_role = 'opening'
+WHERE ($1::bigint IS NULL OR v.server_id = $1::bigint)
+  AND ($2::bigint IS NULL OR v.agency_id = $2::bigint)
+  AND ($3::bigint IS NULL OR v.endpoint_id = $3::bigint)
+  AND ($4::bigint IS NULL OR v.vehicle_entity_id = $4::bigint)
+  AND ($5::text IS NULL OR v.vehicle_id = $5::text)
+  AND ($6::text IS NULL OR v.anomaly_code = $6::text)
+  AND ($7::text IS NULL
+       OR ($7::text = 'open' AND v.closing_response_id IS NULL)
+       OR ($7::text = 'closed' AND v.closing_response_id IS NOT NULL))
+  AND ($8::timestamptz IS NULL OR v.opened_at < $8::timestamptz)
+  AND ($9::timestamptz IS NULL OR v.closed_at IS NULL
+       OR v.closed_at >= $9::timestamptz)
+  AND ($10::text IS NULL OR v.close_reason = $10::text)
+  AND ($11::bigint IS NULL OR v.vehicle_anomaly_episode_id < $11::bigint)
+ORDER BY v.vehicle_anomaly_episode_id DESC
+LIMIT $12
+`
+
+type ListVehicleAnomalyEpisodesParams struct {
+	ServerID          *int64
+	AgencyID          *int64
+	EndpointID        *int64
+	VehicleEntityID   *int64
+	ExternalVehicleID *string
+	AnomalyCode       *string
+	Status            *string
+	ActiveTo          *time.Time
+	ActiveFrom        *time.Time
+	CloseReason       *string
+	AfterID           *int64
+	PageLimit         int32
+}
+
+type ListVehicleAnomalyEpisodesRow struct {
+	VehicleAnomalyEpisodeView VehicleAnomalyEpisodeView
+	OpeningEvidenceID         *int64
+}
+
+// One page of vehicle anomaly episodes, newest first. E24 uses every filter;
+// E23 sets vehicle_entity_id and leaves the window unbounded.
+func (q *Queries) ListVehicleAnomalyEpisodes(ctx context.Context, arg ListVehicleAnomalyEpisodesParams) ([]ListVehicleAnomalyEpisodesRow, error) {
+	rows, err := q.db.Query(ctx, listVehicleAnomalyEpisodes,
+		arg.ServerID,
+		arg.AgencyID,
+		arg.EndpointID,
+		arg.VehicleEntityID,
+		arg.ExternalVehicleID,
+		arg.AnomalyCode,
+		arg.Status,
+		arg.ActiveTo,
+		arg.ActiveFrom,
+		arg.CloseReason,
+		arg.AfterID,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListVehicleAnomalyEpisodesRow
+	for rows.Next() {
+		var i ListVehicleAnomalyEpisodesRow
+		if err := rows.Scan(
+			&i.VehicleAnomalyEpisodeView.VehicleAnomalyEpisodeID,
+			&i.VehicleAnomalyEpisodeView.VehicleEntityID,
+			&i.VehicleAnomalyEpisodeView.AnomalyTypeID,
+			&i.VehicleAnomalyEpisodeView.RuleVersionID,
+			&i.VehicleAnomalyEpisodeView.OpeningResponseID,
+			&i.VehicleAnomalyEpisodeView.ClosingResponseID,
+			&i.VehicleAnomalyEpisodeView.CloseReason,
+			&i.VehicleAnomalyEpisodeView.ServerID,
+			&i.VehicleAnomalyEpisodeView.OpenedAt,
+			&i.VehicleAnomalyEpisodeView.ClosedAt,
+			&i.VehicleAnomalyEpisodeView.VehicleID,
+			&i.VehicleAnomalyEpisodeView.EndpointID,
+			&i.VehicleAnomalyEpisodeView.AnomalyCode,
+			&i.VehicleAnomalyEpisodeView.AgencyID,
+			&i.VehicleAnomalyEpisodeView.AttributionReason,
+			&i.VehicleAnomalyEpisodeView.PositionValidationReason,
+			&i.VehicleAnomalyEpisodeView.ExpectedScheduleState,
+			&i.VehicleAnomalyEpisodeView.RouteID,
+			&i.VehicleAnomalyEpisodeView.GtfsStaticVersionID,
+			&i.VehicleAnomalyEpisodeView.BoundingBoxVersionID,
+			&i.VehicleAnomalyEpisodeView.PreviousEpisodeCount,
+			&i.VehicleAnomalyEpisodeView.PreviousClosedAt,
+			&i.OpeningEvidenceID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
