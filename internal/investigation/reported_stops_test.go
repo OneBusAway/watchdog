@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"slices"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/julienschmidt/httprouter"
@@ -78,7 +80,7 @@ func decodeJSON(t *testing.T, rec *httptest.ResponseRecorder) map[string]json.Ra
 
 func TestReportedStops_Registered(t *testing.T) {
 	s, router := newTestService(t)
-	for _, path := range []string{"/v1/reported-stops", "/v1/reported-stops/1"} {
+	for _, path := range []string{"/v1/reported-stops", "/v1/reported-stops/1", "/v1/reported-stops/1/unmatched-stop-episodes"} {
 		for _, method := range []string{http.MethodGet, http.MethodHead} {
 			if h, _, _ := router.Lookup(method, path); h == nil {
 				t.Errorf("%s %s is not registered", method, path)
@@ -425,4 +427,154 @@ func TestReportedStopLoader(t *testing.T) {
 			t.Errorf("reported stop %d: loaded\n%s\nGET returned\n%s", id, data, rec.Body)
 		}
 	}
+}
+
+// newReportedStopEpisodesRouter mounts E10 without the request pipeline.
+func newReportedStopEpisodesRouter(t *testing.T, pool *pgxpool.Pool) http.Handler {
+	t.Helper()
+	s, _ := newTestService(t)
+	s.Pool = pool
+	s.now = func() time.Time { return episodesNow }
+	router := httprouter.New()
+	router.GET("/v1/reported-stops/:reported_stop_id/unmatched-stop-episodes", s.listReportedStopEpisodes)
+	router.HEAD("/v1/reported-stops/:reported_stop_id/unmatched-stop-episodes", s.listReportedStopEpisodes)
+	return router
+}
+
+func reportedStopEpisodesPath(id int64) string {
+	return reportedStopPath(id) + "/unmatched-stop-episodes"
+}
+
+// reportedStopWindowQuery is s's E10 path with the active window [from, to).
+func reportedStopWindowQuery(s stop, from, to time.Time) string {
+	return reportedStopEpisodesPath(s.reportedStopID) + "?" + url.Values{
+		"active_from": {from.Format(time.RFC3339)},
+		"active_to":   {to.Format(time.RFC3339)},
+	}.Encode()
+}
+
+func TestListReportedStopEpisodes_ReturnsNewestFirst(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	s := newStop(t, pool)
+	a := s.episode(t, episodesNow.Add(-5*time.Hour), episodesNow.Add(-4*time.Hour))
+	b := s.episode(t, episodesNow.Add(-3*time.Hour), episodesNow.Add(-2*time.Hour))
+	c := s.episode(t, episodesNow.Add(-time.Hour), time.Time{})
+	wantIDs(t, newReportedStopEpisodesRouter(t, pool), reportedStopEpisodesPath(s.reportedStopID), c, b, a)
+}
+
+func TestListReportedStopEpisodes_Paginates(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	s := newStop(t, pool)
+	a := s.episode(t, episodesNow.Add(-5*time.Hour), episodesNow.Add(-4*time.Hour))
+	b := s.episode(t, episodesNow.Add(-3*time.Hour), episodesNow.Add(-2*time.Hour))
+	c := s.episode(t, episodesNow.Add(-time.Hour), time.Time{})
+	router := newReportedStopEpisodesRouter(t, pool)
+
+	first := decodeEpisodeBody(t, doGet(t, router, reportedStopEpisodesPath(s.reportedStopID)+"?page_size=2", nil))
+	if got := listIDs(t, first); !reflect.DeepEqual(got, []int64{c, b}) {
+		t.Errorf("first page = %v, want %v", got, []int64{c, b})
+	}
+	next, ok := first["links"].(map[string]any)["next"].(string)
+	if !ok {
+		t.Fatal("first page has no links.next")
+	}
+	second := decodeEpisodeBody(t, doGet(t, router, next, nil))
+	if got := listIDs(t, second); !reflect.DeepEqual(got, []int64{a}) {
+		t.Errorf("second page = %v, want %v", got, []int64{a})
+	}
+	if _, ok := second["links"].(map[string]any)["next"]; ok {
+		t.Error("last page has links.next")
+	}
+}
+
+func TestListReportedStopEpisodes_EmptyResult(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	s := newStop(t, pool)
+	body := decodeEpisodeBody(t, doGet(t, newReportedStopEpisodesRouter(t, pool), reportedStopEpisodesPath(s.reportedStopID), nil))
+	if items, ok := body["items"].([]any); !ok || len(items) != 0 {
+		t.Errorf("items = %v, want []", body["items"])
+	}
+	if _, ok := body["links"].(map[string]any)["next"]; ok {
+		t.Error("empty page has links.next")
+	}
+}
+
+func TestListReportedStopEpisodes_RejectsBadPageSize(t *testing.T) {
+	router := newReportedStopEpisodesRouter(t, nil)
+	for _, size := range []string{"0", "201"} {
+		t.Run(size, func(t *testing.T) {
+			wantInvalidParam(t, doGet(t, router, reportedStopEpisodesPath(1)+"?page_size="+size, nil), "page_size")
+		})
+	}
+}
+
+func TestListReportedStopEpisodes_RejectsBadCursor(t *testing.T) {
+	router := newReportedStopEpisodesRouter(t, nil)
+	wantStatus(t, doGet(t, router, reportedStopEpisodesPath(1)+"?cursor=%%%", nil), http.StatusBadRequest)
+}
+
+func TestListReportedStopEpisodes_Filter_status(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	s := newStop(t, pool)
+	closed := s.episode(t, episodesNow.Add(-3*time.Hour), episodesNow.Add(-2*time.Hour))
+	open := s.episode(t, episodesNow.Add(-time.Hour), time.Time{})
+	router := newReportedStopEpisodesRouter(t, pool)
+	wantIDs(t, router, reportedStopEpisodesPath(s.reportedStopID)+"?status=open", open)
+	wantIDs(t, router, reportedStopEpisodesPath(s.reportedStopID)+"?status=closed", closed)
+}
+
+func TestListReportedStopEpisodes_RejectsUnknownParameter(t *testing.T) {
+	router := newReportedStopEpisodesRouter(t, nil)
+	wantInvalidParam(t, doGet(t, router, reportedStopEpisodesPath(1)+"?foo=1", nil), "foo")
+}
+
+func TestListReportedStopEpisodes_Head(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	s := newStop(t, pool)
+	s.episode(t, episodesNow.Add(-time.Hour), time.Time{})
+	wantEpisodeHead(t, newReportedStopEpisodesRouter(t, pool), reportedStopEpisodesPath(s.reportedStopID))
+}
+
+func TestListReportedStopEpisodes_WindowOverlap(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	s := newStop(t, pool)
+	from, to := time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC)
+	s.episode(t, from.Add(-3*time.Hour), from.Add(-2*time.Hour))
+	overlapping := s.episode(t, from.Add(-time.Hour), from.Add(time.Hour))
+	stillOpen := s.episode(t, from.Add(-5*time.Hour), time.Time{})
+	s.episode(t, to.Add(time.Hour), to.Add(2*time.Hour))
+	wantIDs(t, newReportedStopEpisodesRouter(t, pool), reportedStopWindowQuery(s, from, to), stillOpen, overlapping)
+}
+
+func TestListReportedStopEpisodes_WindowNeedsBothEnds(t *testing.T) {
+	router := newReportedStopEpisodesRouter(t, nil)
+	wantInvalidParam(t, doGet(t, router, reportedStopEpisodesPath(1)+"?active_from=2026-10-01T00:00:00Z", nil), "active_to")
+	same := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	wantInvalidParam(t, doGet(t, router, reportedStopWindowQuery(stop{reportedStopID: 1}, same, same), nil), "active_to")
+}
+
+func TestListReportedStopEpisodes_WindowRequiresOffset(t *testing.T) {
+	router := newReportedStopEpisodesRouter(t, nil)
+	wantInvalidParam(t, doGet(t, router,
+		reportedStopEpisodesPath(1)+"?active_from=2026-10-01T00:00:00&active_to=2026-10-02T00:00:00Z", nil), "active_from")
+}
+
+func TestListReportedStopEpisodes_NoDefaultWindow(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	s := newStop(t, pool)
+	id := s.episode(t, episodesNow.Add(-60*24*time.Hour-time.Hour), episodesNow.Add(-60*24*time.Hour))
+	wantIDs(t, newReportedStopEpisodesRouter(t, pool), reportedStopEpisodesPath(s.reportedStopID), id)
+}
+
+func TestListReportedStopEpisodes_OnlyThisStop(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	s := newStop(t, pool)
+	id := s.episode(t, episodesNow.Add(-time.Hour), time.Time{})
+	addStop(t, pool, s.serverID, s.agencyID, "1_99999").episode(t, episodesNow.Add(-time.Hour), time.Time{})
+	wantIDs(t, newReportedStopEpisodesRouter(t, pool), reportedStopEpisodesPath(s.reportedStopID), id)
+}
+
+func TestListReportedStopEpisodes_UnknownStop(t *testing.T) {
+	router := newReportedStopEpisodesRouter(t, dbtest.NewMigratedPool(t))
+	wantNotFound(t, doGet(t, router, reportedStopEpisodesPath(999), nil))
 }
