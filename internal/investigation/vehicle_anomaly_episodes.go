@@ -16,6 +16,9 @@ const (
 	kindVehicleAnomalyEpisodeEvidence resourceKind = "vehicle_anomaly_episode_evidence"
 )
 
+// vehicleAnomalyCodes are the seeded vehicle_anomaly_type codes, the values anomaly_type accepts.
+var vehicleAnomalyCodes = []string{"stale_source_timestamp", "invalid_coordinate", "stopped_out_of_bounds"}
+
 // vehicleAnomalyEpisodeIncludable uses "vehicle_response" for both responses, the kind the vehicle-position-response endpoint registers.
 var vehicleAnomalyEpisodeIncludable = map[string]resourceKind{
 	"vehicle":          "vehicle",

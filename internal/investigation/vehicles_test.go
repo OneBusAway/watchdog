@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/julienschmidt/httprouter"
@@ -498,4 +500,245 @@ func TestVehicleLoader(t *testing.T) {
 			t.Errorf("vehicle %d loaded as\n%s\nwant\n%s", id, loaded, wantJSON)
 		}
 	}
+}
+
+// newVehicleEpisodesRouter mounts E23 without the request pipeline.
+func newVehicleEpisodesRouter(t *testing.T, pool *pgxpool.Pool) http.Handler {
+	t.Helper()
+	s, _ := newTestService(t)
+	s.Pool = pool
+	s.now = func() time.Time { return episodesNow }
+	router := httprouter.New()
+	router.GET("/v1/vehicles/:vehicle_entity_id/anomaly-episodes", s.listVehicleAnomalyEpisodesForVehicle)
+	router.HEAD("/v1/vehicles/:vehicle_entity_id/anomaly-episodes", s.listVehicleAnomalyEpisodesForVehicle)
+	return router
+}
+
+func vehicleEpisodesPath(id int64) string {
+	return vehiclePath(id) + "/anomaly-episodes"
+}
+
+// vehicleEpisodesWindowQuery is the vehicle's E23 path with the active window [from, to).
+func vehicleEpisodesWindowQuery(id int64, from, to time.Time) string {
+	return vehicleEpisodesPath(id) + "?" + url.Values{
+		"active_from": {from.Format(time.RFC3339)},
+		"active_to":   {to.Format(time.RFC3339)},
+	}.Encode()
+}
+
+// vehicleEpisodeIDs lists the vehicle_anomaly_episode_id of each item in body.
+func vehicleEpisodeIDs(t *testing.T, body map[string]any) []int64 {
+	t.Helper()
+	ids := []int64{}
+	for _, item := range body["items"].([]any) {
+		ids = append(ids, int64(item.(map[string]any)["vehicle_anomaly_episode_id"].(float64)))
+	}
+	return ids
+}
+
+// wantVehicleEpisodeIDs checks that GET path lists exactly want, in order.
+func wantVehicleEpisodeIDs(t *testing.T, router http.Handler, path string, want ...int64) {
+	t.Helper()
+	if want == nil {
+		want = []int64{}
+	}
+	if got := vehicleEpisodeIDs(t, decodeEpisodeBody(t, doGet(t, router, path, nil))); !reflect.DeepEqual(got, want) {
+		t.Errorf("GET %s returned episodes %v, want %v", path, got, want)
+	}
+}
+
+func TestListVehicleAnomalyEpisodesForVehicle_Registered(t *testing.T) {
+	_, router := newTestService(t)
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		if h, _, _ := router.Lookup(method, "/v1/vehicles/1/anomaly-episodes"); h == nil {
+			t.Errorf("%s /v1/vehicles/1/anomaly-episodes is not registered", method)
+		}
+	}
+}
+
+func TestListVehicleAnomalyEpisodesForVehicle_ReturnsNewestFirst(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc := newAnomalyVehicle(t, pool)
+	a := closedAnomalyEpisode(t, vc, episodesNow.Add(-5*time.Hour), episodesNow.Add(-4*time.Hour), nil)
+	b := closedAnomalyEpisode(t, vc, episodesNow.Add(-3*time.Hour), episodesNow.Add(-2*time.Hour), nil)
+	c := openAnomalyEpisode(t, vc, episodesNow.Add(-time.Hour))
+	wantVehicleEpisodeIDs(t, newVehicleEpisodesRouter(t, pool), vehicleEpisodesPath(vc.vehicleEntity), c, b, a)
+}
+
+// TestListVehicleAnomalyEpisodesForVehicle_ItemMatchesDetail checks that an
+// item is exactly the E25 representation of the same episode.
+func TestListVehicleAnomalyEpisodesForVehicle_ItemMatchesDetail(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc := newAnomalyVehicle(t, pool)
+	agencyID := insertEpisodeAgency(t, pool, vc.serverID, "1")
+	closedAnomalyEpisode(t, vc, episodesNow.Add(-3*time.Hour), episodesNow.Add(-2*time.Hour), &agencyID)
+	id := openAnomalyEpisode(t, vc, episodesNow.Add(-time.Hour))
+	detail, _ := newVehicleAnomalyEpisodesRouter(t, pool)
+
+	list := decodeEpisodeBody(t, doGet(t, newVehicleEpisodesRouter(t, pool), vehicleEpisodesPath(vc.vehicleEntity), nil))
+	items := list["items"].([]any)
+	if len(items) != 2 {
+		t.Fatalf("items = %d, want 2", len(items))
+	}
+	for _, item := range items {
+		got := item.(map[string]any)
+		epID := int64(got["vehicle_anomaly_episode_id"].(float64))
+		want := decodeEpisodeBody(t, doGet(t, detail, vehicleAnomalyEpisodePath(epID), nil))
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("episode %d: item\n%v\ndetail\n%v", epID, got, want)
+		}
+	}
+	if got := vehicleEpisodeIDs(t, list)[0]; got != id {
+		t.Errorf("first item = %d, want %d", got, id)
+	}
+}
+
+func TestListVehicleAnomalyEpisodesForVehicle_Paginates(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc := newAnomalyVehicle(t, pool)
+	a := closedAnomalyEpisode(t, vc, episodesNow.Add(-5*time.Hour), episodesNow.Add(-4*time.Hour), nil)
+	b := closedAnomalyEpisode(t, vc, episodesNow.Add(-3*time.Hour), episodesNow.Add(-2*time.Hour), nil)
+	c := openAnomalyEpisode(t, vc, episodesNow.Add(-time.Hour))
+	router := newVehicleEpisodesRouter(t, pool)
+
+	first := decodeEpisodeBody(t, doGet(t, router, vehicleEpisodesPath(vc.vehicleEntity)+"?page_size=2", nil))
+	if got := vehicleEpisodeIDs(t, first); !reflect.DeepEqual(got, []int64{c, b}) {
+		t.Errorf("first page = %v, want %v", got, []int64{c, b})
+	}
+	next, ok := first["links"].(map[string]any)["next"].(string)
+	if !ok {
+		t.Fatal("first page has no links.next")
+	}
+	second := decodeEpisodeBody(t, doGet(t, router, next, nil))
+	if got := vehicleEpisodeIDs(t, second); !reflect.DeepEqual(got, []int64{a}) {
+		t.Errorf("second page = %v, want %v", got, []int64{a})
+	}
+	if _, ok := second["links"].(map[string]any)["next"]; ok {
+		t.Error("last page has links.next")
+	}
+}
+
+func TestListVehicleAnomalyEpisodesForVehicle_EmptyResult(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc := newAnomalyVehicle(t, pool)
+	path := vehicleEpisodesPath(vc.vehicleEntity)
+	rec := doGet(t, newVehicleEpisodesRouter(t, pool), path, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body)
+	}
+	body := decodeEpisodeBody(t, rec)
+	if items, ok := body["items"].([]any); !ok || len(items) != 0 {
+		t.Errorf("items = %v, want []", body["items"])
+	}
+	l := body["links"].(map[string]any)
+	if l["self"] != path {
+		t.Errorf("links.self = %v, want %s", l["self"], path)
+	}
+	if _, ok := l["next"]; ok {
+		t.Error("empty result has links.next")
+	}
+}
+
+func TestListVehicleAnomalyEpisodesForVehicle_RejectsBadPageSize(t *testing.T) {
+	router := newVehicleEpisodesRouter(t, nil)
+	for _, size := range []string{"0", "201"} {
+		wantInvalidParam(t, doGet(t, router, vehicleEpisodesPath(1)+"?page_size="+size, nil), "page_size")
+	}
+}
+
+func TestListVehicleAnomalyEpisodesForVehicle_RejectsBadCursor(t *testing.T) {
+	router := newVehicleEpisodesRouter(t, nil)
+	wantInvalidParam(t, doGet(t, router, vehicleEpisodesPath(1)+"?cursor=%25%25%25", nil), "cursor")
+}
+
+func TestListVehicleAnomalyEpisodesForVehicle_Filter_anomaly_type(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc := newAnomalyVehicle(t, pool)
+	stale := openAnomalyEpisode(t, vc, episodesNow.Add(-2*time.Hour))
+	invalid := vc.episode(t, "invalid_coordinate", episodesNow.Add(-time.Hour), time.Time{}, nil, nil)
+	router := newVehicleEpisodesRouter(t, pool)
+	path := vehicleEpisodesPath(vc.vehicleEntity)
+	wantVehicleEpisodeIDs(t, router, path+"?anomaly_type=stale_source_timestamp", stale)
+	wantVehicleEpisodeIDs(t, router, path+"?anomaly_type=invalid_coordinate", invalid)
+	wantVehicleEpisodeIDs(t, router, path+"?anomaly_type=stopped_out_of_bounds")
+	wantInvalidParam(t, doGet(t, router, path+"?anomaly_type=unknown", nil), "anomaly_type")
+}
+
+func TestListVehicleAnomalyEpisodesForVehicle_Filter_status(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc := newAnomalyVehicle(t, pool)
+	closed := closedAnomalyEpisode(t, vc, episodesNow.Add(-3*time.Hour), episodesNow.Add(-2*time.Hour), nil)
+	open := openAnomalyEpisode(t, vc, episodesNow.Add(-time.Hour))
+	router := newVehicleEpisodesRouter(t, pool)
+	path := vehicleEpisodesPath(vc.vehicleEntity)
+	wantVehicleEpisodeIDs(t, router, path+"?status=open", open)
+	wantVehicleEpisodeIDs(t, router, path+"?status=closed", closed)
+	wantInvalidParam(t, doGet(t, router, path+"?status=other", nil), "status")
+}
+
+func TestListVehicleAnomalyEpisodesForVehicle_RejectsUnknownParameter(t *testing.T) {
+	router := newVehicleEpisodesRouter(t, nil)
+	wantInvalidParam(t, doGet(t, router, vehicleEpisodesPath(1)+"?foo=1", nil), "foo")
+}
+
+func TestListVehicleAnomalyEpisodesForVehicle_Head(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc := newAnomalyVehicle(t, pool)
+	openAnomalyEpisode(t, vc, episodesNow.Add(-time.Hour))
+	router := newVehicleEpisodesRouter(t, pool)
+	path := vehicleEpisodesPath(vc.vehicleEntity)
+	wantEpisodeHead(t, router, path)
+	get := doGet(t, router, path, nil)
+	if got := get.Header().Get("Cache-Control"); got != "private, max-age=30" {
+		t.Errorf("Cache-Control = %q, want private, max-age=30", got)
+	}
+	if get.Header().Get("ETag") == "" {
+		t.Error("no ETag header")
+	}
+}
+
+func TestListVehicleAnomalyEpisodesForVehicle_WindowOverlap(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc := newAnomalyVehicle(t, pool)
+	from, to := time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC)
+	closedAnomalyEpisode(t, vc, from.Add(-3*time.Hour), from.Add(-2*time.Hour), nil)
+	overlapping := closedAnomalyEpisode(t, vc, from.Add(-time.Hour), from.Add(time.Hour), nil)
+	stillOpen := openAnomalyEpisode(t, vc, from.Add(-5*time.Hour))
+	closedAnomalyEpisode(t, vc, to.Add(time.Hour), to.Add(2*time.Hour), nil)
+	wantVehicleEpisodeIDs(t, newVehicleEpisodesRouter(t, pool),
+		vehicleEpisodesWindowQuery(vc.vehicleEntity, from, to), stillOpen, overlapping)
+}
+
+func TestListVehicleAnomalyEpisodesForVehicle_WindowNeedsBothEnds(t *testing.T) {
+	router := newVehicleEpisodesRouter(t, nil)
+	wantInvalidParam(t, doGet(t, router, vehicleEpisodesPath(1)+"?active_from=2026-10-01T00:00:00Z", nil), "active_to")
+	same := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	wantInvalidParam(t, doGet(t, router, vehicleEpisodesWindowQuery(1, same, same), nil), "active_to")
+}
+
+func TestListVehicleAnomalyEpisodesForVehicle_WindowRequiresOffset(t *testing.T) {
+	router := newVehicleEpisodesRouter(t, nil)
+	wantInvalidParam(t, doGet(t, router,
+		vehicleEpisodesPath(1)+"?active_from=2026-10-01T00:00:00&active_to=2026-10-02T00:00:00Z", nil), "active_from")
+}
+
+func TestListVehicleAnomalyEpisodesForVehicle_NoDefaultWindow(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc := newAnomalyVehicle(t, pool)
+	id := closedAnomalyEpisode(t, vc, episodesNow.Add(-60*24*time.Hour-time.Hour), episodesNow.Add(-60*24*time.Hour), nil)
+	wantVehicleEpisodeIDs(t, newVehicleEpisodesRouter(t, pool), vehicleEpisodesPath(vc.vehicleEntity), id)
+}
+
+func TestListVehicleAnomalyEpisodesForVehicle_OnlyThisVehicle(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc := newAnomalyVehicle(t, pool)
+	id := openAnomalyEpisode(t, vc, episodesNow.Add(-time.Hour))
+	openAnomalyEpisode(t, vc.withVehicle(t, "veh-2"), episodesNow.Add(-time.Hour))
+	wantVehicleEpisodeIDs(t, newVehicleEpisodesRouter(t, pool), vehicleEpisodesPath(vc.vehicleEntity), id)
+}
+
+func TestListVehicleAnomalyEpisodesForVehicle_UnknownVehicle(t *testing.T) {
+	router := newVehicleEpisodesRouter(t, dbtest.NewMigratedPool(t))
+	wantNotFound(t, doGet(t, router, vehicleEpisodesPath(999), nil))
+	wantNotFound(t, doGet(t, router, "/v1/vehicles/abc/anomaly-episodes", nil))
 }
