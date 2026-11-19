@@ -14,7 +14,7 @@ import (
 // vehicleIncludable uses the kind the vehicle-position-endpoint detail endpoint
 // registers. Until it does, parseInclude rejects the name.
 var vehicleIncludable = map[string]resourceKind{
-	"endpoint": "vehicle_position_endpoint",
+	"endpoint": kindEndpoint,
 }
 
 // vehicle is the representation of one vehicle identity (E21, E22).
@@ -47,7 +47,7 @@ func vehicleLinks(row dbgen.VehicleEntity) itemLinks {
 	return itemLinks{
 		"self": {URL: self},
 		"endpoint": {
-			Kind: "vehicle_position_endpoint",
+			Kind: kindEndpoint,
 			ID:   row.EndpointID,
 			URL:  "/v1/vehicle-position-endpoints/" + strconv.FormatInt(row.EndpointID, 10),
 		},

@@ -390,8 +390,8 @@ func TestGetVehicle_IncludeCacheControl(t *testing.T) {
 	s, _ := newTestService(t)
 	s.Pool = pool
 	// Stand in for the endpoint loader until E07 registers the real one.
-	delete(s.loaders, "vehicle_position_endpoint")
-	s.registerLoader("vehicle_position_endpoint", func(_ context.Context, _ *dbgen.Queries, ids []int64) (map[int64]any, error) {
+	delete(s.loaders, kindEndpoint)
+	s.registerLoader(kindEndpoint, func(_ context.Context, _ *dbgen.Queries, ids []int64) (map[int64]any, error) {
 		reps := make(map[int64]any, len(ids))
 		for _, id := range ids {
 			reps[id] = map[string]any{"endpoint_id": id, "configured": true}

@@ -49,7 +49,7 @@ func newEpisodesRouter(t *testing.T, pool *pgxpool.Pool, kinds ...resourceKind) 
 }
 
 // allEpisodeKinds are the kinds behind every includable episode link.
-var allEpisodeKinds = []resourceKind{"reported_stop", "agency", "server", kindOBAMetricsResponse, kindUnmatchedStopStaticContexts}
+var allEpisodeKinds = []resourceKind{"reported_stop", kindAgency, kindServer, kindOBAMetricsResponse, kindUnmatchedStopStaticContexts}
 
 // stop is one reported stop and the agency and server it belongs to.
 type stop struct {
@@ -310,7 +310,7 @@ func TestGetUnmatchedStopEpisode_CachePolicy(t *testing.T) {
 	closedAt := episodesNow.Add(-time.Hour)
 	closed := s.episode(t, episodesNow.Add(-2*time.Hour), closedAt)
 	open := s.episode(t, episodesNow.Add(-time.Minute), time.Time{})
-	router, _ := newEpisodesRouter(t, pool, "agency")
+	router, _ := newEpisodesRouter(t, pool, kindAgency)
 
 	for _, tc := range []struct {
 		path, cacheControl, lastModified string
