@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -270,7 +271,7 @@ func (gs *GtfsService) observeBackendHash(server models.ObaServer, match *bool) 
 func (gs *GtfsService) fetchBackendHash(ctx context.Context, server models.ObaServer) (string, BackendHashStatus) {
 	// A stalled optional endpoint must not consume the collection deadline.
 	callerCtx := ctx
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, backendMetadataTimeout)
 	defer cancel()
 	endpoint, err := url.Parse(strings.TrimRight(server.ObaBaseURL, "/") + "/api/v2/metadata.json")
 	if err != nil {
@@ -310,6 +311,13 @@ func (gs *GtfsService) fetchBackendHash(ctx context.Context, server models.ObaSe
 		if callerCtx.Err() != nil {
 			return "", BackendHashNotChecked
 		}
+		if !isJSONContentError(err) {
+			// The body stopped arriving (the request deadline, a reset
+			// connection), which may clear up on its own, unlike a backend
+			// that answers with something that is not a metadata document.
+			gs.logBackendMetadataFailure(server, "body_read_failed")
+			return "", BackendHashTransient
+		}
 		gs.logBackendMetadataFailure(server, "malformed_json")
 		return "", BackendHashUnsupported
 	}
@@ -324,6 +332,18 @@ func (gs *GtfsService) fetchBackendHash(ctx context.Context, server models.ObaSe
 		return "", BackendHashUnsupported
 	}
 	return hash, BackendHashOK
+}
+
+// backendMetadataTimeout bounds one metadata request, body included. A
+// variable so tests need not wait for it.
+var backendMetadataTimeout = 2 * time.Second
+
+// isJSONContentError reports whether a decode error comes from the body's
+// content (not JSON, or the wrong shape) rather than from reading it.
+func isJSONContentError(err error) bool {
+	var syntaxErr *json.SyntaxError
+	var typeErr *json.UnmarshalTypeError
+	return errors.As(err, &syntaxErr) || errors.As(err, &typeErr) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 // classifyBackendMetadataStatus maps a non-OK HTTP status to a check result.

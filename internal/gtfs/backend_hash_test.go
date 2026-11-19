@@ -695,3 +695,28 @@ func TestMatchingBackendHashConfirmsSnapshotCurrent(t *testing.T) {
 		t.Fatal("a differing backend hash renewed the snapshot's fetch time")
 	}
 }
+
+// TestBackendMetadataStalledBody covers a backend that sends its headers and
+// then stops sending the body: that may clear up on its own, so it gets the
+// transient backoff, not the hour reserved for backends without a hash.
+func TestBackendMetadataStalledBody(t *testing.T) {
+	saved := backendMetadataTimeout
+	backendMetadataTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { backendMetadataTimeout = saved })
+	h := newUnchangedFeedHarness(t)
+	var logs bytes.Buffer
+	h.service.Logger = slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"staticGtfsHash":"`)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer ts.Close()
+	h.server.ObaBaseURL = ts.URL
+	if _, status := h.service.fetchBackendHash(context.Background(), h.server); status != BackendHashTransient {
+		t.Fatalf("status = %s, want transient", status)
+	}
+	if !strings.Contains(logs.String(), "body_read_failed") {
+		t.Fatalf("missing diagnostic: %s", logs.String())
+	}
+}
