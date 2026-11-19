@@ -34,6 +34,10 @@ type scheduleService struct {
 	added    []int
 	removed  []int
 	windows  []scheduleWindow
+	// datesOnly marks a service defined solely by calendar_dates.txt. Its end
+	// spans every exception date, removals included, so the dates it runs on
+	// are its added dates only.
+	datesOnly bool
 }
 
 // scheduleTrip is the compact per-trip record kept for trip lookup and
@@ -165,7 +169,9 @@ func (s *ScheduleStore) agencyDateAndLatestService(serverKey string, now time.Ti
 		return 0, 0, false
 	}
 	for _, service := range state.snapshot.services {
-		if service.end > latest {
+		// A dates-only service's end also counts the dates it removes, which
+		// are not service days, so only its added dates set its boundary.
+		if !service.datesOnly && service.end > latest {
 			latest = service.end
 		}
 		if len(service.added) > 0 && service.added[len(service.added)-1] > latest {
@@ -417,7 +423,7 @@ func compileRawSchedule(server models.ObaServer, feed rawScheduleFeed) (map[stri
 		compact := b.services[serviceKey]
 		if compact == nil {
 			added, removed := sortedExceptions(service)
-			compact = &scheduleService{id: ids.intern(trip.serviceID), weekdays: service.weekdays, start: service.start, end: service.end, added: added, removed: removed}
+			compact = &scheduleService{id: ids.intern(trip.serviceID), weekdays: service.weekdays, start: service.start, end: service.end, added: added, removed: removed, datesOnly: service.datesOnly}
 			b.services[serviceKey] = compact
 		}
 		compact.windows = append(compact.windows, windows...)

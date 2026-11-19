@@ -609,3 +609,60 @@ func TestCompileSchedulesSplitsTripsByAgencyInMergedFeed(t *testing.T) {
 		t.Fatalf("agency-mode snapshots = %v; want only agency A", snapshots)
 	}
 }
+
+// TestCalendarDatesOnlyRemovalDoesNotExtendCoverage covers #343: a removed
+// date is not a service day, so it must not push a dates-only service's last
+// service date forward, while an added date still does. ServiceDateRange
+// keeps spanning every exception date.
+func TestCalendarDatesOnlyRemovalDoesNotExtendCoverage(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		dates       string
+		wantExpired bool
+	}{
+		{"trailing removal", "service_id,date,exception_type\nWK,20260910,1\nWK,20261231,2\n", true},
+		{"trailing addition", "service_id,date,exception_type\nWK,20260910,1\nWK,20261231,1\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			feed := basicScheduleFiles("UTC", "12:00:00", "13:00:00")
+			delete(feed, "calendar.txt")
+			feed["calendar_dates.txt"] = tc.dates
+			server := scheduleServer("A", "https://dates-only-removal.zip")
+			snapshots, err := compileSchedules(server, downloadedStaticFeed{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, feed)})
+			if err != nil {
+				t.Fatalf("compile: %v", err)
+			}
+			store := NewScheduleStore()
+			store.Replace(server, snapshots)
+			now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+			if got := store.Expired(server.ServerKey(), now); got != tc.wantExpired {
+				t.Fatalf("expired = %t, want %t", got, tc.wantExpired)
+			}
+			if got := store.CoversDate(server.ServerKey(), now); got == tc.wantExpired {
+				t.Fatalf("covers date = %t, want %t", got, !tc.wantExpired)
+			}
+			_, latest, ok := store.ServiceDateRange(server.ServerKey())
+			if want := time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC); !ok || !latest.Equal(want) {
+				t.Fatalf("service date range end = %s (ok=%t), want %s", latest, ok, want)
+			}
+		})
+	}
+}
+
+// TestCalendarServiceKeepsEndDate checks that a calendar.txt service still
+// covers dates up to its end_date.
+func TestCalendarServiceKeepsEndDate(t *testing.T) {
+	feed := basicScheduleFiles("UTC", "12:00:00", "13:00:00")
+	feed["calendar.txt"] = "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nWK,1,1,1,1,1,1,1,20260101,20261231\n"
+	feed["calendar_dates.txt"] = "service_id,date,exception_type\nWK,20261231,2\n"
+	server := scheduleServer("A", "https://calendar-end.zip")
+	snapshots, err := compileSchedules(server, downloadedStaticFeed{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, feed)})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	store := NewScheduleStore()
+	store.Replace(server, snapshots)
+	if store.Expired(server.ServerKey(), time.Date(2026, 12, 30, 12, 0, 0, 0, time.UTC)) {
+		t.Fatal("a calendar.txt service expired before its end_date")
+	}
+}
