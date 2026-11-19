@@ -42,6 +42,68 @@ func (q *Queries) GetUnmatchedStopEpisode(ctx context.Context, unmatchedStopEpis
 	return i, err
 }
 
+const listUnmatchedStopEpisodeStaticContexts = `-- name: ListUnmatchedStopEpisodeStaticContexts :many
+SELECT m.unmatched_stop_episode_id, v.stop_metadata_version_id, v.gtfs_static_version_id,
+       v.static_stop_found, v.stop_name, v.latitude, v.longitude, v.parent_station_id,
+       v.location_type, g.published_at, e.opened_at, e.closed_at
+FROM unmatched_stop_episode_metadata m
+JOIN stop_metadata_version v ON v.stop_metadata_version_id = m.stop_metadata_version_id
+JOIN gtfs_static_version g ON g.gtfs_static_version_id = v.gtfs_static_version_id
+JOIN unmatched_stop_episode_view e ON e.unmatched_stop_episode_id = m.unmatched_stop_episode_id
+WHERE m.unmatched_stop_episode_id = ANY($1::bigint[])
+ORDER BY m.unmatched_stop_episode_id, g.published_at, g.gtfs_static_version_id
+`
+
+type ListUnmatchedStopEpisodeStaticContextsRow struct {
+	UnmatchedStopEpisodeID int64
+	StopMetadataVersionID  int64
+	GtfsStaticVersionID    int64
+	StaticStopFound        bool
+	StopName               *string
+	Latitude               *float64
+	Longitude              *float64
+	ParentStationID        *string
+	LocationType           *int16
+	PublishedAt            time.Time
+	OpenedAt               time.Time
+	ClosedAt               *time.Time
+}
+
+// The static contexts linked to each episode, for E16 and its include loader,
+// oldest published first.
+func (q *Queries) ListUnmatchedStopEpisodeStaticContexts(ctx context.Context, episodeIds []int64) ([]ListUnmatchedStopEpisodeStaticContextsRow, error) {
+	rows, err := q.db.Query(ctx, listUnmatchedStopEpisodeStaticContexts, episodeIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUnmatchedStopEpisodeStaticContextsRow
+	for rows.Next() {
+		var i ListUnmatchedStopEpisodeStaticContextsRow
+		if err := rows.Scan(
+			&i.UnmatchedStopEpisodeID,
+			&i.StopMetadataVersionID,
+			&i.GtfsStaticVersionID,
+			&i.StaticStopFound,
+			&i.StopName,
+			&i.Latitude,
+			&i.Longitude,
+			&i.ParentStationID,
+			&i.LocationType,
+			&i.PublishedAt,
+			&i.OpenedAt,
+			&i.ClosedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUnmatchedStopEpisodes = `-- name: ListUnmatchedStopEpisodes :many
 SELECT unmatched_stop_episode_id, reported_stop_id, agency_id, first_response_agency_id, closing_response_agency_id, last_reported_at, close_reason, server_id, opened_at, closed_at, opening_response_id, closing_response_id, stop_id, stop_metadata_version_id, static_found, gtfs_static_version_id, previous_episode_count, previous_closed_at
 FROM unmatched_stop_episode_view
