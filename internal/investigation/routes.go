@@ -19,6 +19,7 @@ func (s *InvestigationService) registerRoutes(router *httprouter.Router) {
 	s.registerLoader(kindReportedTrip, loadReportedTrips)
 	s.get(router, "/v1/cluster-schemes", s.listClusterSchemes)
 	s.get(router, "/v1/cluster-schemes/:scheme_version", s.getClusterScheme)
+	s.get(router, "/v1/unmatched-stop-clusters", s.listUnmatchedStopClusters)
 	s.get(router, "/v1/servers", s.listServers)
 	s.get(router, "/v1/servers/:server_id", s.getServer)
 	s.get(router, "/v1/unmatched-stop-episodes", s.listUnmatchedStopEpisodes)
