@@ -27,3 +27,35 @@ func (q *Queries) GetClusterScheme(ctx context.Context, schemeVersion string) (C
 	)
 	return i, err
 }
+
+const listClusterSchemes = `-- name: ListClusterSchemes :many
+SELECT scheme_version, s2_level, station_grouping, description, created_at
+FROM cluster_scheme
+ORDER BY created_at DESC
+`
+
+func (q *Queries) ListClusterSchemes(ctx context.Context) ([]ClusterScheme, error) {
+	rows, err := q.db.Query(ctx, listClusterSchemes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ClusterScheme
+	for rows.Next() {
+		var i ClusterScheme
+		if err := rows.Scan(
+			&i.SchemeVersion,
+			&i.S2Level,
+			&i.StationGrouping,
+			&i.Description,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
