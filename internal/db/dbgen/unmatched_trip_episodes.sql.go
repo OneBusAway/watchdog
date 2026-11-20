@@ -103,3 +103,92 @@ func (q *Queries) ListUnmatchedTripEpisodeStaticContexts(ctx context.Context, ep
 	}
 	return items, nil
 }
+
+const listUnmatchedTripEpisodes = `-- name: ListUnmatchedTripEpisodes :many
+SELECT unmatched_trip_episode_id, reported_trip_id, agency_id, first_response_agency_id, closing_response_agency_id, last_reported_at, close_reason, server_id, opened_at, closed_at, opening_response_id, closing_response_id, trip_id, trip_metadata_version_id, static_found, gtfs_static_version_id, route_id, service_id, block_id, previous_episode_count, previous_closed_at
+FROM unmatched_trip_episode_view
+WHERE ($1::bigint IS NULL OR server_id = $1::bigint)
+  AND ($2::bigint IS NULL OR agency_id = $2::bigint)
+  AND ($3::bigint IS NULL OR reported_trip_id = $3::bigint)
+  AND ($4::text IS NULL OR trip_id = $4::text)
+  AND ($5::text IS NULL
+       OR ($5::text = 'open' AND closing_response_agency_id IS NULL)
+       OR ($5::text = 'closed' AND closing_response_agency_id IS NOT NULL))
+  AND ($6::timestamptz IS NULL OR opened_at < $6::timestamptz)
+  AND ($7::timestamptz IS NULL OR closed_at IS NULL
+       OR closed_at >= $7::timestamptz)
+  AND ($8::text IS NULL OR close_reason = $8::text)
+  AND ($9::boolean IS NULL OR static_found = $9::boolean)
+  AND ($10::bigint IS NULL OR unmatched_trip_episode_id < $10::bigint)
+ORDER BY unmatched_trip_episode_id DESC
+LIMIT $11
+`
+
+type ListUnmatchedTripEpisodesParams struct {
+	ServerID       *int64
+	AgencyID       *int64
+	ReportedTripID *int64
+	ObaTripID      *string
+	Status         *string
+	ActiveTo       *time.Time
+	ActiveFrom     *time.Time
+	CloseReason    *string
+	StaticFound    *bool
+	AfterID        *int64
+	PageLimit      int32
+}
+
+// One page of unmatched-trip episodes, newest first, for E17 and E13.
+func (q *Queries) ListUnmatchedTripEpisodes(ctx context.Context, arg ListUnmatchedTripEpisodesParams) ([]UnmatchedTripEpisodeView, error) {
+	rows, err := q.db.Query(ctx, listUnmatchedTripEpisodes,
+		arg.ServerID,
+		arg.AgencyID,
+		arg.ReportedTripID,
+		arg.ObaTripID,
+		arg.Status,
+		arg.ActiveTo,
+		arg.ActiveFrom,
+		arg.CloseReason,
+		arg.StaticFound,
+		arg.AfterID,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []UnmatchedTripEpisodeView
+	for rows.Next() {
+		var i UnmatchedTripEpisodeView
+		if err := rows.Scan(
+			&i.UnmatchedTripEpisodeID,
+			&i.ReportedTripID,
+			&i.AgencyID,
+			&i.FirstResponseAgencyID,
+			&i.ClosingResponseAgencyID,
+			&i.LastReportedAt,
+			&i.CloseReason,
+			&i.ServerID,
+			&i.OpenedAt,
+			&i.ClosedAt,
+			&i.OpeningResponseID,
+			&i.ClosingResponseID,
+			&i.TripID,
+			&i.TripMetadataVersionID,
+			&i.StaticFound,
+			&i.GtfsStaticVersionID,
+			&i.RouteID,
+			&i.ServiceID,
+			&i.BlockID,
+			&i.PreviousEpisodeCount,
+			&i.PreviousClosedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
