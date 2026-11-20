@@ -594,3 +594,277 @@ func TestListVehicleAnomalyEpisodes_IncludeOpeningEvidence(t *testing.T) {
 		t.Errorf("opening_evidence loader called %d times, want 1", calls[kindVehiclePositionEvidence])
 	}
 }
+
+type evidenceOptions struct {
+	agencyID                 *int64
+	routeID                  *string
+	gtfsStaticVersionID      *int64
+	boundingBoxVersionID     *int64
+	positionValidationReason *string
+	attributionReason        *string
+	expectedScheduleState    *string
+}
+
+func (vc vehicleContext) episodeWithEvidence(
+	t *testing.T,
+	anomalyCode string,
+	opened, closed time.Time,
+	closeReason *string,
+	ruleVersionID *int64,
+	opts *evidenceOptions,
+) (epID, openRespID, closeRespID int64) {
+	t.Helper()
+	var typeID int16
+	if err := vc.pool.QueryRow(context.Background(),
+		"SELECT anomaly_type_id FROM vehicle_anomaly_type WHERE anomaly_code = $1", anomalyCode).Scan(&typeID); err != nil {
+		t.Fatalf("query anomaly_type_id: %v", err)
+	}
+
+	rID := int64(0)
+	if ruleVersionID != nil {
+		rID = *ruleVersionID
+	} else {
+		err := vc.pool.QueryRow(context.Background(),
+			"SELECT rule_version_id FROM vehicle_anomaly_rule_version WHERE anomaly_type_id = $1 LIMIT 1", typeID).Scan(&rID)
+		if err != nil {
+			rID = dbtest.ID(t, vc.pool,
+				"INSERT INTO vehicle_anomaly_rule_version (anomaly_type_id, rule_logic_version, version_name, effective_at) VALUES ($1, 1, 'v1', now()) RETURNING rule_version_id",
+				typeID)
+		}
+	}
+
+	openRespID = dbtest.ID(t, vc.pool,
+		"INSERT INTO vehicle_position_response (endpoint_id, observed_at, incrementality) VALUES ($1, $2, 'FULL_DATASET') RETURNING vehicle_position_response_id",
+		vc.endpointID, opened)
+
+	var closingResponseID *int64
+	if !closed.IsZero() {
+		id := dbtest.ID(t, vc.pool,
+			"INSERT INTO vehicle_position_response (endpoint_id, observed_at, incrementality) VALUES ($1, $2, 'FULL_DATASET') RETURNING vehicle_position_response_id",
+			vc.endpointID, closed)
+		closingResponseID = &id
+		closeRespID = id
+		if closeReason == nil {
+			defaultReason := "fresh_source_timestamp"
+			closeReason = &defaultReason
+		}
+	}
+
+	epID = dbtest.ID(t, vc.pool,
+		`INSERT INTO vehicle_anomaly_episode
+		 (vehicle_entity_id, anomaly_type_id, rule_version_id, opening_response_id, closing_response_id, close_reason)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING vehicle_anomaly_episode_id`,
+		vc.vehicleEntity, typeID, rID, openRespID, closingResponseID, closeReason)
+
+	if opts != nil {
+		posValid := opts.positionValidationReason == nil
+		var schedReason *string
+		if opts.expectedScheduleState != nil {
+			switch *opts.expectedScheduleState {
+			case "expected_active":
+				r := "within_scheduled_window"
+				schedReason = &r
+			case "expected_inactive":
+				r := "before_scheduled_window"
+				schedReason = &r
+			case "unknown":
+				r := "no_trip_descriptor"
+				schedReason = &r
+			}
+		}
+		evidenceID := dbtest.ID(t, vc.pool,
+			`INSERT INTO vehicle_position_evidence
+			 (vehicle_position_response_id, vehicle_entity_id, agency_id, position_valid,
+			  position_validation_reason, attribution_reason, expected_schedule_state, expected_schedule_reason,
+			  route_id, gtfs_static_version_id, bounding_box_version_id)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING vehicle_position_evidence_id`,
+			openRespID, vc.vehicleEntity, opts.agencyID, posValid,
+			opts.positionValidationReason, opts.attributionReason, opts.expectedScheduleState, schedReason,
+			opts.routeID, opts.gtfsStaticVersionID, opts.boundingBoxVersionID)
+		if err := dbtest.Exec(vc.pool,
+			`INSERT INTO vehicle_anomaly_episode_evidence
+			 (vehicle_anomaly_episode_id, vehicle_position_evidence_id, evidence_role)
+			 VALUES ($1, $2, 'opening')`,
+			epID, evidenceID); err != nil {
+			t.Fatalf("insert episode evidence: %v", err)
+		}
+	}
+	return epID, openRespID, closeRespID
+}
+
+func TestListVehicleAnomalyEpisodes_Filter_opened_window(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc := newAnomalyVehicle(t, pool)
+	vc.episode(t, "stale_source_timestamp", episodesNow.Add(-10*time.Hour), time.Time{}, nil, nil)
+	inWindow := vc.episode(t, "invalid_coordinate", episodesNow.Add(-3*time.Hour), episodesNow.Add(-2*time.Hour), nil, nil)
+	router, _ := newVehicleAnomalyEpisodesRouter(t, pool)
+
+	from := episodesNow.Add(-5 * time.Hour).Format(time.RFC3339)
+	to := episodesNow.Add(-time.Hour).Format(time.RFC3339)
+	wantVehicleEpisodeIDs(t, router, fmt.Sprintf("%s?opened_from=%s&opened_to=%s", vehicleAnomalyEpisodesPath, from, to), inWindow)
+
+	// Window pair rules
+	wantInvalidParam(t, doGet(t, router, fmt.Sprintf("%s?opened_from=%s", vehicleAnomalyEpisodesPath, from), nil), "opened_to")
+	wantInvalidParam(t, doGet(t, router, fmt.Sprintf("%s?opened_to=%s", vehicleAnomalyEpisodesPath, to), nil), "opened_from")
+	wantInvalidParam(t, doGet(t, router, fmt.Sprintf("%s?opened_from=%s&opened_to=%s", vehicleAnomalyEpisodesPath, to, from), nil), "opened_to")
+	over31 := episodesNow.Add(-40 * 24 * time.Hour).Format(time.RFC3339)
+	wantInvalidParam(t, doGet(t, router, fmt.Sprintf("%s?opened_from=%s&opened_to=%s", vehicleAnomalyEpisodesPath, over31, to), nil), "opened_to")
+}
+
+func TestListVehicleAnomalyEpisodes_Filter_open_at(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc := newAnomalyVehicle(t, pool)
+	tInstant := episodesNow.Add(-10 * time.Hour)
+
+	vc.episode(t, "stale_source_timestamp", tInstant.Add(-3*time.Hour), tInstant.Add(-time.Hour), nil, nil)
+	openAcross := vc.episode(t, "invalid_coordinate", tInstant.Add(-time.Hour), tInstant.Add(time.Hour), nil, nil)
+	vc.episode(t, "stopped_out_of_bounds", tInstant.Add(time.Hour), tInstant.Add(3*time.Hour), nil, nil)
+
+	router, _ := newVehicleAnomalyEpisodesRouter(t, pool)
+	wantVehicleEpisodeIDs(t, router, fmt.Sprintf("%s?open_at=%s", vehicleAnomalyEpisodesPath, tInstant.Format(time.RFC3339)), openAcross)
+
+	// Future open_at returns 400
+	future := episodesNow.Add(time.Hour).Format(time.RFC3339)
+	wantInvalidParam(t, doGet(t, router, fmt.Sprintf("%s?open_at=%s", vehicleAnomalyEpisodesPath, future), nil), "open_at")
+}
+
+func TestListVehicleAnomalyEpisodes_NeitherWindowKeepsDefault24h(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc := newAnomalyVehicle(t, pool)
+	oldEp := vc.episode(t, "stale_source_timestamp", episodesNow.Add(-40*24*time.Hour), episodesNow.Add(-30*24*time.Hour), nil, nil)
+	router, _ := newVehicleAnomalyEpisodesRouter(t, pool)
+
+	at := episodesNow.Add(-35 * 24 * time.Hour).Format(time.RFC3339)
+	wantVehicleEpisodeIDs(t, router, fmt.Sprintf("%s?open_at=%s", vehicleAnomalyEpisodesPath, at), oldEp)
+
+	from := episodesNow.Add(-41 * 24 * time.Hour).Format(time.RFC3339)
+	to := episodesNow.Add(-39 * 24 * time.Hour).Format(time.RFC3339)
+	wantVehicleEpisodeIDs(t, router, fmt.Sprintf("%s?opened_from=%s&opened_to=%s", vehicleAnomalyEpisodesPath, from, to), oldEp)
+}
+
+func TestListVehicleAnomalyEpisodes_Filter_responses_and_static(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc := newAnomalyVehicle(t, pool)
+
+	v1 := dbtest.ID(t, pool,
+		"INSERT INTO gtfs_static_version (server_id, published_at) VALUES ($1, $2) RETURNING gtfs_static_version_id",
+		vc.serverID, episodesNow.Add(-10*time.Hour))
+	v2 := dbtest.ID(t, pool,
+		"INSERT INTO gtfs_static_version (server_id, published_at) VALUES ($1, $2) RETURNING gtfs_static_version_id",
+		vc.serverID, episodesNow.Add(-5*time.Hour))
+
+	ep1, openResp1, closeResp1 := vc.episodeWithEvidence(t, "stale_source_timestamp",
+		episodesNow.Add(-3*time.Hour), episodesNow.Add(-2*time.Hour), nil, nil,
+		&evidenceOptions{gtfsStaticVersionID: &v1})
+
+	vc2 := vc.withVehicle(t, "veh-2")
+	ep2, _, _ := vc2.episodeWithEvidence(t, "invalid_coordinate",
+		episodesNow.Add(-2*time.Hour), episodesNow.Add(-time.Hour), nil, nil,
+		&evidenceOptions{gtfsStaticVersionID: &v2})
+
+	router, _ := newVehicleAnomalyEpisodesRouter(t, pool)
+
+	wantVehicleEpisodeIDs(t, router, fmt.Sprintf("%s?opening_response_id=%d", vehicleAnomalyEpisodesPath, openResp1), ep1)
+	wantVehicleEpisodeIDs(t, router, fmt.Sprintf("%s?closing_response_id=%d", vehicleAnomalyEpisodesPath, closeResp1), ep1)
+	wantVehicleEpisodeIDs(t, router, fmt.Sprintf("%s?gtfs_static_version_id=%d", vehicleAnomalyEpisodesPath, v1), ep1)
+	wantVehicleEpisodeIDs(t, router, fmt.Sprintf("%s?gtfs_static_version_id=%d", vehicleAnomalyEpisodesPath, v2), ep2)
+}
+
+func TestListVehicleAnomalyEpisodes_Filter_recurrence(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc := newAnomalyVehicle(t, pool)
+	ep1 := vc.episode(t, "stale_source_timestamp", episodesNow.Add(-5*time.Hour), episodesNow.Add(-4*time.Hour), nil, nil)
+	ep2 := vc.episode(t, "stale_source_timestamp", episodesNow.Add(-3*time.Hour), episodesNow.Add(-2*time.Hour), nil, nil)
+	router, _ := newVehicleAnomalyEpisodesRouter(t, pool)
+
+	wantVehicleEpisodeIDs(t, router, vehicleAnomalyEpisodesPath+"?recurrence=has_previous_episode", ep2)
+	wantVehicleEpisodeIDs(t, router, vehicleAnomalyEpisodesPath+"?recurrence=no_previous_episode", ep1)
+	wantInvalidParam(t, doGet(t, router, vehicleAnomalyEpisodesPath+"?recurrence=unknown", nil), "recurrence")
+}
+
+func TestListVehicleAnomalyEpisodes_Filter_route_and_versions(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc := newAnomalyVehicle(t, pool)
+
+	vStatic := dbtest.ID(t, pool,
+		"INSERT INTO gtfs_static_version (server_id, published_at) VALUES ($1, $2) RETURNING gtfs_static_version_id",
+		vc.serverID, episodesNow.Add(-10*time.Hour))
+	boxID := dbtest.ID(t, pool,
+		`INSERT INTO bounding_box_version (gtfs_static_version_id, server_id, minimum_latitude, maximum_latitude, minimum_longitude, maximum_longitude)
+		 VALUES ($1, $2, 47.0, 48.0, -123.0, -122.0) RETURNING bounding_box_version_id`,
+		vStatic, vc.serverID)
+
+	ruleID := dbtest.ID(t, pool,
+		`INSERT INTO vehicle_anomaly_rule_version (anomaly_type_id, rule_logic_version, version_name, effective_at)
+		 VALUES (1, 2, 'v2-test', $1) RETURNING rule_version_id`,
+		episodesNow.Add(-20*time.Hour))
+
+	r1 := "route-99"
+	ep1, _, _ := vc.episodeWithEvidence(t, "stale_source_timestamp",
+		episodesNow.Add(-3*time.Hour), episodesNow.Add(-2*time.Hour), nil, &ruleID,
+		&evidenceOptions{routeID: &r1, boundingBoxVersionID: &boxID})
+
+	vc2 := vc.withVehicle(t, "veh-other")
+	ep2, _, _ := vc2.episodeWithEvidence(t, "invalid_coordinate",
+		episodesNow.Add(-2*time.Hour), episodesNow.Add(-time.Hour), nil, nil, nil)
+
+	router, _ := newVehicleAnomalyEpisodesRouter(t, pool)
+
+	wantVehicleEpisodeIDs(t, router, vehicleAnomalyEpisodesPath+"?route_id=route-99", ep1)
+	wantVehicleEpisodeIDs(t, router, fmt.Sprintf("%s?rule_version_id=%d", vehicleAnomalyEpisodesPath, ruleID), ep1)
+	wantVehicleEpisodeIDs(t, router, fmt.Sprintf("%s?bounding_box_version_id=%d", vehicleAnomalyEpisodesPath, boxID), ep1)
+	wantVehicleEpisodeIDs(t, router, vehicleAnomalyEpisodesPath+"?route_id=route-unknown")
+	_ = ep2
+}
+
+func TestListVehicleAnomalyEpisodes_Filter_evidence_enums(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc := newAnomalyVehicle(t, pool)
+
+	valReason := "placeholder_zero_coordinate"
+	attrReason := "unknown_route_id"
+	schedState := "expected_active"
+
+	ep1, _, _ := vc.episodeWithEvidence(t, "invalid_coordinate",
+		episodesNow.Add(-3*time.Hour), episodesNow.Add(-2*time.Hour), nil, nil,
+		&evidenceOptions{
+			positionValidationReason: &valReason,
+			attributionReason:        &attrReason,
+			expectedScheduleState:    &schedState,
+		})
+
+	vc2 := vc.withVehicle(t, "veh-other")
+	ep2, _, _ := vc2.episodeWithEvidence(t, "stale_source_timestamp",
+		episodesNow.Add(-2*time.Hour), episodesNow.Add(-time.Hour), nil, nil, nil)
+
+	router, _ := newVehicleAnomalyEpisodesRouter(t, pool)
+
+	wantVehicleEpisodeIDs(t, router, vehicleAnomalyEpisodesPath+"?position_validation_reason=placeholder_zero_coordinate", ep1)
+	wantVehicleEpisodeIDs(t, router, vehicleAnomalyEpisodesPath+"?attribution_reason=unknown_route_id", ep1)
+	wantVehicleEpisodeIDs(t, router, vehicleAnomalyEpisodesPath+"?expected_schedule_state=expected_active", ep1)
+
+	wantInvalidParam(t, doGet(t, router, vehicleAnomalyEpisodesPath+"?position_validation_reason=bad", nil), "position_validation_reason")
+	wantInvalidParam(t, doGet(t, router, vehicleAnomalyEpisodesPath+"?attribution_reason=bad", nil), "attribution_reason")
+	wantInvalidParam(t, doGet(t, router, vehicleAnomalyEpisodesPath+"?expected_schedule_state=bad", nil), "expected_schedule_state")
+	_ = ep2
+}
+
+func TestListVehicleAnomalyEpisodes_Filter_agency_none(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc := newAnomalyVehicle(t, pool)
+	agencyID := insertEpisodeAgency(t, pool, vc.serverID, "7")
+
+	attributed, _, _ := vc.episodeWithEvidence(t, "stale_source_timestamp",
+		episodesNow.Add(-3*time.Hour), episodesNow.Add(-2*time.Hour), nil, nil,
+		&evidenceOptions{agencyID: &agencyID})
+
+	vc2 := vc.withVehicle(t, "veh-unattr")
+	unattributed, _, _ := vc2.episodeWithEvidence(t, "stale_source_timestamp",
+		episodesNow.Add(-2*time.Hour), episodesNow.Add(-time.Hour), nil, nil,
+		&evidenceOptions{agencyID: nil})
+
+	router, _ := newVehicleAnomalyEpisodesRouter(t, pool)
+
+	wantVehicleEpisodeIDs(t, router, vehicleAnomalyEpisodesPath+"?agency_id=none", unattributed)
+	wantVehicleEpisodeIDs(t, router, fmt.Sprintf("%s?agency_id=%d", vehicleAnomalyEpisodesPath, agencyID), attributed)
+}

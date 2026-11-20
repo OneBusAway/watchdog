@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -625,8 +626,192 @@ func TestListUnmatchedStopEpisodes_BadCloseReason(t *testing.T) {
 	wantInvalidParam(t, doGet(t, router, episodesPath+"?close_reason=matched", nil), "close_reason")
 }
 
+func (s stop) linkStaticVersion(t *testing.T, episodeID int64, published time.Time, found bool) (versionID, metadataID int64) {
+	t.Helper()
+	versionID = dbtest.ID(t, s.pool,
+		"INSERT INTO gtfs_static_version (server_id, published_at) VALUES ($1, $2) RETURNING gtfs_static_version_id",
+		s.serverID, published)
+	metadataID = dbtest.ID(t, s.pool,
+		`INSERT INTO stop_metadata_version (gtfs_static_version_id, agency_id, reported_stop_id, static_stop_found)
+		 VALUES ($1, $2, $3, $4) RETURNING stop_metadata_version_id`,
+		versionID, s.agencyID, s.reportedStopID, found)
+	if err := dbtest.Exec(s.pool,
+		`INSERT INTO unmatched_stop_episode_metadata (unmatched_stop_episode_id, stop_metadata_version_id, reported_stop_id, agency_id)
+		 VALUES ($1, $2, $3, $4)`,
+		episodeID, metadataID, s.reportedStopID, s.agencyID); err != nil {
+		t.Fatalf("link static context: %v", err)
+	}
+	return versionID, metadataID
+}
+
+func (s stop) episodeWithResponses(t *testing.T, opened, closed time.Time) (epID, openResp, closeResp int64) {
+	t.Helper()
+	openResp, first := s.response(t, opened)
+	var closing *int64
+	var reason *string
+	if !closed.IsZero() {
+		var id int64
+		closeResp, id = s.response(t, closed)
+		closing = &id
+		notReported := "not_reported"
+		reason = &notReported
+	}
+	epID = dbtest.ID(t, s.pool,
+		`INSERT INTO unmatched_stop_episode
+		 (reported_stop_id, agency_id, first_response_agency_id, closing_response_agency_id, last_reported_at, close_reason)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING unmatched_stop_episode_id`,
+		s.reportedStopID, s.agencyID, first, closing, opened.Add(30*time.Second), reason)
+	return epID, openResp, closeResp
+}
+
 func staticContextsPath(id int64) string {
 	return episodePath(id) + "/static-contexts"
+}
+
+func TestListUnmatchedStopEpisodes_Filter_opened_window(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	s := newStop(t, pool)
+	// Opened before window, still open -> excluded
+	s.episode(t, episodesNow.Add(-10*time.Hour), time.Time{})
+	// Opened inside window -> included
+	inWindow := s.episode(t, episodesNow.Add(-3*time.Hour), episodesNow.Add(-2*time.Hour))
+	router, _ := newEpisodesRouter(t, pool)
+
+	from := episodesNow.Add(-5 * time.Hour).Format(time.RFC3339)
+	to := episodesNow.Add(-time.Hour).Format(time.RFC3339)
+	wantIDs(t, router, fmt.Sprintf("%s?opened_from=%s&opened_to=%s", episodesPath, from, to), inWindow)
+
+	// Window pair rules
+	wantInvalidParam(t, doGet(t, router, fmt.Sprintf("%s?opened_from=%s", episodesPath, from), nil), "opened_to")
+	wantInvalidParam(t, doGet(t, router, fmt.Sprintf("%s?opened_to=%s", episodesPath, to), nil), "opened_from")
+	wantInvalidParam(t, doGet(t, router, fmt.Sprintf("%s?opened_from=%s&opened_to=%s", episodesPath, to, from), nil), "opened_to")
+	over31 := episodesNow.Add(-40 * 24 * time.Hour).Format(time.RFC3339)
+	wantInvalidParam(t, doGet(t, router, fmt.Sprintf("%s?opened_from=%s&opened_to=%s", episodesPath, over31, to), nil), "opened_to")
+}
+
+func TestListUnmatchedStopEpisodes_Filter_open_at(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	s := newStop(t, pool)
+	tInstant := episodesNow.Add(-10 * time.Hour)
+
+	// Ep 1: closed before tInstant
+	s.episode(t, tInstant.Add(-3*time.Hour), tInstant.Add(-time.Hour))
+	// Ep 2: open across tInstant
+	openAcross := s.episode(t, tInstant.Add(-time.Hour), tInstant.Add(time.Hour))
+	// Ep 3: opened after tInstant
+	s.episode(t, tInstant.Add(time.Hour), tInstant.Add(3*time.Hour))
+
+	router, _ := newEpisodesRouter(t, pool)
+	wantIDs(t, router, fmt.Sprintf("%s?open_at=%s", episodesPath, tInstant.Format(time.RFC3339)), openAcross)
+
+	// Future open_at returns 400
+	future := episodesNow.Add(time.Hour).Format(time.RFC3339)
+	wantInvalidParam(t, doGet(t, router, fmt.Sprintf("%s?open_at=%s", episodesPath, future), nil), "open_at")
+}
+
+func TestListUnmatchedStopEpisodes_NeitherWindowKeepsDefault24h(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	s := newStop(t, pool)
+	// Opened 40 days ago, closed 30 days ago
+	oldEp := s.episode(t, episodesNow.Add(-40*24*time.Hour), episodesNow.Add(-30*24*time.Hour))
+	router, _ := newEpisodesRouter(t, pool)
+
+	// open_at inside the open period (35 days ago) returns it
+	at := episodesNow.Add(-35 * 24 * time.Hour).Format(time.RFC3339)
+	wantIDs(t, router, fmt.Sprintf("%s?open_at=%s", episodesPath, at), oldEp)
+
+	// opened window covering 40 days ago returns it
+	from := episodesNow.Add(-41 * 24 * time.Hour).Format(time.RFC3339)
+	to := episodesNow.Add(-39 * 24 * time.Hour).Format(time.RFC3339)
+	wantIDs(t, router, fmt.Sprintf("%s?opened_from=%s&opened_to=%s", episodesPath, from, to), oldEp)
+}
+
+func TestListUnmatchedStopEpisodes_Filter_responses_and_static(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	s := newStop(t, pool)
+	ep1, openResp1, closeResp1 := s.episodeWithResponses(t, episodesNow.Add(-3*time.Hour), episodesNow.Add(-2*time.Hour))
+	ep2, _, _ := s.episodeWithResponses(t, episodesNow.Add(-2*time.Hour), episodesNow.Add(-time.Hour))
+
+	v1, _ := s.linkStaticVersion(t, ep1, episodesNow.Add(-10*time.Hour), true)
+	v2, _ := s.linkStaticVersion(t, ep2, episodesNow.Add(-5*time.Hour), true)
+
+	router, _ := newEpisodesRouter(t, pool)
+
+	// opening_response_id
+	wantIDs(t, router, fmt.Sprintf("%s?opening_response_id=%d", episodesPath, openResp1), ep1)
+	// closing_response_id
+	wantIDs(t, router, fmt.Sprintf("%s?closing_response_id=%d", episodesPath, closeResp1), ep1)
+	// gtfs_static_version_id
+	wantIDs(t, router, fmt.Sprintf("%s?gtfs_static_version_id=%d", episodesPath, v1), ep1)
+	wantIDs(t, router, fmt.Sprintf("%s?gtfs_static_version_id=%d", episodesPath, v2), ep2)
+}
+
+func TestListUnmatchedStopEpisodes_Filter_recurrence(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	s := newStop(t, pool)
+	ep1 := s.episode(t, episodesNow.Add(-5*time.Hour), episodesNow.Add(-4*time.Hour))
+	ep2 := s.episode(t, episodesNow.Add(-3*time.Hour), episodesNow.Add(-2*time.Hour))
+	router, _ := newEpisodesRouter(t, pool)
+
+	wantIDs(t, router, episodesPath+"?recurrence=has_previous_episode", ep2)
+	wantIDs(t, router, episodesPath+"?recurrence=no_previous_episode", ep1)
+	wantInvalidParam(t, doGet(t, router, episodesPath+"?recurrence=unknown", nil), "recurrence")
+}
+
+func TestListUnmatchedStopEpisodes_AgencyNone_Returns400(t *testing.T) {
+	router, _ := newEpisodesRouter(t, nil)
+	wantInvalidParam(t, doGet(t, router, episodesPath+"?agency_id=none", nil), "agency_id")
+}
+
+func TestListUnmatchedStopEpisodes_ClusterFilters(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	s := newStop(t, pool)
+
+	// Set up cluster scheme and cells
+	dbtest.Exec(pool,
+		"INSERT INTO cluster_scheme (scheme_version, s2_level, station_grouping, description, created_at) VALUES ($1, 12, 'none', 'desc', $2)",
+		"scheme-1", episodesNow.Add(-100*time.Hour))
+	dbtest.Exec(pool,
+		"INSERT INTO s2_cell (scheme_version, cell_id, cell_level, center_latitude, center_longitude) VALUES ($1, 'cell-a', 12, 47.0, -122.0), ($1, 'cell-b', 12, 47.1, -122.1)",
+		"scheme-1")
+
+	// Episode opened at -5h, closed at -1h
+	epID := s.episode(t, episodesNow.Add(-5*time.Hour), episodesNow.Add(-time.Hour))
+
+	// Static context 1: published at -10h -> cell-a, station-1
+	_, meta1 := s.linkStaticVersion(t, epID, episodesNow.Add(-10*time.Hour), true)
+	st1 := "station-1"
+	dbtest.Exec(pool,
+		"INSERT INTO stop_cluster_assignment (stop_metadata_version_id, scheme_version, cell_id, root_station_id, root_station_name) VALUES ($1, $2, $3, $4, 'Station 1')",
+		meta1, "scheme-1", "cell-a", &st1)
+
+	// Static context 2: published at -3h -> cell-b, station-2
+	_, meta2 := s.linkStaticVersion(t, epID, episodesNow.Add(-3*time.Hour), true)
+	st2 := "station-2"
+	dbtest.Exec(pool,
+		"INSERT INTO stop_cluster_assignment (stop_metadata_version_id, scheme_version, cell_id, root_station_id, root_station_name) VALUES ($1, $2, $3, $4, 'Station 2')",
+		meta2, "scheme-1", "cell-b", &st2)
+
+	router, _ := newEpisodesRouter(t, pool)
+
+	// At -4h: meta1 applies (cell-a, station-1)
+	tEarly := episodesNow.Add(-4 * time.Hour).Format(time.RFC3339)
+	wantIDs(t, router, fmt.Sprintf("%s?open_at=%s&cell_id=cell-a", episodesPath, tEarly), epID)
+	wantIDs(t, router, fmt.Sprintf("%s?open_at=%s&cell_id=cell-b", episodesPath, tEarly))
+	wantIDs(t, router, fmt.Sprintf("%s?open_at=%s&root_station_id=station-1", episodesPath, tEarly), epID)
+	wantIDs(t, router, fmt.Sprintf("%s?open_at=%s&root_station_id=station-2", episodesPath, tEarly))
+
+	// At -2h: meta2 applies (cell-b, station-2)
+	tLate := episodesNow.Add(-2 * time.Hour).Format(time.RFC3339)
+	wantIDs(t, router, fmt.Sprintf("%s?open_at=%s&cell_id=cell-b", episodesPath, tLate), epID)
+	wantIDs(t, router, fmt.Sprintf("%s?open_at=%s&cell_id=cell-a", episodesPath, tLate))
+
+	// Absent open_at: latest applies (cell-b)
+	wantIDs(t, router, fmt.Sprintf("%s?cell_id=cell-b", episodesPath), epID)
+	wantIDs(t, router, fmt.Sprintf("%s?cell_id=cell-a", episodesPath))
+
+	// Unknown scheme_version returns 400
+	wantInvalidParam(t, doGet(t, router, episodesPath+"?scheme_version=nonexistent&cell_id=cell-a", nil), "scheme_version")
 }
 
 // staticContextItems returns the items of GET staticContextsPath(id).
@@ -764,6 +949,83 @@ func TestStopStaticContextsLoader(t *testing.T) {
 		}
 		if string(data) != rec.Body.String() {
 			t.Errorf("episode %d: loaded\n%s\nGET returned\n%s", id, data, rec.Body)
+		}
+	}
+}
+
+func TestListUnmatchedStopEpisodes_FollowClusterEpisodesLink(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	seedScheme(t, pool, "s", episodesNow.Add(-time.Hour))
+	seedCell(t, pool, "s", "c1")
+	seedCell(t, pool, "s", "c2")
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	opened := at.Add(-time.Hour)
+
+	serverID := insertEpisodeServer(t, pool, "https://example.com")
+	agencyID := insertEpisodeAgency(t, pool, serverID, "1")
+	var c1IDs, c2IDs []int64
+	for i := range 4 {
+		st := addStop(t, pool, serverID, agencyID, fmt.Sprintf("1_%d", i))
+		id := st.episode(t, opened, time.Time{})
+		if i < 3 {
+			assign(t, pool, linkVersion(t, st, id, opened.Add(-time.Hour)), "s", "c1", strPtr("1_A"))
+			c1IDs = append(c1IDs, id)
+		} else {
+			assign(t, pool, linkVersion(t, st, id, opened.Add(-time.Hour)), "s", "c2", nil)
+			c2IDs = append(c2IDs, id)
+		}
+	}
+
+	s, _ := newTestService(t)
+	s.Pool = pool
+	s.now = func() time.Time { return episodesNow }
+	router := httprouter.New()
+	router.GET("/v1/unmatched-stop-clusters", s.listUnmatchedStopClusters)
+	router.GET("/v1/unmatched-stop-episodes", s.listUnmatchedStopEpisodes)
+
+	clustersURL := fmt.Sprintf("/v1/unmatched-stop-clusters?server_id=%d&at=%s&scheme_version=s",
+		serverID, url.QueryEscape(at.Format(time.RFC3339Nano)))
+	clustersRec := doGet(t, router, clustersURL, nil)
+	if clustersRec.Code != http.StatusOK {
+		t.Fatalf("GET %s status = %d, want 200", clustersURL, clustersRec.Code)
+	}
+	body := decodeEpisodeBody(t, clustersRec)
+	items, ok := body["items"].([]any)
+	if !ok || len(items) != 2 {
+		t.Fatalf("cluster items = %v, want 2 items", body["items"])
+	}
+
+	for _, rawItem := range items {
+		item := rawItem.(map[string]any)
+		linksMap, _ := item["links"].(map[string]any)
+		episodesLink, ok := linksMap["episodes"].(string)
+		if !ok || episodesLink == "" {
+			t.Fatalf("missing links.episodes on item: %v", item)
+		}
+
+		epRec := doGet(t, router, episodesLink, nil)
+		if epRec.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want 200; body = %s", episodesLink, epRec.Code, epRec.Body.String())
+		}
+		epBody := decodeEpisodeBody(t, epRec)
+		gotItems, _ := epBody["items"].([]any)
+		var gotIDs []int64
+		for _, rawEp := range gotItems {
+			ep := rawEp.(map[string]any)
+			gotIDs = append(gotIDs, int64(ep["unmatched_stop_episode_id"].(float64)))
+		}
+
+		cellID := item["cell_id"].(string)
+		var wantIDs []int64
+		if cellID == "c1" {
+			wantIDs = c1IDs
+		} else {
+			wantIDs = c2IDs
+		}
+		slices.Sort(gotIDs)
+		slices.Sort(wantIDs)
+		if !reflect.DeepEqual(gotIDs, wantIDs) {
+			t.Errorf("cluster %s episodes = %v, want %v", cellID, gotIDs, wantIDs)
 		}
 	}
 }

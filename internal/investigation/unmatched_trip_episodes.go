@@ -320,27 +320,38 @@ func (s *InvestigationService) unmatchedTripEpisodePage(ctx context.Context, q *
 	return body, err
 }
 
-// listUnmatchedTripEpisodes serves GET /v1/unmatched-trip-episodes. Without a
-// window it covers the last 24 hours, except with status=open, where open
-// episodes need no window.
+// listUnmatchedTripEpisodes serves GET /v1/unmatched-trip-episodes.
 func (s *InvestigationService) listUnmatchedTripEpisodes(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	var bad invalidParams
 	values := parseQuery(r, &bad, "server_id", "agency_id", "trip_id", "status", "active_from", "active_to",
+		"opened_from", "opened_to", "open_at", "opening_response_id", "closing_response_id",
+		"gtfs_static_version_id", "recurrence", "route_id",
 		"close_reason", "static_found", "include", "page_size", "cursor")
 	params := dbgen.ListUnmatchedTripEpisodesParams{
-		ServerID:    paramID(values, "server_id", &bad),
-		AgencyID:    paramID(values, "agency_id", &bad),
-		ObaTripID:   paramString(values, "trip_id", &bad),
-		Status:      paramEnum(values, "status", []string{"open", "closed"}, &bad),
-		CloseReason: paramEnum(values, "close_reason", unmatchedCloseReasons, &bad),
-		StaticFound: paramBool(values, "static_found", &bad),
+		ServerID:            paramID(values, "server_id", &bad),
+		AgencyID:            paramID(values, "agency_id", &bad),
+		ObaTripID:           paramString(values, "trip_id", &bad),
+		Status:              paramEnum(values, "status", []string{"open", "closed"}, &bad),
+		CloseReason:         paramEnum(values, "close_reason", unmatchedCloseReasons, &bad),
+		StaticFound:         paramBool(values, "static_found", &bad),
+		OpeningResponseID:   paramID(values, "opening_response_id", &bad),
+		ClosingResponseID:   paramID(values, "closing_response_id", &bad),
+		GtfsStaticVersionID: paramID(values, "gtfs_static_version_id", &bad),
+		Recurrence:          paramEnum(values, "recurrence", []string{"has_previous_episode", "no_previous_episode"}, &bad),
+		RouteID:             paramString(values, "route_id", &bad),
 	}
 	// A trip ID is only unique within one agency, so it needs agency_id.
 	if params.ObaTripID != nil && !values.Has("agency_id") {
 		bad.add("trip_id", "requires agency_id")
 	}
+	hasOpenedWindow := values.Has("opened_from") || values.Has("opened_to")
+	hasOpenAt := values.Has("open_at")
+	replaced := hasOpenedWindow || hasOpenAt
 	statusOpen := params.Status != nil && *params.Status == "open"
-	win := s.parseWindow(values, activeWindowOptions(statusOpen, false), &bad)
+	win := s.parseWindow(values, activeWindowOptions(statusOpen, replaced), &bad)
+	openedWin := s.parseWindow(values, openedWindowOptions(), &bad)
+	openAt := paramTime(values, "open_at", &bad)
+	notFuture("open_at", openAt, s.now(), &bad)
 	inc := s.parseInclude(values, unmatchedTripEpisodeIncludable, &bad)
 	p := parsePage(values, &bad)
 	if len(bad) > 0 {
@@ -348,6 +359,8 @@ func (s *InvestigationService) listUnmatchedTripEpisodes(w http.ResponseWriter, 
 		return
 	}
 	params.ActiveFrom, params.ActiveTo = win.From, win.To
+	params.OpenedFrom, params.OpenedTo = openedWin.From, openedWin.To
+	params.OpenAt = openAt
 	params.AfterID, params.PageLimit = p.AfterID, p.Limit()
 
 	var body unmatchedTripEpisodesBody

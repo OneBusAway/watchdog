@@ -62,36 +62,77 @@ LEFT JOIN vehicle_anomaly_episode_evidence opening_link
     ON opening_link.vehicle_anomaly_episode_id = v.vehicle_anomaly_episode_id
    AND opening_link.evidence_role = 'opening'
 WHERE ($1::bigint IS NULL OR v.server_id = $1::bigint)
-  AND ($2::bigint IS NULL OR v.agency_id = $2::bigint)
-  AND ($3::bigint IS NULL OR v.endpoint_id = $3::bigint)
-  AND ($4::bigint IS NULL OR v.vehicle_entity_id = $4::bigint)
-  AND ($5::text IS NULL OR v.vehicle_id = $5::text)
-  AND ($6::text IS NULL OR v.anomaly_code = $6::text)
-  AND ($7::text IS NULL
-       OR ($7::text = 'open' AND v.closing_response_id IS NULL)
-       OR ($7::text = 'closed' AND v.closing_response_id IS NOT NULL))
-  AND ($8::timestamptz IS NULL OR v.opened_at < $8::timestamptz)
-  AND ($9::timestamptz IS NULL OR v.closed_at IS NULL
-       OR v.closed_at >= $9::timestamptz)
-  AND ($10::text IS NULL OR v.close_reason = $10::text)
-  AND ($11::bigint IS NULL OR v.vehicle_anomaly_episode_id < $11::bigint)
+  AND (
+      CASE
+          WHEN $2::boolean IS TRUE THEN v.agency_id IS NULL
+          WHEN $3::bigint IS NOT NULL THEN v.agency_id = $3::bigint
+          ELSE TRUE
+      END
+  )
+  AND ($4::bigint IS NULL OR v.endpoint_id = $4::bigint)
+  AND ($5::bigint IS NULL OR v.vehicle_entity_id = $5::bigint)
+  AND ($6::text IS NULL OR v.vehicle_id = $6::text)
+  AND ($7::text IS NULL OR v.anomaly_code = $7::text)
+  AND ($8::text IS NULL
+       OR ($8::text = 'open' AND v.closing_response_id IS NULL)
+       OR ($8::text = 'closed' AND v.closing_response_id IS NOT NULL))
+  AND ($9::timestamptz IS NULL OR v.opened_at < $9::timestamptz)
+  AND ($10::timestamptz IS NULL OR v.closed_at IS NULL
+       OR v.closed_at >= $10::timestamptz)
+  AND ($11::timestamptz IS NULL OR v.opened_at >= $11::timestamptz)
+  AND ($12::timestamptz IS NULL OR v.opened_at < $12::timestamptz)
+  AND ($13::timestamptz IS NULL
+       OR (v.opened_at <= $13::timestamptz
+           AND (v.closed_at IS NULL OR v.closed_at > $13::timestamptz)))
+  AND ($14::text IS NULL OR v.close_reason = $14::text)
+  AND ($15::bigint IS NULL OR v.opening_response_id = $15::bigint)
+  AND ($16::bigint IS NULL OR v.closing_response_id = $16::bigint)
+  AND ($17::bigint IS NULL OR v.gtfs_static_version_id = $17::bigint)
+  AND (
+      CASE
+          WHEN $18::text = 'has_previous_episode' THEN v.previous_episode_count > 0
+          WHEN $18::text = 'no_previous_episode' THEN v.previous_episode_count = 0
+          ELSE TRUE
+      END
+  )
+  AND ($19::text IS NULL OR v.route_id = $19::text)
+  AND ($20::bigint IS NULL OR v.rule_version_id = $20::bigint)
+  AND ($21::bigint IS NULL OR v.bounding_box_version_id = $21::bigint)
+  AND ($22::text IS NULL OR v.position_validation_reason = $22::text)
+  AND ($23::text IS NULL OR v.attribution_reason = $23::text)
+  AND ($24::text IS NULL OR v.expected_schedule_state = $24::text)
+  AND ($25::bigint IS NULL OR v.vehicle_anomaly_episode_id < $25::bigint)
 ORDER BY v.vehicle_anomaly_episode_id DESC
-LIMIT $12
+LIMIT $26
 `
 
 type ListVehicleAnomalyEpisodesParams struct {
-	ServerID          *int64
-	AgencyID          *int64
-	EndpointID        *int64
-	VehicleEntityID   *int64
-	ExternalVehicleID *string
-	AnomalyCode       *string
-	Status            *string
-	ActiveTo          *time.Time
-	ActiveFrom        *time.Time
-	CloseReason       *string
-	AfterID           *int64
-	PageLimit         int32
+	ServerID                 *int64
+	AgencyNone               *bool
+	AgencyID                 *int64
+	EndpointID               *int64
+	VehicleEntityID          *int64
+	ExternalVehicleID        *string
+	AnomalyCode              *string
+	Status                   *string
+	ActiveTo                 *time.Time
+	ActiveFrom               *time.Time
+	OpenedFrom               *time.Time
+	OpenedTo                 *time.Time
+	OpenAt                   *time.Time
+	CloseReason              *string
+	OpeningResponseID        *int64
+	ClosingResponseID        *int64
+	GtfsStaticVersionID      *int64
+	Recurrence               *string
+	RouteID                  *string
+	RuleVersionID            *int64
+	BoundingBoxVersionID     *int64
+	PositionValidationReason *string
+	AttributionReason        *string
+	ExpectedScheduleState    *string
+	AfterID                  *int64
+	PageLimit                int32
 }
 
 type ListVehicleAnomalyEpisodesRow struct {
@@ -104,6 +145,7 @@ type ListVehicleAnomalyEpisodesRow struct {
 func (q *Queries) ListVehicleAnomalyEpisodes(ctx context.Context, arg ListVehicleAnomalyEpisodesParams) ([]ListVehicleAnomalyEpisodesRow, error) {
 	rows, err := q.db.Query(ctx, listVehicleAnomalyEpisodes,
 		arg.ServerID,
+		arg.AgencyNone,
 		arg.AgencyID,
 		arg.EndpointID,
 		arg.VehicleEntityID,
@@ -112,7 +154,20 @@ func (q *Queries) ListVehicleAnomalyEpisodes(ctx context.Context, arg ListVehicl
 		arg.Status,
 		arg.ActiveTo,
 		arg.ActiveFrom,
+		arg.OpenedFrom,
+		arg.OpenedTo,
+		arg.OpenAt,
 		arg.CloseReason,
+		arg.OpeningResponseID,
+		arg.ClosingResponseID,
+		arg.GtfsStaticVersionID,
+		arg.Recurrence,
+		arg.RouteID,
+		arg.RuleVersionID,
+		arg.BoundingBoxVersionID,
+		arg.PositionValidationReason,
+		arg.AttributionReason,
+		arg.ExpectedScheduleState,
 		arg.AfterID,
 		arg.PageLimit,
 	)

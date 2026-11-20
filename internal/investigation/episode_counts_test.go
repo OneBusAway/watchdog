@@ -150,6 +150,10 @@ func (vc vehicleContext) episode(
 			"INSERT INTO vehicle_position_response (endpoint_id, observed_at, incrementality) VALUES ($1, $2, 'FULL_DATASET') RETURNING vehicle_position_response_id",
 			vc.endpointID, closed)
 		closingResponseID = &id
+		if closeReason == nil {
+			defaultReason := "fresh_source_timestamp"
+			closeReason = &defaultReason
+		}
 	}
 
 	epID := dbtest.ID(t, vc.pool,

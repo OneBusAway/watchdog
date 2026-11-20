@@ -2,6 +2,7 @@ package investigation
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -191,20 +192,35 @@ func (s *InvestigationService) getUnmatchedStopEpisode(w http.ResponseWriter, r 
 func (s *InvestigationService) listUnmatchedStopEpisodes(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	var bad invalidParams
 	values := parseQuery(r, &bad, "server_id", "agency_id", "stop_id", "status", "active_from", "active_to",
+		"opened_from", "opened_to", "open_at", "opening_response_id", "closing_response_id",
+		"gtfs_static_version_id", "recurrence", "cell_id", "root_station_id", "scheme_version",
 		"close_reason", "static_found", "include", "page_size", "cursor")
 	params := dbgen.ListUnmatchedStopEpisodesParams{
-		ServerID:    paramID(values, "server_id", &bad),
-		AgencyID:    paramID(values, "agency_id", &bad),
-		ObaStopID:   paramString(values, "stop_id", &bad),
-		Status:      paramEnum(values, "status", []string{"open", "closed"}, &bad),
-		CloseReason: paramEnum(values, "close_reason", []string{"not_reported"}, &bad),
-		StaticFound: paramBool(values, "static_found", &bad),
+		ServerID:            paramID(values, "server_id", &bad),
+		AgencyID:            paramID(values, "agency_id", &bad),
+		ObaStopID:           paramString(values, "stop_id", &bad),
+		Status:              paramEnum(values, "status", []string{"open", "closed"}, &bad),
+		CloseReason:         paramEnum(values, "close_reason", []string{"not_reported"}, &bad),
+		StaticFound:         paramBool(values, "static_found", &bad),
+		OpeningResponseID:   paramID(values, "opening_response_id", &bad),
+		ClosingResponseID:   paramID(values, "closing_response_id", &bad),
+		GtfsStaticVersionID: paramID(values, "gtfs_static_version_id", &bad),
+		Recurrence:          paramEnum(values, "recurrence", []string{"has_previous_episode", "no_previous_episode"}, &bad),
+		CellID:              paramString(values, "cell_id", &bad),
+		RootStationID:       paramString(values, "root_station_id", &bad),
+		SchemeVersion:       paramString(values, "scheme_version", &bad),
 	}
 	if params.ObaStopID != nil && !values.Has("agency_id") {
 		bad.add("stop_id", "requires agency_id")
 	}
+	hasOpenedWindow := values.Has("opened_from") || values.Has("opened_to")
+	hasOpenAt := values.Has("open_at")
+	replaced := hasOpenedWindow || hasOpenAt
 	statusOpen := params.Status != nil && *params.Status == "open"
-	win := s.parseWindow(values, activeWindowOptions(statusOpen, false), &bad)
+	win := s.parseWindow(values, activeWindowOptions(statusOpen, replaced), &bad)
+	openedWin := s.parseWindow(values, openedWindowOptions(), &bad)
+	openAt := paramTime(values, "open_at", &bad)
+	notFuture("open_at", openAt, s.now(), &bad)
 	inc := s.parseInclude(values, unmatchedStopEpisodeIncludable, &bad)
 	p := parsePage(values, &bad)
 	if len(bad) > 0 {
@@ -212,14 +228,45 @@ func (s *InvestigationService) listUnmatchedStopEpisodes(w http.ResponseWriter, 
 		return
 	}
 	params.ActiveFrom, params.ActiveTo = win.From, win.To
+	params.OpenedFrom, params.OpenedTo = openedWin.From, openedWin.To
+	params.OpenAt = openAt
 	params.AfterID, params.PageLimit = p.AfterID, p.Limit()
 
 	var body unmatchedStopEpisodesBody
+	var schemeErr *invalidParam
 	err := s.read(r.Context(), func(ctx context.Context, q *dbgen.Queries) error {
+		if values.Has("scheme_version") || values.Has("cell_id") || values.Has("root_station_id") {
+			if values.Has("scheme_version") {
+				sv := *params.SchemeVersion
+				_, err := q.GetClusterScheme(ctx, sv)
+				if err != nil {
+					if errors.Is(err, pgx.ErrNoRows) {
+						schemeErr = &invalidParam{Name: "scheme_version", Reason: "unknown cluster scheme"}
+						return nil
+					}
+					return err
+				}
+				params.SchemeVersion = &sv
+			} else {
+				schemes, err := q.ListClusterSchemes(ctx)
+				if err != nil {
+					return err
+				}
+				if len(schemes) == 0 {
+					schemeErr = &invalidParam{Name: "scheme_version", Reason: "unknown cluster scheme"}
+					return nil
+				}
+				params.SchemeVersion = &schemes[0].SchemeVersion
+			}
+		}
 		var err error
 		body, err = s.unmatchedStopEpisodePage(ctx, q, r, params, p, inc)
 		return err
 	})
+	if schemeErr != nil {
+		writeInvalidParams(w, invalidParams{*schemeErr})
+		return
+	}
 	if err != nil {
 		s.fail(w, r, err)
 		return
