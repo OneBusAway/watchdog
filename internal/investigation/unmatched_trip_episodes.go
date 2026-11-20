@@ -153,3 +153,136 @@ func (s *InvestigationService) getUnmatchedTripEpisode(w http.ResponseWriter, r 
 	}
 	s.writeJSON(w, r, body, cache)
 }
+
+// tripStaticContextIncludable accepts gtfs_static_version once its loader is registered.
+var tripStaticContextIncludable = map[string]resourceKind{
+	"gtfs_static_version": "gtfs_static_version",
+}
+
+// tripStaticContext is one item of E19: what Watchdog's static GTFS said about the trip for part of the episode.
+type tripStaticContext struct {
+	TripMetadataVersionID int64    `json:"trip_metadata_version_id"`
+	Source                string   `json:"source"`
+	StaticTripFound       bool     `json:"static_trip_found"`
+	RouteID               *string  `json:"route_id"`
+	ServiceID             *string  `json:"service_id"`
+	BlockID               *string  `json:"block_id"`
+	AppliesFrom           apiTime  `json:"applies_from"`
+	AppliesUntil          *apiTime `json:"applies_until"`
+	Links                 links    `json:"links"`
+}
+
+// tripStaticContexts is the E19 representation, which the static_contexts loader also returns.
+type tripStaticContexts struct {
+	Items []tripStaticContext `json:"items"`
+	Links links               `json:"links"`
+}
+
+// tripStaticContextsBody is the E19 response.
+type tripStaticContextsBody struct {
+	tripStaticContexts
+	Included included `json:"included,omitzero"`
+}
+
+// tripStaticContextList maps one episode's rows, oldest published first, to E19 and each item's links.
+func tripStaticContextList(episodeID int64, rows []dbgen.ListUnmatchedTripEpisodeStaticContextsRow) (tripStaticContexts, []itemLinks) {
+	episode := "/v1/unmatched-trip-episodes/" + strconv.FormatInt(episodeID, 10)
+	list := tripStaticContexts{
+		Items: make([]tripStaticContext, 0, len(rows)),
+		Links: links{"self": episode + "/static-contexts", "episode": episode},
+	}
+	related := make([]itemLinks, 0, len(rows))
+	for i, row := range rows {
+		l := itemLinks{"gtfs_static_version": {
+			Kind: "gtfs_static_version",
+			ID:   row.GtfsStaticVersionID,
+			URL:  "/v1/gtfs-static-versions/" + strconv.FormatInt(row.GtfsStaticVersionID, 10),
+		}}
+		until := row.ClosedAt
+		if i+1 < len(rows) {
+			next := tripAppliesFrom(rows[i+1])
+			until = &next
+		}
+		list.Items = append(list.Items, tripStaticContext{
+			TripMetadataVersionID: row.TripMetadataVersionID,
+			Source:                "watchdog_static_gtfs",
+			StaticTripFound:       row.StaticTripFound,
+			RouteID:               row.RouteID,
+			ServiceID:             row.ServiceID,
+			BlockID:               row.BlockID,
+			AppliesFrom:           newAPITime(tripAppliesFrom(row)),
+			AppliesUntil:          newOptionalAPITime(until),
+			Links:                 l.links(),
+		})
+		related = append(related, l)
+	}
+	return list, related
+}
+
+// tripAppliesFrom is the later of the static version's publication and the episode's opening.
+func tripAppliesFrom(row dbgen.ListUnmatchedTripEpisodeStaticContextsRow) time.Time {
+	if row.PublishedAt.After(row.OpenedAt) {
+		return row.PublishedAt
+	}
+	return row.OpenedAt
+}
+
+// loadTripStaticContexts returns E19 for each episode in ids, in one query.
+func loadTripStaticContexts(ctx context.Context, q *dbgen.Queries, ids []int64) (map[int64]any, error) {
+	rows, err := q.ListUnmatchedTripEpisodeStaticContexts(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	byEpisode := make(map[int64][]dbgen.ListUnmatchedTripEpisodeStaticContextsRow, len(ids))
+	for _, row := range rows {
+		byEpisode[row.UnmatchedTripEpisodeID] = append(byEpisode[row.UnmatchedTripEpisodeID], row)
+	}
+	out := make(map[int64]any, len(ids))
+	for _, id := range ids {
+		out[id], _ = tripStaticContextList(id, byEpisode[id])
+	}
+	return out, nil
+}
+
+// listUnmatchedTripEpisodeStaticContexts serves GET /v1/unmatched-trip-episodes/:episode_id/static-contexts.
+func (s *InvestigationService) listUnmatchedTripEpisodeStaticContexts(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	id, ok := pathID(ps, "episode_id")
+	if !ok {
+		writeNotFound(w)
+		return
+	}
+	var bad invalidParams
+	values := parseQuery(r, &bad, "include")
+	inc := s.parseInclude(values, tripStaticContextIncludable, &bad)
+	if len(bad) > 0 {
+		writeInvalidParams(w, bad)
+		return
+	}
+
+	var body tripStaticContextsBody
+	var closedAt *time.Time
+	err := s.read(r.Context(), func(ctx context.Context, q *dbgen.Queries) error {
+		episode, err := q.GetUnmatchedTripEpisode(ctx, id)
+		if err != nil {
+			return err
+		}
+		closedAt = episode.ClosedAt
+		rows, err := q.ListUnmatchedTripEpisodeStaticContexts(ctx, []int64{id})
+		if err != nil {
+			return err
+		}
+		var related []itemLinks
+		body.tripStaticContexts, related = tripStaticContextList(id, rows)
+		body.Included, err = s.loadIncluded(ctx, q, related, inc)
+		return err
+	})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	cache := cacheShort()
+	if closedAt != nil {
+		cache = cacheImmutable(*closedAt)
+	}
+	s.writeJSON(w, r, body, cache)
+}

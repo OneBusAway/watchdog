@@ -7,6 +7,7 @@ package dbgen
 
 import (
 	"context"
+	"time"
 )
 
 const getUnmatchedTripEpisode = `-- name: GetUnmatchedTripEpisode :one
@@ -42,4 +43,63 @@ func (q *Queries) GetUnmatchedTripEpisode(ctx context.Context, unmatchedTripEpis
 		&i.PreviousClosedAt,
 	)
 	return i, err
+}
+
+const listUnmatchedTripEpisodeStaticContexts = `-- name: ListUnmatchedTripEpisodeStaticContexts :many
+SELECT m.unmatched_trip_episode_id, v.trip_metadata_version_id, v.static_trip_found,
+       v.route_id, v.service_id, v.block_id, v.gtfs_static_version_id,
+       g.published_at, e.opened_at, e.closed_at
+FROM unmatched_trip_episode_metadata m
+JOIN trip_metadata_version v ON v.trip_metadata_version_id = m.trip_metadata_version_id
+JOIN gtfs_static_version g ON g.gtfs_static_version_id = v.gtfs_static_version_id
+JOIN unmatched_trip_episode_view e ON e.unmatched_trip_episode_id = m.unmatched_trip_episode_id
+WHERE m.unmatched_trip_episode_id = ANY($1::bigint[])
+ORDER BY m.unmatched_trip_episode_id, g.published_at, g.gtfs_static_version_id
+`
+
+type ListUnmatchedTripEpisodeStaticContextsRow struct {
+	UnmatchedTripEpisodeID int64
+	TripMetadataVersionID  int64
+	StaticTripFound        bool
+	RouteID                *string
+	ServiceID              *string
+	BlockID                *string
+	GtfsStaticVersionID    int64
+	PublishedAt            time.Time
+	OpenedAt               time.Time
+	ClosedAt               *time.Time
+}
+
+// The static trip contexts linked to each episode, for E19 and its include
+// loader, oldest published first. Episode timing comes from the view, because
+// opened_at and closed_at are derived from the OBA responses.
+func (q *Queries) ListUnmatchedTripEpisodeStaticContexts(ctx context.Context, episodeIds []int64) ([]ListUnmatchedTripEpisodeStaticContextsRow, error) {
+	rows, err := q.db.Query(ctx, listUnmatchedTripEpisodeStaticContexts, episodeIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUnmatchedTripEpisodeStaticContextsRow
+	for rows.Next() {
+		var i ListUnmatchedTripEpisodeStaticContextsRow
+		if err := rows.Scan(
+			&i.UnmatchedTripEpisodeID,
+			&i.TripMetadataVersionID,
+			&i.StaticTripFound,
+			&i.RouteID,
+			&i.ServiceID,
+			&i.BlockID,
+			&i.GtfsStaticVersionID,
+			&i.PublishedAt,
+			&i.OpenedAt,
+			&i.ClosedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

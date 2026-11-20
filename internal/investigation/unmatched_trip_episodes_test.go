@@ -296,3 +296,216 @@ func TestGetUnmatchedTripEpisode_NoIncludedKeyByDefault(t *testing.T) {
 		t.Error("body has an included key")
 	}
 }
+
+// newTripStaticRouter mounts E19 at episodesNow.
+func newTripStaticRouter(t *testing.T, pool *pgxpool.Pool) http.Handler {
+	t.Helper()
+	s, _ := newTestService(t)
+	s.Pool = pool
+	s.now = func() time.Time { return episodesNow }
+	router := httprouter.New()
+	router.GET("/v1/unmatched-trip-episodes/:episode_id/static-contexts", s.listUnmatchedTripEpisodeStaticContexts)
+	router.HEAD("/v1/unmatched-trip-episodes/:episode_id/static-contexts", s.listUnmatchedTripEpisodeStaticContexts)
+	return router
+}
+
+// tripStaticFixture is one trip with its own server and agency, for the E19 tests.
+func tripStaticFixture(t *testing.T, pool *pgxpool.Pool, tripID string) trip {
+	t.Helper()
+	serverID := insertEpisodeServer(t, pool, "https://example.com")
+	return addTrip(t, pool, serverID, insertEpisodeAgency(t, pool, serverID, "1"), tripID)
+}
+
+// headRequest sends a HEAD request and returns the recorded response.
+func headRequest(t *testing.T, handler http.Handler, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodHead, path, nil))
+	return rec
+}
+
+// linkStatic records a static trip context for the episode: a static version published at published, and whether the trip was found in it.
+func (tr trip) linkStatic(t *testing.T, episodeID int64, published time.Time, found bool) {
+	t.Helper()
+	versionID := dbtest.ID(t, tr.pool,
+		"INSERT INTO gtfs_static_version (server_id, published_at) VALUES ($1, $2) RETURNING gtfs_static_version_id",
+		tr.serverID, published)
+	var route, service, block *string
+	if found {
+		r, s, b := "route-1", "service-1", "block-1"
+		route, service, block = &r, &s, &b
+	}
+	metadataID := dbtest.ID(t, tr.pool,
+		`INSERT INTO trip_metadata_version
+		 (gtfs_static_version_id, agency_id, reported_trip_id, static_trip_found, route_id, service_id, block_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING trip_metadata_version_id`,
+		versionID, tr.agencyID, tr.reportedTripID, found, route, service, block)
+	if err := dbtest.Exec(tr.pool,
+		`INSERT INTO unmatched_trip_episode_metadata (unmatched_trip_episode_id, trip_metadata_version_id, reported_trip_id, agency_id)
+		 VALUES ($1, $2, $3, $4)`,
+		episodeID, metadataID, tr.reportedTripID, tr.agencyID); err != nil {
+		t.Fatalf("link static context: %v", err)
+	}
+}
+
+func tripStaticContextsPath(id int64) string {
+	return fmt.Sprintf("/v1/unmatched-trip-episodes/%d/static-contexts", id)
+}
+
+// tripStaticContextItems returns the items of GET tripStaticContextsPath(id).
+func tripStaticContextItems(t *testing.T, router http.Handler, id int64) []any {
+	t.Helper()
+	return decodeEpisodeBody(t, doGet(t, router, tripStaticContextsPath(id), nil))["items"].([]any)
+}
+
+func TestListUnmatchedTripEpisodeStaticContexts_RejectsUnknownParameter(t *testing.T) {
+	router := newTripStaticRouter(t, nil)
+	wantInvalidParam(t, doGet(t, router, tripStaticContextsPath(1)+"?foo=1", nil), "foo")
+}
+
+func TestListUnmatchedTripEpisodeStaticContexts_Head(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	id := tripStaticFixture(t, pool, "trip-1").episode(t, episodesNow.Add(-time.Hour), time.Time{})
+	router := newTripStaticRouter(t, pool)
+
+	get := doGet(t, router, tripStaticContextsPath(id), nil)
+	head := headRequest(t, router, tripStaticContextsPath(id))
+	if head.Code != get.Code {
+		t.Errorf("HEAD status = %d, GET status = %d", head.Code, get.Code)
+	}
+	for _, h := range []string{"Cache-Control", "ETag", "Content-Type"} {
+		if head.Header().Get(h) != get.Header().Get(h) {
+			t.Errorf("HEAD %s = %q, GET %s = %q", h, head.Header().Get(h), h, get.Header().Get(h))
+		}
+	}
+	// net/http drops a HEAD body itself, so only the headers are compared here.
+}
+
+func TestListUnmatchedTripEpisodeStaticContexts_AppliesRule(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	tr := tripStaticFixture(t, pool, "trip-1")
+	opened, during, closed := episodesNow.Add(-3*time.Hour), episodesNow.Add(-2*time.Hour), episodesNow.Add(-time.Hour)
+	closedID := tr.episode(t, opened, closed)
+	other := addTrip(t, pool, tr.serverID, tr.agencyID, "trip-2")
+	openID := other.episode(t, opened, time.Time{})
+	for _, st := range []struct {
+		trip trip
+		id   int64
+	}{{tr, closedID}, {other, openID}} {
+		st.trip.linkStatic(t, st.id, opened.Add(-24*time.Hour), true)
+		st.trip.linkStatic(t, st.id, during, true)
+	}
+	router := newTripStaticRouter(t, pool)
+
+	format := func(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
+	for _, tc := range []struct {
+		id        int64
+		lastUntil any
+	}{{closedID, format(closed)}, {openID, nil}} {
+		items := tripStaticContextItems(t, router, tc.id)
+		if len(items) != 2 {
+			t.Fatalf("episode %d: %d items, want 2", tc.id, len(items))
+		}
+		first, second := items[0].(map[string]any), items[1].(map[string]any)
+		if first["applies_from"] != format(opened) || first["applies_until"] != format(during) {
+			t.Errorf("episode %d: first applies %v to %v, want %s to %s",
+				tc.id, first["applies_from"], first["applies_until"], format(opened), format(during))
+		}
+		if second["applies_from"] != format(during) || second["applies_until"] != tc.lastUntil {
+			t.Errorf("episode %d: second applies %v to %v, want %s to %v",
+				tc.id, second["applies_from"], second["applies_until"], format(during), tc.lastUntil)
+		}
+	}
+}
+
+func TestListUnmatchedTripEpisodeStaticContexts_NotFoundRow(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	tr := tripStaticFixture(t, pool, "trip-1")
+	id := tr.episode(t, episodesNow.Add(-2*time.Hour), episodesNow.Add(-time.Hour))
+	tr.linkStatic(t, id, episodesNow.Add(-3*time.Hour), false)
+	router := newTripStaticRouter(t, pool)
+
+	item := tripStaticContextItems(t, router, id)[0].(map[string]any)
+	if item["static_trip_found"] != false || item["source"] != "watchdog_static_gtfs" {
+		t.Errorf("static_trip_found = %v, source = %v", item["static_trip_found"], item["source"])
+	}
+	for _, field := range []string{"route_id", "service_id", "block_id"} {
+		if v, ok := item[field]; !ok || v != nil {
+			t.Errorf("%s = %v (present %v), want null", field, v, ok)
+		}
+	}
+}
+
+func TestListUnmatchedTripEpisodeStaticContexts_UnknownEpisode(t *testing.T) {
+	router := newTripStaticRouter(t, dbtest.NewMigratedPool(t))
+	wantNotFound(t, doGet(t, router, tripStaticContextsPath(999), nil))
+}
+
+func TestListUnmatchedTripEpisodeStaticContexts_Empty(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	id := tripStaticFixture(t, pool, "trip-1").episode(t, episodesNow.Add(-time.Hour), time.Time{})
+	router := newTripStaticRouter(t, pool)
+
+	body := decodeEpisodeBody(t, doGet(t, router, tripStaticContextsPath(id), nil))
+	if items, ok := body["items"].([]any); !ok || len(items) != 0 {
+		t.Errorf("items = %v, want an empty list", body["items"])
+	}
+}
+
+func TestTripStaticContextsLoader(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	tr := tripStaticFixture(t, pool, "trip-1")
+	ids := make([]int64, 0, 3)
+	for i := range 3 {
+		id := tr.episode(t, episodesNow.Add(-time.Duration(i+2)*time.Hour), episodesNow.Add(-time.Duration(i+1)*time.Hour))
+		tr.linkStatic(t, id, episodesNow.Add(-time.Duration(i+3)*time.Hour), true)
+		ids = append(ids, id)
+	}
+	router := newTripStaticRouter(t, pool)
+
+	s, _ := newTestService(t)
+	s.Pool = pool
+	var loaded map[int64]any
+	err := s.read(context.Background(), func(ctx context.Context, q *dbgen.Queries) error {
+		var err error
+		loaded, err = loadTripStaticContexts(ctx, q, ids)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	for _, id := range ids {
+		want := decodeEpisodeBody(t, doGet(t, router, tripStaticContextsPath(id), nil))
+		raw, err := json.Marshal(loaded[id])
+		if err != nil {
+			t.Fatalf("marshal loader value: %v", err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatalf("decode loader value: %v", err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("episode %d: loader value =\n%v\nwant endpoint body\n%v", id, got, want)
+		}
+	}
+}
+
+// E18's static_contexts include uses the E19 loader, so requesting it returns one entry keyed by that link.
+func TestGetUnmatchedTripEpisode_IncludeStaticContexts(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	tr := tripStaticFixture(t, pool, "trip-1")
+	id := tr.episode(t, episodesNow.Add(-2*time.Hour), episodesNow.Add(-time.Hour))
+	tr.linkStatic(t, id, episodesNow.Add(-3*time.Hour), true)
+	s, _ := newTestService(t)
+	s.Pool = pool
+	s.now = func() time.Time { return episodesNow }
+	router := httprouter.New()
+	router.GET("/v1/unmatched-trip-episodes/:episode_id", s.getUnmatchedTripEpisode)
+
+	body := decodeEpisodeBody(t, doGet(t, router, tripEpisodePath(id)+"?include=static_contexts", nil))
+	included, _ := body["included"].(map[string]any)
+	want := tripStaticContextsPath(id)
+	if _, ok := included[want]; !ok || len(included) != 1 {
+		t.Errorf("included = %v, want exactly one entry keyed %s", included, want)
+	}
+}
