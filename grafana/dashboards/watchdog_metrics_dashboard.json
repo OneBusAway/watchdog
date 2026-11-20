@@ -481,7 +481,7 @@
           "datasource": {
             "name": "Prometheus"
           },
-          "legendFormat": "Source age - {{server_name}} (feed {{feed}})",
+          "legendFormat": "Source age - {{server_url}} {{agency_id}} (feed {{feed}})",
           "instant": true
         },
         {
@@ -490,7 +490,7 @@
           "datasource": {
             "name": "Prometheus"
           },
-          "legendFormat": "Payload age - {{server_name}} (feed {{feed}})",
+          "legendFormat": "Payload age - {{server_url}} {{agency_id}} (feed {{feed}})",
           "instant": true
         }
       ],
@@ -637,8 +637,8 @@
         "overrides": [
           {
             "matcher": {
-              "id": "byRegexp",
-              "options": ".*ratio.*"
+              "id": "byFrameRefID",
+              "options": "D"
             },
             "properties": [
               {
@@ -1023,11 +1023,11 @@
           "datasource": {
             "name": "Prometheus"
           },
-          "legendFormat": "Discrepancy ratio {{vehicle_id}}"
+          "legendFormat": "Discrepancy ratio {{vehicle_id}} ({{agency_id}} {{server_url}} feed {{feed}})"
         },
         {
           "expr": "((((time() - gtfs_rt_vehicle_speed_last_computed_timestamp_seconds{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}) and on (agency_id, server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id!=\"\"} == 1) and on (agency_id, server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id!=\"\"}) < on() group_left clamp_max(clamp_min(watchdog_collection_interval_seconds * 3, 60), 300)))) or (((time() - gtfs_rt_vehicle_speed_last_computed_timestamp_seconds{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}) and on (server_name, server_url, feed) (gtfs_rt_feed_fetch_success{agency_id=\"\"} == 1) and on (server_name, server_url, feed) ((time() - gtfs_rt_feed_last_successful_fetch_timestamp_seconds{agency_id=\"\"}) < on() group_left clamp_max(clamp_min(watchdog_collection_interval_seconds * 3, 60), 300))))) and on (agency_id, agency_name, server_name, server_url) (gtfs_static_bundle_usable == 1) and on() ((time() - watchdog_collection_last_completed_timestamp_seconds) < on() group_left clamp_max(clamp_min(watchdog_collection_interval_seconds * 3, 60), 300))",
-          "legendFormat": "Speed age {{vehicle_id}}",
+          "legendFormat": "Speed age {{vehicle_id}} ({{agency_id}} {{server_url}} feed {{feed}})",
           "refId": "B",
           "datasource": {
             "name": "Prometheus"
