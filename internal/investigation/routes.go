@@ -26,6 +26,8 @@ func (s *InvestigationService) registerRoutes(router *httprouter.Router) {
 	s.get(router, "/v1/unmatched-trip-episodes/:episode_id", s.getUnmatchedTripEpisode)
 	s.get(router, "/v1/unmatched-trip-episodes/:episode_id/static-contexts", s.listUnmatchedTripEpisodeStaticContexts)
 	s.registerLoader(kindUnmatchedTripStaticContexts, loadTripStaticContexts)
+	s.get(router, "/v1/oba-metrics-responses/:response_id", s.getOBAMetricsResponse)
+	s.registerLoader(kindOBAMetricsResponse, loadOBAMetricsResponses)
 	s.get(router, "/v1/vehicles", s.listVehicles)
 	s.get(router, "/v1/vehicles/:vehicle_entity_id", s.getVehicle)
 	s.get(router, "/v1/vehicles/:vehicle_entity_id/anomaly-episodes", s.listVehicleAnomalyEpisodesForVehicle)
