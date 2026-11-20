@@ -150,3 +150,44 @@ func loadReportedTrips(ctx context.Context, q *dbgen.Queries, ids []int64) (map[
 	}
 	return reps, nil
 }
+
+// listReportedTripEpisodes serves GET /v1/reported-trips/:reported_trip_id/unmatched-trip-episodes:
+// every retained unmatched-trip episode of one trip, newest first. It is scoped
+// to one identity, so the window is optional and has neither a default nor a maximum.
+func (s *InvestigationService) listReportedTripEpisodes(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	id, ok := pathID(ps, "reported_trip_id")
+	if !ok {
+		writeNotFound(w)
+		return
+	}
+	var bad invalidParams
+	values := parseQuery(r, &bad, "status", "active_from", "active_to", "page_size", "cursor", "include")
+	params := dbgen.ListUnmatchedTripEpisodesParams{
+		ReportedTripID: &id,
+		Status:         paramEnum(values, "status", []string{"open", "closed"}, &bad),
+	}
+	win := s.parseWindow(values, unboundedWindowOptions("active_from", "active_to"), &bad)
+	inc := s.parseInclude(values, unmatchedTripEpisodeIncludable, &bad)
+	p := parsePage(values, &bad)
+	if len(bad) > 0 {
+		writeInvalidParams(w, bad)
+		return
+	}
+	params.ActiveFrom, params.ActiveTo = win.From, win.To
+	params.AfterID, params.PageLimit = p.AfterID, p.Limit()
+
+	var body unmatchedTripEpisodesBody
+	err := s.read(r.Context(), func(ctx context.Context, q *dbgen.Queries) error {
+		if _, err := q.GetReportedTrip(ctx, id); err != nil {
+			return err
+		}
+		var err error
+		body, err = s.unmatchedTripEpisodePage(ctx, q, r, params, p, inc)
+		return err
+	})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.writeJSON(w, r, body, cacheShort())
+}

@@ -6,10 +6,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/julienschmidt/httprouter"
@@ -390,4 +392,174 @@ func TestReportedTripLoader(t *testing.T) {
 			t.Errorf("reported trip %d: loaded\n%s\nGET returned\n%s", id, loaded, rec.Body)
 		}
 	}
+}
+
+// newReportedTripEpisodesRouter mounts E13 without the request pipeline.
+func newReportedTripEpisodesRouter(t *testing.T, pool *pgxpool.Pool) http.Handler {
+	t.Helper()
+	s, _ := newTestService(t)
+	s.Pool = pool
+	s.now = func() time.Time { return tripEpisodesNow }
+	router := httprouter.New()
+	router.GET("/v1/reported-trips/:reported_trip_id/unmatched-trip-episodes", s.listReportedTripEpisodes)
+	router.HEAD("/v1/reported-trips/:reported_trip_id/unmatched-trip-episodes", s.listReportedTripEpisodes)
+	return router
+}
+
+func reportedTripEpisodesPath(id int64) string {
+	return reportedTripPath(id) + "/unmatched-trip-episodes"
+}
+
+// reportedTripWindowQuery is the trip's E13 path with the active window [from, to).
+func reportedTripWindowQuery(id int64, from, to time.Time) string {
+	return reportedTripEpisodesPath(id) + "?" + url.Values{
+		"active_from": {from.Format(time.RFC3339)},
+		"active_to":   {to.Format(time.RFC3339)},
+	}.Encode()
+}
+
+func TestListReportedTripEpisodes_Registered(t *testing.T) {
+	_, router := newTestService(t)
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		if h, _, _ := router.Lookup(method, reportedTripEpisodesPath(7)); h == nil {
+			t.Errorf("%s %s is not registered", method, reportedTripEpisodesPath(7))
+		}
+	}
+}
+
+func TestListReportedTripEpisodes_ReturnsNewestFirst(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	tr := newTripFixture(t, pool)
+	a := tr.episode(t, tripEpisodesNow.Add(-5*time.Hour), tripEpisodesNow.Add(-4*time.Hour))
+	b := tr.episode(t, tripEpisodesNow.Add(-3*time.Hour), tripEpisodesNow.Add(-2*time.Hour))
+	c := tr.episode(t, tripEpisodesNow.Add(-time.Hour), time.Time{})
+	wantTripEpisodeIDs(t, newReportedTripEpisodesRouter(t, pool), reportedTripEpisodesPath(tr.reportedTripID), c, b, a)
+}
+
+func TestListReportedTripEpisodes_Paginates(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	tr := newTripFixture(t, pool)
+	a := tr.episode(t, tripEpisodesNow.Add(-5*time.Hour), tripEpisodesNow.Add(-4*time.Hour))
+	b := tr.episode(t, tripEpisodesNow.Add(-3*time.Hour), tripEpisodesNow.Add(-2*time.Hour))
+	c := tr.episode(t, tripEpisodesNow.Add(-time.Hour), time.Time{})
+	router := newReportedTripEpisodesRouter(t, pool)
+
+	first := decodeTripEpisodeBody(t, doGet(t, router, reportedTripEpisodesPath(tr.reportedTripID)+"?page_size=2", nil))
+	if got := tripEpisodeIDs(t, first); !reflect.DeepEqual(got, []int64{c, b}) {
+		t.Errorf("first page = %v, want %v", got, []int64{c, b})
+	}
+	next, ok := first["links"].(map[string]any)["next"].(string)
+	if !ok {
+		t.Fatal("first page has no links.next")
+	}
+	second := decodeTripEpisodeBody(t, doGet(t, router, next, nil))
+	if got := tripEpisodeIDs(t, second); !reflect.DeepEqual(got, []int64{a}) {
+		t.Errorf("second page = %v, want %v", got, []int64{a})
+	}
+	if _, ok := second["links"].(map[string]any)["next"]; ok {
+		t.Error("last page has links.next")
+	}
+}
+
+func TestListReportedTripEpisodes_EmptyResult(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	tr := newTripFixture(t, pool)
+	path := reportedTripEpisodesPath(tr.reportedTripID)
+	body := decodeTripEpisodeBody(t, doGet(t, newReportedTripEpisodesRouter(t, pool), path, nil))
+	if items, ok := body["items"].([]any); !ok || len(items) != 0 {
+		t.Errorf("items = %v, want []", body["items"])
+	}
+	l := body["links"].(map[string]any)
+	if l["self"] != path {
+		t.Errorf("links.self = %v, want %s", l["self"], path)
+	}
+	if _, ok := l["next"]; ok {
+		t.Error("empty result has links.next")
+	}
+}
+
+func TestListReportedTripEpisodes_RejectsBadPageSize(t *testing.T) {
+	router := newReportedTripEpisodesRouter(t, nil)
+	for _, size := range []string{"0", "201"} {
+		wantInvalidParam(t, doGet(t, router, reportedTripEpisodesPath(1)+"?page_size="+size, nil), "page_size")
+	}
+}
+
+func TestListReportedTripEpisodes_RejectsBadCursor(t *testing.T) {
+	router := newReportedTripEpisodesRouter(t, nil)
+	wantInvalidParam(t, doGet(t, router, reportedTripEpisodesPath(1)+"?cursor=%25%25%25", nil), "cursor")
+}
+
+func TestListReportedTripEpisodes_Filter_status(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	tr := newTripFixture(t, pool)
+	closed := tr.episode(t, tripEpisodesNow.Add(-3*time.Hour), tripEpisodesNow.Add(-2*time.Hour))
+	open := tr.episode(t, tripEpisodesNow.Add(-time.Hour), time.Time{})
+	router := newReportedTripEpisodesRouter(t, pool)
+	path := reportedTripEpisodesPath(tr.reportedTripID)
+	wantTripEpisodeIDs(t, router, path+"?status=open", open)
+	wantTripEpisodeIDs(t, router, path+"?status=closed", closed)
+}
+
+func TestListReportedTripEpisodes_RejectsUnknownParameter(t *testing.T) {
+	router := newReportedTripEpisodesRouter(t, nil)
+	wantInvalidParam(t, doGet(t, router, reportedTripEpisodesPath(1)+"?foo=1", nil), "foo")
+}
+
+func TestListReportedTripEpisodes_Head(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	tr := newTripFixture(t, pool)
+	tr.episode(t, tripEpisodesNow.Add(-time.Hour), time.Time{})
+	router := newReportedTripEpisodesRouter(t, pool)
+	path := reportedTripEpisodesPath(tr.reportedTripID)
+	wantEpisodeHead(t, router, path)
+	if got := doGet(t, router, path, nil).Header().Get("Cache-Control"); got != "private, max-age=30" {
+		t.Errorf("Cache-Control = %q, want private, max-age=30", got)
+	}
+}
+
+func TestListReportedTripEpisodes_WindowOverlap(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	tr := newTripFixture(t, pool)
+	from, to := time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC)
+	tr.episode(t, from.Add(-3*time.Hour), from.Add(-2*time.Hour))
+	overlapping := tr.episode(t, from.Add(-time.Hour), from.Add(time.Hour))
+	stillOpen := tr.episode(t, from.Add(-5*time.Hour), time.Time{})
+	tr.episode(t, to.Add(time.Hour), to.Add(2*time.Hour))
+	wantTripEpisodeIDs(t, newReportedTripEpisodesRouter(t, pool),
+		reportedTripWindowQuery(tr.reportedTripID, from, to), stillOpen, overlapping)
+}
+
+func TestListReportedTripEpisodes_WindowNeedsBothEnds(t *testing.T) {
+	router := newReportedTripEpisodesRouter(t, nil)
+	wantInvalidParam(t, doGet(t, router, reportedTripEpisodesPath(1)+"?active_from=2026-10-01T00:00:00Z", nil), "active_to")
+	same := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	wantInvalidParam(t, doGet(t, router, reportedTripWindowQuery(1, same, same), nil), "active_to")
+}
+
+func TestListReportedTripEpisodes_WindowRequiresOffset(t *testing.T) {
+	router := newReportedTripEpisodesRouter(t, nil)
+	wantInvalidParam(t, doGet(t, router,
+		reportedTripEpisodesPath(1)+"?active_from=2026-10-01T00:00:00&active_to=2026-10-02T00:00:00Z", nil), "active_from")
+}
+
+func TestListReportedTripEpisodes_NoDefaultWindow(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	tr := newTripFixture(t, pool)
+	id := tr.episode(t, tripEpisodesNow.Add(-60*24*time.Hour-time.Hour), tripEpisodesNow.Add(-60*24*time.Hour))
+	wantTripEpisodeIDs(t, newReportedTripEpisodesRouter(t, pool), reportedTripEpisodesPath(tr.reportedTripID), id)
+}
+
+func TestListReportedTripEpisodes_OnlyThisTrip(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	tr := newTripFixture(t, pool)
+	id := tr.episode(t, tripEpisodesNow.Add(-time.Hour), time.Time{})
+	addTrip(t, pool, tr.serverID, tr.agencyID, "Trip_B").episode(t, tripEpisodesNow.Add(-time.Hour), time.Time{})
+	wantTripEpisodeIDs(t, newReportedTripEpisodesRouter(t, pool), reportedTripEpisodesPath(tr.reportedTripID), id)
+}
+
+func TestListReportedTripEpisodes_UnknownTrip(t *testing.T) {
+	router := newReportedTripEpisodesRouter(t, dbtest.NewMigratedPool(t))
+	wantNotFound(t, doGet(t, router, reportedTripEpisodesPath(999), nil))
+	wantNotFound(t, doGet(t, router, "/v1/reported-trips/abc/unmatched-trip-episodes", nil))
 }
