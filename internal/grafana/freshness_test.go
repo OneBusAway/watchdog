@@ -96,7 +96,7 @@ func TestPanelFreshnessExpressions(t *testing.T) {
 	// remove it from the check. Ref IDs survive reordering within the panel.
 	required := []panelTarget{
 		{301, "A"}, {301, "B"}, {301, "C"}, {301, "F"}, {301, "G"}, {301, "H"}, {301, "I"},
-		{501, "A"}, {501, "B"}, {501, "C"},
+		{501, "A"}, {503, "A"}, {503, "B"},
 	}
 	for _, target := range required {
 		if _, ok := gated[target]; !ok {
