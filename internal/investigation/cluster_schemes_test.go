@@ -1,6 +1,7 @@
 package investigation
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -13,19 +14,21 @@ import (
 	"watchdog.onebusaway.org/internal/db/dbtest"
 )
 
-// newClusterSchemesRouter returns a router serving getClusterScheme for GET and HEAD on a
-// service using pool (which may be nil for tests that never reach the database).
+// newClusterSchemesRouter returns a router serving list and get cluster-scheme
+// handlers for GET and HEAD on a service using pool (which may be nil for
+// tests that never reach the database).
 //
-// The handler is mounted without the request pipeline: until #197 replaces
-// the authenticate stub, every request through s.get is rejected with 401.
-// The pipeline's own checks (401, 405, 406, 503) are tested in routes_test.go
-// and pipeline_test.go.
+// The handlers are mounted without the request pipeline so unit tests are not
+// rejected by auth. The pipeline's own checks (401, 405, 406, 503) are tested
+// in routes_test.go and pipeline_test.go.
 func newClusterSchemesRouter(t *testing.T, pool *pgxpool.Pool) http.Handler {
 	t.Helper()
 	s, _ := newTestService(t)
 	s.Pool = pool
 
 	router := httprouter.New()
+	router.GET("/v1/cluster-schemes", s.listClusterSchemes)
+	router.HEAD("/v1/cluster-schemes", s.listClusterSchemes)
 	router.GET("/v1/cluster-schemes/:scheme_version", s.getClusterScheme)
 	router.HEAD("/v1/cluster-schemes/:scheme_version", s.getClusterScheme)
 	return router
@@ -34,6 +37,9 @@ func newClusterSchemesRouter(t *testing.T, pool *pgxpool.Pool) http.Handler {
 func TestGetClusterScheme_Registered(t *testing.T) {
 	_, router := newTestService(t)
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		if h, _, _ := router.Lookup(method, "/v1/cluster-schemes"); h == nil {
+			t.Errorf("%s /v1/cluster-schemes is not registered", method)
+		}
 		if h, _, _ := router.Lookup(method, "/v1/cluster-schemes/v1"); h == nil {
 			t.Errorf("%s /v1/cluster-schemes/:scheme_version is not registered", method)
 		}
@@ -182,5 +188,92 @@ func TestGetClusterScheme_Head(t *testing.T) {
 	}
 	if got := head.Header().Get("Cache-Control"); got != "private, max-age=86400" {
 		t.Errorf("Cache-Control = %q, want private, max-age=86400", got)
+	}
+}
+
+func TestListClusterSchemes_RejectsUnknownParameter(t *testing.T) {
+	router := newClusterSchemesRouter(t, nil)
+	wantInvalidParam(t, doGet(t, router, "/v1/cluster-schemes?foo=1", nil), "foo")
+}
+
+func TestListClusterSchemes_Head(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	created := time.Date(2026, 10, 24, 14, 5, 30, 0, time.UTC)
+	if err := dbtest.Exec(pool,
+		"INSERT INTO cluster_scheme (scheme_version, s2_level, station_grouping, description, created_at) VALUES ($1, $2, $3, $4, $5)",
+		"head-list", 12, "none", "Head list", created); err != nil {
+		t.Fatalf("insert cluster scheme: %v", err)
+	}
+	router := newClusterSchemesRouter(t, pool)
+
+	get := doGet(t, router, "/v1/cluster-schemes", nil)
+	req := httptest.NewRequest(http.MethodHead, "/v1/cluster-schemes", nil)
+	head := httptest.NewRecorder()
+	router.ServeHTTP(head, req)
+
+	if head.Code != get.Code {
+		t.Errorf("HEAD status = %d, GET status = %d", head.Code, get.Code)
+	}
+	if !reflect.DeepEqual(head.Header(), get.Header()) {
+		t.Errorf("HEAD headers = %v, GET headers = %v", head.Header(), get.Header())
+	}
+	if get.Body.Len() == 0 {
+		t.Error("GET body is empty")
+	}
+	if got := get.Header().Get("Cache-Control"); got != "private, max-age=30" {
+		t.Errorf("Cache-Control = %q, want private, max-age=30", got)
+	}
+	if get.Header().Get("ETag") == "" {
+		t.Error("no ETag header")
+	}
+}
+
+func TestListClusterSchemes_Order(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	older := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	newer := time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)
+	if err := dbtest.Exec(pool,
+		"INSERT INTO cluster_scheme (scheme_version, s2_level, station_grouping, description, created_at) VALUES ($1, $2, $3, $4, $5)",
+		"older", 10, "none", "Older scheme", older); err != nil {
+		t.Fatalf("insert older scheme: %v", err)
+	}
+	if err := dbtest.Exec(pool,
+		"INSERT INTO cluster_scheme (scheme_version, s2_level, station_grouping, description, created_at) VALUES ($1, $2, $3, $4, $5)",
+		"newer", 14, "parent_station", "Newer scheme", newer); err != nil {
+		t.Fatalf("insert newer scheme: %v", err)
+	}
+	router := newClusterSchemesRouter(t, pool)
+
+	rec := doGet(t, router, "/v1/cluster-schemes", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	want := map[string]any{
+		"items": []any{
+			map[string]any{
+				"scheme_version":   "newer",
+				"s2_level":         float64(14),
+				"station_grouping": "parent_station",
+				"description":      "Newer scheme",
+				"created_at":       "2026-10-02T00:00:00Z",
+				"links":            map[string]any{"self": "/v1/cluster-schemes/newer"},
+			},
+			map[string]any{
+				"scheme_version":   "older",
+				"s2_level":         float64(10),
+				"station_grouping": "none",
+				"description":      "Older scheme",
+				"created_at":       "2026-10-01T00:00:00Z",
+				"links":            map[string]any{"self": "/v1/cluster-schemes/older"},
+			},
+		},
+		"links": map[string]any{"self": "/v1/cluster-schemes"},
+	}
+	if !reflect.DeepEqual(body, want) {
+		t.Errorf("body =\n%v\nwant\n%v", body, want)
 	}
 }
