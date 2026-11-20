@@ -7,6 +7,7 @@ package dbgen
 
 import (
 	"context"
+	"time"
 )
 
 const getOBAMetricsResponse = `-- name: GetOBAMetricsResponse :one
@@ -76,29 +77,53 @@ func (q *Queries) ListOBAMetricsResponseAgencies(ctx context.Context, responseId
 	return items, nil
 }
 
-const listOBAMetricsResponses = `-- name: ListOBAMetricsResponses :many
-SELECT response_id, server_id, observed_at, upstream_current_time, api_version
-FROM onebusaway_metrics_response
-WHERE response_id = ANY($1::bigint[])
-ORDER BY response_id
+const listOBAMetricsResponsesWithAgencies = `-- name: ListOBAMetricsResponsesWithAgencies :many
+SELECT r.response_id, r.server_id, r.observed_at, r.upstream_current_time, r.api_version,
+       a.agency_id, a.response_complete, a.unmatched_stop_count, a.unmatched_trip_count,
+       a.matched_stop_count, a.matched_trip_count
+FROM onebusaway_metrics_response AS r
+LEFT JOIN onebusaway_metrics_response_agency AS a ON a.response_id = r.response_id
+WHERE r.response_id = ANY($1::bigint[])
+ORDER BY r.response_id, a.agency_id
 `
 
-// The response headers for every ID, for the E20 include loader's single batched read.
-func (q *Queries) ListOBAMetricsResponses(ctx context.Context, responseIds []int64) ([]OnebusawayMetricsResponse, error) {
-	rows, err := q.db.Query(ctx, listOBAMetricsResponses, responseIds)
+type ListOBAMetricsResponsesWithAgenciesRow struct {
+	ResponseID          int64
+	ServerID            int64
+	ObservedAt          time.Time
+	UpstreamCurrentTime *time.Time
+	ApiVersion          *int32
+	AgencyID            *int64
+	ResponseComplete    *bool
+	UnmatchedStopCount  *int32
+	UnmatchedTripCount  *int32
+	MatchedStopCount    *int32
+	MatchedTripCount    *int32
+}
+
+// Headers and agency counts for every ID in one batched read, for the E20 include loader.
+// A response with no agency rows still returns one row, with NULL agency columns.
+func (q *Queries) ListOBAMetricsResponsesWithAgencies(ctx context.Context, responseIds []int64) ([]ListOBAMetricsResponsesWithAgenciesRow, error) {
+	rows, err := q.db.Query(ctx, listOBAMetricsResponsesWithAgencies, responseIds)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []OnebusawayMetricsResponse
+	var items []ListOBAMetricsResponsesWithAgenciesRow
 	for rows.Next() {
-		var i OnebusawayMetricsResponse
+		var i ListOBAMetricsResponsesWithAgenciesRow
 		if err := rows.Scan(
 			&i.ResponseID,
 			&i.ServerID,
 			&i.ObservedAt,
 			&i.UpstreamCurrentTime,
 			&i.ApiVersion,
+			&i.AgencyID,
+			&i.ResponseComplete,
+			&i.UnmatchedStopCount,
+			&i.UnmatchedTripCount,
+			&i.MatchedStopCount,
+			&i.MatchedTripCount,
 		); err != nil {
 			return nil, err
 		}

@@ -81,24 +81,43 @@ func obaMetricsResponseRepresentation(row dbgen.OnebusawayMetricsResponse, agenc
 }
 
 // loadOBAMetricsResponses is the batched include loader for kindOBAMetricsResponse.
-// It reads every requested response's header and agency rows, two queries
-// whatever the number of IDs, and returns E20 for each ID.
+// One query reads every requested response's header and agency rows whatever the
+// number of IDs, and the rows are grouped by response ID. A response with no
+// agency rows still gets an entry, with an empty agencies array.
 func loadOBAMetricsResponses(ctx context.Context, q *dbgen.Queries, ids []int64) (map[int64]any, error) {
-	headers, err := q.ListOBAMetricsResponses(ctx, ids)
+	rows, err := q.ListOBAMetricsResponsesWithAgencies(ctx, ids)
 	if err != nil {
 		return nil, err
 	}
-	agencyRows, err := q.ListOBAMetricsResponseAgencies(ctx, ids)
-	if err != nil {
-		return nil, err
-	}
+	headers := make(map[int64]dbgen.OnebusawayMetricsResponse, len(ids))
 	byResponse := make(map[int64][]dbgen.ListOBAMetricsResponseAgenciesRow, len(ids))
-	for _, row := range agencyRows {
-		byResponse[row.ResponseID] = append(byResponse[row.ResponseID], row)
+	for _, row := range rows {
+		if _, seen := headers[row.ResponseID]; !seen {
+			headers[row.ResponseID] = dbgen.OnebusawayMetricsResponse{
+				ResponseID:          row.ResponseID,
+				ServerID:            row.ServerID,
+				ObservedAt:          row.ObservedAt,
+				UpstreamCurrentTime: row.UpstreamCurrentTime,
+				ApiVersion:          row.ApiVersion,
+			}
+		}
+		// The LEFT JOIN yields NULL agency columns for a response with no agency rows.
+		// A matched agency row always has all of them set, since they are NOT NULL in the schema.
+		if row.AgencyID != nil {
+			byResponse[row.ResponseID] = append(byResponse[row.ResponseID], dbgen.ListOBAMetricsResponseAgenciesRow{
+				ResponseID:         row.ResponseID,
+				AgencyID:           *row.AgencyID,
+				ResponseComplete:   *row.ResponseComplete,
+				UnmatchedStopCount: row.UnmatchedStopCount,
+				UnmatchedTripCount: row.UnmatchedTripCount,
+				MatchedStopCount:   row.MatchedStopCount,
+				MatchedTripCount:   row.MatchedTripCount,
+			})
+		}
 	}
 	out := make(map[int64]any, len(headers))
-	for _, row := range headers {
-		out[row.ResponseID] = obaMetricsResponseRepresentation(row, byResponse[row.ResponseID], obaMetricsResponseLinks(row))
+	for id, header := range headers {
+		out[id] = obaMetricsResponseRepresentation(header, byResponse[id], obaMetricsResponseLinks(header))
 	}
 	return out, nil
 }

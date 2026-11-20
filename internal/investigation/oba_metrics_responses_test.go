@@ -179,6 +179,8 @@ func TestOBAMetricsResponseLoader(t *testing.T) {
 		insertResponseAgency(t, pool, id, agency, true, [4]*int32{int32Ptr(int32(i)), nil, nil, nil})
 		ids = append(ids, id)
 	}
+	// A response with no agency rows must still load, with an empty agencies array.
+	ids = append(ids, insertMetricsResponse(t, pool, serverID, episodesNow.Add(-5*time.Hour), nil, nil))
 	router := newOBAMetricsRouter(t, pool)
 
 	s, _ := newTestService(t)
