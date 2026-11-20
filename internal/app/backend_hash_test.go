@@ -27,7 +27,8 @@ func TestCollectionChecksMetadataOncePerBackend(t *testing.T) {
 			return
 		}
 		requests.Add(1)
-		http.NotFound(w, r)
+		// A healthy backend: a usable hash never puts metadata in backoff.
+		fmt.Fprintf(w, `{"staticGtfsHash":%q}`, strings.Repeat("ab", 32))
 	}))
 	defer ts.Close()
 	app := newEmptyApplication(t)
@@ -220,12 +221,13 @@ func TestBackendHashGaugeLifecycleAndAPIHealth(t *testing.T) {
 }
 
 // backendHashTestFeed builds a minimal valid feed for the gauge publication test.
+// Its service runs until 2099, so the bundle never expires under the real clock.
 func backendHashTestFeed(t *testing.T) []byte {
 	t.Helper()
 	files := map[string]string{
 		"agency.txt":     "agency_id,agency_name,agency_url,agency_timezone\n40,Sound Transit,https://example.com,UTC\n",
 		"routes.txt":     "route_id,agency_id,route_short_name,route_type\nR,40,R,3\n",
-		"calendar.txt":   "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nWK,1,1,1,1,1,1,1,20260101,20261231\n",
+		"calendar.txt":   "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nWK,1,1,1,1,1,1,1,20260101,20991231\n",
 		"trips.txt":      "route_id,service_id,trip_id\nR,WK,T\n",
 		"stops.txt":      "stop_id,stop_name,stop_lat,stop_lon\nS1,One,1,1\nS2,Two,2,2\n",
 		"stop_times.txt": "trip_id,arrival_time,departure_time,stop_id,stop_sequence\nT,08:00:00,08:00:00,S1,1\nT,09:00:00,09:00:00,S2,2\n",

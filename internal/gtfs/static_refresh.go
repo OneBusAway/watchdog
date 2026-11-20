@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -37,16 +36,6 @@ func staticConfigFingerprint(server models.ObaServer) string {
 // cached artifacts and re-download feeds for a snapshot that cannot publish.
 var errStaticServerUnconfigured = errors.New("static refresh server is no longer configured")
 
-type StaticRefreshTrigger string
-
-const (
-	StaticRefreshStartup        StaticRefreshTrigger = "startup"
-	StaticRefreshDaily          StaticRefreshTrigger = "daily"
-	StaticRefreshBackendChanged StaticRefreshTrigger = "backend_changed"
-	StaticRefreshConfigChange   StaticRefreshTrigger = "config_change"
-	StaticRefreshAgencyMismatch StaticRefreshTrigger = "agency_mismatch"
-)
-
 // A backend hash starts a backend_changed campaign only once the backend has
 // reported it steadily for both a minimum duration and a minimum number of
 // observations, so a deployment in progress does not trigger downloads. A
@@ -66,21 +55,22 @@ const maxStaticCampaignCacheSize = int64(2 << 30)
 const maxStaticFeedDownloadSize = int64(512 << 20)
 
 type staticFeedFailureHistory struct {
-	failureSince      time.Time
-	failedDailyRuns   int
-	identicalFailures int
-	lastContentHash   string
-	conservative      bool
-	lastStage         StaticFailureStage
-	lastReason        StaticFailureReason
+	failureSince time.Time
+	// failedEscalatingCampaigns counts failed campaigns whose trigger
+	// escalates (see staticTriggerPolicy).
+	failedEscalatingCampaigns int
+	identicalFailures         int
+	lastContentHash           string
+	conservative              bool
+	lastStage                 StaticFailureStage
+	lastReason                StaticFailureReason
 }
 
 // publishedStaticContent is what a server's last successful publish was built
-// from: its static configuration and the SHA-256 of each feed zip, in
-// configured order.
+// from: its static configuration and the SHA-256 of the feed zip.
 type publishedStaticContent struct {
 	fingerprint string
-	hashes      []string
+	hash        string
 }
 
 type activeStaticCampaign struct {
@@ -104,9 +94,17 @@ type staticRefreshCoordinator struct {
 	published        map[string]publishedStaticContent
 	snapshotContent  map[string]publishedStaticContent
 	mismatches       map[string]agencyMismatchState
-	policy           staticRefreshRetryPolicy
-	nextGeneration   uint64
-	now              func() time.Time
+	// superseded is, per server, the snapshot that its current snapshot
+	// replaced, so a backend still serving it is recognised as behind.
+	superseded map[string]publishedStaticContent
+	// relations is, per server, how the backend's bundle related to the
+	// snapshot at the last usable hash comparison.
+	relations map[string]backendRelationState
+	// feedChecks is, per server, the result of the last completed feed attempt.
+	feedChecks     map[string]feedCheckState
+	policy         staticRefreshRetryPolicy
+	nextGeneration uint64
+	now            func() time.Time
 	// checkInterval is the collection fetch interval, which sets how long a
 	// gap between backend hash observations may be before a run restarts.
 	checkInterval time.Duration
@@ -122,10 +120,23 @@ func newStaticRefreshCoordinator() *staticRefreshCoordinator {
 		histories:        make(map[string]*staticFeedFailureHistory),
 		published:        make(map[string]publishedStaticContent),
 		mismatches:       make(map[string]agencyMismatchState),
-		policy:           dailyStaticRefreshRetryPolicy,
+		superseded:       make(map[string]publishedStaticContent),
+		relations:        make(map[string]backendRelationState),
+		feedChecks:       make(map[string]feedCheckState),
+		policy:           defaultStaticRefreshRetryPolicy,
 		now:              time.Now,
 		checkInterval:    30 * time.Second,
 	}
+}
+
+// staticFeedURL returns the entry's upstream-merged static feed. ok is false
+// for an entry that does not configure exactly one, which config validation
+// rejects.
+func staticFeedURL(server models.ObaServer) (string, bool) {
+	if len(server.GtfsStaticFeeds) != 1 {
+		return "", false
+	}
+	return server.GtfsStaticFeeds[0], true
 }
 
 func staticFeedHistoryKey(server models.ObaServer, feedURL string) string {
@@ -184,7 +195,7 @@ func (c *staticRefreshCoordinator) reconcile(servers []models.ObaServer) {
 	configuredFeeds := make(map[string]struct{})
 	for _, server := range servers {
 		configured[server.ServerKey()] = staticConfigFingerprint(server)
-		for _, feedURL := range server.GtfsStaticFeeds {
+		if feedURL, ok := staticFeedURL(server); ok {
 			configuredFeeds[staticFeedHistoryKey(server, feedURL)] = struct{}{}
 		}
 	}
@@ -226,37 +237,54 @@ func (c *staticRefreshCoordinator) reconcile(servers []models.ObaServer) {
 			delete(c.mismatches, key)
 		}
 	}
+	for key, content := range c.superseded {
+		if configured[key] != content.fingerprint {
+			delete(c.superseded, key)
+		}
+	}
+	for key, state := range c.relations {
+		if configured[key] != state.fingerprint {
+			delete(c.relations, key)
+		}
+	}
+	for key, state := range c.feedChecks {
+		if configured[key] != state.fingerprint {
+			delete(c.feedChecks, key)
+		}
+	}
 }
 
-// unchanged reports whether hashes and the server's static configuration
+// unchanged reports whether hash and the server's static configuration
 // match its last successful publish.
-func (c *staticRefreshCoordinator) unchanged(server models.ObaServer, hashes []string) bool {
+func (c *staticRefreshCoordinator) unchanged(server models.ObaServer, hash string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	content, ok := c.published[server.ServerKey()]
-	if !ok || content.fingerprint != staticConfigFingerprint(server) || len(content.hashes) != len(hashes) {
-		return false
-	}
-	for i := range hashes {
-		if hashes[i] == "" || content.hashes[i] != hashes[i] {
-			return false
-		}
-	}
-	return true
+	return ok && hash != "" && content.fingerprint == staticConfigFingerprint(server) && content.hash == hash
 }
 
-// recordPublished records the zip hashes of a successful publication unless its context was canceled.
-func (c *staticRefreshCoordinator) recordPublished(ctx context.Context, server models.ObaServer, hashes []string) bool {
+// recordPublished records the zip hash of a successful publication unless its context was canceled.
+func (c *staticRefreshCoordinator) recordPublished(ctx context.Context, server models.ObaServer, hash string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if ctx.Err() != nil {
 		return false
 	}
-	content := publishedStaticContent{fingerprint: staticConfigFingerprint(server), hashes: hashes}
-	c.published[server.ServerKey()] = content
+	key := server.ServerKey()
+	content := publishedStaticContent{fingerprint: staticConfigFingerprint(server), hash: hash}
+	if previous, ok := c.snapshotContent[key]; ok && previous.fingerprint == content.fingerprint && previous.hash != hash {
+		// A newer bundle replaced the snapshot. A backend still reporting the
+		// old one's hash is behind Watchdog, not ahead of it.
+		c.superseded[key] = previous
+		delete(c.relations, key)
+	} else if !ok || previous.fingerprint != content.fingerprint {
+		delete(c.superseded, key)
+		delete(c.relations, key)
+	}
+	c.published[key] = content
 	// Retain the identity of the snapshot still in use if a later refresh
 	// fails and invalidates only the unchanged-download optimization.
-	c.snapshotContent[server.ServerKey()] = content
+	c.snapshotContent[key] = content
 	return true
 }
 
@@ -331,7 +359,7 @@ func (c *staticRefreshCoordinator) recordFailureLocked(server models.ObaServer, 
 		c.histories[key] = history
 	}
 	if failurePolicyClass(history.lastReason) != failurePolicyClass(failure.Reason) {
-		history.failedDailyRuns = 0
+		history.failedEscalatingCampaigns = 0
 		history.identicalFailures = 0
 		history.lastContentHash = ""
 	}
@@ -367,17 +395,19 @@ func failurePolicyClass(reason StaticFailureReason) string {
 	}
 }
 
-func (c *staticRefreshCoordinator) recordFailedCampaign(server models.ObaServer, feedURLs []string, trigger StaticRefreshTrigger) {
-	if trigger != StaticRefreshDaily {
+// recordFailedCampaign counts a failed campaign toward the conservative
+// classification when its trigger escalates.
+func (c *staticRefreshCoordinator) recordFailedCampaign(server models.ObaServer, feedURL string, trigger StaticRefreshTrigger) {
+	if !trigger.policy().escalates {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.recordFailedCampaignLocked(server, feedURLs)
+	c.recordFailedCampaignLocked(server, feedURL)
 }
 
-func (c *staticRefreshCoordinator) recordCampaignExhaustion(ctx context.Context, server models.ObaServer, feedURLs []string, trigger StaticRefreshTrigger) bool {
-	if trigger != StaticRefreshDaily {
+func (c *staticRefreshCoordinator) recordCampaignExhaustion(ctx context.Context, server models.ObaServer, feedURL string, trigger StaticRefreshTrigger) bool {
+	if !trigger.policy().escalates {
 		return ctx.Err() == nil
 	}
 	c.mu.Lock()
@@ -385,30 +415,32 @@ func (c *staticRefreshCoordinator) recordCampaignExhaustion(ctx context.Context,
 	if ctx.Err() != nil {
 		return false
 	}
-	c.recordFailedCampaignLocked(server, feedURLs)
+	c.recordFailedCampaignLocked(server, feedURL)
 	return true
 }
 
-func (c *staticRefreshCoordinator) recordFailedCampaignLocked(server models.ObaServer, feedURLs []string) {
-	for _, feedURL := range feedURLs {
-		history := c.histories[staticFeedHistoryKey(server, feedURL)]
-		if history == nil {
-			continue
-		}
-		history.failedDailyRuns++
-		switch history.lastReason {
-		case StaticReasonNotFound, StaticReasonGone:
+func (c *staticRefreshCoordinator) recordFailedCampaignLocked(server models.ObaServer, feedURL string) {
+	history := c.histories[staticFeedHistoryKey(server, feedURL)]
+	if history == nil {
+		return
+	}
+	history.failedEscalatingCampaigns++
+	switch history.lastReason {
+	case StaticReasonNotFound, StaticReasonGone:
+		history.conservative = true
+	default:
+		if history.failedEscalatingCampaigns >= conservativeAfterFailedCampaigns {
 			history.conservative = true
-		default:
-			if history.failedDailyRuns >= 7 {
-				history.conservative = true
-			}
 		}
 	}
 }
 
+// runStaticRefreshCampaign downloads the server's upstream-merged static feed,
+// retrying with the policy's backoff until it publishes, the budget runs out,
+// or the feed is classified as conservative.
 func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server models.ObaServer, trigger StaticRefreshTrigger, maxRetries int, policy staticRefreshRetryPolicy) {
-	if len(server.GtfsStaticFeeds) != 1 {
+	feedURL, ok := staticFeedURL(server)
+	if !ok {
 		gs.Logger.Error("Expected one upstream-merged static feed; merge feeds upstream", "server_name", server.ServerName)
 		gs.StaticStore.WithRefreshLock(func() {
 			if gs.StaticStore.IsConfigured(server) {
@@ -425,24 +457,15 @@ func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server mode
 	}
 	defer cache.Close()
 
-	pending := make(map[string]struct{}, len(server.GtfsStaticFeeds))
-	conservativeProbe := trigger == StaticRefreshDaily
-	for _, feedURL := range server.GtfsStaticFeeds {
-		if !conservativeProbe || gs.refreshCoordinator.isConservative(server, feedURL) {
-			pending[feedURL] = struct{}{}
-		}
-	}
-	if conservativeProbe && len(pending) == 0 {
-		for _, feedURL := range server.GtfsStaticFeeds {
-			pending[feedURL] = struct{}{}
-		}
-		conservativeProbe = false
-	}
+	// A trigger that probes conservative feeds gives one already classified
+	// as conservative a single attempt: a failure ends the campaign.
+	conservativeProbe := trigger.policy().probeOnceWhenConservative && gs.refreshCoordinator.isConservative(server, feedURL)
+	pending := true
 
 	started := time.Now()
 	deadline := started.Add(policy.budget)
 	delay := time.Duration(0)
-	lastFailures := make(map[string]*StaticFeedError)
+	var lastFailure *StaticFeedError
 	for {
 		if delay > 0 {
 			timer := time.NewTimer(delay)
@@ -455,9 +478,8 @@ func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server mode
 		}
 		attemptedAt := time.Now().UTC()
 		gs.reportStaticRefresh(server, StaticRefreshObservation{AttemptedAt: attemptedAt, Retrying: true})
-		feedURLs := sortedPendingFeeds(pending)
 		maxRetryAfter := time.Duration(0)
-		for _, feedURL := range feedURLs {
+		if pending {
 			data, downloadErr := fetchGTFSBundleData(ctx, gs.Client, feedURL, server.AgencyID, maxRetries)
 			if downloadErr == nil {
 				admitted := gs.withStaticParseSlot(ctx, func() {
@@ -475,99 +497,78 @@ func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server mode
 				if cacheErr != nil {
 					downloadErr = &StaticFeedError{Stage: StaticFailureDownload, Reason: StaticReasonResponseTooLarge, Err: cacheErr}
 				} else {
-					delete(pending, feedURL)
-					delete(lastFailures, feedURL)
+					pending = false
+					lastFailure = nil
 					history, _ := gs.refreshCoordinator.history(server, feedURL)
 					gs.reportStaticFeedRefresh(server, feedURL, StaticFeedRefreshObservation{AttemptedAt: attemptedAt, Success: true, Conservative: history.conservative, ContentHash: artifact.hash})
-					continue
 				}
 			}
-			failure := asStaticFeedError(downloadErr)
-			lastFailures[feedURL] = failure
-			history, recorded := gs.refreshCoordinator.recordCampaignFailure(ctx, server, feedURL, failure, attemptedAt)
-			if !recorded {
-				return
-			}
-			gs.reportStaticFeedRefresh(server, feedURL, StaticFeedRefreshObservation{AttemptedAt: attemptedAt, FailureSince: history.failureSince, Stage: failure.Stage, Reason: failure.Reason, Conservative: history.conservative})
-			if failure.RetryAfter > maxRetryAfter {
+			if downloadErr != nil {
+				failure := asStaticFeedError(downloadErr)
+				lastFailure = failure
+				history, recorded := gs.refreshCoordinator.recordCampaignFailure(ctx, server, feedURL, failure, attemptedAt)
+				if !recorded {
+					return
+				}
+				gs.refreshCoordinator.recordFeedCheck(server, attemptedAt, failure)
+				gs.reportStaticFeedRefresh(server, feedURL, StaticFeedRefreshObservation{AttemptedAt: attemptedAt, FailureSince: history.failureSince, Stage: failure.Stage, Reason: failure.Reason, Conservative: history.conservative})
 				maxRetryAfter = failure.RetryAfter
 			}
 		}
 
 		if conservativeProbe {
-			if len(pending) > 0 {
-				gs.finishFailedStaticCampaign(ctx, server, trigger, attemptedAt, pending, lastFailures)
+			if pending {
+				gs.finishFailedStaticCampaign(ctx, server, trigger, attemptedAt, feedURL, lastFailure)
 				return
 			}
-			for _, feedURL := range server.GtfsStaticFeeds {
-				if _, cached := cache.Get(feedURL); !cached {
-					pending[feedURL] = struct{}{}
-				}
-			}
 			conservativeProbe = false
-			if len(pending) > 0 {
-				continue
-			}
 		}
 
-		if len(pending) == 0 {
-			hashes := make([]string, len(server.GtfsStaticFeeds))
-			for i, feedURL := range server.GtfsStaticFeeds {
-				artifact, _ := cache.Get(feedURL)
-				hashes[i] = artifact.hash
-			}
+		if !pending {
+			artifact, _ := cache.Get(feedURL)
+			hash := artifact.hash
 			reportSuccess := func() {
-				for _, feedURL := range server.GtfsStaticFeeds {
-					if !gs.refreshCoordinator.recordCampaignSuccess(ctx, server, feedURL) {
-						return
-					}
-					artifact, _ := cache.Get(feedURL)
-					gs.reportStaticFeedRefresh(server, feedURL, StaticFeedRefreshObservation{AttemptedAt: attemptedAt, Success: true, ContentHash: artifact.hash})
+				if !gs.refreshCoordinator.recordCampaignSuccess(ctx, server, feedURL) {
+					return
 				}
+				gs.refreshCoordinator.recordFeedCheck(server, attemptedAt, nil)
+				gs.reportStaticFeedRefresh(server, feedURL, StaticFeedRefreshObservation{AttemptedAt: attemptedAt, Success: true, ContentHash: hash})
 				gs.reportStaticRefresh(server, StaticRefreshObservation{AttemptedAt: attemptedAt, Success: true})
 			}
-			// Byte-identical feeds under an unchanged configuration would
+			// A byte-identical feed under an unchanged configuration would
 			// parse to the snapshot already published, so confirm it as
 			// current instead of paying for a full parse and store swap.
-			if gs.refreshCoordinator.unchanged(server, hashes) && gs.confirmUnchangedStaticSnapshot(ctx, server) {
+			if gs.refreshCoordinator.unchanged(server, hash) && gs.confirmUnchangedStaticSnapshot(ctx, server) {
 				reportSuccess()
 				return
 			}
 			var err error
-			if !gs.withStaticParseSlot(ctx, func() { err = gs.publishStaticCampaign(ctx, server, cache) }) {
+			if !gs.withStaticParseSlot(ctx, func() { err = gs.publishStaticCampaign(ctx, server, feedURL, cache) }) {
 				return
 			}
 			if err == nil {
-				if gs.refreshCoordinator.recordPublished(ctx, server, hashes) {
+				if gs.refreshCoordinator.recordPublished(ctx, server, hash) {
 					reportSuccess()
 				}
 				return
-			} else {
-				gs.refreshCoordinator.forgetPublished(server)
-				if ctx.Err() != nil || errors.Is(err, errStaticServerUnconfigured) {
-					return
-				}
-				failure := asStaticFeedError(err)
-				failedFeeds := server.GtfsStaticFeeds
-				if failure.FeedURL != "" {
-					failedFeeds = []string{failure.FeedURL}
-				}
-				for _, feedURL := range failedFeeds {
-					artifact, _ := cache.Get(feedURL)
-					feedFailure := *failure
-					if feedFailure.ContentHash == "" {
-						feedFailure.ContentHash = artifact.hash
-					}
-					history, recorded := gs.refreshCoordinator.recordCampaignFailure(ctx, server, feedURL, &feedFailure, attemptedAt)
-					if !recorded {
-						return
-					}
-					gs.reportStaticFeedRefresh(server, feedURL, StaticFeedRefreshObservation{AttemptedAt: attemptedAt, FailureSince: history.failureSince, Stage: feedFailure.Stage, Reason: feedFailure.Reason, Conservative: history.conservative})
-					lastFailures[feedURL] = &feedFailure
-					cache.Delete(feedURL)
-					pending[feedURL] = struct{}{}
-				}
 			}
+			gs.refreshCoordinator.forgetPublished(server)
+			if ctx.Err() != nil || errors.Is(err, errStaticServerUnconfigured) {
+				return
+			}
+			failure := *asStaticFeedError(err)
+			if failure.ContentHash == "" {
+				failure.ContentHash = hash
+			}
+			history, recorded := gs.refreshCoordinator.recordCampaignFailure(ctx, server, feedURL, &failure, attemptedAt)
+			if !recorded {
+				return
+			}
+			gs.refreshCoordinator.recordFeedCheck(server, attemptedAt, &failure)
+			gs.reportStaticFeedRefresh(server, feedURL, StaticFeedRefreshObservation{AttemptedAt: attemptedAt, FailureSince: history.failureSince, Stage: failure.Stage, Reason: failure.Reason, Conservative: history.conservative})
+			lastFailure = &failure
+			cache.Delete(feedURL)
+			pending = true
 		}
 
 		if delay == 0 {
@@ -578,8 +579,8 @@ func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server mode
 		if maxRetryAfter > delay {
 			delay = maxRetryAfter
 		}
-		if time.Now().Add(delay).After(deadline) || containsConservativeFailure(server, pending, gs.refreshCoordinator) {
-			gs.finishFailedStaticCampaign(ctx, server, trigger, attemptedAt, pending, lastFailures)
+		if time.Now().Add(delay).After(deadline) || (pending && gs.refreshCoordinator.isConservative(server, feedURL)) {
+			gs.finishFailedStaticCampaign(ctx, server, trigger, attemptedAt, feedURL, lastFailure)
 			return
 		}
 	}
@@ -600,34 +601,11 @@ func (gs *GtfsService) withStaticParseSlot(ctx context.Context, fn func()) bool 
 	return true
 }
 
-func sortedPendingFeeds(pending map[string]struct{}) []string {
-	result := make([]string, 0, len(pending))
-	for feedURL := range pending {
-		result = append(result, feedURL)
-	}
-	sort.Strings(result)
-	return result
-}
-
-func containsConservativeFailure(server models.ObaServer, pending map[string]struct{}, coordinator *staticRefreshCoordinator) bool {
-	for feedURL := range pending {
-		if coordinator.isConservative(server, feedURL) {
-			return true
-		}
-	}
-	return false
-}
-
-func (gs *GtfsService) finishFailedStaticCampaign(ctx context.Context, server models.ObaServer, trigger StaticRefreshTrigger, attemptedAt time.Time, pending map[string]struct{}, failures map[string]*StaticFeedError) {
-	failedFeeds := sortedPendingFeeds(pending)
-	if !gs.refreshCoordinator.recordCampaignExhaustion(ctx, server, failedFeeds, trigger) {
+func (gs *GtfsService) finishFailedStaticCampaign(ctx context.Context, server models.ObaServer, trigger StaticRefreshTrigger, attemptedAt time.Time, feedURL string, failure *StaticFeedError) {
+	if !gs.refreshCoordinator.recordCampaignExhaustion(ctx, server, feedURL, trigger) {
 		return
 	}
-	for _, feedURL := range failedFeeds {
-		history, ok := gs.refreshCoordinator.history(server, feedURL)
-		if !ok {
-			continue
-		}
+	if history, ok := gs.refreshCoordinator.history(server, feedURL); ok {
 		gs.reportStaticFeedRefresh(server, feedURL, StaticFeedRefreshObservation{
 			AttemptedAt: attemptedAt, FailureSince: history.failureSince,
 			Stage: history.lastStage, Reason: history.lastReason, Conservative: history.conservative,
@@ -640,7 +618,7 @@ func (gs *GtfsService) finishFailedStaticCampaign(ctx context.Context, server mo
 		}
 	})
 	gs.reportStaticRefresh(server, StaticRefreshObservation{AttemptedAt: attemptedAt, GaveUp: true})
-	gs.Logger.Error("GTFS static refresh campaign failed; preserving prior complete snapshot", "server_name", server.ServerName, "agency_id", server.AgencyID, "failed_feeds", failedFeeds, "failures", failures)
+	gs.Logger.Error("GTFS static refresh campaign failed; preserving prior complete snapshot", "server_name", server.ServerName, "agency_id", server.AgencyID, "feed_url", utils.SanitizeServerURL(feedURL), "failure", failure)
 }
 
 // confirmUnchangedStaticSnapshot renews the fetch time of the snapshot the
@@ -657,14 +635,10 @@ func (gs *GtfsService) confirmUnchangedStaticSnapshot(ctx context.Context, serve
 	return confirmed
 }
 
-func (gs *GtfsService) publishStaticCampaign(ctx context.Context, server models.ObaServer, cache *staticArtifactCache) error {
-	if len(server.GtfsStaticFeeds) != 1 {
-		return fmt.Errorf("expected one upstream-merged static feed; merge feeds upstream")
-	}
+func (gs *GtfsService) publishStaticCampaign(ctx context.Context, server models.ObaServer, feedURL string, cache *staticArtifactCache) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	feedURL := server.GtfsStaticFeeds[0]
 	data, err := cache.Read(feedURL)
 	if err != nil {
 		return &StaticFeedError{Stage: StaticFailureCompleteValidate, Reason: StaticReasonUnknown, Err: err}
@@ -686,8 +660,7 @@ func (gs *GtfsService) publishStaticCampaign(ctx context.Context, server models.
 	if err != nil {
 		return &StaticFeedError{Stage: StaticFailureCompleteValidate, Reason: StaticReasonInvalidSchedule, Err: err}
 	}
-	bundles := []*remoteGtfs.Static{bundle}
-	downloaded := []downloadedStaticFeed{{url: feedURL, data: data, bundle: bundle}}
+	downloaded := downloadedStaticFeed{url: feedURL, data: data, bundle: bundle}
 
 	configured := false
 	var storeErr error
@@ -696,7 +669,7 @@ func (gs *GtfsService) publishStaticCampaign(ctx context.Context, server models.
 			return
 		}
 		configured = true
-		storeErr = storeStaticForServer(server, bundles, gs.StaticStore, gs.BoundingBoxStore, gs.RouteAgencyIndex, gs.Observer, gs.Logger)
+		storeErr = storeStaticForServer(server, bundle, gs.StaticStore, gs.BoundingBoxStore, gs.RouteAgencyIndex, gs.Observer, gs.Logger)
 		if storeErr != nil {
 			gs.StaticStore.ScheduleStore().MarkUnavailable(server)
 			return
@@ -757,21 +730,6 @@ func validateStaticAgencyDiscovery(server models.ObaServer, bundle *remoteGtfs.S
 		return StaticReasonUnknownAgency
 	}
 	return ""
-}
-
-func startDailyStaticRefreshes(ctx context.Context, service *GtfsService, servers func() []models.ObaServer, logger *slog.Logger, interval time.Duration, maxRetries int) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			configured := servers()
-			logger.Info("Starting daily GTFS static refresh campaigns", "server_count", len(configured))
-			service.StartStaticRefreshCampaigns(ctx, configured, StaticRefreshDaily, maxRetries)
-		}
-	}
 }
 
 // Static refresh errors are reported at their origin. This helper exists so a

@@ -25,7 +25,7 @@ func TestCompileSchedulesCalendarExceptionsAndOvernight(t *testing.T) {
 		"stop_times.txt":     "trip_id,arrival_time,departure_time,stop_id,stop_sequence\nT,25:00:00,25:00:00,S1,1\nT,26:00:00,26:00:00,S2,2\n",
 	})
 	server := scheduleServer("A", "https://a.zip")
-	snapshots, err := compileSchedules(server, []downloadedStaticFeed{{url: server.GtfsStaticFeeds[0], data: feed}})
+	snapshots, err := compileSchedules(server, downloadedStaticFeed{url: server.GtfsStaticFeeds[0], data: feed})
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestCompileSchedulesCalendarExceptionsAndOvernight(t *testing.T) {
 
 func TestCompileSchedulesRealFixture(t *testing.T) {
 	server := scheduleServer("40", "https://fixture.example/gtfs.zip")
-	snapshots, err := compileSchedules(server, []downloadedStaticFeed{{url: server.GtfsStaticFeeds[0], data: readFixture(t, "gtfs.zip")}})
+	snapshots, err := compileSchedules(server, downloadedStaticFeed{url: server.GtfsStaticFeeds[0], data: readFixture(t, "gtfs.zip")})
 	if err != nil {
 		t.Fatalf("compile repository GTFS fixture: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestCompileSchedulesCalendarDatesOnly(t *testing.T) {
 	delete(feed, "calendar.txt")
 	feed["calendar_dates.txt"] = "service_id,date,exception_type\nWK,20260910,1\n"
 	server := scheduleServer("A", "https://dates-only.zip")
-	snapshots, err := compileSchedules(server, []downloadedStaticFeed{{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, feed)}})
+	snapshots, err := compileSchedules(server, downloadedStaticFeed{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, feed)})
 	if err != nil {
 		t.Fatalf("compile calendar-dates-only feed: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestCompileSchedulesCalendarDatesOnlyDateRangeSpansAllDates(t *testing.T) {
 	delete(feed, "calendar.txt")
 	feed["calendar_dates.txt"] = "service_id,date,exception_type\nWK,20260910,1\nWK,20261231,1\nWK,20260905,1\n"
 	server := scheduleServer("A", "https://dates-only-range.zip")
-	snapshots, err := compileSchedules(server, []downloadedStaticFeed{{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, feed)}})
+	snapshots, err := compileSchedules(server, downloadedStaticFeed{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, feed)})
 	if err != nil {
 		t.Fatalf("compile calendar-dates-only feed: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestCompileSchedulesFrequencyWindows(t *testing.T) {
 	files := basicScheduleFiles("UTC", "00:00:00", "00:10:00")
 	files["frequencies.txt"] = "trip_id,start_time,end_time,headway_secs,exact_times\nT,06:00:00,07:00:00,1800,1\n"
 	server := scheduleServer("A", "https://frequency.zip")
-	snapshots, err := compileSchedules(server, []downloadedStaticFeed{{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, files)}})
+	snapshots, err := compileSchedules(server, downloadedStaticFeed{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, files)})
 	if err != nil {
 		t.Fatalf("compile frequency feed: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestCompileSchedulesApproximateFrequencyIsConservativelyActive(t *testing.T
 	files := basicScheduleFiles("UTC", "00:00:00", "00:10:00")
 	files["frequencies.txt"] = "trip_id,start_time,end_time,headway_secs,exact_times\nT,06:00:00,07:00:00,1800,0\n"
 	server := scheduleServer("A", "https://approximate-frequency.zip")
-	snapshots, err := compileSchedules(server, []downloadedStaticFeed{{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, files)}})
+	snapshots, err := compileSchedules(server, downloadedStaticFeed{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, files)})
 	if err != nil {
 		t.Fatalf("compile approximate frequency feed: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestCompileSchedulesUsesAgencyOwnershipInServerMode(t *testing.T) {
 	files["trips.txt"] = "route_id,service_id,trip_id\nRA,WK,TA\nRB,WK,TB\n"
 	files["stop_times.txt"] = "trip_id,arrival_time,departure_time,stop_id,stop_sequence\nTA,10:00:00,10:00:00,S1,1\nTA,11:00:00,11:00:00,S2,2\nTB,10:00:00,10:00:00,S1,1\nTB,11:00:00,11:00:00,S2,2\n"
 	server := scheduleServer("", "https://multi.zip")
-	snapshots, err := compileSchedules(server, []downloadedStaticFeed{{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, files)}})
+	snapshots, err := compileSchedules(server, downloadedStaticFeed{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, files)})
 	if err != nil {
 		t.Fatalf("compile server-mode feed: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestCompileSchedulesRejectsUnsafeParserFallbacks(t *testing.T) {
 			files := basicScheduleFiles("UTC", "08:00:00", "09:00:00")
 			tc.mutate(files)
 			server := scheduleServer("A", "https://invalid.zip")
-			if _, err := compileSchedules(server, []downloadedStaticFeed{{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, files)}}); err == nil {
+			if _, err := compileSchedules(server, downloadedStaticFeed{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, files)}); err == nil {
 				t.Fatal("expected schedule compilation to fail")
 			}
 		})
@@ -216,7 +216,7 @@ func TestCompileSchedulesAcceptsTimezoneAliases(t *testing.T) {
 	files["trips.txt"] = "route_id,service_id,trip_id\nRA,WK,TA\nRB,WK,TB\n"
 	files["stop_times.txt"] = "trip_id,arrival_time,departure_time,stop_id,stop_sequence\nTA,10:00:00,10:00:00,S1,1\nTA,11:00:00,11:00:00,S2,2\nTB,10:00:00,10:00:00,S1,1\nTB,11:00:00,11:00:00,S2,2\n"
 	server := scheduleServer("", "https://aliases.zip")
-	snapshots, err := compileSchedules(server, []downloadedStaticFeed{{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, files)}})
+	snapshots, err := compileSchedules(server, downloadedStaticFeed{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, files)})
 	if err != nil {
 		t.Fatalf("compile feed with aliased timezones: %v", err)
 	}
@@ -313,8 +313,8 @@ func TestCompileSchedulesMergedFeedAndAtomicAvailability(t *testing.T) {
 	files["calendar.txt"] += "PM,1,1,1,1,1,1,1,20260901,20260930\n"
 	files["trips.txt"] += "R,PM,PM-T\n"
 	files["stop_times.txt"] += "PM-T,17:00:00,17:00:00,S1,1\nPM-T,18:00:00,18:00:00,S2,2\n"
-	feeds := []downloadedStaticFeed{{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, files)}}
-	snapshots, err := compileSchedules(server, feeds)
+	feed := downloadedStaticFeed{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, files)}
+	snapshots, err := compileSchedules(server, feed)
 	if err != nil {
 		t.Fatalf("compile merged feed: %v", err)
 	}
@@ -327,9 +327,6 @@ func TestCompileSchedulesMergedFeedAndAtomicAvailability(t *testing.T) {
 	store.Replace(server, snapshots)
 	if available, _ := store.Evaluate(server.ServerKey(), time.Now()); !available {
 		t.Fatal("complete replacement should be available")
-	}
-	if _, err := compileSchedules(server, nil); err == nil {
-		t.Fatal("partial configured-feed success must not compile")
 	}
 	store.MarkUnavailable(server)
 	if available, active := store.Evaluate(server.ServerKey(), time.Date(2026, 9, 7, 8, 30, 0, 0, time.UTC)); available || active {
@@ -348,7 +345,7 @@ func TestScheduleEvaluationAcrossDSTUsesAgencyTimezone(t *testing.T) {
 	files := basicScheduleFiles("America/New_York", "01:30:00", "03:30:00")
 	files["calendar.txt"] = "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nWK,0,0,0,0,0,0,1,20260308,20260308\n"
 	server := scheduleServer("A", "https://dst.zip")
-	snapshots, err := compileSchedules(server, []downloadedStaticFeed{{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, files)}})
+	snapshots, err := compileSchedules(server, downloadedStaticFeed{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, files)})
 	if err != nil {
 		t.Fatalf("compile DST schedule: %v", err)
 	}
@@ -403,7 +400,7 @@ func makeScheduleZip(t *testing.T, files map[string]string) []byte {
 func classifyStore(t *testing.T, files map[string]string) (*ScheduleStore, string) {
 	t.Helper()
 	server := scheduleServer("A", "https://classify.zip")
-	snapshots, err := compileSchedules(server, []downloadedStaticFeed{{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, files)}})
+	snapshots, err := compileSchedules(server, downloadedStaticFeed{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, files)})
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -587,9 +584,9 @@ func TestCompileSchedulesSplitsTripsByAgencyInMergedFeed(t *testing.T) {
 	files["trips.txt"] = "route_id,service_id,trip_id\nRA,WK,TA\nRB,WK,TB\n"
 	files["stop_times.txt"] = "trip_id,arrival_time,departure_time,stop_id,stop_sequence\nTA,08:00:00,08:00:00,S1,1\nTA,09:00:00,09:00:00,S2,2\nTB,08:00:00,08:00:00,S1,1\nTB,09:00:00,09:00:00,S2,2\n"
 	server := scheduleServer("", "https://merged.zip")
-	feeds := []downloadedStaticFeed{{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, files)}}
+	feed := downloadedStaticFeed{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, files)}
 
-	snapshots, err := compileSchedules(server, feeds)
+	snapshots, err := compileSchedules(server, feed)
 	if err != nil {
 		t.Fatalf("server-mode compile: %v", err)
 	}
@@ -604,11 +601,68 @@ func TestCompileSchedulesSplitsTripsByAgencyInMergedFeed(t *testing.T) {
 	}
 
 	server.AgencyID = "A"
-	snapshots, err = compileSchedules(server, feeds)
+	snapshots, err = compileSchedules(server, feed)
 	if err != nil {
 		t.Fatalf("agency-mode compile: %v", err)
 	}
 	if len(snapshots) != 1 || snapshots[models.ServerKey(server.ObaBaseURL, "A")] == nil {
 		t.Fatalf("agency-mode snapshots = %v; want only agency A", snapshots)
+	}
+}
+
+// TestCalendarDatesOnlyRemovalDoesNotExtendCoverage covers #343: a removed
+// date is not a service day, so it must not push a dates-only service's last
+// service date forward, while an added date still does. ServiceDateRange
+// keeps spanning every exception date.
+func TestCalendarDatesOnlyRemovalDoesNotExtendCoverage(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		dates       string
+		wantExpired bool
+	}{
+		{"trailing removal", "service_id,date,exception_type\nWK,20260910,1\nWK,20261231,2\n", true},
+		{"trailing addition", "service_id,date,exception_type\nWK,20260910,1\nWK,20261231,1\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			feed := basicScheduleFiles("UTC", "12:00:00", "13:00:00")
+			delete(feed, "calendar.txt")
+			feed["calendar_dates.txt"] = tc.dates
+			server := scheduleServer("A", "https://dates-only-removal.zip")
+			snapshots, err := compileSchedules(server, downloadedStaticFeed{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, feed)})
+			if err != nil {
+				t.Fatalf("compile: %v", err)
+			}
+			store := NewScheduleStore()
+			store.Replace(server, snapshots)
+			now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+			if got := store.Expired(server.ServerKey(), now); got != tc.wantExpired {
+				t.Fatalf("expired = %t, want %t", got, tc.wantExpired)
+			}
+			if got := store.CoversDate(server.ServerKey(), now); got == tc.wantExpired {
+				t.Fatalf("covers date = %t, want %t", got, !tc.wantExpired)
+			}
+			_, latest, ok := store.ServiceDateRange(server.ServerKey())
+			if want := time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC); !ok || !latest.Equal(want) {
+				t.Fatalf("service date range end = %s (ok=%t), want %s", latest, ok, want)
+			}
+		})
+	}
+}
+
+// TestCalendarServiceKeepsEndDate checks that a calendar.txt service still
+// covers dates up to its end_date.
+func TestCalendarServiceKeepsEndDate(t *testing.T) {
+	feed := basicScheduleFiles("UTC", "12:00:00", "13:00:00")
+	feed["calendar.txt"] = "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nWK,1,1,1,1,1,1,1,20260101,20261231\n"
+	feed["calendar_dates.txt"] = "service_id,date,exception_type\nWK,20261231,2\n"
+	server := scheduleServer("A", "https://calendar-end.zip")
+	snapshots, err := compileSchedules(server, downloadedStaticFeed{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, feed)})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	store := NewScheduleStore()
+	store.Replace(server, snapshots)
+	if store.Expired(server.ServerKey(), time.Date(2026, 12, 30, 12, 0, 0, 0, time.UTC)) {
+		t.Fatal("a calendar.txt service expired before its end_date")
 	}
 }

@@ -124,9 +124,16 @@ func (ms *MetricsService) ReconcileStaticFeedHealth(servers []models.ObaServer) 
 
 // ReportScheduledService evaluates the compact immutable schedule snapshot at
 // collection time. It never reparses static data.
-func (ms *MetricsService) ReportScheduledService(now time.Time, server models.ObaServer) {
+//
+// withheld reports the schedule as unknown: the caller withholds metrics
+// derived from the bundle because it has expired (it schedules nothing, which
+// would read as "no service right now") or the backend serves another bundle.
+func (ms *MetricsService) ReportScheduledService(now time.Time, server models.ObaServer, withheld bool) {
 	ms.reportStaticBundleState(now, server)
 	available, active := ms.StaticStore.ScheduleStore().Evaluate(server.ServerKey(), now)
+	if withheld {
+		available, active = false, false
+	}
 	labels := []string{server.AgencyID, server.AgencyName, server.ServerName, utils.SanitizeServerURL(server.ObaBaseURL)}
 	GtfsScheduleAvailable.WithLabelValues(labels...).Set(boolValue(available))
 	GtfsScheduledServiceActive.WithLabelValues(labels...).Set(boolValue(active))
@@ -172,6 +179,30 @@ func (ms *MetricsService) RetireInactiveVehicleAgency(server models.ObaServer) {
 	StoppedOutOfBoundsVehiclesGauge.WithLabelValues(labels...).Set(0)
 	AgencyActiveVehiclesGauge.DeleteLabelValues(labels...)
 	ObaVehiclesLastSuccessfulFetch.DeleteLabelValues(labels...)
+}
+
+// StaticBundleExpired reports whether the entry's retained static bundle no
+// longer covers the agency-local date: its latest service date has passed.
+func (ms *MetricsService) StaticBundleExpired(server models.ObaServer, now time.Time) bool {
+	return ms.StaticStore.ScheduleStore().Expired(server.ServerKey(), now)
+}
+
+// RetireStaticDerivedVehicleSeries deletes the agency's series that the
+// vehicle pass derives from the static bundle (attribution, bounding boxes),
+// so an expired bundle leaves them absent rather than frozen at a stale value.
+// Counters are left alone: they simply stop increasing.
+func (ms *MetricsService) RetireStaticDerivedVehicleSeries(server models.ObaServer) {
+	ms.VehicleLastSeen.RemoveAgency(server.ServerKey())
+	labels := prometheus.Labels{"server_url": utils.SanitizeServerURL(server.ObaBaseURL), "agency_id": server.AgencyID}
+	for _, vec := range []*prometheus.GaugeVec{
+		RealtimeVehiclePositions, TrackedVehiclesGauge,
+		InvalidVehicleCoordinatesGauge, StoppedOutOfBoundsVehiclesGauge,
+		VehicleSpeedGauge, VehicleSpeedDiscrepancyRatioGauge,
+		GtfsRtVehicleSourceTimestamp, GtfsRtVehicleSpeedLastComputedTimestamp,
+		GtfsRtVehicleStateLastChangedTimestamp,
+	} {
+		vec.DeletePartialMatch(labels)
+	}
 }
 
 func (ms *MetricsService) RetireVehicleAttributionDiagnostics(server models.ObaServer) {

@@ -14,12 +14,13 @@ type staticFeedMappingSeries struct {
 }
 
 type staticFeedMappingEntry struct {
-	server models.ObaServer
-	feeds  map[string]staticFeedMappingSeries
+	server  models.ObaServer
+	feedURL string
+	series  staticFeedMappingSeries
 }
 
 // StaticFeedMappingStore tracks the exact series emitted for each configured
-// entry and source feed so a successful reparse can retire relationships that
+// entry's static feed so a successful reparse can retire relationships that
 // changed. Failed downloads leave the last successful result intact.
 type StaticFeedMappingStore struct {
 	mu      sync.Mutex
@@ -30,49 +31,27 @@ func NewStaticFeedMappingStore() *StaticFeedMappingStore {
 	return &StaticFeedMappingStore{entries: make(map[string]staticFeedMappingEntry)}
 }
 
+// Observe replaces the entry's series with the latest parse. The previous
+// series are deleted under the identity they were emitted with, so a renamed
+// server or a changed feed URL never leaves a stale series behind.
 func (s *StaticFeedMappingStore) Observe(server models.ObaServer, observation gtfs.StaticFeedMappingObservation) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	key := server.ServerKey()
-	entry, exists := s.entries[key]
-	if !exists {
-		entry = staticFeedMappingEntry{server: server, feeds: make(map[string]staticFeedMappingSeries)}
+	if previous, exists := s.entries[key]; exists {
+		deleteStaticFeedMappingSeries(previous.server, previous.feedURL, previous.series)
 	}
-	previousServer := entry.server
-	current := entry.feeds
-	if previousServer.ServerName != server.ServerName || utils.SanitizeServerURL(previousServer.ObaBaseURL) != utils.SanitizeServerURL(server.ObaBaseURL) {
-		for feedURL, series := range current {
-			deleteStaticFeedMappingSeries(previousServer, feedURL, series)
-			emitStaticFeedMappingSeries(server, feedURL, series)
-		}
-		previousServer = server
+	next := staticFeedMappingEntry{
+		server:  server,
+		feedURL: observation.FeedURL,
+		series: staticFeedMappingSeries{
+			mappings: append([]gtfs.StaticFeedAgencyMapping(nil), observation.Mappings...),
+			failures: append([]gtfs.StaticFeedMappingFailure(nil), observation.Failures...),
+		},
 	}
-	configured := make(map[string]bool, len(observation.ConfiguredFeedURLs))
-	for _, feedURL := range observation.ConfiguredFeedURLs {
-		configured[feedURL] = true
-	}
-	for feedURL, series := range current {
-		if configured[feedURL] {
-			continue
-		}
-		deleteStaticFeedMappingSeries(previousServer, feedURL, series)
-		delete(current, feedURL)
-	}
-
-	for _, result := range observation.Results {
-		if previous, ok := current[result.FeedURL]; ok {
-			deleteStaticFeedMappingSeries(previousServer, result.FeedURL, previous)
-		}
-		next := staticFeedMappingSeries{
-			mappings: append([]gtfs.StaticFeedAgencyMapping(nil), result.Mappings...),
-			failures: append([]gtfs.StaticFeedMappingFailure(nil), result.Failures...),
-		}
-		current[result.FeedURL] = next
-		emitStaticFeedMappingSeries(server, result.FeedURL, next)
-	}
-	entry.server = server
-	s.entries[key] = entry
+	emitStaticFeedMappingSeries(next.server, next.feedURL, next.series)
+	s.entries[key] = next
 }
 
 func (s *StaticFeedMappingStore) Prune(keep func(string) bool) []string {
@@ -84,9 +63,7 @@ func (s *StaticFeedMappingStore) Prune(keep func(string) bool) []string {
 		if keep(key) {
 			continue
 		}
-		for feedURL, series := range entry.feeds {
-			deleteStaticFeedMappingSeries(entry.server, feedURL, series)
-		}
+		deleteStaticFeedMappingSeries(entry.server, entry.feedURL, entry.series)
 		delete(s.entries, key)
 		removed = append(removed, key)
 	}

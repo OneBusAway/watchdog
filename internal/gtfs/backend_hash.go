@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -43,18 +44,52 @@ type backendCampaign struct {
 	warned bool
 }
 
+// BackendHashStatus is the outcome of one backend metadata check. The caller
+// uses it to decide how long to wait before checking the deployment again and
+// whether the backend hash currently covers the deployment's static bundle.
+type BackendHashStatus int
+
+const (
+	// BackendHashNotChecked means no usable request was made: the entries are
+	// not eligible for a hash comparison, or the check was canceled. It says
+	// nothing about the backend, so it neither backs off nor covers the bundle.
+	BackendHashNotChecked BackendHashStatus = iota
+	// BackendHashOK means the backend reported a valid hash.
+	BackendHashOK
+	// BackendHashTransient means the request failed in a way that may clear up
+	// on its own: a network error, a timeout, or a server error.
+	BackendHashTransient
+	// BackendHashUnsupported means the backend answered but exposes no usable
+	// hash: the endpoint is missing or refused, or the body has no valid hash.
+	BackendHashUnsupported
+)
+
+func (s BackendHashStatus) String() string {
+	switch s {
+	case BackendHashOK:
+		return "ok"
+	case BackendHashTransient:
+		return "transient"
+	case BackendHashUnsupported:
+		return "unsupported"
+	default:
+		return "not_checked"
+	}
+}
+
 // CheckBackendBundles checks one deployment, including any agency-scoped entries
 // sharing its URL. Metadata is optional and independent of API health checks.
 // campaignCtx outlives the collection deadline so refresh retries can finish.
-func (gs *GtfsService) CheckBackendBundles(ctx, campaignCtx context.Context, servers []models.ObaServer) {
+func (gs *GtfsService) CheckBackendBundles(ctx, campaignCtx context.Context, servers []models.ObaServer) BackendHashStatus {
 	if len(servers) == 0 {
-		return
+		return BackendHashNotChecked
 	}
 
 	eligible := backendHashEligible(servers)
 	hash := ""
+	status := BackendHashNotChecked
 	if eligible {
-		hash = gs.fetchBackendHash(ctx, servers[0])
+		hash, status = gs.fetchBackendHash(ctx, servers[0])
 	}
 	// A gauge describes a deployment, so aggregate siblings before emitting
 	// once per label set. An unknown local snapshot makes the result unknown.
@@ -75,14 +110,50 @@ func (gs *GtfsService) CheckBackendBundles(ctx, campaignCtx context.Context, ser
 			c.mu.Lock()
 			content, ok := c.snapshotContent[server.ServerKey()]
 			localHash := ""
-			if ok && content.fingerprint == fingerprint && len(content.hashes) == 1 {
-				localHash = content.hashes[0]
+			relation := BackendBundleUnknown
+			if ok && content.fingerprint == fingerprint {
+				localHash = content.hash
 				value := localHash == hash
 				match = &value
+				switch {
+				case value:
+					relation = BackendBundleMatch
+					// The backend caught up. From now on, the replaced bundle's
+					// hash means a rollback, which is a real change to follow.
+					delete(c.superseded, server.ServerKey())
+				case c.supersedesLocked(server.ServerKey(), fingerprint, hash):
+					relation = BackendBundleBehind
+				default:
+					relation = BackendBundleDiffers
+				}
 			}
 			run, startCampaign, warn := c.observeBackendRunLocked(server, fingerprint, hash, localHash, match)
+			if relation == BackendBundleBehind {
+				// Watchdog already replaced the bundle the backend serves, so
+				// downloading the feed now would fetch the same newer bundle
+				// again: wait for the backend to load it. The hourly retry
+				// still runs, because the newer bundle may have been a mistake
+				// that the agency has since reverted on the feed URL.
+				campaignKey := backendCampaignKey{server.ServerKey(), fingerprint, hash, localHash}
+				if startCampaign && c.backendCampaigns[campaignKey].at.IsZero() {
+					c.backendCampaigns[campaignKey] = backendCampaign{at: run.lastSeen}
+					startCampaign = false
+				}
+				warn = false
+			}
+			relationChanged := c.setRelationLocked(server.ServerKey(), fingerprint, relation)
 			c.mu.Unlock()
 			gs.StaticStore.mu.RUnlock()
+			if match != nil && *match {
+				// The backend serves the bundle Watchdog holds, so the
+				// snapshot is confirmed current without downloading it.
+				gs.StaticStore.TouchServerSnapshot(server, time.Now().UTC())
+			}
+			if relationChanged && relation == BackendBundleBehind {
+				gs.Logger.Warn("Backend still serves the static GTFS bundle Watchdog replaced; waiting for it to load the newer one",
+					"server_name", server.ServerName, "server_url", utils.SanitizeServerURL(server.ObaBaseURL),
+					"agency_id", server.AgencyID, "agency_name", server.AgencyName, "backend_hash", hash, "local_hash", localHash)
+			}
 			if warn {
 				gs.Logger.Warn("Backend static GTFS bundle still differs from the configured feed after refresh",
 					"server_name", server.ServerName, "server_url", utils.SanitizeServerURL(server.ObaBaseURL),
@@ -108,6 +179,7 @@ func (gs *GtfsService) CheckBackendBundles(ctx, campaignCtx context.Context, ser
 	for key, match := range results {
 		gs.observeBackendHash(representatives[key], match)
 	}
+	return status
 }
 
 // observeBackendRunLocked records one backend hash observation and decides
@@ -194,58 +266,94 @@ func (gs *GtfsService) observeBackendHash(server models.ObaServer, match *bool) 
 	}
 }
 
-// fetchBackendHash returns a valid SHA-256 from optional backend metadata, or an empty string on failure.
-func (gs *GtfsService) fetchBackendHash(ctx context.Context, server models.ObaServer) string {
+// fetchBackendHash returns a valid SHA-256 from optional backend metadata and
+// the status of the request. The hash is empty unless the status is OK.
+func (gs *GtfsService) fetchBackendHash(ctx context.Context, server models.ObaServer) (string, BackendHashStatus) {
 	// A stalled optional endpoint must not consume the collection deadline.
 	callerCtx := ctx
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, backendMetadataTimeout)
 	defer cancel()
 	endpoint, err := url.Parse(strings.TrimRight(server.ObaBaseURL, "/") + "/api/v2/metadata.json")
 	if err != nil {
-		return ""
+		gs.logBackendMetadataFailure(server, "invalid_url")
+		return "", BackendHashUnsupported
 	}
 	query := endpoint.Query()
 	query.Set("key", server.ObaApiKey)
 	endpoint.RawQuery = query.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
-		return ""
+		gs.logBackendMetadataFailure(server, "invalid_url")
+		return "", BackendHashUnsupported
 	}
 	response, err := gs.Client.Do(req)
 	if err != nil {
-		if callerCtx.Err() == nil {
-			gs.logBackendMetadataFailure(server, "request_failed")
+		if callerCtx.Err() != nil {
+			// The cycle ended or shutdown began: not the backend's fault.
+			return "", BackendHashNotChecked
 		}
-		return ""
+		gs.logBackendMetadataFailure(server, "request_failed")
+		return "", BackendHashTransient
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
+		// 404 and 503 are how backends without metadata ordinarily answer.
 		if response.StatusCode != http.StatusNotFound && response.StatusCode != http.StatusServiceUnavailable {
 			gs.Logger.Debug("Backend metadata request returned unexpected status", "server_name", server.ServerName,
 				"server_url", utils.SanitizeServerURL(server.ObaBaseURL), "status", response.StatusCode)
 		}
-		return ""
+		return "", classifyBackendMetadataStatus(response.StatusCode)
 	}
 	var metadata struct {
 		StaticGtfsHash string `json:"staticGtfsHash"`
 	}
-	if json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&metadata) != nil {
-		if callerCtx.Err() == nil {
-			gs.logBackendMetadataFailure(server, "malformed_json")
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&metadata); err != nil {
+		if callerCtx.Err() != nil {
+			return "", BackendHashNotChecked
 		}
-		return ""
+		if !isJSONContentError(err) {
+			// The body stopped arriving (the request deadline, a reset
+			// connection), which may clear up on its own, unlike a backend
+			// that answers with something that is not a metadata document.
+			gs.logBackendMetadataFailure(server, "body_read_failed")
+			return "", BackendHashTransient
+		}
+		gs.logBackendMetadataFailure(server, "malformed_json")
+		return "", BackendHashUnsupported
 	}
 	hash := strings.ToLower(strings.TrimSpace(metadata.StaticGtfsHash))
-	// An absent hash is an expected unsupported-backend response.
 	if hash == "" {
-		return ""
+		// An absent hash is how an older backend ordinarily answers.
+		return "", BackendHashUnsupported
 	}
 	decoded, err := hex.DecodeString(hash)
 	if err != nil || len(decoded) != 32 {
 		gs.logBackendMetadataFailure(server, "invalid_hash")
-		return ""
+		return "", BackendHashUnsupported
 	}
-	return hash
+	return hash, BackendHashOK
+}
+
+// backendMetadataTimeout bounds one metadata request, body included. A
+// variable so tests need not wait for it.
+var backendMetadataTimeout = 2 * time.Second
+
+// isJSONContentError reports whether a decode error comes from the body's
+// content (not JSON, or the wrong shape) rather than from reading it.
+func isJSONContentError(err error) bool {
+	var syntaxErr *json.SyntaxError
+	var typeErr *json.UnmarshalTypeError
+	return errors.As(err, &syntaxErr) || errors.As(err, &typeErr) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+// classifyBackendMetadataStatus maps a non-OK HTTP status to a check result.
+// Server errors and throttling may clear up soon. Anything else (a missing
+// endpoint, a refused key) will not change until someone changes the backend.
+func classifyBackendMetadataStatus(code int) BackendHashStatus {
+	if code >= 500 || code == http.StatusTooManyRequests || code == http.StatusRequestTimeout {
+		return BackendHashTransient
+	}
+	return BackendHashUnsupported
 }
 
 // logBackendMetadataFailure records optional metadata failures without exposing response bodies or API keys.

@@ -290,7 +290,7 @@ func TestParsedStaticDuplicateRetainsFailureClassification(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			err = service.publishStaticCampaign(context.Background(), server, cache)
+			err = service.publishStaticCampaign(context.Background(), server, server.GtfsStaticFeeds[0], cache)
 			var failure *StaticFeedError
 			if !errors.As(err, &failure) || failure.Stage != StaticFailureParse || failure.Reason != StaticReasonDuplicateID || failure.ContentHash != artifact.hash || failure.FeedURL != artifact.url {
 				t.Fatalf("parsed duplicate lost classification or provenance: %+v", failure)
@@ -305,7 +305,7 @@ func TestParsedStaticDuplicateRetainsFailureClassification(t *testing.T) {
 func TestStaleInvalidCampaignPreservesCurrentSchedule(t *testing.T) {
 	server := scheduleServer("A", "https://merged.example/static.zip")
 	data := makeScheduleZip(t, basicScheduleFiles("UTC", "08:00:00", "09:00:00"))
-	snapshots, err := compileSchedules(server, []downloadedStaticFeed{{url: server.GtfsStaticFeeds[0], data: data}})
+	snapshots, err := compileSchedules(server, downloadedStaticFeed{url: server.GtfsStaticFeeds[0], data: data})
 	if err != nil {
 		t.Fatal(err)
 	}

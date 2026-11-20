@@ -198,13 +198,6 @@ func (gs *GtfsService) DownloadGTFSBundle(ctx context.Context, url, agencyID str
 	return downloadGTFSBundle(ctx, gs.Client, url, agencyID, maxRetires)
 }
 
-// RefreshGTFSBundles re-downloads every configured server's static bundles on
-// a fixed interval. servers is consulted on each tick so the routine follows
-// configuration changes instead of the boot-time server list.
-func (gs *GtfsService) RefreshGTFSBundles(ctx context.Context, servers func() []models.ObaServer, interval time.Duration, maxRetries int) {
-	startDailyStaticRefreshes(ctx, gs, servers, gs.Logger, interval, maxRetries)
-}
-
 // FetchAndStoreGTFSRTFeed stores a consolidated feed in server mode. In
 // agency-mode it resolves route_id/trip_id through RouteAgencyIndex and stores
 // only vehicles belonging to server.AgencyID.

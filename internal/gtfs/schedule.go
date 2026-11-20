@@ -34,6 +34,10 @@ type scheduleService struct {
 	added    []int
 	removed  []int
 	windows  []scheduleWindow
+	// datesOnly marks a service defined solely by calendar_dates.txt. Its end
+	// spans every exception date, removals included, so the dates it runs on
+	// are its added dates only.
+	datesOnly bool
 }
 
 // scheduleTrip is the compact per-trip record kept for trip lookup and
@@ -143,23 +147,41 @@ func (s *ScheduleStore) Evaluate(serverKey string, now time.Time) (available, ac
 // It intentionally ignores state.available: a failed refresh can make the
 // snapshot non-current while the retained complete bundle remains usable.
 func (s *ScheduleStore) CoversDate(serverKey string, now time.Time) bool {
-	s.mu.RLock()
-	state, ok := s.data[serverKey]
-	s.mu.RUnlock()
-	if !ok || state.snapshot == nil || !state.snapshot.complete || state.snapshot.timezone == nil {
-		return false
-	}
+	today, latest, ok := s.agencyDateAndLatestService(serverKey, now)
+	return ok && today <= latest
+}
 
-	latest := 0
+// Expired reports whether the retained schedule's latest service date is
+// before the agency-local date of now. Unlike !CoversDate it is false when
+// there is no complete schedule to judge: a missing bundle is not an expired one.
+func (s *ScheduleStore) Expired(serverKey string, now time.Time) bool {
+	today, latest, ok := s.agencyDateAndLatestService(serverKey, now)
+	return ok && today > latest
+}
+
+// agencyDateAndLatestService returns now's agency-local date and the latest
+// date the retained complete schedule covers, both as YYYYMMDD numbers.
+func (s *ScheduleStore) agencyDateAndLatestService(serverKey string, now time.Time) (today, latest int, ok bool) {
+	s.mu.RLock()
+	state, exists := s.data[serverKey]
+	s.mu.RUnlock()
+	if !exists || state.snapshot == nil || !state.snapshot.complete || state.snapshot.timezone == nil {
+		return 0, 0, false
+	}
 	for _, service := range state.snapshot.services {
-		if service.end > latest {
+		// A dates-only service's end also counts the dates it removes, which
+		// are not service days, so only its added dates set its boundary.
+		if !service.datesOnly && service.end > latest {
 			latest = service.end
 		}
 		if len(service.added) > 0 && service.added[len(service.added)-1] > latest {
 			latest = service.added[len(service.added)-1]
 		}
 	}
-	return latest > 0 && dateNumber(now.In(state.snapshot.timezone)) <= latest
+	if latest == 0 {
+		return 0, 0, false
+	}
+	return dateNumber(now.In(state.snapshot.timezone)), latest, true
 }
 
 // ServiceDateRange returns the earliest regular service end date and the
@@ -331,13 +353,10 @@ type rawEndpoint struct {
 	valid     bool
 }
 
-func compileSchedules(server models.ObaServer, feeds []downloadedStaticFeed) (map[string]*ScheduleSnapshot, error) {
-	if len(server.GtfsStaticFeeds) != 1 || len(feeds) != 1 {
-		return nil, fmt.Errorf("expected one upstream-merged static feed; merge feeds upstream")
-	}
-	raw, err := parseRawScheduleFeed(feeds[0].url, feeds[0].data, server)
+func compileSchedules(server models.ObaServer, feed downloadedStaticFeed) (map[string]*ScheduleSnapshot, error) {
+	raw, err := parseRawScheduleFeed(feed.url, feed.data, server)
 	if err != nil {
-		return nil, fmt.Errorf("compile static feed (%s): %w", utils.SanitizeServerURL(feeds[0].url), err)
+		return nil, fmt.Errorf("compile static feed (%s): %w", utils.SanitizeServerURL(feed.url), err)
 	}
 	return compileRawSchedule(server, raw)
 }
@@ -404,7 +423,7 @@ func compileRawSchedule(server models.ObaServer, feed rawScheduleFeed) (map[stri
 		compact := b.services[serviceKey]
 		if compact == nil {
 			added, removed := sortedExceptions(service)
-			compact = &scheduleService{id: ids.intern(trip.serviceID), weekdays: service.weekdays, start: service.start, end: service.end, added: added, removed: removed}
+			compact = &scheduleService{id: ids.intern(trip.serviceID), weekdays: service.weekdays, start: service.start, end: service.end, added: added, removed: removed, datesOnly: service.datesOnly}
 			b.services[serviceKey] = compact
 		}
 		compact.windows = append(compact.windows, windows...)

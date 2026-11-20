@@ -59,10 +59,15 @@ func DoWithBackoff(ctx context.Context, client *http.Client, req *http.Request, 
 // given backoff duration. The result is capped at MaxBackoff and returned as a
 // UTC timestamp.
 func CalculateNextRetryAt(backoff time.Duration) time.Time {
+	return NextRetryAtWithCap(backoff, MaxBackoff)
+}
+
+// NextRetryAtWithCap is CalculateNextRetryAt with an explicit cap.
+func NextRetryAtWithCap(backoff, maxBackoff time.Duration) time.Time {
 	jitter := time.Duration(rand.Float64() * float64(backoff) * JitterFactor)
 	backoff += jitter
-	if backoff > MaxBackoff {
-		backoff = MaxBackoff
+	if backoff > maxBackoff {
+		backoff = maxBackoff
 	}
 	return time.Now().Add(backoff).UTC()
 }
@@ -70,9 +75,14 @@ func CalculateNextRetryAt(backoff time.Duration) time.Time {
 // CalculateNewBackoffDelay increases the given backoff delay by BackoffFactor.
 // The result is capped at MaxBackoff.
 func CalculateNewBackoffDelay(backoffDelay time.Duration) time.Duration {
+	return NextBackoffDelayWithCap(backoffDelay, MaxBackoff)
+}
+
+// NextBackoffDelayWithCap is CalculateNewBackoffDelay with an explicit cap.
+func NextBackoffDelayWithCap(backoffDelay, maxBackoff time.Duration) time.Duration {
 	backoffDelay *= BackoffFactor
-	if backoffDelay >= MaxBackoff {
-		backoffDelay = MaxBackoff
+	if backoffDelay >= maxBackoff {
+		backoffDelay = maxBackoff
 	}
 	return backoffDelay
 }

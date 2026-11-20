@@ -31,6 +31,12 @@ type Application struct {
 	// seen configuration, so a --config-url refresh can tell newcomers (which
 	// need an immediate bundle download) from servers it has already seen.
 	KnownServers *KnownServerSet
+	// StaticBundleWatch decides each tick whether a deployment's static
+	// bundle is kept current by the backend metadata hash or needs a
+	// fallback download.
+	StaticBundleWatch *StaticBundleWatch
+	// BundleExpiry reports each entry's static bundle expiring and recovering once.
+	BundleExpiry *BundleExpiryReporter
 	// InvestigationDB is the PostgreSQL pool for durable investigation
 	// history, already migrated. It is nil when DATABASE_URL is unset or the
 	// database was unreachable at startup: PostgreSQL is optional, and every
@@ -122,6 +128,8 @@ func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version s
 		// constructor makes it impossible to forget and keeps the first
 		// refresh after start-up from re-downloading every bundle.
 		KnownServers:         NewKnownServerSet(cfg.GetServers()),
+		StaticBundleWatch:    NewStaticBundleWatch(time.Duration(cfg.FetchInterval) * time.Second),
+		BundleExpiry:         NewBundleExpiryReporter(),
 		InvestigationDB:      investigationDB,
 		InvestigationService: investigationService,
 		HistoryService:       history.NewHistoryService(investigationDB, logger, version, cfg.GetServers()),

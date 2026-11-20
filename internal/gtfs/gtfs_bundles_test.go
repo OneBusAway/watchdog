@@ -328,7 +328,7 @@ func TestStoreGTFSBundleRecordsFetchTime(t *testing.T) {
 	boundingBoxStore := geo.NewBoundingBoxStore()
 	routeAgencyIndex := NewRouteAgencyIndex()
 
-	err = storeStaticForServer(server, []*remoteGtfs.Static{staticBundle}, staticStore, boundingBoxStore, routeAgencyIndex, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	err = storeStaticForServer(server, staticBundle, staticStore, boundingBoxStore, routeAgencyIndex, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -363,7 +363,7 @@ func TestStoreStaticForServerExcludesForeignAgencyData(t *testing.T) {
 	bounds.Set(key, geo.BoundingBox{MinLat: 1, MaxLat: 2, MinLon: 3, MaxLon: 4})
 	index := NewRouteAgencyIndex()
 
-	if err := storeStaticForServer(server, []*remoteGtfs.Static{bundle}, staticStore, bounds, index, nil, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
+	if err := storeStaticForServer(server, bundle, staticStore, bounds, index, nil, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
 		t.Fatalf("store: %v", err)
 	}
 	stored, ok := staticStore.Get(key)
@@ -395,7 +395,7 @@ func TestStoreStaticForServerModeKeysByDeclaredAgency(t *testing.T) {
 	}
 	staticStore := NewStaticStore()
 
-	err = storeStaticForServer(server, []*remoteGtfs.Static{staticBundle}, staticStore, geo.NewBoundingBoxStore(), NewRouteAgencyIndex(), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	err = storeStaticForServer(server, staticBundle, staticStore, geo.NewBoundingBoxStore(), NewRouteAgencyIndex(), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -959,7 +959,7 @@ func TestComputeBoundingBoxesForMultiAgencyFeedUsesSharedStops(t *testing.T) {
 	})
 	bundle.Agencies = append(bundle.Agencies, remoteGtfs.Agency{Id: "agency-B", Name: "Agency B", Url: "https://b.example"})
 
-	computed := computeBoundingBoxes([]*remoteGtfs.Static{bundle})
+	computed := computeBoundingBoxes(bundle)
 	want := geo.BoundingBox{MinLat: 1, MaxLat: 3, MinLon: 2, MaxLon: 4}
 	for _, agencyID := range []string{"agency-A", "agency-B"} {
 		if got := computed.byAgency[agencyID]; got != want {
@@ -985,7 +985,7 @@ func TestStoreStaticForServerStoresServerScopedBoundingBox(t *testing.T) {
 	}
 
 	boundingBoxStore := geo.NewBoundingBoxStore()
-	err := storeStaticForServer(server, []*remoteGtfs.Static{bundle}, NewStaticStore(), boundingBoxStore, NewRouteAgencyIndex(), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	err := storeStaticForServer(server, bundle, NewStaticStore(), boundingBoxStore, NewRouteAgencyIndex(), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("storeStaticForServer: %v", err)
 	}
@@ -1011,7 +1011,7 @@ func TestStoreStaticForServerMergedFeedSharesBoundsAndStorage(t *testing.T) {
 	bundle.Agencies = append(bundle.Agencies, remoteGtfs.Agency{Id: "agency-B", Name: "Agency B"})
 	server := models.ObaServer{ServerName: "merged", ObaBaseURL: "https://merged.example"}
 	store, boxes := NewStaticStore(), geo.NewBoundingBoxStore()
-	if err := storeStaticForServer(server, []*remoteGtfs.Static{bundle}, store, boxes, NewRouteAgencyIndex(), nil, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
+	if err := storeStaticForServer(server, bundle, store, boxes, NewRouteAgencyIndex(), nil, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
 		t.Fatal(err)
 	}
 	want := geo.BoundingBox{MinLat: 40.6, MaxLat: 47.6, MinLon: -122.3, MaxLon: -73.3}
@@ -1043,7 +1043,7 @@ func TestStoreStaticForServerObservesBundleWithoutUsableCoordinates(t *testing.T
 	}
 
 	logger := slog.New(slog.NewTextHandler(&logBuffer, nil))
-	if err := storeStaticForServer(server, []*remoteGtfs.Static{bundle}, NewStaticStore(), geo.NewBoundingBoxStore(), NewRouteAgencyIndex(), observer, logger); err != nil {
+	if err := storeStaticForServer(server, bundle, NewStaticStore(), geo.NewBoundingBoxStore(), NewRouteAgencyIndex(), observer, logger); err != nil {
 		t.Fatalf("storeStaticForServer: %v", err)
 	}
 	if observed != 1 {
@@ -1056,7 +1056,7 @@ func TestStoreStaticForServerObservesBundleWithoutUsableCoordinates(t *testing.T
 
 func TestComputeAgencyBoundingBoxesReportsCoordinateErrors(t *testing.T) {
 	bundle := makeSyntheticBundle(t, "agency-A", "Agency A", "https://a.example", []remoteGtfs.Stop{{Id: "S1"}})
-	computed := computeBoundingBoxes([]*remoteGtfs.Static{bundle})
+	computed := computeBoundingBoxes(bundle)
 	if _, ok := computed.byAgency["agency-A"]; ok {
 		t.Fatal("expected no bounding box for stops without coordinates")
 	}
@@ -1079,7 +1079,7 @@ func TestStoreStaticForServerSkipsServerScopedBoxInAgencyMode(t *testing.T) {
 	}
 
 	boundingBoxStore := geo.NewBoundingBoxStore()
-	err := storeStaticForServer(server, []*remoteGtfs.Static{bundle}, NewStaticStore(), boundingBoxStore, NewRouteAgencyIndex(), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	err := storeStaticForServer(server, bundle, NewStaticStore(), boundingBoxStore, NewRouteAgencyIndex(), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("storeStaticForServer: %v", err)
 	}

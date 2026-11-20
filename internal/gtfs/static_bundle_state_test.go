@@ -84,3 +84,26 @@ func TestReplaceServerSnapshotRetiresRemovedAgencies(t *testing.T) {
 		t.Fatal("removed agency remained in static store")
 	}
 }
+
+func TestScheduleExpiredNeedsAKnownSchedule(t *testing.T) {
+	now := time.Date(2026, time.September, 29, 12, 0, 0, 0, time.UTC)
+	server := models.ObaServer{ObaBaseURL: "https://oba.example"}
+	store := NewScheduleStore()
+	store.Replace(server, map[string]*ScheduleSnapshot{
+		models.ServerKey(server.ObaBaseURL, "ended"):      {timezone: time.UTC, services: []scheduleService{{end: 20260928}}, complete: true},
+		models.ServerKey(server.ObaBaseURL, "last-day"):   {timezone: time.UTC, services: []scheduleService{{end: 20260929}}, complete: true},
+		models.ServerKey(server.ObaBaseURL, "added-day"):  {timezone: time.UTC, services: []scheduleService{{end: 20260901, added: []int{20261001}}}, complete: true},
+		models.ServerKey(server.ObaBaseURL, "incomplete"): {timezone: time.UTC, services: []scheduleService{{end: 20260101}}},
+	})
+	for agency, want := range map[string]bool{
+		"ended":      true,
+		"last-day":   false, // still serving its last service date
+		"added-day":  false, // an added exception extends the bundle
+		"incomplete": false, // nothing to judge
+		"missing":    false, // a missing bundle is not an expired one
+	} {
+		if got := store.Expired(models.ServerKey(server.ObaBaseURL, agency), now); got != want {
+			t.Errorf("%s: Expired = %v, want %v", agency, got, want)
+		}
+	}
+}
