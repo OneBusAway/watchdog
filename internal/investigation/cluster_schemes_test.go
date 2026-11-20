@@ -194,6 +194,53 @@ func TestGetClusterScheme_Head(t *testing.T) {
 func TestListClusterSchemes_RejectsUnknownParameter(t *testing.T) {
 	router := newClusterSchemesRouter(t, nil)
 	wantInvalidParam(t, doGet(t, router, "/v1/cluster-schemes?foo=1", nil), "foo")
+	// The list is not paginated, so the page parameters are unknown here too.
+	wantInvalidParam(t, doGet(t, router, "/v1/cluster-schemes?page_size=10", nil), "page_size")
+	wantInvalidParam(t, doGet(t, router, "/v1/cluster-schemes?cursor=abc", nil), "cursor")
+}
+
+// Schemes inserted with the same created_at must list in the same order every
+// time, so the strong ETag stays the same for an unchanged list.
+func TestListClusterSchemes_TiedCreatedAtIsStable(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	created := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	for _, version := range []string{"alpha", "beta", "gamma"} {
+		if err := dbtest.Exec(pool,
+			"INSERT INTO cluster_scheme (scheme_version, s2_level, station_grouping, description, created_at) VALUES ($1, $2, $3, $4, $5)",
+			version, 12, "none", "Scheme "+version, created); err != nil {
+			t.Fatalf("insert %s: %v", version, err)
+		}
+	}
+	router := newClusterSchemesRouter(t, pool)
+
+	first := doGet(t, router, "/v1/cluster-schemes", nil)
+	if first.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", first.Code)
+	}
+	wantOrder := []string{"gamma", "beta", "alpha"}
+	var body struct {
+		Items []struct {
+			SchemeVersion string `json:"scheme_version"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(first.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	var got []string
+	for _, item := range body.Items {
+		got = append(got, item.SchemeVersion)
+	}
+	if !reflect.DeepEqual(got, wantOrder) {
+		t.Errorf("order = %v, want %v", got, wantOrder)
+	}
+
+	etag := first.Header().Get("ETag")
+	for range 5 {
+		again := doGet(t, router, "/v1/cluster-schemes", nil)
+		if again.Header().Get("ETag") != etag {
+			t.Fatalf("ETag changed between identical requests: %q vs %q", again.Header().Get("ETag"), etag)
+		}
+	}
 }
 
 func TestListClusterSchemes_Head(t *testing.T) {
