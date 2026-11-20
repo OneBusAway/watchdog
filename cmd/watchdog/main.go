@@ -201,9 +201,10 @@ func main() {
 	// and collects metrics from all configured OBA servers.
 	app.StartMetricsCollection(ctx)
 
-	// There is no scheduled bundle download. Each collection tick reads the
-	// backend metadata hash and downloads on a change, falling back to a
-	// download every 2 hours while the hash is unusable (app.StaticBundleWatch).
+	// Static bundles are kept current inside the collection tick
+	// (app.StaticBundleWatch): it reads the backend metadata hash and downloads
+	// on a change, downloads every feed URL at least once a day whatever the
+	// hash says, and every 2 hours once a bundle has expired.
 
 	// Cron job to delete the data of vehicles that has not sent updates for 1 hour
 	go app.MetricsService.VehicleLastSeen.ClearRoutine(ctx, 15*time.Minute, time.Hour)
