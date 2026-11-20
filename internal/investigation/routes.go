@@ -15,6 +15,7 @@ func (s *InvestigationService) Register(router *httprouter.Router) {
 func (s *InvestigationService) registerRoutes(router *httprouter.Router) {
 	s.get(router, "/v1/reported-trips", s.listReportedTrips)
 	s.get(router, "/v1/reported-trips/:reported_trip_id", s.getReportedTrip)
+	s.get(router, "/v1/reported-trips/:reported_trip_id/unmatched-trip-episodes", s.listReportedTripEpisodes)
 	s.registerLoader(kindReportedTrip, loadReportedTrips)
 	s.get(router, "/v1/cluster-schemes/:scheme_version", s.getClusterScheme)
 	s.get(router, "/v1/servers", s.listServers)
