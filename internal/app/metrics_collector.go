@@ -363,6 +363,13 @@ func (app *Application) collectForServerScope(ctx, campaignCtx context.Context, 
 	// may have loaded newer static data. Refresh in the background; this does
 	// not delay the rest of the tick, and the retirement below still runs now.
 	// The campaign runs under campaignCtx so it survives the end of this cycle.
+	//
+	// TODO(#361): remove this refresh trigger. A changed agency list always
+	// means a changed bundle, which the metadata hash check in
+	// app.StaticBundleWatch already catches on backends that report
+	// staticGtfsHash. It stays only for backends that don't yet, such as Java
+	// OBA until OneBusAway/onebusaway-application-modules#488 ships. The
+	// /metrics.json probe above stays: server mode needs the live agencies.
 	localAgencyIDs := make([]string, 0, len(scope.StaticAgencies))
 	for _, agency := range scope.StaticAgencies {
 		localAgencyIDs = append(localAgencyIDs, agency.AgencyID)
