@@ -48,6 +48,13 @@ type unmatchedTripEpisodeBody struct {
 	Included included `json:"included,omitzero"`
 }
 
+// unmatchedTripEpisodesBody is the E17 and E13 response.
+type unmatchedTripEpisodesBody struct {
+	Items    []unmatchedTripEpisode `json:"items"`
+	Links    links                  `json:"links"`
+	Included included               `json:"included,omitzero"`
+}
+
 // unmatchedTripEpisodeLinks builds an episode's links; closing_response only exists once it closed.
 func unmatchedTripEpisodeLinks(row dbgen.UnmatchedTripEpisodeView) itemLinks {
 	self := "/v1/unmatched-trip-episodes/" + strconv.FormatInt(row.UnmatchedTripEpisodeID, 10)
@@ -285,4 +292,73 @@ func (s *InvestigationService) listUnmatchedTripEpisodeStaticContexts(w http.Res
 		cache = cacheImmutable(*closedAt)
 	}
 	s.writeJSON(w, r, body, cache)
+}
+
+// unmatchedTripEpisodePage reads one page of ListUnmatchedTripEpisodes for E17 and E13.
+// The items are never nil, so an empty page encodes as [] rather than null.
+func (s *InvestigationService) unmatchedTripEpisodePage(ctx context.Context, q *dbgen.Queries, r *http.Request,
+	params dbgen.ListUnmatchedTripEpisodesParams, p page, inc include) (unmatchedTripEpisodesBody, error) {
+	var body unmatchedTripEpisodesBody
+	rows, err := q.ListUnmatchedTripEpisodes(ctx, params)
+	if err != nil {
+		return body, err
+	}
+	rows, hasMore := trimPage(rows, p)
+	body.Items = make([]unmatchedTripEpisode, 0, len(rows))
+	all := make([]itemLinks, 0, len(rows))
+	for _, row := range rows {
+		l := unmatchedTripEpisodeLinks(row)
+		all = append(all, l)
+		body.Items = append(body.Items, unmatchedTripEpisodeRepresentation(row, l))
+	}
+	var lastID int64
+	if len(rows) > 0 {
+		lastID = rows[len(rows)-1].UnmatchedTripEpisodeID
+	}
+	body.Links = pageLinks(r, lastID, hasMore)
+	body.Included, err = s.loadIncluded(ctx, q, all, inc)
+	return body, err
+}
+
+// listUnmatchedTripEpisodes serves GET /v1/unmatched-trip-episodes. Without a
+// window it covers the last 24 hours, except with status=open, where open
+// episodes need no window.
+func (s *InvestigationService) listUnmatchedTripEpisodes(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	var bad invalidParams
+	values := parseQuery(r, &bad, "server_id", "agency_id", "trip_id", "status", "active_from", "active_to",
+		"close_reason", "static_found", "include", "page_size", "cursor")
+	params := dbgen.ListUnmatchedTripEpisodesParams{
+		ServerID:    paramID(values, "server_id", &bad),
+		AgencyID:    paramID(values, "agency_id", &bad),
+		ObaTripID:   paramString(values, "trip_id", &bad),
+		Status:      paramEnum(values, "status", []string{"open", "closed"}, &bad),
+		CloseReason: paramEnum(values, "close_reason", unmatchedCloseReasons, &bad),
+		StaticFound: paramBool(values, "static_found", &bad),
+	}
+	// A trip ID is only unique within one agency, so it needs agency_id.
+	if params.ObaTripID != nil && !values.Has("agency_id") {
+		bad.add("trip_id", "requires agency_id")
+	}
+	statusOpen := params.Status != nil && *params.Status == "open"
+	win := s.parseWindow(values, activeWindowOptions(statusOpen, false), &bad)
+	inc := s.parseInclude(values, unmatchedTripEpisodeIncludable, &bad)
+	p := parsePage(values, &bad)
+	if len(bad) > 0 {
+		writeInvalidParams(w, bad)
+		return
+	}
+	params.ActiveFrom, params.ActiveTo = win.From, win.To
+	params.AfterID, params.PageLimit = p.AfterID, p.Limit()
+
+	var body unmatchedTripEpisodesBody
+	err := s.read(r.Context(), func(ctx context.Context, q *dbgen.Queries) error {
+		var err error
+		body, err = s.unmatchedTripEpisodePage(ctx, q, r, params, p, inc)
+		return err
+	})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.writeJSON(w, r, body, cacheShort())
 }
