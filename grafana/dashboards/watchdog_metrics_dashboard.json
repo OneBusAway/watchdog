@@ -204,7 +204,8 @@
           "datasource": {
             "name": "Prometheus"
           },
-          "legendFormat": "{{server_url}} - {{agency_id}} - Earliest"
+          "legendFormat": "{{server_url}} - {{agency_id}} - Earliest",
+          "instant": true
         },
         {
           "expr": "(gtfs_bundle_days_until_latest_expiration{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}) * 86400",
@@ -212,7 +213,8 @@
           "datasource": {
             "name": "Prometheus"
           },
-          "legendFormat": "{{server_url}} - {{agency_id}} - Latest"
+          "legendFormat": "{{server_url}} - {{agency_id}} - Latest",
+          "instant": true
         }
       ],
       "title": "2.1 Feed Expiration",
@@ -466,7 +468,7 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: gtfs_rt_feed_source_timestamp_seconds, gtfs_rt_feed_payload_last_changed_timestamp_seconds\nQuestion answered: \"Is each successfully fetched source and payload fresh?\"\n\nVisualization: Bar Gauge\nRationale: Freshness requires an immediate live status check. A vertical bar gauge per agency immediately catches the eye. As realtime updates lag, the bars fill up and hit red thresholds, quickly highlighting exactly which agency's data pipeline is hung.",
+      "description": "Metrics: gtfs_rt_feed_source_timestamp_seconds, gtfs_rt_feed_payload_last_changed_timestamp_seconds\nQuestion answered: \"Is each successfully fetched source and payload fresh?\"\n\nVisualization: Bar Gauge\nRationale: Freshness requires an immediate live status check. A horizontal bar gauge per agency immediately catches the eye. As realtime updates lag, the bars fill up and hit red thresholds, quickly highlighting exactly which agency's data pipeline is hung.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -696,21 +698,24 @@
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
-          }
+          },
+          "instant": true
         },
         {
           "expr": "oba_stops_unmatched_count{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}",
           "refId": "B",
           "datasource": {
             "name": "Prometheus"
-          }
+          },
+          "instant": true
         },
         {
           "expr": "oba_stop_match_ratio{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}",
           "refId": "C",
           "datasource": {
             "name": "Prometheus"
-          }
+          },
+          "instant": true
         }
       ],
       "title": "4.2 Stop Matching",
@@ -735,8 +740,8 @@
         "overrides": [
           {
             "matcher": {
-              "id": "byRegexp",
-              "options": ".*ratio.*"
+              "id": "byFrameRefID",
+              "options": "C"
             },
             "properties": [
               {
@@ -775,8 +780,8 @@
           },
           {
             "matcher": {
-              "id": "byRegexp",
-              "options": ".*unmatched.*"
+              "id": "byFrameRefID",
+              "options": "B"
             },
             "properties": [
               {
@@ -813,7 +818,7 @@
       "datasource": {
         "name": "Prometheus"
       },
-      "description": "Metrics: oba_scheduled_trips_count, gtfs_static_agency_reported_by_oba\nQuestion answered: \"What is the scheduled-trip footprint, and how many static agencies does OBA report?\"\n\nVisualization: Stat\nRationale: These two headline counts summarize the scheduled-trip footprint and the number of bundle-backed agencies currently reported by OBA.",
+      "description": "Metrics: oba_scheduled_trips_count, gtfs_static_agency_reported_by_oba\nQuestion answered: \"What is the scheduled-trip footprint, and how many static agencies does OBA report?\"\n\nVisualization: Stat\nRationale: These two headline counts summarize the scheduled-trip footprint and the number of bundle-backed agencies currently reported by OBA.\n\nThe agencies reported by OBA count includes only server-scoped entries. Agency-scoped entries do not contribute; deployments with only agency-scoped entries show No data for this count.",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -832,7 +837,7 @@
         },
         {
           "expr": "sum(gtfs_static_agency_reported_by_oba{agency_id=~\"$agency_id\",server_url=~\"$server_url\"})",
-          "legendFormat": "Agencies reported by OBA",
+          "legendFormat": "Agencies reported by OBA (server mode only)",
           "refId": "B",
           "datasource": {
             "name": "Prometheus"
@@ -929,14 +934,16 @@
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
-          }
+          },
+          "instant": true
         },
         {
           "expr": "gtfs_rt_stopped_out_of_bounds_vehicles{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}",
           "refId": "B",
           "datasource": {
             "name": "Prometheus"
-          }
+          },
+          "instant": true
         }
       ],
       "title": "5.2 Spatial Validation",
