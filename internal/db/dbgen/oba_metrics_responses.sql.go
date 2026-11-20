@@ -10,73 +10,6 @@ import (
 	"time"
 )
 
-const getOBAMetricsResponse = `-- name: GetOBAMetricsResponse :one
-SELECT response_id, server_id, observed_at, upstream_current_time, api_version
-FROM onebusaway_metrics_response
-WHERE response_id = $1
-`
-
-// One OBA metrics response by ID, for E20.
-func (q *Queries) GetOBAMetricsResponse(ctx context.Context, responseID int64) (OnebusawayMetricsResponse, error) {
-	row := q.db.QueryRow(ctx, getOBAMetricsResponse, responseID)
-	var i OnebusawayMetricsResponse
-	err := row.Scan(
-		&i.ResponseID,
-		&i.ServerID,
-		&i.ObservedAt,
-		&i.UpstreamCurrentTime,
-		&i.ApiVersion,
-	)
-	return i, err
-}
-
-const listOBAMetricsResponseAgencies = `-- name: ListOBAMetricsResponseAgencies :many
-SELECT response_id, agency_id, response_complete, unmatched_stop_count, unmatched_trip_count,
-       matched_stop_count, matched_trip_count
-FROM onebusaway_metrics_response_agency
-WHERE response_id = ANY($1::bigint[])
-ORDER BY response_id, agency_id
-`
-
-type ListOBAMetricsResponseAgenciesRow struct {
-	ResponseID         int64
-	AgencyID           int64
-	ResponseComplete   bool
-	UnmatchedStopCount *int32
-	UnmatchedTripCount *int32
-	MatchedStopCount   *int32
-	MatchedTripCount   *int32
-}
-
-// Each agency's counts for the given responses, agency_id ascending within each response.
-func (q *Queries) ListOBAMetricsResponseAgencies(ctx context.Context, responseIds []int64) ([]ListOBAMetricsResponseAgenciesRow, error) {
-	rows, err := q.db.Query(ctx, listOBAMetricsResponseAgencies, responseIds)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListOBAMetricsResponseAgenciesRow
-	for rows.Next() {
-		var i ListOBAMetricsResponseAgenciesRow
-		if err := rows.Scan(
-			&i.ResponseID,
-			&i.AgencyID,
-			&i.ResponseComplete,
-			&i.UnmatchedStopCount,
-			&i.UnmatchedTripCount,
-			&i.MatchedStopCount,
-			&i.MatchedTripCount,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listOBAMetricsResponsesWithAgencies = `-- name: ListOBAMetricsResponsesWithAgencies :many
 SELECT r.response_id, r.server_id, r.observed_at, r.upstream_current_time, r.api_version,
        a.agency_id, a.response_complete, a.unmatched_stop_count, a.unmatched_trip_count,
@@ -101,8 +34,9 @@ type ListOBAMetricsResponsesWithAgenciesRow struct {
 	MatchedTripCount    *int32
 }
 
-// Headers and agency counts for every ID in one batched read, for the E20 include loader.
-// A response with no agency rows still returns one row, with NULL agency columns.
+// Headers and agency counts for the given responses in one read. A response with no
+// agency rows still returns one row, with NULL agency columns. A response that does
+// not exist returns no rows. Used by the E20 page and its include loader.
 func (q *Queries) ListOBAMetricsResponsesWithAgencies(ctx context.Context, responseIds []int64) ([]ListOBAMetricsResponsesWithAgenciesRow, error) {
 	rows, err := q.db.Query(ctx, listOBAMetricsResponsesWithAgencies, responseIds)
 	if err != nil {

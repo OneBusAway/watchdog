@@ -209,3 +209,19 @@ func TestOBAMetricsResponseLoader(t *testing.T) {
 		}
 	}
 }
+
+func TestGetOBAMetricsResponse_CacheDependsOnInclude(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	serverID := insertEpisodeServer(t, pool, "https://example.com")
+	id := insertMetricsResponse(t, pool, serverID, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), nil, nil)
+	router := newOBAMetricsRouter(t, pool)
+	path := fmt.Sprintf("/v1/oba-metrics-responses/%d", id)
+
+	// Without include the response is immutable; an included server can change, so it is short-cached.
+	if got := doGet(t, router, path, nil).Header().Get("Cache-Control"); got != "private, max-age=86400" {
+		t.Errorf("Cache-Control without include = %q, want immutable", got)
+	}
+	if got := doGet(t, router, path+"?include=server", nil).Header().Get("Cache-Control"); got != "private, max-age=30" {
+		t.Errorf("Cache-Control with include=server = %q, want short", got)
+	}
+}
