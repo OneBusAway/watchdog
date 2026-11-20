@@ -105,41 +105,83 @@ func (q *Queries) ListUnmatchedStopEpisodeStaticContexts(ctx context.Context, ep
 }
 
 const listUnmatchedStopEpisodes = `-- name: ListUnmatchedStopEpisodes :many
-SELECT unmatched_stop_episode_id, reported_stop_id, agency_id, first_response_agency_id, closing_response_agency_id, last_reported_at, close_reason, server_id, opened_at, closed_at, opening_response_id, closing_response_id, stop_id, stop_metadata_version_id, static_found, gtfs_static_version_id, previous_episode_count, previous_closed_at
-FROM unmatched_stop_episode_view
-WHERE ($1::bigint IS NULL OR server_id = $1::bigint)
-  AND ($2::bigint IS NULL OR agency_id = $2::bigint)
-  AND ($3::bigint IS NULL OR reported_stop_id = $3::bigint)
-  AND ($4::text IS NULL OR stop_id = $4::text)
-  AND ($5::text IS NULL
-       OR ($5::text = 'open' AND closing_response_agency_id IS NULL)
-       OR ($5::text = 'closed' AND closing_response_agency_id IS NOT NULL))
-  AND ($6::timestamptz IS NULL OR opened_at < $6::timestamptz)
-  AND ($7::timestamptz IS NULL OR closed_at IS NULL
-       OR closed_at >= $7::timestamptz)
-  AND ($8::text IS NULL OR close_reason = $8::text)
-  AND ($9::boolean IS NULL OR static_found = $9::boolean)
-  AND ($10::bigint IS NULL OR unmatched_stop_episode_id < $10::bigint)
-ORDER BY unmatched_stop_episode_id DESC
-LIMIT $11
+SELECT e.unmatched_stop_episode_id, e.reported_stop_id, e.agency_id, e.first_response_agency_id, e.closing_response_agency_id, e.last_reported_at, e.close_reason, e.server_id, e.opened_at, e.closed_at, e.opening_response_id, e.closing_response_id, e.stop_id, e.stop_metadata_version_id, e.static_found, e.gtfs_static_version_id, e.previous_episode_count, e.previous_closed_at
+FROM unmatched_stop_episode_view e
+LEFT JOIN LATERAL (
+    SELECT sc_v.stop_metadata_version_id
+    FROM unmatched_stop_episode_metadata sc_m
+    JOIN stop_metadata_version sc_v ON sc_v.stop_metadata_version_id = sc_m.stop_metadata_version_id
+    JOIN gtfs_static_version sc_g ON sc_g.gtfs_static_version_id = sc_v.gtfs_static_version_id
+    WHERE sc_m.unmatched_stop_episode_id = e.unmatched_stop_episode_id
+      AND ($1::timestamptz IS NULL OR sc_g.published_at <= $1::timestamptz)
+    ORDER BY sc_g.published_at DESC, sc_g.gtfs_static_version_id DESC
+    LIMIT 1
+) applied_metadata ON TRUE
+LEFT JOIN stop_cluster_assignment sca
+    ON sca.stop_metadata_version_id = applied_metadata.stop_metadata_version_id
+   AND sca.scheme_version = $2::text
+WHERE ($3::bigint IS NULL OR e.server_id = $3::bigint)
+  AND ($4::bigint IS NULL OR e.agency_id = $4::bigint)
+  AND ($5::bigint IS NULL OR e.reported_stop_id = $5::bigint)
+  AND ($6::text IS NULL OR e.stop_id = $6::text)
+  AND ($7::text IS NULL
+       OR ($7::text = 'open' AND e.closing_response_agency_id IS NULL)
+       OR ($7::text = 'closed' AND e.closing_response_agency_id IS NOT NULL))
+  AND ($8::timestamptz IS NULL OR e.opened_at < $8::timestamptz)
+  AND ($9::timestamptz IS NULL OR e.closed_at IS NULL
+       OR e.closed_at >= $9::timestamptz)
+  AND ($10::timestamptz IS NULL OR e.opened_at >= $10::timestamptz)
+  AND ($11::timestamptz IS NULL OR e.opened_at < $11::timestamptz)
+  AND ($1::timestamptz IS NULL
+       OR (e.opened_at <= $1::timestamptz
+           AND (e.closed_at IS NULL OR e.closed_at > $1::timestamptz)))
+  AND ($12::text IS NULL OR e.close_reason = $12::text)
+  AND ($13::boolean IS NULL OR e.static_found = $13::boolean)
+  AND ($14::bigint IS NULL OR e.opening_response_id = $14::bigint)
+  AND ($15::bigint IS NULL OR e.closing_response_id = $15::bigint)
+  AND ($16::bigint IS NULL OR e.gtfs_static_version_id = $16::bigint)
+  AND (
+      CASE
+          WHEN $17::text = 'has_previous_episode' THEN e.previous_episode_count > 0
+          WHEN $17::text = 'no_previous_episode' THEN e.previous_episode_count = 0
+          ELSE TRUE
+      END
+  )
+  AND ($18::text IS NULL OR sca.cell_id = $18::text)
+  AND ($19::text IS NULL OR sca.root_station_id = $19::text)
+  AND ($20::bigint IS NULL OR e.unmatched_stop_episode_id < $20::bigint)
+ORDER BY e.unmatched_stop_episode_id DESC
+LIMIT $21
 `
 
 type ListUnmatchedStopEpisodesParams struct {
-	ServerID       *int64
-	AgencyID       *int64
-	ReportedStopID *int64
-	ObaStopID      *string
-	Status         *string
-	ActiveTo       *time.Time
-	ActiveFrom     *time.Time
-	CloseReason    *string
-	StaticFound    *bool
-	AfterID        *int64
-	PageLimit      int32
+	OpenAt              *time.Time
+	SchemeVersion       *string
+	ServerID            *int64
+	AgencyID            *int64
+	ReportedStopID      *int64
+	ObaStopID           *string
+	Status              *string
+	ActiveTo            *time.Time
+	ActiveFrom          *time.Time
+	OpenedFrom          *time.Time
+	OpenedTo            *time.Time
+	CloseReason         *string
+	StaticFound         *bool
+	OpeningResponseID   *int64
+	ClosingResponseID   *int64
+	GtfsStaticVersionID *int64
+	Recurrence          *string
+	CellID              *string
+	RootStationID       *string
+	AfterID             *int64
+	PageLimit           int32
 }
 
 func (q *Queries) ListUnmatchedStopEpisodes(ctx context.Context, arg ListUnmatchedStopEpisodesParams) ([]UnmatchedStopEpisodeView, error) {
 	rows, err := q.db.Query(ctx, listUnmatchedStopEpisodes,
+		arg.OpenAt,
+		arg.SchemeVersion,
 		arg.ServerID,
 		arg.AgencyID,
 		arg.ReportedStopID,
@@ -147,8 +189,16 @@ func (q *Queries) ListUnmatchedStopEpisodes(ctx context.Context, arg ListUnmatch
 		arg.Status,
 		arg.ActiveTo,
 		arg.ActiveFrom,
+		arg.OpenedFrom,
+		arg.OpenedTo,
 		arg.CloseReason,
 		arg.StaticFound,
+		arg.OpeningResponseID,
+		arg.ClosingResponseID,
+		arg.GtfsStaticVersionID,
+		arg.Recurrence,
+		arg.CellID,
+		arg.RootStationID,
 		arg.AfterID,
 		arg.PageLimit,
 	)

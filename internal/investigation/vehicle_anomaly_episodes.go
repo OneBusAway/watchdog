@@ -195,21 +195,69 @@ func (s *InvestigationService) vehicleAnomalyEpisodePage(ctx context.Context, q 
 	return body, err
 }
 
-// listVehicleAnomalyEpisodes serves GET /v1/vehicle-anomaly-episodes. Without
-// a window it covers the last 24 hours, except with status=open, where open
-// episodes need no window.
+var vehiclePositionValidationReasons = []string{
+	"missing_position",
+	"non_finite_coordinate",
+	"placeholder_zero_coordinate",
+	"latitude_out_of_range",
+	"longitude_out_of_range",
+}
+
+var vehicleAttributionReasons = []string{
+	"missing_vehicle_id",
+	"missing_route_id",
+	"unknown_route_id",
+	"agency_not_reported_by_oba",
+	"ambiguous_identifier",
+	"route_trip_conflict",
+}
+
+var vehicleExpectedScheduleStates = []string{
+	"expected_active",
+	"expected_inactive",
+	"unknown",
+}
+
+// listVehicleAnomalyEpisodes serves GET /v1/vehicle-anomaly-episodes.
 func (s *InvestigationService) listVehicleAnomalyEpisodes(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	var bad invalidParams
 	values := parseQuery(r, &bad, "server_id", "agency_id", "endpoint_id", "vehicle_id", "anomaly_type", "status",
-		"active_from", "active_to", "close_reason", "include", "page_size", "cursor")
+		"active_from", "active_to", "opened_from", "opened_to", "open_at", "opening_response_id", "closing_response_id",
+		"gtfs_static_version_id", "recurrence", "route_id", "rule_version_id", "bounding_box_version_id",
+		"position_validation_reason", "attribution_reason", "expected_schedule_state",
+		"close_reason", "include", "page_size", "cursor")
+
+	var agencyID *int64
+	var agencyNone *bool
+	if values.Has("agency_id") {
+		raw := values.Get("agency_id")
+		if raw == "none" {
+			t := true
+			agencyNone = &t
+		} else {
+			agencyID = paramID(values, "agency_id", &bad)
+		}
+	}
+
 	params := dbgen.ListVehicleAnomalyEpisodesParams{
-		ServerID:          paramID(values, "server_id", &bad),
-		AgencyID:          paramID(values, "agency_id", &bad),
-		EndpointID:        paramID(values, "endpoint_id", &bad),
-		ExternalVehicleID: paramString(values, "vehicle_id", &bad),
-		AnomalyCode:       paramEnum(values, "anomaly_type", vehicleAnomalyCodes, &bad),
-		Status:            paramEnum(values, "status", []string{"open", "closed"}, &bad),
-		CloseReason:       paramEnum(values, "close_reason", vehicleCloseReasons, &bad),
+		ServerID:                 paramID(values, "server_id", &bad),
+		AgencyID:                 agencyID,
+		AgencyNone:               agencyNone,
+		EndpointID:               paramID(values, "endpoint_id", &bad),
+		ExternalVehicleID:        paramString(values, "vehicle_id", &bad),
+		AnomalyCode:              paramEnum(values, "anomaly_type", vehicleAnomalyCodes, &bad),
+		Status:                   paramEnum(values, "status", []string{"open", "closed"}, &bad),
+		CloseReason:              paramEnum(values, "close_reason", vehicleCloseReasons, &bad),
+		OpeningResponseID:        paramID(values, "opening_response_id", &bad),
+		ClosingResponseID:        paramID(values, "closing_response_id", &bad),
+		GtfsStaticVersionID:      paramID(values, "gtfs_static_version_id", &bad),
+		Recurrence:               paramEnum(values, "recurrence", []string{"has_previous_episode", "no_previous_episode"}, &bad),
+		RouteID:                  paramString(values, "route_id", &bad),
+		RuleVersionID:            paramID(values, "rule_version_id", &bad),
+		BoundingBoxVersionID:     paramID(values, "bounding_box_version_id", &bad),
+		PositionValidationReason: paramEnum(values, "position_validation_reason", vehiclePositionValidationReasons, &bad),
+		AttributionReason:        paramEnum(values, "attribution_reason", vehicleAttributionReasons, &bad),
+		ExpectedScheduleState:    paramEnum(values, "expected_schedule_state", vehicleExpectedScheduleStates, &bad),
 	}
 	// A feed vehicle ID is only unique within one endpoint, so it needs a scope.
 	// An empty vehicle_id is already reported by paramString, so it is not
@@ -217,8 +265,14 @@ func (s *InvestigationService) listVehicleAnomalyEpisodes(w http.ResponseWriter,
 	if params.ExternalVehicleID != nil && !values.Has("endpoint_id") && !values.Has("server_id") {
 		bad.add("vehicle_id", "requires endpoint_id or server_id")
 	}
+	hasOpenedWindow := values.Has("opened_from") || values.Has("opened_to")
+	hasOpenAt := values.Has("open_at")
+	replaced := hasOpenedWindow || hasOpenAt
 	statusOpen := params.Status != nil && *params.Status == "open"
-	win := s.parseWindow(values, activeWindowOptions(statusOpen, false), &bad)
+	win := s.parseWindow(values, activeWindowOptions(statusOpen, replaced), &bad)
+	openedWin := s.parseWindow(values, openedWindowOptions(), &bad)
+	openAt := paramTime(values, "open_at", &bad)
+	notFuture("open_at", openAt, s.now(), &bad)
 	inc := s.parseInclude(values, vehicleAnomalyEpisodeIncludable, &bad)
 	p := parsePage(values, &bad)
 	if len(bad) > 0 {
@@ -226,6 +280,8 @@ func (s *InvestigationService) listVehicleAnomalyEpisodes(w http.ResponseWriter,
 		return
 	}
 	params.ActiveFrom, params.ActiveTo = win.From, win.To
+	params.OpenedFrom, params.OpenedTo = openedWin.From, openedWin.To
+	params.OpenAt = openAt
 	params.AfterID, params.PageLimit = p.AfterID, p.Limit()
 
 	var body vehicleAnomalyEpisodesBody

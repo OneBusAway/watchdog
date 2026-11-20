@@ -31,8 +31,24 @@ WHERE (sqlc.narg('server_id')::bigint IS NULL OR server_id = sqlc.narg('server_i
   AND (sqlc.narg('active_to')::timestamptz IS NULL OR opened_at < sqlc.narg('active_to')::timestamptz)
   AND (sqlc.narg('active_from')::timestamptz IS NULL OR closed_at IS NULL
        OR closed_at >= sqlc.narg('active_from')::timestamptz)
+  AND (sqlc.narg('opened_from')::timestamptz IS NULL OR opened_at >= sqlc.narg('opened_from')::timestamptz)
+  AND (sqlc.narg('opened_to')::timestamptz IS NULL OR opened_at < sqlc.narg('opened_to')::timestamptz)
+  AND (sqlc.narg('open_at')::timestamptz IS NULL
+       OR (opened_at <= sqlc.narg('open_at')::timestamptz
+           AND (closed_at IS NULL OR closed_at > sqlc.narg('open_at')::timestamptz)))
   AND (sqlc.narg('close_reason')::text IS NULL OR close_reason = sqlc.narg('close_reason')::text)
   AND (sqlc.narg('static_found')::boolean IS NULL OR static_found = sqlc.narg('static_found')::boolean)
+  AND (sqlc.narg('opening_response_id')::bigint IS NULL OR opening_response_id = sqlc.narg('opening_response_id')::bigint)
+  AND (sqlc.narg('closing_response_id')::bigint IS NULL OR closing_response_id = sqlc.narg('closing_response_id')::bigint)
+  AND (sqlc.narg('gtfs_static_version_id')::bigint IS NULL OR gtfs_static_version_id = sqlc.narg('gtfs_static_version_id')::bigint)
+  AND (
+      CASE
+          WHEN sqlc.narg('recurrence')::text = 'has_previous_episode' THEN previous_episode_count > 0
+          WHEN sqlc.narg('recurrence')::text = 'no_previous_episode' THEN previous_episode_count = 0
+          ELSE TRUE
+      END
+  )
+  AND (sqlc.narg('route_id')::text IS NULL OR route_id = sqlc.narg('route_id')::text)
   AND (sqlc.narg('after_id')::bigint IS NULL OR unmatched_trip_episode_id < sqlc.narg('after_id')::bigint)
 ORDER BY unmatched_trip_episode_id DESC
 LIMIT sqlc.arg('page_limit');

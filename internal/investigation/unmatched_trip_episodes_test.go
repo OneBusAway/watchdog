@@ -820,3 +820,135 @@ func TestListUnmatchedTripEpisodes_IncludeStaticContexts(t *testing.T) {
 		t.Errorf("loader called %d times, want 1", calls[kindUnmatchedTripStaticContexts])
 	}
 }
+
+func (tr trip) linkStaticWithRoute(t *testing.T, episodeID int64, published time.Time, found bool, routeID *string) (versionID, metadataID int64) {
+	t.Helper()
+	versionID = dbtest.ID(t, tr.pool,
+		"INSERT INTO gtfs_static_version (server_id, published_at) VALUES ($1, $2) RETURNING gtfs_static_version_id",
+		tr.serverID, published)
+	var service, block *string
+	if found {
+		s, b := "service-1", "block-1"
+		service, block = &s, &b
+	}
+	metadataID = dbtest.ID(t, tr.pool,
+		`INSERT INTO trip_metadata_version
+		 (gtfs_static_version_id, agency_id, reported_trip_id, static_trip_found, route_id, service_id, block_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING trip_metadata_version_id`,
+		versionID, tr.agencyID, tr.reportedTripID, found, routeID, service, block)
+	if err := dbtest.Exec(tr.pool,
+		`INSERT INTO unmatched_trip_episode_metadata (unmatched_trip_episode_id, trip_metadata_version_id, reported_trip_id, agency_id)
+		 VALUES ($1, $2, $3, $4)`,
+		episodeID, metadataID, tr.reportedTripID, tr.agencyID); err != nil {
+		t.Fatalf("link static context: %v", err)
+	}
+	return versionID, metadataID
+}
+
+func (tr trip) episodeWithResponses(t *testing.T, opened, closed time.Time) (epID, openResp, closeResp int64) {
+	t.Helper()
+	openResp, first := tr.response(t, opened)
+	var closing *int64
+	var reason *string
+	if !closed.IsZero() {
+		var id int64
+		closeResp, id = tr.response(t, closed)
+		closing = &id
+		notReported := "not_reported"
+		reason = &notReported
+	}
+	epID = dbtest.ID(t, tr.pool,
+		`INSERT INTO unmatched_trip_episode
+		 (reported_trip_id, agency_id, first_response_agency_id, closing_response_agency_id, last_reported_at, close_reason)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING unmatched_trip_episode_id`,
+		tr.reportedTripID, tr.agencyID, first, closing, opened.Add(30*time.Second), reason)
+	return epID, openResp, closeResp
+}
+
+func TestListUnmatchedTripEpisodes_Filter_opened_window(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	tr := newTripFixture(t, pool)
+	tr.episode(t, tripEpisodesNow.Add(-10*time.Hour), time.Time{})
+	inWindow := tr.episode(t, tripEpisodesNow.Add(-3*time.Hour), tripEpisodesNow.Add(-2*time.Hour))
+	router, _ := newTripEpisodeListRouter(t, pool)
+
+	from := tripEpisodesNow.Add(-5 * time.Hour).Format(time.RFC3339)
+	to := tripEpisodesNow.Add(-time.Hour).Format(time.RFC3339)
+	wantTripEpisodeIDs(t, router, fmt.Sprintf("%s?opened_from=%s&opened_to=%s", tripEpisodesPath, from, to), inWindow)
+
+	// Window pair rules
+	wantInvalidParam(t, doGet(t, router, fmt.Sprintf("%s?opened_from=%s", tripEpisodesPath, from), nil), "opened_to")
+	wantInvalidParam(t, doGet(t, router, fmt.Sprintf("%s?opened_to=%s", tripEpisodesPath, to), nil), "opened_from")
+	wantInvalidParam(t, doGet(t, router, fmt.Sprintf("%s?opened_from=%s&opened_to=%s", tripEpisodesPath, to, from), nil), "opened_to")
+	over31 := tripEpisodesNow.Add(-40 * 24 * time.Hour).Format(time.RFC3339)
+	wantInvalidParam(t, doGet(t, router, fmt.Sprintf("%s?opened_from=%s&opened_to=%s", tripEpisodesPath, over31, to), nil), "opened_to")
+}
+
+func TestListUnmatchedTripEpisodes_Filter_open_at(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	tr := newTripFixture(t, pool)
+	tInstant := tripEpisodesNow.Add(-10 * time.Hour)
+
+	tr.episode(t, tInstant.Add(-3*time.Hour), tInstant.Add(-time.Hour))
+	openAcross := tr.episode(t, tInstant.Add(-time.Hour), tInstant.Add(time.Hour))
+	tr.episode(t, tInstant.Add(time.Hour), tInstant.Add(3*time.Hour))
+
+	router, _ := newTripEpisodeListRouter(t, pool)
+	wantTripEpisodeIDs(t, router, fmt.Sprintf("%s?open_at=%s", tripEpisodesPath, tInstant.Format(time.RFC3339)), openAcross)
+
+	// Future open_at returns 400
+	future := tripEpisodesNow.Add(time.Hour).Format(time.RFC3339)
+	wantInvalidParam(t, doGet(t, router, fmt.Sprintf("%s?open_at=%s", tripEpisodesPath, future), nil), "open_at")
+}
+
+func TestListUnmatchedTripEpisodes_NeitherWindowKeepsDefault24h(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	tr := newTripFixture(t, pool)
+	oldEp := tr.episode(t, tripEpisodesNow.Add(-40*24*time.Hour), tripEpisodesNow.Add(-30*24*time.Hour))
+	router, _ := newTripEpisodeListRouter(t, pool)
+
+	at := tripEpisodesNow.Add(-35 * 24 * time.Hour).Format(time.RFC3339)
+	wantTripEpisodeIDs(t, router, fmt.Sprintf("%s?open_at=%s", tripEpisodesPath, at), oldEp)
+
+	from := tripEpisodesNow.Add(-41 * 24 * time.Hour).Format(time.RFC3339)
+	to := tripEpisodesNow.Add(-39 * 24 * time.Hour).Format(time.RFC3339)
+	wantTripEpisodeIDs(t, router, fmt.Sprintf("%s?opened_from=%s&opened_to=%s", tripEpisodesPath, from, to), oldEp)
+}
+
+func TestListUnmatchedTripEpisodes_Filter_responses_and_static(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	tr := newTripFixture(t, pool)
+	ep1, openResp1, closeResp1 := tr.episodeWithResponses(t, tripEpisodesNow.Add(-3*time.Hour), tripEpisodesNow.Add(-2*time.Hour))
+	ep2, _, _ := tr.episodeWithResponses(t, tripEpisodesNow.Add(-2*time.Hour), tripEpisodesNow.Add(-time.Hour))
+
+	r1 := "route-alpha"
+	r2 := "route-beta"
+	v1, _ := tr.linkStaticWithRoute(t, ep1, tripEpisodesNow.Add(-10*time.Hour), true, &r1)
+	v2, _ := tr.linkStaticWithRoute(t, ep2, tripEpisodesNow.Add(-5*time.Hour), true, &r2)
+
+	router, _ := newTripEpisodeListRouter(t, pool)
+
+	wantTripEpisodeIDs(t, router, fmt.Sprintf("%s?opening_response_id=%d", tripEpisodesPath, openResp1), ep1)
+	wantTripEpisodeIDs(t, router, fmt.Sprintf("%s?closing_response_id=%d", tripEpisodesPath, closeResp1), ep1)
+	wantTripEpisodeIDs(t, router, fmt.Sprintf("%s?gtfs_static_version_id=%d", tripEpisodesPath, v1), ep1)
+	wantTripEpisodeIDs(t, router, fmt.Sprintf("%s?gtfs_static_version_id=%d", tripEpisodesPath, v2), ep2)
+	wantTripEpisodeIDs(t, router, tripEpisodesPath+"?route_id=route-alpha", ep1)
+	wantTripEpisodeIDs(t, router, tripEpisodesPath+"?route_id=route-beta", ep2)
+}
+
+func TestListUnmatchedTripEpisodes_Filter_recurrence(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	tr := newTripFixture(t, pool)
+	ep1 := tr.episode(t, tripEpisodesNow.Add(-5*time.Hour), tripEpisodesNow.Add(-4*time.Hour))
+	ep2 := tr.episode(t, tripEpisodesNow.Add(-3*time.Hour), tripEpisodesNow.Add(-2*time.Hour))
+	router, _ := newTripEpisodeListRouter(t, pool)
+
+	wantTripEpisodeIDs(t, router, tripEpisodesPath+"?recurrence=has_previous_episode", ep2)
+	wantTripEpisodeIDs(t, router, tripEpisodesPath+"?recurrence=no_previous_episode", ep1)
+	wantInvalidParam(t, doGet(t, router, tripEpisodesPath+"?recurrence=unknown", nil), "recurrence")
+}
+
+func TestListUnmatchedTripEpisodes_AgencyNone_Returns400(t *testing.T) {
+	router, _ := newTripEpisodeListRouter(t, nil)
+	wantInvalidParam(t, doGet(t, router, tripEpisodesPath+"?agency_id=none", nil), "agency_id")
+}

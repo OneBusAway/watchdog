@@ -117,25 +117,49 @@ WHERE ($1::bigint IS NULL OR server_id = $1::bigint)
   AND ($6::timestamptz IS NULL OR opened_at < $6::timestamptz)
   AND ($7::timestamptz IS NULL OR closed_at IS NULL
        OR closed_at >= $7::timestamptz)
-  AND ($8::text IS NULL OR close_reason = $8::text)
-  AND ($9::boolean IS NULL OR static_found = $9::boolean)
-  AND ($10::bigint IS NULL OR unmatched_trip_episode_id < $10::bigint)
+  AND ($8::timestamptz IS NULL OR opened_at >= $8::timestamptz)
+  AND ($9::timestamptz IS NULL OR opened_at < $9::timestamptz)
+  AND ($10::timestamptz IS NULL
+       OR (opened_at <= $10::timestamptz
+           AND (closed_at IS NULL OR closed_at > $10::timestamptz)))
+  AND ($11::text IS NULL OR close_reason = $11::text)
+  AND ($12::boolean IS NULL OR static_found = $12::boolean)
+  AND ($13::bigint IS NULL OR opening_response_id = $13::bigint)
+  AND ($14::bigint IS NULL OR closing_response_id = $14::bigint)
+  AND ($15::bigint IS NULL OR gtfs_static_version_id = $15::bigint)
+  AND (
+      CASE
+          WHEN $16::text = 'has_previous_episode' THEN previous_episode_count > 0
+          WHEN $16::text = 'no_previous_episode' THEN previous_episode_count = 0
+          ELSE TRUE
+      END
+  )
+  AND ($17::text IS NULL OR route_id = $17::text)
+  AND ($18::bigint IS NULL OR unmatched_trip_episode_id < $18::bigint)
 ORDER BY unmatched_trip_episode_id DESC
-LIMIT $11
+LIMIT $19
 `
 
 type ListUnmatchedTripEpisodesParams struct {
-	ServerID       *int64
-	AgencyID       *int64
-	ReportedTripID *int64
-	ObaTripID      *string
-	Status         *string
-	ActiveTo       *time.Time
-	ActiveFrom     *time.Time
-	CloseReason    *string
-	StaticFound    *bool
-	AfterID        *int64
-	PageLimit      int32
+	ServerID            *int64
+	AgencyID            *int64
+	ReportedTripID      *int64
+	ObaTripID           *string
+	Status              *string
+	ActiveTo            *time.Time
+	ActiveFrom          *time.Time
+	OpenedFrom          *time.Time
+	OpenedTo            *time.Time
+	OpenAt              *time.Time
+	CloseReason         *string
+	StaticFound         *bool
+	OpeningResponseID   *int64
+	ClosingResponseID   *int64
+	GtfsStaticVersionID *int64
+	Recurrence          *string
+	RouteID             *string
+	AfterID             *int64
+	PageLimit           int32
 }
 
 // One page of unmatched-trip episodes, newest first, for E17 and E13.
@@ -148,8 +172,16 @@ func (q *Queries) ListUnmatchedTripEpisodes(ctx context.Context, arg ListUnmatch
 		arg.Status,
 		arg.ActiveTo,
 		arg.ActiveFrom,
+		arg.OpenedFrom,
+		arg.OpenedTo,
+		arg.OpenAt,
 		arg.CloseReason,
 		arg.StaticFound,
+		arg.OpeningResponseID,
+		arg.ClosingResponseID,
+		arg.GtfsStaticVersionID,
+		arg.Recurrence,
+		arg.RouteID,
 		arg.AfterID,
 		arg.PageLimit,
 	)
