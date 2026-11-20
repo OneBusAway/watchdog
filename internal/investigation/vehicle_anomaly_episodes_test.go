@@ -540,6 +540,13 @@ func TestListVehicleAnomalyEpisodes_VehicleIDRequiresScope(t *testing.T) {
 	wantInvalidParam(t, doGet(t, router, vehicleAnomalyEpisodesPath+"?vehicle_id=veh-1", nil), "vehicle_id")
 }
 
+// TestListVehicleAnomalyEpisodes_EmptyVehicleIDReportedOnce checks that an
+// empty vehicle_id with no scope is one problem, not two for the same field.
+func TestListVehicleAnomalyEpisodes_EmptyVehicleIDReportedOnce(t *testing.T) {
+	router, _ := newVehicleAnomalyEpisodesRouter(t, nil)
+	wantInvalidParam(t, doGet(t, router, vehicleAnomalyEpisodesPath+"?vehicle_id=", nil), "vehicle_id")
+}
+
 func TestListVehicleAnomalyEpisodes_AgencyFromOpeningEvidence(t *testing.T) {
 	pool := dbtest.NewMigratedPool(t)
 	vc := newAnomalyVehicle(t, pool)
