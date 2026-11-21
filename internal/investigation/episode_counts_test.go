@@ -3,9 +3,11 @@ package investigation
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -577,4 +579,400 @@ func agencyIDString(id int64) string {
 func strconvFormat(id int64) string {
 	b, _ := json.Marshal(id)
 	return string(b)
+}
+
+func TestGetEpisodeCounts_GroupRequiresType(t *testing.T) {
+	router := newEpisodeCountsRouter(t, nil)
+	fromTo := "from=2026-10-17T00:00:00Z&to=2026-10-24T00:00:00Z"
+
+	// static_found without episode_type -> 400
+	wantInvalidParam(t, doGet(t, router, "/v1/episode-counts?"+fromTo+"&group_by=static_found", nil), "group_by")
+
+	// static_found with invalid_coordinate -> 400
+	wantInvalidParam(t, doGet(t, router, "/v1/episode-counts?"+fromTo+"&group_by=static_found&episode_type=invalid_coordinate", nil), "group_by")
+
+	// cluster with unmatched_trip -> 400
+	wantInvalidParam(t, doGet(t, router, "/v1/episode-counts?"+fromTo+"&group_by=cluster&episode_type=unmatched_trip", nil), "group_by")
+
+	// endpoint without episode_type -> 400
+	wantInvalidParam(t, doGet(t, router, "/v1/episode-counts?"+fromTo+"&group_by=endpoint", nil), "group_by")
+
+	// endpoint with unmatched_stop -> 400
+	wantInvalidParam(t, doGet(t, router, "/v1/episode-counts?"+fromTo+"&group_by=endpoint&episode_type=unmatched_stop", nil), "group_by")
+
+	// unknown group_by -> 400
+	wantInvalidParam(t, doGet(t, router, "/v1/episode-counts?"+fromTo+"&group_by=invalid_dimension", nil), "group_by")
+
+	// unknown episode_type -> 400
+	wantInvalidParam(t, doGet(t, router, "/v1/episode-counts?"+fromTo+"&episode_type=invalid_type", nil), "episode_type")
+}
+
+func TestGetEpisodeCounts_OpenedHourWindow(t *testing.T) {
+	router := newEpisodeCountsRouter(t, nil)
+
+	// 8 days window with opened_hour -> 400
+	rec8 := doGet(t, router, "/v1/episode-counts?from=2026-10-16T00:00:00Z&to=2026-10-24T00:00:00Z&group_by=opened_hour", nil)
+	wantInvalidParam(t, rec8, "to")
+
+	// 7 days window with opened_hour -> 200 (even without pool if no DB needed or with pool)
+}
+
+func TestGetEpisodeCounts_EpisodeTypeOnly(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	serverID := insertEpisodeServer(t, pool, "https://example.com")
+	agencyID := insertEpisodeAgency(t, pool, serverID, "1")
+	st := addStop(t, pool, serverID, agencyID, "1_100")
+	opened := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+	st.episode(t, opened, time.Time{})
+
+	router := newEpisodeCountsRouter(t, pool)
+
+	// episode_type=unmatched_stop alone
+	rec := doGet(t, router, "/v1/episode-counts?from=2026-10-17T00:00:00Z&to=2026-10-24T00:00:00Z&episode_type=unmatched_stop", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var body map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &body)
+	if body["episode_type"] != "unmatched_stop" {
+		t.Errorf("episode_type = %v, want unmatched_stop", body["episode_type"])
+	}
+	items := body["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+	it := items[0].(map[string]any)
+	if it["episode_type"] != "unmatched_stop" || int64(it["opened"].(float64)) != 1 {
+		t.Errorf("unexpected item: %+v", it)
+	}
+}
+
+func TestGetEpisodeCounts_GroupLinks(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	serverID := insertEpisodeServer(t, pool, "https://example.com")
+	agencyID := insertEpisodeAgency(t, pool, serverID, "1")
+	st1 := addStop(t, pool, serverID, agencyID, "1_101")
+	st2 := addStop(t, pool, serverID, agencyID, "1_102")
+
+	opened := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+	ep1 := st1.episode(t, opened, time.Time{})
+	ep2 := st2.episode(t, opened.Add(time.Hour), time.Time{})
+
+	st1.linkStatic(t, ep1, opened.Add(-time.Hour), true)
+	st2.linkStatic(t, ep2, opened.Add(-time.Hour), false)
+
+	s, router := newTestService(t)
+	s.Pool = pool
+	s.now = func() time.Time { return episodesNow }
+
+	rec := doGet(t, router, "/v1/episode-counts?from=2026-10-17T00:00:00Z&to=2026-10-24T00:00:00Z&episode_type=unmatched_stop&group_by=static_found", map[string]string{"Authorization": "Bearer " + testToken})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body)
+	}
+	var body map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &body)
+	items := body["items"].([]any)
+	if len(items) != 2 {
+		t.Fatalf("len(items) = %d, want 2", len(items))
+	}
+
+	for _, raw := range items {
+		it := raw.(map[string]any)
+		val := it["value"].(bool)
+		links := it["links"].(map[string]any)
+		epLink := links["episodes"].(string)
+
+		epRec := doGet(t, router, epLink, map[string]string{"Authorization": "Bearer " + testToken})
+		if epRec.Code != http.StatusOK {
+			t.Fatalf("GET episodes link %s status = %d, want 200", epLink, epRec.Code)
+		}
+		var epBody map[string]any
+		json.Unmarshal(epRec.Body.Bytes(), &epBody)
+		epItems := epBody["items"].([]any)
+		if len(epItems) != 1 {
+			t.Fatalf("episodes count = %d, want 1", len(epItems))
+		}
+		gotID := int64(epItems[0].(map[string]any)["unmatched_stop_episode_id"].(float64))
+		if val && gotID != ep1 {
+			t.Errorf("static_found=true returned %d, want %d", gotID, ep1)
+		}
+		if !val && gotID != ep2 {
+			t.Errorf("static_found=false returned %d, want %d", gotID, ep2)
+		}
+	}
+}
+
+func TestGetEpisodeCounts_NullGroups(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	serverID := insertEpisodeServer(t, pool, "https://example.com")
+	agencyID := insertEpisodeAgency(t, pool, serverID, "1")
+	vc := newVehicleContext(t, pool, serverID)
+
+	opened := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+	// 1. Unattributed vehicle (agency_id = nil)
+	vc.episode(t, episodeTypeInvalidCoordinate, opened, time.Time{}, nil, nil)
+
+	router := newEpisodeCountsRouter(t, pool)
+
+	// group_by=agency on vehicle -> null group with agency_id=none
+	recAgency := doGet(t, router, "/v1/episode-counts?from=2026-10-17T00:00:00Z&to=2026-10-24T00:00:00Z&episode_type=invalid_coordinate&group_by=agency", nil)
+	if recAgency.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recAgency.Code)
+	}
+	var bodyAgency map[string]any
+	json.Unmarshal(recAgency.Body.Bytes(), &bodyAgency)
+	itemsAgency := bodyAgency["items"].([]any)
+	if len(itemsAgency) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(itemsAgency))
+	}
+	itAgency := itemsAgency[0].(map[string]any)
+	if itAgency["value"] != nil {
+		t.Errorf("agency value = %v, want nil", itAgency["value"])
+	}
+	linksAgency := itAgency["links"].(map[string]any)
+	epLinkAgency := linksAgency["episodes"].(string)
+	if !strings.Contains(epLinkAgency, "agency_id=none") {
+		t.Errorf("expected agency_id=none in %s", epLinkAgency)
+	}
+
+	// 2. Open episode -> closing_response=nil has status=open link
+	recClose := doGet(t, router, "/v1/episode-counts?from=2026-10-17T00:00:00Z&to=2026-10-24T00:00:00Z&episode_type=invalid_coordinate&group_by=closing_response", nil)
+	var bodyClose map[string]any
+	json.Unmarshal(recClose.Body.Bytes(), &bodyClose)
+	itClose := bodyClose["items"].([]any)[0].(map[string]any)
+	if itClose["value"] != nil {
+		t.Errorf("closing_response value = %v, want nil", itClose["value"])
+	}
+	epLinkClose := itClose["links"].(map[string]any)["episodes"].(string)
+	if !strings.Contains(epLinkClose, "status=open") {
+		t.Errorf("expected status=open in %s", epLinkClose)
+	}
+
+	// 3. Null route_id -> no episodes link
+	tr := addTrip(t, pool, serverID, agencyID, "trip-noroute")
+	tr.episode(t, opened, time.Time{})
+
+	recRoute := doGet(t, router, "/v1/episode-counts?from=2026-10-17T00:00:00Z&to=2026-10-24T00:00:00Z&episode_type=unmatched_trip&group_by=route_id", nil)
+	var bodyRoute map[string]any
+	json.Unmarshal(recRoute.Body.Bytes(), &bodyRoute)
+	itRoute := bodyRoute["items"].([]any)[0].(map[string]any)
+	if itRoute["value"] != nil {
+		t.Errorf("route_id value = %v, want nil", itRoute["value"])
+	}
+	if itRoute["links"] != nil {
+		l := itRoute["links"].(map[string]any)
+		if _, ok := l["episodes"]; ok {
+			t.Errorf("expected no episodes link on null route_id, got %v", l)
+		}
+	}
+}
+
+func TestGetEpisodeCounts_Truncated(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	serverID := insertEpisodeServer(t, pool, "https://example.com")
+	agencyID := insertEpisodeAgency(t, pool, serverID, "1")
+	opened := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+
+	// Create 201 stops with distinct entities
+	for i := 0; i < 205; i++ {
+		st := addStop(t, pool, serverID, agencyID, fmt.Sprintf("stop_%d", i))
+		st.episode(t, opened, time.Time{})
+	}
+
+	router := newEpisodeCountsRouter(t, pool)
+	rec := doGet(t, router, "/v1/episode-counts?from=2026-10-17T00:00:00Z&to=2026-10-24T00:00:00Z&episode_type=unmatched_stop&group_by=entity", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var body map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &body)
+	if body["groups_truncated"] != true {
+		t.Errorf("groups_truncated = %v, want true", body["groups_truncated"])
+	}
+	items := body["items"].([]any)
+	if len(items) != 200 {
+		t.Errorf("len(items) = %d, want 200", len(items))
+	}
+}
+
+func TestGetEpisodeCounts_ClusterScheme(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	serverID := insertEpisodeServer(t, pool, "https://example.com")
+	agencyID := insertEpisodeAgency(t, pool, serverID, "1")
+	st := addStop(t, pool, serverID, agencyID, "stop-clust")
+	opened := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+	ep := st.episode(t, opened, time.Time{})
+
+	seedScheme(t, pool, "s1", episodesNow.Add(-10*time.Hour))
+	seedCell(t, pool, "s1", "cell1")
+	metaID := linkVersion(t, st, ep, opened.Add(-time.Hour))
+	station := "st-A"
+	assign(t, pool, metaID, "s1", "cell1", &station)
+
+	router := newEpisodeCountsRouter(t, pool)
+
+	// 1. Defaults to newest scheme
+	rec := doGet(t, router, "/v1/episode-counts?from=2026-10-17T00:00:00Z&to=2026-10-24T00:00:00Z&episode_type=unmatched_stop&group_by=cluster", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body)
+	}
+	var body map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &body)
+	items := body["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+	it := items[0].(map[string]any)
+	val := it["value"].(map[string]any)
+	if val["cell_id"] != "cell1" || val["root_station_id"] != "st-A" {
+		t.Errorf("cluster value = %+v, want cell1 and st-A", val)
+	}
+
+	// 2. Unknown scheme -> 400
+	recBad := doGet(t, router, "/v1/episode-counts?from=2026-10-17T00:00:00Z&to=2026-10-24T00:00:00Z&episode_type=unmatched_stop&group_by=cluster&scheme_version=nonexistent", nil)
+	wantInvalidParam(t, recBad, "scheme_version")
+}
+
+func TestGetEpisodeCounts_Dimensions(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	serverID := insertEpisodeServer(t, pool, "https://example.com")
+	agency1 := insertEpisodeAgency(t, pool, serverID, "1")
+	agency2 := insertEpisodeAgency(t, pool, serverID, "2")
+	opened := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+
+	// Stops for recurrence
+	st1 := addStop(t, pool, serverID, agency1, "stop-rec-1")
+	st1.episode(t, opened.Add(-48*time.Hour), opened.Add(-24*time.Hour))
+	st1.episode(t, opened, time.Time{})
+
+	st2 := addStop(t, pool, serverID, agency2, "stop-rec-2")
+	st2.episode(t, opened, time.Time{})
+
+	router := newEpisodeCountsRouter(t, pool)
+
+	// 1. group_by=agency across all types
+	recAgency := doGet(t, router, "/v1/episode-counts?from=2026-10-17T00:00:00Z&to=2026-10-24T00:00:00Z&group_by=agency", nil)
+	if recAgency.Code != http.StatusOK {
+		t.Fatalf("agency status = %d, want 200", recAgency.Code)
+	}
+
+	// 2. group_by=recurrence
+	recRec := doGet(t, router, "/v1/episode-counts?from=2026-10-17T00:00:00Z&to=2026-10-24T00:00:00Z&episode_type=unmatched_stop&group_by=recurrence", nil)
+	if recRec.Code != http.StatusOK {
+		t.Fatalf("recurrence status = %d, want 200", recRec.Code)
+	}
+	var bodyRec map[string]any
+	json.Unmarshal(recRec.Body.Bytes(), &bodyRec)
+	itemsRec := bodyRec["items"].([]any)
+	if len(itemsRec) != 2 {
+		t.Fatalf("recurrence items = %d, want 2", len(itemsRec))
+	}
+
+	// 3. group_by=opened_hour & opened_day
+	recHour := doGet(t, router, "/v1/episode-counts?from=2026-10-17T00:00:00Z&to=2026-10-24T00:00:00Z&episode_type=unmatched_stop&group_by=opened_hour", nil)
+	if recHour.Code != http.StatusOK {
+		t.Fatalf("opened_hour status = %d, want 200", recHour.Code)
+	}
+	recDay := doGet(t, router, "/v1/episode-counts?from=2026-10-17T00:00:00Z&to=2026-10-24T00:00:00Z&episode_type=unmatched_stop&group_by=opened_day", nil)
+	if recDay.Code != http.StatusOK {
+		t.Fatalf("opened_day status = %d, want 200", recDay.Code)
+	}
+
+	// 4. Vehicle dimensions
+	vc := newVehicleContext(t, pool, serverID)
+	// Seed vehicle anomaly with evidence
+	vStatic := dbtest.ID(t, pool,
+		"INSERT INTO gtfs_static_version (server_id, published_at) VALUES ($1, $2) RETURNING gtfs_static_version_id",
+		serverID, episodesNow.Add(-10*time.Hour))
+	bboxID := dbtest.ID(t, pool,
+		`INSERT INTO bounding_box_version (gtfs_static_version_id, server_id, minimum_latitude, maximum_latitude, minimum_longitude, maximum_longitude)
+		 VALUES ($1, $2, 47.0, 48.0, -123.0, -122.0) RETURNING bounding_box_version_id`,
+		vStatic, serverID)
+	respID := dbtest.ID(t, pool,
+		"INSERT INTO vehicle_position_response (endpoint_id, observed_at, incrementality) VALUES ($1, $2, 'FULL_DATASET') RETURNING vehicle_position_response_id",
+		vc.endpointID, opened)
+	evID := dbtest.ID(t, pool,
+		`INSERT INTO vehicle_position_evidence
+		 (vehicle_position_response_id, vehicle_entity_id, agency_id, position_valid,
+		  route_id, bounding_box_version_id, position_validation_reason, attribution_reason, expected_schedule_state, expected_schedule_reason)
+		 VALUES ($1, $2, NULL, false, 'route-44', $3, 'latitude_out_of_range', 'unknown_route_id', 'expected_active', 'within_scheduled_window')
+		 RETURNING vehicle_position_evidence_id`,
+		respID, vc.vehicleEntity, bboxID)
+
+	var typeID int16
+	pool.QueryRow(context.Background(), "SELECT anomaly_type_id FROM vehicle_anomaly_type WHERE anomaly_code = 'stopped_out_of_bounds'").Scan(&typeID)
+	ruleID := dbtest.ID(t, pool,
+		"INSERT INTO vehicle_anomaly_rule_version (anomaly_type_id, rule_logic_version, version_name, effective_at) VALUES ($1, 1, 'v1', now()) RETURNING rule_version_id",
+		typeID)
+	vehEp := dbtest.ID(t, pool,
+		`INSERT INTO vehicle_anomaly_episode
+		 (vehicle_entity_id, anomaly_type_id, rule_version_id, opening_response_id, closing_response_id, close_reason)
+		 VALUES ($1, $2, $3, $4, NULL, NULL) RETURNING vehicle_anomaly_episode_id`,
+		vc.vehicleEntity, typeID, ruleID, respID)
+	dbtest.Exec(pool,
+		`INSERT INTO vehicle_anomaly_episode_evidence (vehicle_anomaly_episode_id, vehicle_position_evidence_id, evidence_role)
+		 VALUES ($1, $2, 'opening')`, vehEp, evID)
+
+	// test endpoint
+	recEnd := doGet(t, router, "/v1/episode-counts?from=2026-10-17T00:00:00Z&to=2026-10-24T00:00:00Z&episode_type=stopped_out_of_bounds&group_by=endpoint", nil)
+	if recEnd.Code != http.StatusOK {
+		t.Fatalf("endpoint status = %d, want 200", recEnd.Code)
+	}
+	// test route_id
+	recRoute := doGet(t, router, "/v1/episode-counts?from=2026-10-17T00:00:00Z&to=2026-10-24T00:00:00Z&episode_type=stopped_out_of_bounds&group_by=route_id", nil)
+	if recRoute.Code != http.StatusOK {
+		t.Fatalf("route_id status = %d, want 200", recRoute.Code)
+	}
+	// test rule_version
+	recRule := doGet(t, router, "/v1/episode-counts?from=2026-10-17T00:00:00Z&to=2026-10-24T00:00:00Z&episode_type=stopped_out_of_bounds&group_by=rule_version", nil)
+	if recRule.Code != http.StatusOK {
+		t.Fatalf("rule_version status = %d, want 200", recRule.Code)
+	}
+	// test bounding_box_version
+	recBBox := doGet(t, router, "/v1/episode-counts?from=2026-10-17T00:00:00Z&to=2026-10-24T00:00:00Z&episode_type=stopped_out_of_bounds&group_by=bounding_box_version", nil)
+	if recBBox.Code != http.StatusOK {
+		t.Fatalf("bounding_box_version status = %d, want 200", recBBox.Code)
+	}
+	// test position_validation_reason
+	recPos := doGet(t, router, "/v1/episode-counts?from=2026-10-17T00:00:00Z&to=2026-10-24T00:00:00Z&episode_type=invalid_coordinate&group_by=position_validation_reason", nil)
+	if recPos.Code != http.StatusOK {
+		t.Fatalf("position_validation_reason status = %d, want 200", recPos.Code)
+	}
+	// test attribution_reason
+	recAttr := doGet(t, router, "/v1/episode-counts?from=2026-10-17T00:00:00Z&to=2026-10-24T00:00:00Z&episode_type=stopped_out_of_bounds&group_by=attribution_reason", nil)
+	if recAttr.Code != http.StatusOK {
+		t.Fatalf("attribution_reason status = %d, want 200", recAttr.Code)
+	}
+	// test expected_schedule_state
+	recSched := doGet(t, router, "/v1/episode-counts?from=2026-10-17T00:00:00Z&to=2026-10-24T00:00:00Z&episode_type=stopped_out_of_bounds&group_by=expected_schedule_state", nil)
+	if recSched.Code != http.StatusOK {
+		t.Fatalf("expected_schedule_state status = %d, want 200", recSched.Code)
+	}
+}
+
+func TestGetEpisodeCounts_Include(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	serverID := insertEpisodeServer(t, pool, "https://example.com")
+	agencyID := insertEpisodeAgency(t, pool, serverID, "1")
+	st := addStop(t, pool, serverID, agencyID, "stop-inc")
+	opened := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+	st.episode(t, opened, time.Time{})
+
+	s, router := newTestService(t)
+	s.Pool = pool
+
+	rec := doGet(t, router, "/v1/episode-counts?from=2026-10-17T00:00:00Z&to=2026-10-24T00:00:00Z&episode_type=unmatched_stop&group_by=agency&include=agency", map[string]string{"Authorization": "Bearer " + testToken})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body)
+	}
+	var body map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &body)
+	inc, ok := body["included"].(map[string]any)
+	if !ok || len(inc) != 1 {
+		t.Fatalf("included = %+v, want 1 agency", inc)
+	}
+	agencyURL := fmt.Sprintf("/v1/agencies/%d", agencyID)
+	if _, ok := inc[agencyURL]; !ok {
+		t.Errorf("missing included URL %s in %+v", agencyURL, inc)
+	}
 }
