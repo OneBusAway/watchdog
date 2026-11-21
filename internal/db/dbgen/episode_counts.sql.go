@@ -123,7 +123,13 @@ WITH filtered AS (
     WHERE ($3::bigint IS NULL OR e.server_id = $3::bigint)
       AND ($4::bigint IS NULL OR e.agency_id = $4::bigint)
       AND e.opened_at < $5::timestamptz
-      AND (e.closed_at IS NULL OR e.closed_at >= $6::timestamptz)
+      AND (
+          CASE
+              WHEN $1::text IN ('opened_hour', 'opened_day')
+                  THEN e.opened_at >= $6::timestamptz
+              ELSE (e.closed_at IS NULL OR e.closed_at >= $6::timestamptz)
+          END
+      )
 ),
 totals AS (
     SELECT
@@ -308,7 +314,13 @@ WITH filtered AS (
     WHERE ($2::bigint IS NULL OR e.server_id = $2::bigint)
       AND ($3::bigint IS NULL OR e.agency_id = $3::bigint)
       AND e.opened_at < $4::timestamptz
-      AND (e.closed_at IS NULL OR e.closed_at >= $5::timestamptz)
+      AND (
+          CASE
+              WHEN $1::text IN ('opened_hour', 'opened_day')
+                  THEN e.opened_at >= $5::timestamptz
+              ELSE (e.closed_at IS NULL OR e.closed_at >= $5::timestamptz)
+          END
+      )
 ),
 totals AS (
     SELECT
@@ -505,7 +517,13 @@ WITH filtered AS (
       AND ($3::bigint IS NULL OR e.agency_id = $3::bigint)
       AND ($4::text IS NULL OR e.anomaly_code = $4::text)
       AND e.opened_at < $5::timestamptz
-      AND (e.closed_at IS NULL OR e.closed_at >= $6::timestamptz)
+      AND (
+          CASE
+              WHEN $1::text IN ('opened_hour', 'opened_day')
+                  THEN e.opened_at >= $6::timestamptz
+              ELSE (e.closed_at IS NULL OR e.closed_at >= $6::timestamptz)
+          END
+      )
 ),
 totals AS (
     SELECT

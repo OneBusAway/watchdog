@@ -976,3 +976,152 @@ func TestGetEpisodeCounts_Include(t *testing.T) {
 		t.Errorf("missing included URL %s in %+v", agencyURL, inc)
 	}
 }
+
+func TestGetEpisodeCounts_StaticFoundNullGroup(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	serverID := insertEpisodeServer(t, pool, "https://example.com")
+	agencyID := insertEpisodeAgency(t, pool, serverID, "1")
+	st := addStop(t, pool, serverID, agencyID, "stop-no-static")
+	opened := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+	// Episode with no static metadata linked -> static_found is NULL
+	st.episode(t, opened, time.Time{})
+
+	router := newEpisodeCountsRouter(t, pool)
+	rec := doGet(t, router, "/v1/episode-counts?from=2026-10-17T00:00:00Z&to=2026-10-24T00:00:00Z&episode_type=unmatched_stop&group_by=static_found", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body)
+	}
+	var body map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &body)
+	items := body["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+	it := items[0].(map[string]any)
+	if it["value"] != nil {
+		t.Errorf("value = %v, want nil", it["value"])
+	}
+	if it["links"] != nil {
+		l := it["links"].(map[string]any)
+		if _, ok := l["episodes"]; ok {
+			t.Errorf("expected no links.episodes on null static_found group, got %v", l)
+		}
+	}
+}
+
+func TestGetEpisodeCounts_EntityMixedTypes(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	serverID := insertEpisodeServer(t, pool, "https://example.com")
+	agencyID := insertEpisodeAgency(t, pool, serverID, "1")
+	opened := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+
+	// Stop episode
+	st := addStop(t, pool, serverID, agencyID, "stop-1")
+	st.episode(t, opened, time.Time{})
+
+	// Trip episode
+	tr := addTrip(t, pool, serverID, agencyID, "trip-1")
+	tr.episode(t, opened, time.Time{})
+
+	// Vehicle episode
+	vc := newVehicleContext(t, pool, serverID)
+	vc.episode(t, episodeTypeInvalidCoordinate, opened, time.Time{}, nil, &agencyID)
+
+	router := newEpisodeCountsRouter(t, pool)
+	// group_by=entity without episode_type -> all 3 types present with opened=1
+	rec := doGet(t, router, "/v1/episode-counts?from=2026-10-17T00:00:00Z&to=2026-10-24T00:00:00Z&group_by=entity", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body)
+	}
+	var body map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &body)
+	items := body["items"].([]any)
+	if len(items) != 3 {
+		t.Fatalf("len(items) = %d, want 3", len(items))
+	}
+}
+
+func TestGetEpisodeCounts_OpenedHourNoPreWindowBuckets(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	serverID := insertEpisodeServer(t, pool, "https://example.com")
+	agencyID := insertEpisodeAgency(t, pool, serverID, "1")
+
+	// Episode 1: opened 20 days ago, still open
+	st1 := addStop(t, pool, serverID, agencyID, "stop-old")
+	st1.episode(t, time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC), time.Time{})
+
+	// Episode 2: opened in window (2026-10-20)
+	st2 := addStop(t, pool, serverID, agencyID, "stop-in-window")
+	st2.episode(t, time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC), time.Time{})
+
+	router := newEpisodeCountsRouter(t, pool)
+	rec := doGet(t, router, "/v1/episode-counts?from=2026-10-17T00:00:00Z&to=2026-10-24T00:00:00Z&episode_type=unmatched_stop&group_by=opened_hour", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body)
+	}
+	var body map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &body)
+	items := body["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want exactly 1 in-window bucket; got %+v", len(items), items)
+	}
+	it := items[0].(map[string]any)
+	if it["value"] != "2026-10-20T10:00:00Z" {
+		t.Errorf("bucket = %v, want 2026-10-20T10:00:00Z", it["value"])
+	}
+}
+
+func TestGetEpisodeCounts_IncludeTruncatedLinks(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	serverID := insertEpisodeServer(t, pool, "https://example.com")
+	agencyID := insertEpisodeAgency(t, pool, serverID, "1")
+	opened := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+
+	// 205 stops
+	for i := 0; i < 205; i++ {
+		st := addStop(t, pool, serverID, agencyID, fmt.Sprintf("trunc_stop_%d", i))
+		st.episode(t, opened, time.Time{})
+	}
+
+	s, router := newTestService(t)
+	s.Pool = pool
+
+	rec := doGet(t, router, "/v1/episode-counts?from=2026-10-17T00:00:00Z&to=2026-10-24T00:00:00Z&episode_type=unmatched_stop&group_by=entity&include=reported_stop",
+		map[string]string{"Authorization": "Bearer " + testToken})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body)
+	}
+	var body map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &body)
+	items := body["items"].([]any)
+	if len(items) != 200 {
+		t.Fatalf("len(items) = %d, want 200", len(items))
+	}
+	inc := body["included"].(map[string]any)
+	if len(inc) != 200 {
+		t.Fatalf("len(included) = %d, want 200", len(inc))
+	}
+
+	// Verify that every returned item's reported_stop link exists in included
+	for _, raw := range items {
+		it := raw.(map[string]any)
+		l := it["links"].(map[string]any)
+		stopURL := l["reported_stop"].(string)
+		if _, ok := inc[stopURL]; !ok {
+			t.Fatalf("reported_stop link %s not found in included", stopURL)
+		}
+	}
+}
+
+func TestGetEpisodeCounts_VehicleResponseIncludeRejection(t *testing.T) {
+	router := newEpisodeCountsRouter(t, nil)
+	fromTo := "from=2026-10-17T00:00:00Z&to=2026-10-24T00:00:00Z"
+
+	// opening_response with vehicle type -> 400
+	rec := doGet(t, router, "/v1/episode-counts?"+fromTo+"&episode_type=invalid_coordinate&group_by=opening_response&include=opening_response", nil)
+	wantInvalidParam(t, rec, "include")
+
+	// closing_response with vehicle type -> 400
+	recClose := doGet(t, router, "/v1/episode-counts?"+fromTo+"&episode_type=invalid_coordinate&group_by=closing_response&include=closing_response", nil)
+	wantInvalidParam(t, recClose, "include")
+}

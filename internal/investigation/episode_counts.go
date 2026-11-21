@@ -65,7 +65,7 @@ var vehicleCloseReasons = []string{
 	"no_longer_stopped_at_stop",
 }
 
-func includableForGroupBy(groupBy *string) map[string]resourceKind {
+func includableForGroupBy(groupBy *string, episodeType *string) map[string]resourceKind {
 	if groupBy == nil {
 		return map[string]resourceKind{}
 	}
@@ -75,9 +75,15 @@ func includableForGroupBy(groupBy *string) map[string]resourceKind {
 	case "endpoint":
 		return map[string]resourceKind{"endpoint": kindEndpoint}
 	case "opening_response":
-		return map[string]resourceKind{"opening_response": kindOBAMetricsResponse}
+		if episodeType != nil && (*episodeType == episodeTypeUnmatchedStop || *episodeType == episodeTypeUnmatchedTrip) {
+			return map[string]resourceKind{"opening_response": kindOBAMetricsResponse}
+		}
+		return map[string]resourceKind{"opening_response": "vehicle_response"}
 	case "closing_response":
-		return map[string]resourceKind{"closing_response": kindOBAMetricsResponse}
+		if episodeType != nil && (*episodeType == episodeTypeUnmatchedStop || *episodeType == episodeTypeUnmatchedTrip) {
+			return map[string]resourceKind{"closing_response": kindOBAMetricsResponse}
+		}
+		return map[string]resourceKind{"closing_response": "vehicle_response"}
 	case "gtfs_static_version":
 		return map[string]resourceKind{"gtfs_static_version": "gtfs_static_version"}
 	case "rule_version":
@@ -403,68 +409,77 @@ func compareValues(a, b any) int {
 	}
 	switch va := a.(type) {
 	case int64:
-		vb := b.(int64)
-		if va < vb {
-			return -1
-		} else if va > vb {
-			return 1
-		}
-		return 0
-	case bool:
-		vb := b.(bool)
-		if !va && vb {
-			return -1
-		} else if va && !vb {
-			return 1
-		}
-		return 0
-	case string:
-		vb := b.(string)
-		return strings.Compare(va, vb)
-	case clusterValue:
-		vb := b.(clusterValue)
-		if c := strings.Compare(va.CellID, vb.CellID); c != 0 {
-			return c
-		}
-		if va.RootStationID == nil && vb.RootStationID == nil {
+		if vb, ok := b.(int64); ok {
+			if va < vb {
+				return -1
+			} else if va > vb {
+				return 1
+			}
 			return 0
 		}
-		if va.RootStationID == nil {
-			return -1
+	case bool:
+		if vb, ok := b.(bool); ok {
+			if !va && vb {
+				return -1
+			} else if va && !vb {
+				return 1
+			}
+			return 0
 		}
-		if vb.RootStationID == nil {
-			return 1
+	case string:
+		if vb, ok := b.(string); ok {
+			return strings.Compare(va, vb)
 		}
-		return strings.Compare(*va.RootStationID, *vb.RootStationID)
+	case clusterValue:
+		if vb, ok := b.(clusterValue); ok {
+			if c := strings.Compare(va.CellID, vb.CellID); c != 0 {
+				return c
+			}
+			if va.RootStationID == nil && vb.RootStationID == nil {
+				return 0
+			}
+			if va.RootStationID == nil {
+				return -1
+			}
+			if vb.RootStationID == nil {
+				return 1
+			}
+			return strings.Compare(*va.RootStationID, *vb.RootStationID)
+		}
 	case stopEntityValue:
-		vb := b.(stopEntityValue)
-		if va.ReportedStopID != vb.ReportedStopID {
-			if va.ReportedStopID < vb.ReportedStopID {
-				return -1
+		if vb, ok := b.(stopEntityValue); ok {
+			if va.ReportedStopID != vb.ReportedStopID {
+				if va.ReportedStopID < vb.ReportedStopID {
+					return -1
+				}
+				return 1
 			}
-			return 1
+			return strings.Compare(va.StopID, vb.StopID)
 		}
-		return strings.Compare(va.StopID, vb.StopID)
 	case tripEntityValue:
-		vb := b.(tripEntityValue)
-		if va.ReportedTripID != vb.ReportedTripID {
-			if va.ReportedTripID < vb.ReportedTripID {
-				return -1
+		if vb, ok := b.(tripEntityValue); ok {
+			if va.ReportedTripID != vb.ReportedTripID {
+				if va.ReportedTripID < vb.ReportedTripID {
+					return -1
+				}
+				return 1
 			}
-			return 1
+			return strings.Compare(va.TripID, vb.TripID)
 		}
-		return strings.Compare(va.TripID, vb.TripID)
 	case vehicleEntityValue:
-		vb := b.(vehicleEntityValue)
-		if va.VehicleEntityID != vb.VehicleEntityID {
-			if va.VehicleEntityID < vb.VehicleEntityID {
-				return -1
+		if vb, ok := b.(vehicleEntityValue); ok {
+			if va.VehicleEntityID != vb.VehicleEntityID {
+				if va.VehicleEntityID < vb.VehicleEntityID {
+					return -1
+				}
+				return 1
 			}
-			return 1
+			return strings.Compare(va.VehicleID, vb.VehicleID)
 		}
-		return strings.Compare(va.VehicleID, vb.VehicleID)
 	}
-	return 0
+	ja, _ := json.Marshal(a)
+	jb, _ := json.Marshal(b)
+	return strings.Compare(string(ja), string(jb))
 }
 
 func buildEpisodesLink(
@@ -532,6 +547,9 @@ func buildEpisodesLink(
 			vals.Set("closing_response_id", strconv.FormatInt(parsed.value.(int64), 10))
 		}
 	case "static_found":
+		if parsed.value == nil {
+			return "", false
+		}
 		vals.Set("static_found", strconv.FormatBool(parsed.value.(bool)))
 	case "gtfs_static_version":
 		if parsed.value == nil {
@@ -728,7 +746,7 @@ func (s *InvestigationService) getEpisodeCounts(w http.ResponseWriter, r *http.R
 		validateDimensionType(*groupBy, episodeType, &bad)
 	}
 
-	inc := s.parseInclude(values, includableForGroupBy(groupBy), &bad)
+	inc := s.parseInclude(values, includableForGroupBy(groupBy, episodeType), &bad)
 	if len(bad) > 0 {
 		writeInvalidParams(w, bad)
 		return
@@ -800,6 +818,7 @@ func (s *InvestigationService) getEpisodeCounts(w http.ResponseWriter, r *http.R
 	var schemeErr *invalidParam
 	var allGroupItems []groupedEpisodeCountItem
 	var allLinks []itemLinks
+	var isTruncated bool
 
 	err := s.read(r.Context(), func(ctx context.Context, q *dbgen.Queries) error {
 		if *groupBy == "cluster" {
@@ -839,9 +858,9 @@ func (s *InvestigationService) getEpisodeCounts(w http.ResponseWriter, r *http.R
 		getAcc := func(epType string, key *string) *groupAccumulator {
 			mapKey := epType + "|"
 			if key != nil {
-				mapKey += *key
+				mapKey += "v" + *key
 			} else {
-				mapKey += "~nil"
+				mapKey += "n"
 			}
 			acc, ok := groupMap[mapKey]
 			if !ok {
@@ -944,6 +963,12 @@ func (s *InvestigationService) getEpisodeCounts(w http.ResponseWriter, r *http.R
 			}
 		}
 
+		type groupedEntry struct {
+			item  groupedEpisodeCountItem
+			links itemLinks
+		}
+		var entries []groupedEntry
+
 		for _, mk := range groupOrder {
 			acc := groupMap[mk]
 			parsed, err := parseGroupKey(*groupBy, acc.key)
@@ -966,16 +991,53 @@ func (s *InvestigationService) getEpisodeCounts(w http.ResponseWriter, r *http.R
 				itLinks[resName] = resRel.URL
 			}
 
-			allLinks = append(allLinks, itemL)
-			allGroupItems = append(allGroupItems, groupedEpisodeCountItem{
-				EpisodeType: acc.epType,
-				Value:       parsed.value,
-				Opened:      acc.opened,
-				Closed:      acc.closed,
-				OpenAtTo:    acc.openAtTo,
-				Links:       itLinks,
+			entries = append(entries, groupedEntry{
+				item: groupedEpisodeCountItem{
+					EpisodeType: acc.epType,
+					Value:       parsed.value,
+					Opened:      acc.opened,
+					Closed:      acc.closed,
+					OpenAtTo:    acc.openAtTo,
+					Links:       itLinks,
+				},
+				links: itemL,
 			})
 		}
+
+		isTime := *groupBy == "opened_hour" || *groupBy == "opened_day"
+		slices.SortFunc(entries, func(a, b groupedEntry) int {
+			if isTime {
+				ta := a.item.Value.(string)
+				tb := b.item.Value.(string)
+				if c := strings.Compare(ta, tb); c != 0 {
+					return c
+				}
+				return strings.Compare(a.item.EpisodeType, b.item.EpisodeType)
+			}
+			if a.item.Opened != b.item.Opened {
+				if a.item.Opened > b.item.Opened {
+					return -1
+				}
+				return 1
+			}
+			if a.item.EpisodeType != b.item.EpisodeType {
+				return strings.Compare(a.item.EpisodeType, b.item.EpisodeType)
+			}
+			return compareValues(a.item.Value, b.item.Value)
+		})
+
+		if len(entries) > 200 {
+			isTruncated = true
+			entries = entries[:200]
+		}
+
+		allGroupItems = make([]groupedEpisodeCountItem, len(entries))
+		allLinks = make([]itemLinks, len(entries))
+		for i, e := range entries {
+			allGroupItems[i] = e.item
+			allLinks[i] = e.links
+		}
+
 		return nil
 	})
 
@@ -986,36 +1048,6 @@ func (s *InvestigationService) getEpisodeCounts(w http.ResponseWriter, r *http.R
 	if err != nil {
 		s.fail(w, r, err)
 		return
-	}
-
-	// Sort items
-	isTime := *groupBy == "opened_hour" || *groupBy == "opened_day"
-	slices.SortFunc(allGroupItems, func(a, b groupedEpisodeCountItem) int {
-		if isTime {
-			ta := a.Value.(string)
-			tb := b.Value.(string)
-			if c := strings.Compare(ta, tb); c != 0 {
-				return c
-			}
-			return strings.Compare(a.EpisodeType, b.EpisodeType)
-		}
-		if a.Opened != b.Opened {
-			if a.Opened > b.Opened {
-				return -1
-			}
-			return 1
-		}
-		if c := compareValues(a.Value, b.Value); c != 0 {
-			return c
-		}
-		return strings.Compare(a.EpisodeType, b.EpisodeType)
-	})
-
-	truncated := false
-	if len(allGroupItems) > 200 {
-		truncated = true
-		allGroupItems = allGroupItems[:200]
-		allLinks = allLinks[:200]
 	}
 
 	var incRes included
@@ -1039,7 +1071,7 @@ func (s *InvestigationService) getEpisodeCounts(w http.ResponseWriter, r *http.R
 		EpisodeType:     episodeType,
 		GroupBy:         groupBy,
 		Items:           allGroupItems,
-		GroupsTruncated: &truncated,
+		GroupsTruncated: &isTruncated,
 		Included:        incRes,
 		Links: links{
 			"self": linkWithQuery(r.URL.Path, values),

@@ -132,7 +132,13 @@ WITH filtered AS (
     WHERE (sqlc.narg('server_id')::bigint IS NULL OR e.server_id = sqlc.narg('server_id')::bigint)
       AND (sqlc.narg('agency_id')::bigint IS NULL OR e.agency_id = sqlc.narg('agency_id')::bigint)
       AND e.opened_at < @to_time::timestamptz
-      AND (e.closed_at IS NULL OR e.closed_at >= @from_time::timestamptz)
+      AND (
+          CASE
+              WHEN sqlc.arg('dimension')::text IN ('opened_hour', 'opened_day')
+                  THEN e.opened_at >= @from_time::timestamptz
+              ELSE (e.closed_at IS NULL OR e.closed_at >= @from_time::timestamptz)
+          END
+      )
 ),
 totals AS (
     SELECT
@@ -191,7 +197,13 @@ WITH filtered AS (
     WHERE (sqlc.narg('server_id')::bigint IS NULL OR e.server_id = sqlc.narg('server_id')::bigint)
       AND (sqlc.narg('agency_id')::bigint IS NULL OR e.agency_id = sqlc.narg('agency_id')::bigint)
       AND e.opened_at < @to_time::timestamptz
-      AND (e.closed_at IS NULL OR e.closed_at >= @from_time::timestamptz)
+      AND (
+          CASE
+              WHEN sqlc.arg('dimension')::text IN ('opened_hour', 'opened_day')
+                  THEN e.opened_at >= @from_time::timestamptz
+              ELSE (e.closed_at IS NULL OR e.closed_at >= @from_time::timestamptz)
+          END
+      )
 ),
 totals AS (
     SELECT
@@ -257,7 +269,13 @@ WITH filtered AS (
       AND (sqlc.narg('agency_id')::bigint IS NULL OR e.agency_id = sqlc.narg('agency_id')::bigint)
       AND (sqlc.narg('anomaly_code')::text IS NULL OR e.anomaly_code = sqlc.narg('anomaly_code')::text)
       AND e.opened_at < @to_time::timestamptz
-      AND (e.closed_at IS NULL OR e.closed_at >= @from_time::timestamptz)
+      AND (
+          CASE
+              WHEN sqlc.arg('dimension')::text IN ('opened_hour', 'opened_day')
+                  THEN e.opened_at >= @from_time::timestamptz
+              ELSE (e.closed_at IS NULL OR e.closed_at >= @from_time::timestamptz)
+          END
+      )
 ),
 totals AS (
     SELECT
