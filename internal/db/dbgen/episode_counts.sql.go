@@ -85,6 +85,130 @@ func (q *Queries) CountUnmatchedStopEpisodes(ctx context.Context, arg CountUnmat
 	return items, nil
 }
 
+const countUnmatchedStopEpisodesGrouped = `-- name: CountUnmatchedStopEpisodesGrouped :many
+WITH filtered AS (
+    SELECT
+        CASE $1::text
+            WHEN 'agency' THEN e.agency_id::text
+            WHEN 'opening_response' THEN e.opening_response_id::text
+            WHEN 'closing_response' THEN e.closing_response_id::text
+            WHEN 'static_found' THEN e.static_found::text
+            WHEN 'gtfs_static_version' THEN e.gtfs_static_version_id::text
+            WHEN 'cluster' THEN
+                CASE
+                    WHEN sca.cell_id IS NOT NULL THEN
+                        json_build_object('cell_id', sca.cell_id, 'root_station_id', sca.root_station_id)::text
+                    ELSE NULL
+                END
+            WHEN 'recurrence' THEN
+                CASE
+                    WHEN e.previous_episode_count > 0 THEN 'has_previous_episode'
+                    ELSE 'no_previous_episode'
+                END
+            WHEN 'entity' THEN
+                json_build_object('reported_stop_id', e.reported_stop_id, 'stop_id', e.stop_id, 'agency_id', e.agency_id)::text
+            WHEN 'opened_hour' THEN
+                to_char(date_trunc('hour', e.opened_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+            WHEN 'opened_day' THEN
+                to_char(date_trunc('day', e.opened_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+            ELSE NULL::text
+        END AS group_key,
+        e.opened_at,
+        e.closed_at,
+        e.close_reason
+    FROM unmatched_stop_episode_view e
+    LEFT JOIN stop_cluster_assignment sca
+        ON sca.stop_metadata_version_id = e.stop_metadata_version_id
+       AND sca.scheme_version = $2::text
+    WHERE ($3::bigint IS NULL OR e.server_id = $3::bigint)
+      AND ($4::bigint IS NULL OR e.agency_id = $4::bigint)
+      AND e.opened_at < $5::timestamptz
+      AND (
+          CASE
+              WHEN $1::text IN ('opened_hour', 'opened_day')
+                  THEN e.opened_at >= $6::timestamptz
+              ELSE (e.closed_at IS NULL OR e.closed_at >= $6::timestamptz)
+          END
+      )
+),
+totals AS (
+    SELECT
+        group_key,
+        count(*) FILTER (WHERE opened_at >= $6::timestamptz AND opened_at < $5::timestamptz) AS opened,
+        count(*) FILTER (WHERE opened_at < $5::timestamptz AND (closed_at IS NULL OR closed_at >= $5::timestamptz)) AS open_at_to
+    FROM filtered
+    GROUP BY group_key
+),
+closed_counts AS (
+    SELECT
+        group_key,
+        close_reason,
+        count(*) AS closed
+    FROM filtered
+    WHERE closed_at >= $6::timestamptz AND closed_at < $5::timestamptz
+      AND close_reason IS NOT NULL
+    GROUP BY group_key, close_reason
+)
+SELECT
+    totals.group_key,
+    totals.opened,
+    totals.open_at_to,
+    closed_counts.close_reason,
+    COALESCE(closed_counts.closed, 0)::bigint AS closed
+FROM totals
+LEFT JOIN closed_counts ON totals.group_key IS NOT DISTINCT FROM closed_counts.group_key
+`
+
+type CountUnmatchedStopEpisodesGroupedParams struct {
+	Dimension     string
+	SchemeVersion *string
+	ServerID      *int64
+	AgencyID      *int64
+	ToTime        time.Time
+	FromTime      time.Time
+}
+
+type CountUnmatchedStopEpisodesGroupedRow struct {
+	GroupKey    *string
+	Opened      int64
+	OpenAtTo    int64
+	CloseReason *string
+	Closed      int64
+}
+
+func (q *Queries) CountUnmatchedStopEpisodesGrouped(ctx context.Context, arg CountUnmatchedStopEpisodesGroupedParams) ([]CountUnmatchedStopEpisodesGroupedRow, error) {
+	rows, err := q.db.Query(ctx, countUnmatchedStopEpisodesGrouped,
+		arg.Dimension,
+		arg.SchemeVersion,
+		arg.ServerID,
+		arg.AgencyID,
+		arg.ToTime,
+		arg.FromTime,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CountUnmatchedStopEpisodesGroupedRow
+	for rows.Next() {
+		var i CountUnmatchedStopEpisodesGroupedRow
+		if err := rows.Scan(
+			&i.GroupKey,
+			&i.Opened,
+			&i.OpenAtTo,
+			&i.CloseReason,
+			&i.Closed,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countUnmatchedTripEpisodes = `-- name: CountUnmatchedTripEpisodes :many
 WITH totals AS (
     SELECT
@@ -145,6 +269,120 @@ func (q *Queries) CountUnmatchedTripEpisodes(ctx context.Context, arg CountUnmat
 	for rows.Next() {
 		var i CountUnmatchedTripEpisodesRow
 		if err := rows.Scan(
+			&i.Opened,
+			&i.OpenAtTo,
+			&i.CloseReason,
+			&i.Closed,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const countUnmatchedTripEpisodesGrouped = `-- name: CountUnmatchedTripEpisodesGrouped :many
+WITH filtered AS (
+    SELECT
+        CASE $1::text
+            WHEN 'agency' THEN e.agency_id::text
+            WHEN 'opening_response' THEN e.opening_response_id::text
+            WHEN 'closing_response' THEN e.closing_response_id::text
+            WHEN 'static_found' THEN e.static_found::text
+            WHEN 'gtfs_static_version' THEN e.gtfs_static_version_id::text
+            WHEN 'route_id' THEN e.route_id
+            WHEN 'recurrence' THEN
+                CASE
+                    WHEN e.previous_episode_count > 0 THEN 'has_previous_episode'
+                    ELSE 'no_previous_episode'
+                END
+            WHEN 'entity' THEN
+                json_build_object('reported_trip_id', e.reported_trip_id, 'trip_id', e.trip_id, 'agency_id', e.agency_id)::text
+            WHEN 'opened_hour' THEN
+                to_char(date_trunc('hour', e.opened_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+            WHEN 'opened_day' THEN
+                to_char(date_trunc('day', e.opened_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+            ELSE NULL::text
+        END AS group_key,
+        e.opened_at,
+        e.closed_at,
+        e.close_reason
+    FROM unmatched_trip_episode_view e
+    WHERE ($2::bigint IS NULL OR e.server_id = $2::bigint)
+      AND ($3::bigint IS NULL OR e.agency_id = $3::bigint)
+      AND e.opened_at < $4::timestamptz
+      AND (
+          CASE
+              WHEN $1::text IN ('opened_hour', 'opened_day')
+                  THEN e.opened_at >= $5::timestamptz
+              ELSE (e.closed_at IS NULL OR e.closed_at >= $5::timestamptz)
+          END
+      )
+),
+totals AS (
+    SELECT
+        group_key,
+        count(*) FILTER (WHERE opened_at >= $5::timestamptz AND opened_at < $4::timestamptz) AS opened,
+        count(*) FILTER (WHERE opened_at < $4::timestamptz AND (closed_at IS NULL OR closed_at >= $4::timestamptz)) AS open_at_to
+    FROM filtered
+    GROUP BY group_key
+),
+closed_counts AS (
+    SELECT
+        group_key,
+        close_reason,
+        count(*) AS closed
+    FROM filtered
+    WHERE closed_at >= $5::timestamptz AND closed_at < $4::timestamptz
+      AND close_reason IS NOT NULL
+    GROUP BY group_key, close_reason
+)
+SELECT
+    totals.group_key,
+    totals.opened,
+    totals.open_at_to,
+    closed_counts.close_reason,
+    COALESCE(closed_counts.closed, 0)::bigint AS closed
+FROM totals
+LEFT JOIN closed_counts ON totals.group_key IS NOT DISTINCT FROM closed_counts.group_key
+`
+
+type CountUnmatchedTripEpisodesGroupedParams struct {
+	Dimension string
+	ServerID  *int64
+	AgencyID  *int64
+	ToTime    time.Time
+	FromTime  time.Time
+}
+
+type CountUnmatchedTripEpisodesGroupedRow struct {
+	GroupKey    *string
+	Opened      int64
+	OpenAtTo    int64
+	CloseReason *string
+	Closed      int64
+}
+
+func (q *Queries) CountUnmatchedTripEpisodesGrouped(ctx context.Context, arg CountUnmatchedTripEpisodesGroupedParams) ([]CountUnmatchedTripEpisodesGroupedRow, error) {
+	rows, err := q.db.Query(ctx, countUnmatchedTripEpisodesGrouped,
+		arg.Dimension,
+		arg.ServerID,
+		arg.AgencyID,
+		arg.ToTime,
+		arg.FromTime,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CountUnmatchedTripEpisodesGroupedRow
+	for rows.Next() {
+		var i CountUnmatchedTripEpisodesGroupedRow
+		if err := rows.Scan(
+			&i.GroupKey,
 			&i.Opened,
 			&i.OpenAtTo,
 			&i.CloseReason,
@@ -227,6 +465,136 @@ func (q *Queries) CountVehicleAnomalyEpisodes(ctx context.Context, arg CountVehi
 		var i CountVehicleAnomalyEpisodesRow
 		if err := rows.Scan(
 			&i.AnomalyCode,
+			&i.Opened,
+			&i.OpenAtTo,
+			&i.CloseReason,
+			&i.Closed,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const countVehicleAnomalyEpisodesGrouped = `-- name: CountVehicleAnomalyEpisodesGrouped :many
+WITH filtered AS (
+    SELECT
+        e.anomaly_code,
+        CASE $1::text
+            WHEN 'agency' THEN e.agency_id::text
+            WHEN 'endpoint' THEN e.endpoint_id::text
+            WHEN 'opening_response' THEN e.opening_response_id::text
+            WHEN 'closing_response' THEN e.closing_response_id::text
+            WHEN 'gtfs_static_version' THEN e.gtfs_static_version_id::text
+            WHEN 'route_id' THEN e.route_id
+            WHEN 'rule_version' THEN e.rule_version_id::text
+            WHEN 'bounding_box_version' THEN e.bounding_box_version_id::text
+            WHEN 'position_validation_reason' THEN e.position_validation_reason
+            WHEN 'attribution_reason' THEN e.attribution_reason
+            WHEN 'expected_schedule_state' THEN e.expected_schedule_state
+            WHEN 'recurrence' THEN
+                CASE
+                    WHEN e.previous_episode_count > 0 THEN 'has_previous_episode'
+                    ELSE 'no_previous_episode'
+                END
+            WHEN 'entity' THEN
+                json_build_object('vehicle_entity_id', e.vehicle_entity_id, 'vehicle_id', e.vehicle_id, 'endpoint_id', e.endpoint_id)::text
+            WHEN 'opened_hour' THEN
+                to_char(date_trunc('hour', e.opened_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+            WHEN 'opened_day' THEN
+                to_char(date_trunc('day', e.opened_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+            ELSE NULL::text
+        END AS group_key,
+        e.opened_at,
+        e.closed_at,
+        e.close_reason
+    FROM vehicle_anomaly_episode_view e
+    WHERE ($2::bigint IS NULL OR e.server_id = $2::bigint)
+      AND ($3::bigint IS NULL OR e.agency_id = $3::bigint)
+      AND ($4::text IS NULL OR e.anomaly_code = $4::text)
+      AND e.opened_at < $5::timestamptz
+      AND (
+          CASE
+              WHEN $1::text IN ('opened_hour', 'opened_day')
+                  THEN e.opened_at >= $6::timestamptz
+              ELSE (e.closed_at IS NULL OR e.closed_at >= $6::timestamptz)
+          END
+      )
+),
+totals AS (
+    SELECT
+        anomaly_code,
+        group_key,
+        count(*) FILTER (WHERE opened_at >= $6::timestamptz AND opened_at < $5::timestamptz) AS opened,
+        count(*) FILTER (WHERE opened_at < $5::timestamptz AND (closed_at IS NULL OR closed_at >= $5::timestamptz)) AS open_at_to
+    FROM filtered
+    GROUP BY anomaly_code, group_key
+),
+closed_counts AS (
+    SELECT
+        anomaly_code,
+        group_key,
+        close_reason,
+        count(*) AS closed
+    FROM filtered
+    WHERE closed_at >= $6::timestamptz AND closed_at < $5::timestamptz
+      AND close_reason IS NOT NULL
+    GROUP BY anomaly_code, group_key, close_reason
+)
+SELECT
+    totals.anomaly_code,
+    totals.group_key,
+    totals.opened,
+    totals.open_at_to,
+    closed_counts.close_reason,
+    COALESCE(closed_counts.closed, 0)::bigint AS closed
+FROM totals
+LEFT JOIN closed_counts
+    ON totals.anomaly_code = closed_counts.anomaly_code
+   AND totals.group_key IS NOT DISTINCT FROM closed_counts.group_key
+`
+
+type CountVehicleAnomalyEpisodesGroupedParams struct {
+	Dimension   string
+	ServerID    *int64
+	AgencyID    *int64
+	AnomalyCode *string
+	ToTime      time.Time
+	FromTime    time.Time
+}
+
+type CountVehicleAnomalyEpisodesGroupedRow struct {
+	AnomalyCode string
+	GroupKey    *string
+	Opened      int64
+	OpenAtTo    int64
+	CloseReason *string
+	Closed      int64
+}
+
+func (q *Queries) CountVehicleAnomalyEpisodesGrouped(ctx context.Context, arg CountVehicleAnomalyEpisodesGroupedParams) ([]CountVehicleAnomalyEpisodesGroupedRow, error) {
+	rows, err := q.db.Query(ctx, countVehicleAnomalyEpisodesGrouped,
+		arg.Dimension,
+		arg.ServerID,
+		arg.AgencyID,
+		arg.AnomalyCode,
+		arg.ToTime,
+		arg.FromTime,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CountVehicleAnomalyEpisodesGroupedRow
+	for rows.Next() {
+		var i CountVehicleAnomalyEpisodesGroupedRow
+		if err := rows.Scan(
+			&i.AnomalyCode,
+			&i.GroupKey,
 			&i.Opened,
 			&i.OpenAtTo,
 			&i.CloseReason,
