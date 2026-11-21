@@ -101,19 +101,6 @@ func includableForGroupBy(groupBy *string, episodeType *string) map[string]resou
 	}
 }
 
-var episodeCountsIncludable = map[string]resourceKind{
-	"agency":               kindAgency,
-	"endpoint":             kindEndpoint,
-	"opening_response":     kindOBAMetricsResponse,
-	"closing_response":     kindOBAMetricsResponse,
-	"gtfs_static_version":  "gtfs_static_version",
-	"rule_version":         kindVehicleAnomalyRuleVersion,
-	"bounding_box_version": "bounding_box_version",
-	"reported_stop":        kindReportedStop,
-	"reported_trip":        kindReportedTrip,
-	"vehicle":              "vehicle",
-}
-
 // episodeCountItem is the counts for one episode type (E41 ungrouped).
 type episodeCountItem struct {
 	EpisodeType string           `json:"episode_type"`
@@ -819,6 +806,7 @@ func (s *InvestigationService) getEpisodeCounts(w http.ResponseWriter, r *http.R
 	var allGroupItems []groupedEpisodeCountItem
 	var allLinks []itemLinks
 	var isTruncated bool
+	var incRes included
 
 	err := s.read(r.Context(), func(ctx context.Context, q *dbgen.Queries) error {
 		if *groupBy == "cluster" {
@@ -1038,6 +1026,14 @@ func (s *InvestigationService) getEpisodeCounts(w http.ResponseWriter, r *http.R
 			allLinks[i] = e.links
 		}
 
+		if inc.requested() {
+			var err error
+			incRes, err = s.loadIncluded(ctx, q, allLinks, inc)
+			if err != nil {
+				return err
+			}
+		}
+
 		return nil
 	})
 
@@ -1048,19 +1044,6 @@ func (s *InvestigationService) getEpisodeCounts(w http.ResponseWriter, r *http.R
 	if err != nil {
 		s.fail(w, r, err)
 		return
-	}
-
-	var incRes included
-	if inc.requested() {
-		err = s.read(r.Context(), func(ctx context.Context, q *dbgen.Queries) error {
-			var err error
-			incRes, err = s.loadIncluded(ctx, q, allLinks, inc)
-			return err
-		})
-		if err != nil {
-			s.fail(w, r, err)
-			return
-		}
 	}
 
 	resp := episodeCountsResponse{
