@@ -29,6 +29,12 @@ type backendHashRun struct {
 	ticks       int
 }
 
+// stable reports whether the run has lasted long enough to act on, rather than
+// being one node's answer behind a load balancer.
+func (r backendHashRun) stable() bool {
+	return r.ticks >= backendHashStableTicks && r.lastSeen.Sub(r.firstSeen) >= backendHashStableFor
+}
+
 // backendCampaignKey identifies one mismatch: a configured entry, its static
 // configuration, the hash its backend reported, and the local snapshot hash.
 type backendCampaignKey struct {
@@ -128,7 +134,15 @@ func (gs *GtfsService) CheckBackendBundles(ctx, campaignCtx context.Context, ser
 				}
 			}
 			run, startCampaign, warn := c.observeBackendRunLocked(server, fingerprint, hash, localHash, match)
+			published := relation
 			if relation == BackendBundleBehind {
+				// One read can come from a single lagging node behind a load
+				// balancer, so report the backend as behind only once the
+				// stale hash has held. A confirmed state survives a metadata
+				// gap, which restarts the run but is no evidence of a catch-up.
+				if !run.stable() && !c.relationIsLocked(server.ServerKey(), fingerprint, BackendBundleBehind) {
+					published = BackendBundleUnknown
+				}
 				// Watchdog already replaced the bundle the backend serves, so
 				// downloading the feed now would fetch the same newer bundle
 				// again: wait for the backend to load it. The hourly retry
@@ -141,7 +155,7 @@ func (gs *GtfsService) CheckBackendBundles(ctx, campaignCtx context.Context, ser
 				}
 				warn = false
 			}
-			relationChanged := c.setRelationLocked(server.ServerKey(), fingerprint, relation)
+			relationChanged := c.setRelationLocked(server.ServerKey(), fingerprint, published)
 			c.mu.Unlock()
 			gs.StaticStore.mu.RUnlock()
 			if match != nil && *match {
@@ -149,7 +163,7 @@ func (gs *GtfsService) CheckBackendBundles(ctx, campaignCtx context.Context, ser
 				// snapshot is confirmed current without downloading it.
 				gs.StaticStore.TouchServerSnapshot(server, time.Now().UTC())
 			}
-			if relationChanged && relation == BackendBundleBehind {
+			if relationChanged && published == BackendBundleBehind {
 				gs.Logger.Warn("Backend still serves the static GTFS bundle Watchdog replaced; waiting for it to load the newer one",
 					"server_name", server.ServerName, "server_url", utils.SanitizeServerURL(server.ObaBaseURL),
 					"agency_id", server.AgencyID, "agency_name", server.AgencyName, "backend_hash", hash, "local_hash", localHash)
@@ -215,8 +229,7 @@ func (c *staticRefreshCoordinator) observeBackendRunLocked(server models.ObaServ
 			campaign.warned, warn = true, true
 			c.backendCampaigns[campaignKey] = campaign
 		}
-		startCampaign = run.ticks >= backendHashStableTicks && now.Sub(run.firstSeen) >= backendHashStableFor &&
-			(campaign.at.IsZero() || now.Sub(campaign.at) >= backendHashRetryEvery)
+		startCampaign = run.stable() && (campaign.at.IsZero() || now.Sub(campaign.at) >= backendHashRetryEvery)
 	}
 	c.backendRuns[key] = run
 	return run, startCampaign, warn
