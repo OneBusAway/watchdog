@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -617,6 +618,163 @@ func TestFetchAndStoreGTFSRTFeed(t *testing.T) {
 		}
 		if realtimeStore.Get(server.ServerKey()) != nil {
 			t.Error("Canceled fetch published a snapshot; want nil")
+		}
+	})
+}
+
+// redirectRecorder records the value of one header from the requests it serves.
+type redirectRecorder struct {
+	mu    sync.Mutex
+	value string
+}
+
+func (r *redirectRecorder) record(req *http.Request, header string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.value = req.Header.Get(header)
+}
+
+func (r *redirectRecorder) get() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.value
+}
+
+// fetchFeedThroughRedirect runs one realtime fetch against feedURL with the
+// configured API key, following whatever redirects the feed serves.
+func fetchFeedThroughRedirect(t *testing.T, feedURL, key, value string, client *http.Client) (*models.RealtimeData, error) {
+	t.Helper()
+	server := models.ObaServer{
+		AgencyID:    "redirect",
+		GtfsRTFeeds: []models.GtfsRTFeed{{VehiclePositionURL: feedURL, GtfsRTAPIKey: key, GtfsRTAPIValue: value}},
+	}
+	store := NewRealtimeStore()
+	err := fetchAndStoreGTFSRTFeed(context.Background(), server, store, client, nil)
+	return store.Get(server.ServerKey()), err
+}
+
+func TestFetchAndStoreGTFSRTFeedRedirectsDoNotLeakCredentials(t *testing.T) {
+	const (
+		header = "X-Feed-Key"
+		secret = "s3cret"
+	)
+	payload := marshalVehicleFeed(t, "redirected", 1, 2)
+	newFeedServer := func(recorder *redirectRecorder) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			recorder.record(r, header)
+			// Writing to ResponseWriter in tests, error can be safely ignored.
+			// #nosec G104
+			w.Write(payload)
+		}))
+	}
+
+	t.Run("same-origin redirect keeps the credential", func(t *testing.T) {
+		recorder := &redirectRecorder{}
+		mux := http.NewServeMux()
+		mux.HandleFunc("/feed", func(w http.ResponseWriter, r *http.Request) {
+			recorder.record(r, header)
+			// #nosec G104
+			w.Write(payload)
+		})
+		mux.HandleFunc("/redirect", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/feed", http.StatusFound)
+		})
+		source := httptest.NewServer(mux)
+		defer source.Close()
+
+		data, err := fetchFeedThroughRedirect(t, source.URL+"/redirect", header, secret, source.Client())
+		if err != nil {
+			t.Fatalf("fetch: %v", err)
+		}
+		if data == nil {
+			t.Fatal("redirected fetch published no snapshot")
+		}
+		if got := recorder.get(); got != secret {
+			t.Errorf("same-origin redirect sent %q, want %q", got, secret)
+		}
+	})
+
+	t.Run("cross-origin redirect drops the credential", func(t *testing.T) {
+		recorder := &redirectRecorder{}
+		destination := newFeedServer(recorder)
+		defer destination.Close()
+		source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, destination.URL, http.StatusFound)
+		}))
+		defer source.Close()
+
+		data, err := fetchFeedThroughRedirect(t, source.URL, header, secret, source.Client())
+		if err != nil {
+			t.Fatalf("fetch: %v", err)
+		}
+		if data == nil {
+			t.Fatal("redirected fetch published no snapshot")
+		}
+		if got := recorder.get(); got != "" {
+			t.Errorf("cross-origin redirect sent %q, want no credential", got)
+		}
+	})
+
+	t.Run("cross-origin redirect without authentication still works", func(t *testing.T) {
+		recorder := &redirectRecorder{}
+		destination := newFeedServer(recorder)
+		defer destination.Close()
+		source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, destination.URL, http.StatusFound)
+		}))
+		defer source.Close()
+
+		data, err := fetchFeedThroughRedirect(t, source.URL, "", "", source.Client())
+		if err != nil {
+			t.Fatalf("fetch: %v", err)
+		}
+		if data == nil {
+			t.Fatal("redirected fetch published no snapshot")
+		}
+	})
+
+	t.Run("HTTPS to HTTP downgrade drops the credential", func(t *testing.T) {
+		recorder := &redirectRecorder{}
+		destination := newFeedServer(recorder)
+		defer destination.Close()
+		source := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, destination.URL, http.StatusFound)
+		}))
+		defer source.Close()
+
+		data, err := fetchFeedThroughRedirect(t, source.URL, header, secret, source.Client())
+		if err != nil {
+			t.Fatalf("fetch: %v", err)
+		}
+		if data == nil {
+			t.Fatal("redirected fetch published no snapshot")
+		}
+		if got := recorder.get(); got != "" {
+			t.Errorf("HTTPS to HTTP redirect sent %q, want no credential", got)
+		}
+	})
+
+	t.Run("redirect loop is stopped", func(t *testing.T) {
+		loop := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/loop", http.StatusFound)
+		}))
+		defer loop.Close()
+
+		_, err := fetchFeedThroughRedirect(t, loop.URL+"/loop", header, secret, loop.Client())
+		if err == nil || !strings.Contains(err.Error(), "stopped after 10 redirects") {
+			t.Fatalf("redirect loop error = %v, want the redirect limit", err)
+		}
+	})
+
+	t.Run("invalid redirect destination fails the fetch", func(t *testing.T) {
+		broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Location", "://not-a-url")
+			w.WriteHeader(http.StatusFound)
+		}))
+		defer broken.Close()
+
+		if _, err := fetchFeedThroughRedirect(t, broken.URL, header, secret, broken.Client()); err == nil {
+			t.Fatal("expected an invalid redirect destination to fail the fetch")
 		}
 	})
 }

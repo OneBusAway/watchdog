@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -913,6 +914,49 @@ func fetchAndStoreGTFSRTFeed(ctx context.Context, server models.ObaServer, realt
 // not change.
 const realtimeFeedID = "0"
 
+// maxFeedRedirects is net/http's default redirect limit. A client with its own
+// CheckRedirect no longer applies that default, so redirectSafeClient enforces
+// it itself.
+const maxFeedRedirects = 10
+
+// redirectSafeClient returns a copy of client that withholds header from any
+// redirect request that leaves the original origin. Go's default redirect
+// policy drops standard sensitive headers such as Authorization on a
+// cross-domain redirect, but it copies arbitrary headers, so a configured feed
+// API key would otherwise reach whatever host the feed redirects to. The
+// redirect is still followed, only without the credential. client itself is
+// not modified.
+func redirectSafeClient(client *http.Client, header string) *http.Client {
+	if header == "" {
+		return client
+	}
+	c := *client
+	previous := client.CheckRedirect
+	c.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if previous != nil {
+			if err := previous(req, via); err != nil {
+				return err
+			}
+		} else if len(via) >= maxFeedRedirects {
+			return fmt.Errorf("stopped after %d redirects", maxFeedRedirects)
+		}
+		// Compare with the first request: net/http copies headers from it on
+		// every hop, so a cross-origin hop must drop the header even when an
+		// earlier one already did.
+		if len(via) > 0 && !sameOrigin(via[0].URL, req.URL) {
+			req.Header.Del(header)
+		}
+		return nil
+	}
+	return &c
+}
+
+// sameOrigin reports whether a and b share a scheme and host, including an
+// explicit port. Host names are case-insensitive.
+func sameOrigin(a, b *url.URL) bool {
+	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Host, b.Host)
+}
+
 // parseGTFSRTFeed fetches one upstream-merged source and preserves its IDs.
 // The returned observation is meaningful only when err is nil.
 func parseGTFSRTFeed(ctx context.Context, server models.ObaServer, client *http.Client, observedAt time.Time) (*models.RealtimeData, FeedObservation, error) {
@@ -948,7 +992,7 @@ func parseGTFSRTFeed(ctx context.Context, server models.ObaServer, client *http.
 	if feed.GtfsRTAPIKey != "" {
 		req.Header.Set(feed.GtfsRTAPIKey, feed.GtfsRTAPIValue)
 	}
-	resp, err := client.Do(req)
+	resp, err := redirectSafeClient(client, feed.GtfsRTAPIKey).Do(req)
 	if err != nil {
 		err = fmt.Errorf("fetch GTFS-RT feed %s: %w", feed.VehiclePositionURL, err)
 		reportFetchErr(err, report.SentryReportOptions{
