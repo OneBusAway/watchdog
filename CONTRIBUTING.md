@@ -61,3 +61,12 @@ Check Prometheus rule syntax and tests (requires Docker):
 ```bash
   go test -race ./...
 ```
+
+  The commands above skip the PostgreSQL tests unless
+  `WATCHDOG_TEST_DATABASE_URL` is set. If your change touches `internal/db`,
+  `internal/history`, or `internal/investigation`, run them too. The
+  [README](README.md#database-tests) shows how to start a database:
+
+```bash
+  WATCHDOG_TEST_DATABASE_URL="postgres://watchdog:watchdog@localhost:5432/watchdog?sslmode=disable" make test-db
+```
