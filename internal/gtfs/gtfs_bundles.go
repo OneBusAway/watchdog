@@ -287,16 +287,29 @@ func storeStaticForServer(server models.ObaServer, bundle *remoteGtfs.Static, st
 type publishedStatic struct {
 	publishedAt time.Time
 	agencies    []StaticPublishedAgency
+	boxes       map[string]geo.BoundingBox
 }
 
 // publication builds the observer's view of a successful store.
 func (p publishedStatic) publication(server models.ObaServer, feeds []StaticFeedContent) *StaticVersionPublication {
 	return &StaticVersionPublication{
-		Server:      server,
-		PublishedAt: p.publishedAt,
-		Feeds:       feeds,
-		Agencies:    p.agencies,
+		Server:        server,
+		PublishedAt:   p.publishedAt,
+		Feeds:         feeds,
+		Agencies:      p.agencies,
+		BoundingBoxes: p.boxes,
 	}
+}
+
+// capturedBoxes copies the boxes stored under keys, skipping keys without one.
+func capturedBoxes(boundingBoxStore *geo.BoundingBoxStore, keys ...string) map[string]geo.BoundingBox {
+	boxes := make(map[string]geo.BoundingBox, len(keys))
+	for _, key := range keys {
+		if bbox, ok := boundingBoxStore.Get(key); ok {
+			boxes[key] = bbox
+		}
+	}
+	return boxes
 }
 
 // storeStaticSnapshot is storeStaticForServer, also reporting what it
@@ -348,6 +361,7 @@ func storeStaticSnapshot(server models.ObaServer, bundle *remoteGtfs.Static, sta
 		return publishedStatic{
 			publishedAt: publishedAt,
 			agencies:    []StaticPublishedAgency{{AgencyID: server.AgencyID, AgencyName: result.data.Agencies[0].Name}},
+			boxes:       capturedBoxes(boundingBoxStore, serverKey),
 		}, nil
 	}
 
@@ -472,9 +486,12 @@ func storeStaticSnapshot(server models.ObaServer, bundle *remoteGtfs.Static, sta
 		publishedAt: publishedAt,
 		agencies:    make([]StaticPublishedAgency, 0, len(storageAgencies)),
 	}
+	boxKeys := []string{models.ServerKey(server.ObaBaseURL, "")}
 	for _, declaredAgency := range storageAgencies {
 		published.agencies = append(published.agencies, StaticPublishedAgency{AgencyID: declaredAgency.AgencyID, AgencyName: declaredAgency.AgencyName})
+		boxKeys = append(boxKeys, models.ServerKey(server.ObaBaseURL, declaredAgency.AgencyID))
 	}
+	published.boxes = capturedBoxes(boundingBoxStore, boxKeys...)
 	return published, nil
 }
 

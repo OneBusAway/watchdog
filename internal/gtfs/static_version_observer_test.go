@@ -1,7 +1,9 @@
 package gtfs
 
 import (
+	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -62,9 +64,34 @@ func TestStaticVersion_ObserverOnPublish(t *testing.T) {
 	if len(got.Agencies) != 1 || got.Agencies[0].AgencyID != h.server.AgencyID {
 		t.Errorf("Agencies = %+v, want agency %q", got.Agencies, h.server.AgencyID)
 	}
-	// The hook fires after the bounding boxes are updated.
-	if _, ok := h.service.BoundingBoxStore.Get(h.server.ServerKey()); !ok {
-		t.Error("no bounding box for the published snapshot")
+	// The publication carries the boxes the snapshot set.
+	stored, ok := h.service.BoundingBoxStore.Get(h.server.ServerKey())
+	if !ok {
+		t.Fatal("no bounding box for the published snapshot")
+	}
+	if carried, ok := got.BoundingBoxes[h.server.ServerKey()]; !ok || carried != stored {
+		t.Errorf("BoundingBoxes[%q] = %+v (%v), want the stored %+v", h.server.ServerKey(), carried, ok, stored)
+	}
+}
+
+// Recording waits on the database, so the hook must run once the global
+// parse slot is free for other servers.
+func TestStaticVersion_ObserverRunsOutsideParseSlot(t *testing.T) {
+	h := newUnchangedFeedHarness(t)
+	var calls, admitted atomic.Int32
+	h.service.SetStaticVersionObserver(func(StaticVersionPublication) {
+		calls.Add(1)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if h.service.withStaticParseSlot(ctx, func() {}) {
+			admitted.Add(1)
+		}
+	})
+
+	h.run(t, h.server, StaticRefreshStartup)
+
+	if calls.Load() != 1 || admitted.Load() != 1 {
+		t.Fatalf("observer calls = %d, parse slot free in %d of them; want 1 and 1", calls.Load(), admitted.Load())
 	}
 }
 

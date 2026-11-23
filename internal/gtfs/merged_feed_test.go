@@ -290,7 +290,7 @@ func TestParsedStaticDuplicateRetainsFailureClassification(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			err = service.publishStaticCampaign(context.Background(), server, server.GtfsStaticFeeds[0], cache)
+			_, err = service.publishStaticCampaign(context.Background(), server, server.GtfsStaticFeeds[0], cache)
 			var failure *StaticFeedError
 			if !errors.As(err, &failure) || failure.Stage != StaticFailureParse || failure.Reason != StaticReasonDuplicateID || failure.ContentHash != artifact.hash || failure.FeedURL != artifact.url {
 				t.Fatalf("parsed duplicate lost classification or provenance: %+v", failure)

@@ -543,11 +543,16 @@ func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server mode
 				return
 			}
 			var err error
-			if !gs.withStaticParseSlot(ctx, func() { err = gs.publishStaticCampaign(ctx, server, feedURL, cache) }) {
+			var publication *StaticVersionPublication
+			if !gs.withStaticParseSlot(ctx, func() { publication, err = gs.publishStaticCampaign(ctx, server, feedURL, cache) }) {
 				return
 			}
 			if err == nil {
 				if gs.refreshCoordinator.recordPublished(ctx, server, hash) {
+					// Recording waits on the investigation database for up
+					// to its write timeout, so it runs once the parse slot
+					// is free for other servers.
+					gs.reportStaticVersion(publication)
 					reportSuccess()
 				}
 				return
@@ -635,30 +640,30 @@ func (gs *GtfsService) confirmUnchangedStaticSnapshot(ctx context.Context, serve
 	return confirmed
 }
 
-func (gs *GtfsService) publishStaticCampaign(ctx context.Context, server models.ObaServer, feedURL string, cache *staticArtifactCache) error {
+func (gs *GtfsService) publishStaticCampaign(ctx context.Context, server models.ObaServer, feedURL string, cache *staticArtifactCache) (*StaticVersionPublication, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	data, err := cache.Read(feedURL)
 	if err != nil {
-		return &StaticFeedError{Stage: StaticFailureCompleteValidate, Reason: StaticReasonUnknown, Err: err}
+		return nil, &StaticFeedError{Stage: StaticFailureCompleteValidate, Reason: StaticReasonUnknown, Err: err}
 	}
 	bundle, err := gs.parseStatic(data, feedURL, server.AgencyID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if reason := validateStaticAgencyDiscovery(server, bundle); reason != "" {
 		artifact, _ := cache.Get(feedURL)
-		return &StaticFeedError{FeedURL: feedURL, Stage: StaticFailureAgencyDiscovery, Reason: reason, ContentHash: artifact.hash, Err: fmt.Errorf("static feed %s failed agency discovery: %s", utils.SanitizeServerURL(feedURL), reason)}
+		return nil, &StaticFeedError{FeedURL: feedURL, Stage: StaticFailureAgencyDiscovery, Reason: reason, ContentHash: artifact.hash, Err: fmt.Errorf("static feed %s failed agency discovery: %s", utils.SanitizeServerURL(feedURL), reason)}
 	}
 	raw, err := parseRawScheduleFeed(feedURL, data, server)
 	if err != nil {
 		artifact, _ := cache.Get(feedURL)
-		return &StaticFeedError{FeedURL: feedURL, Stage: StaticFailureSchedule, Reason: StaticReasonInvalidSchedule, ContentHash: artifact.hash, Err: fmt.Errorf("validate schedule in %s: %w", utils.SanitizeServerURL(feedURL), err)}
+		return nil, &StaticFeedError{FeedURL: feedURL, Stage: StaticFailureSchedule, Reason: StaticReasonInvalidSchedule, ContentHash: artifact.hash, Err: fmt.Errorf("validate schedule in %s: %w", utils.SanitizeServerURL(feedURL), err)}
 	}
 	schedules, err := compileRawSchedule(server, raw)
 	if err != nil {
-		return &StaticFeedError{Stage: StaticFailureCompleteValidate, Reason: StaticReasonInvalidSchedule, Err: err}
+		return nil, &StaticFeedError{Stage: StaticFailureCompleteValidate, Reason: StaticReasonInvalidSchedule, Err: err}
 	}
 	downloaded := downloadedStaticFeed{url: feedURL, data: data, bundle: bundle}
 
@@ -685,22 +690,18 @@ func (gs *GtfsService) publishStaticCampaign(ctx context.Context, server models.
 	})
 	if !configured {
 		if err := ctx.Err(); err != nil {
-			return err
+			return nil, err
 		}
-		return errStaticServerUnconfigured
+		return nil, errStaticServerUnconfigured
 	}
 	if storeErr != nil {
 		artifact, _ := cache.Get(feedURL)
 		failure := staticPublicationFailure(storeErr, feedURL, artifact.hash)
 		report.ReportErrorWithSentryOptions(failure, report.SentryReportOptions{Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName}, Level: sentry.LevelError})
-		return failure
+		return nil, failure
 	}
-	// Notify after the refresh lock is released: recording waits on the
-	// investigation database for up to its write timeout, which must not
-	// hold up other servers' publications.
 	artifact, _ := cache.Get(feedURL)
-	gs.reportStaticVersion(published.publication(server, []StaticFeedContent{{URL: feedURL, ContentSHA256: artifact.hash}}))
-	return nil
+	return published.publication(server, []StaticFeedContent{{URL: feedURL, ContentSHA256: artifact.hash}}), nil
 }
 
 func validateStaticAgencyDiscovery(server models.ObaServer, bundle *remoteGtfs.Static) StaticFailureReason {

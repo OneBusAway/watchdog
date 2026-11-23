@@ -8,11 +8,11 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"watchdog.onebusaway.org/internal/db/dbgen"
-	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
 )
@@ -35,13 +35,17 @@ type currentStatic struct {
 	// boxKeys maps a server key to the box keys its current version set, so
 	// the next version replaces exactly those.
 	boxKeys map[string][]string
+	// publishedAt maps a server key to the newest publication applied, so a
+	// slow write for an older publication cannot replace a newer one.
+	publishedAt map[string]time.Time
 }
 
 func newCurrentStatic() *currentStatic {
 	return &currentStatic{
-		versions: make(map[string]int64),
-		boxes:    make(map[string]int64),
-		boxKeys:  make(map[string][]string),
+		versions:    make(map[string]int64),
+		boxes:       make(map[string]int64),
+		boxKeys:     make(map[string][]string),
+		publishedAt: make(map[string]time.Time),
 	}
 }
 
@@ -60,10 +64,14 @@ func (c *currentStatic) box(boxKey string) (int64, bool) {
 }
 
 // set makes versionID and boxes current for serverKey, dropping the boxes
-// its previous version set.
-func (c *currentStatic) set(serverKey string, versionID int64, boxes map[string]int64) {
+// its previous version set. It reports false and changes nothing when a newer
+// publication was already applied.
+func (c *currentStatic) set(serverKey string, publishedAt time.Time, versionID int64, boxes map[string]int64) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if !c.applyLocked(serverKey, publishedAt) {
+		return false
+	}
 	c.dropLocked(serverKey)
 	c.versions[serverKey] = versionID
 	keys := make([]string, 0, len(boxes))
@@ -72,13 +80,27 @@ func (c *currentStatic) set(serverKey string, versionID int64, boxes map[string]
 		keys = append(keys, key)
 	}
 	c.boxKeys[serverKey] = keys
+	return true
 }
 
-// forget drops serverKey's current version and boxes.
-func (c *currentStatic) forget(serverKey string) {
+// forget drops serverKey's current version and boxes, unless a newer
+// publication was already applied.
+func (c *currentStatic) forget(serverKey string, publishedAt time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.dropLocked(serverKey)
+	if c.applyLocked(serverKey, publishedAt) {
+		c.dropLocked(serverKey)
+	}
+}
+
+// applyLocked records publishedAt as serverKey's newest publication, or
+// reports false when it is older than one already applied.
+func (c *currentStatic) applyLocked(serverKey string, publishedAt time.Time) bool {
+	if newest, ok := c.publishedAt[serverKey]; ok && publishedAt.Before(newest) {
+		return false
+	}
+	c.publishedAt[serverKey] = publishedAt
+	return true
 }
 
 func (c *currentStatic) dropLocked(serverKey string) {
@@ -136,18 +158,17 @@ func (h *HistoryService) recordStaticVersion(ctx context.Context, publication gt
 	var recorded staticVersionRecord
 	committed := h.write(ctx, staticVersionStep, publicationTags(publication.Server), func(q *dbgen.Queries) error {
 		var err error
-		recorded, err = recordStaticVersion(ctx, q, publication, h.boxes, h.resolver, h.version)
+		recorded, err = recordStaticVersion(ctx, q, publication, h.resolver, h.version)
 		return err
 	})
 	if !committed {
 		// The snapshot in use is no longer the recorded current version.
 		// Pointing new history at the old one would be wrong, so point at
 		// none until a publication records successfully.
-		h.static.forget(serverKey)
+		h.static.forget(serverKey, publication.PublishedAt)
 		return
 	}
-	h.static.set(serverKey, recorded.versionID, recorded.boxes)
-	if recorded.created {
+	if h.static.set(serverKey, publication.PublishedAt, recorded.versionID, recorded.boxes) && recorded.created {
 		h.onStaticVersion(ctx, publication.Server, recorded.versionID)
 	}
 }
@@ -165,8 +186,8 @@ func publicationTags(server models.ObaServer) writeTags {
 // staticVersionRecord is the outcome of recording one publication.
 type staticVersionRecord struct {
 	versionID int64
-	// created is false when the server's newest version already had the
-	// same combined hash and was reused.
+	// created is false when the newest version with the same agencies
+	// already had the same combined hash and was reused.
 	created bool
 	// boxes maps each bounding box key to the ID recorded for it.
 	boxes map[string]int64
@@ -176,13 +197,14 @@ type staticVersionRecord struct {
 //
 //  1. Ensure the server and each static source.
 //  2. Compute the combined content hash.
-//  3. If the server's newest version has the same combined hash, reuse it
-//     (a restart with unchanged feeds).
+//  3. If the newest version with the same agencies has the same combined
+//     hash, reuse it (a restart with unchanged feeds). Matching the agency
+//     set keeps agency-scoped entries on one base URL apart.
 //  4. Otherwise insert the version, one source row per feed and one agency
 //     row per published agency.
-//  5. Insert the bounding boxes boxes holds for each published agency and
+//  5. Insert the publication's bounding boxes for each published agency and
 //     the server-wide box, skipping keys without a box.
-func recordStaticVersion(ctx context.Context, q *dbgen.Queries, publication gtfs.StaticVersionPublication, boxes *geo.BoundingBoxStore, resolver *ServerNameResolver, parserVersion string) (staticVersionRecord, error) {
+func recordStaticVersion(ctx context.Context, q *dbgen.Queries, publication gtfs.StaticVersionPublication, resolver *ServerNameResolver, parserVersion string) (staticVersionRecord, error) {
 	server := publication.Server
 	if len(publication.Feeds) == 0 {
 		return staticVersionRecord{}, fmt.Errorf("server %q: static publication has no feeds", server.ServerName)
@@ -209,10 +231,18 @@ func recordStaticVersion(ctx context.Context, q *dbgen.Queries, publication gtfs
 	}
 	combined := combinedContentSHA256(hashes)
 
-	latest, err := q.GetLatestGTFSStaticVersionForServer(ctx, serverID)
+	agencies := uniquePublishedAgencies(publication.Agencies)
+	externalAgencyIDs := make([]string, len(agencies))
+	for i, agency := range agencies {
+		externalAgencyIDs[i] = agency.AgencyID
+	}
+	latest, err := q.GetLatestGTFSStaticVersionForAgencies(ctx, dbgen.GetLatestGTFSStaticVersionForAgenciesParams{
+		ServerID:  serverID,
+		AgencyIds: externalAgencyIDs,
+	})
 	switch {
 	case err == nil && latest.CombinedContentSha256 != nil && *latest.CombinedContentSha256 == combined:
-		recordedBoxes, err := recordedBoundingBoxes(ctx, q, server, latest.GtfsStaticVersionID)
+		recordedBoxes, err := recordedBoundingBoxes(ctx, q, server, externalAgencyIDs, latest.GtfsStaticVersionID)
 		if err != nil {
 			return staticVersionRecord{}, err
 		}
@@ -252,7 +282,6 @@ func recordStaticVersion(ctx context.Context, q *dbgen.Queries, publication gtfs
 		}
 	}
 
-	agencies := uniquePublishedAgencies(publication.Agencies)
 	agencyIDs := make(map[string]int64, len(agencies))
 	for _, agency := range agencies {
 		agencyID, err := ensureAgency(ctx, q, serverID, server.ServerName, agency.AgencyID, agency.AgencyName)
@@ -269,53 +298,60 @@ func recordStaticVersion(ctx context.Context, q *dbgen.Queries, publication gtfs
 	}
 
 	recordedBoxes := make(map[string]int64)
-	if boxes != nil {
-		insertBox := func(boxKey string, agencyID *int64, label string) error {
-			bbox, ok := boxes.Get(boxKey)
-			if !ok {
-				return nil
-			}
-			boxID, err := q.InsertBoundingBoxVersion(ctx, dbgen.InsertBoundingBoxVersionParams{
-				GtfsStaticVersionID: versionID,
-				ServerID:            serverID,
-				AgencyID:            agencyID,
-				MinimumLatitude:     bbox.MinLat,
-				MaximumLatitude:     bbox.MaxLat,
-				MinimumLongitude:    bbox.MinLon,
-				MaximumLongitude:    bbox.MaxLon,
-			})
-			if err != nil {
-				return fmt.Errorf("server %q: insert %s bounding box: %w", server.ServerName, label, err)
-			}
-			recordedBoxes[boxKey] = boxID
+	insertBox := func(boxKey string, agencyID *int64, label string) error {
+		bbox, ok := publication.BoundingBoxes[boxKey]
+		if !ok {
 			return nil
 		}
-		for _, agency := range agencies {
-			agencyID := agencyIDs[agency.AgencyID]
-			if err := insertBox(models.ServerKey(server.ObaBaseURL, agency.AgencyID), &agencyID, fmt.Sprintf("agency %q", agency.AgencyID)); err != nil {
-				return staticVersionRecord{}, err
-			}
+		boxID, err := q.InsertBoundingBoxVersion(ctx, dbgen.InsertBoundingBoxVersionParams{
+			GtfsStaticVersionID: versionID,
+			ServerID:            serverID,
+			AgencyID:            agencyID,
+			MinimumLatitude:     bbox.MinLat,
+			MaximumLatitude:     bbox.MaxLat,
+			MinimumLongitude:    bbox.MinLon,
+			MaximumLongitude:    bbox.MaxLon,
+		})
+		if err != nil {
+			return fmt.Errorf("server %q: insert %s bounding box: %w", server.ServerName, label, err)
 		}
-		if err := insertBox(models.ServerKey(server.ObaBaseURL, ""), nil, "server-wide"); err != nil {
+		recordedBoxes[boxKey] = boxID
+		return nil
+	}
+	for _, agency := range agencies {
+		agencyID := agencyIDs[agency.AgencyID]
+		if err := insertBox(models.ServerKey(server.ObaBaseURL, agency.AgencyID), &agencyID, fmt.Sprintf("agency %q", agency.AgencyID)); err != nil {
 			return staticVersionRecord{}, err
 		}
+	}
+	if err := insertBox(models.ServerKey(server.ObaBaseURL, ""), nil, "server-wide"); err != nil {
+		return staticVersionRecord{}, err
 	}
 
 	return staticVersionRecord{versionID: versionID, created: true, boxes: recordedBoxes}, nil
 }
 
-// recordedBoundingBoxes returns the boxes stored with a version, keyed the
-// way geo.BoundingBoxStore keys them.
-func recordedBoundingBoxes(ctx context.Context, q *dbgen.Queries, server models.ObaServer, versionID int64) (map[string]int64, error) {
+// recordedBoundingBoxes returns the boxes stored with a version for the
+// published agencies and the server-wide box, keyed the way
+// geo.BoundingBoxStore keys them.
+func recordedBoundingBoxes(ctx context.Context, q *dbgen.Queries, server models.ObaServer, agencyIDs []string, versionID int64) (map[string]int64, error) {
 	rows, err := q.ListBoundingBoxVersionsForStaticVersion(ctx, versionID)
 	if err != nil {
 		return nil, fmt.Errorf("server %q: read bounding boxes of static version %d: %w", server.ServerName, versionID, err)
+	}
+	published := make(map[string]bool, len(agencyIDs)+1)
+	published[""] = true
+	for _, agencyID := range agencyIDs {
+		published[agencyID] = true
 	}
 	recorded := make(map[string]int64, len(rows))
 	for _, row := range rows {
 		agencyID := ""
 		if row.ExternalAgencyID != nil {
 			agencyID = *row.ExternalAgencyID
+		}
+		if !published[agencyID] {
+			continue
 		}
 		recorded[models.ServerKey(server.ObaBaseURL, agencyID)] = row.BoundingBoxVersionID
 	}

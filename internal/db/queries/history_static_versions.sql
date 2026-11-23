@@ -1,8 +1,16 @@
--- name: GetLatestGTFSStaticVersionForServer :one
-SELECT gtfs_static_version_id, combined_content_sha256
-FROM gtfs_static_version
-WHERE server_id = @server_id
-ORDER BY published_at DESC, gtfs_static_version_id DESC
+-- name: GetLatestGTFSStaticVersionForAgencies :one
+SELECT v.gtfs_static_version_id, v.combined_content_sha256
+FROM gtfs_static_version v
+CROSS JOIN LATERAL (
+    SELECT coalesce(array_agg(a.external_agency_id), '{}'::text[]) AS agency_ids
+    FROM gtfs_static_version_agency va
+    JOIN agency a ON a.agency_id = va.agency_id
+    WHERE va.gtfs_static_version_id = v.gtfs_static_version_id
+) recorded
+WHERE v.server_id = @server_id
+  AND recorded.agency_ids @> @agency_ids::text[]
+  AND recorded.agency_ids <@ @agency_ids::text[]
+ORDER BY v.published_at DESC, v.gtfs_static_version_id DESC
 LIMIT 1;
 
 -- name: InsertGTFSStaticVersion :one

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"watchdog.onebusaway.org/internal/geo"
@@ -21,7 +22,8 @@ func hashOf(content string) string {
 }
 
 // testPublication is a server-scoped publication of two agencies from one
-// feed whose artifact hashes to hashOf(content).
+// feed whose artifact hashes to hashOf(content). It carries a box for agency
+// 1 and the server-wide box; agency 2 has none, so its key must be skipped.
 func testPublication(content string, publishedAt time.Time) gtfs.StaticVersionPublication {
 	return gtfs.StaticVersionPublication{
 		Server:      testServer,
@@ -31,16 +33,53 @@ func testPublication(content string, publishedAt time.Time) gtfs.StaticVersionPu
 			{AgencyID: "1", AgencyName: "Agency One"},
 			{AgencyID: "2", AgencyName: "Agency Two"},
 		},
+		BoundingBoxes: map[string]geo.BoundingBox{
+			models.ServerKey(testServer.ObaBaseURL, "1"): {MinLat: 47.0, MaxLat: 47.5, MinLon: -122.5, MaxLon: -122.0},
+			models.ServerKey(testServer.ObaBaseURL, ""):  {MinLat: 46.5, MaxLat: 48.0, MinLon: -123.0, MaxLon: -121.5},
+		},
 	}
 }
 
-// testBoxes holds a box for agency 1 and the server-wide box; agency 2 has
-// none, so its key must be skipped.
-func testBoxes() *geo.BoundingBoxStore {
-	boxes := geo.NewBoundingBoxStore()
-	boxes.Set(models.ServerKey(testServer.ObaBaseURL, "1"), geo.BoundingBox{MinLat: 47.0, MaxLat: 47.5, MinLon: -122.5, MaxLon: -122.0})
-	boxes.Set(models.ServerKey(testServer.ObaBaseURL, ""), geo.BoundingBox{MinLat: 46.5, MaxLat: 48.0, MinLon: -123.0, MaxLon: -121.5})
-	return boxes
+// agencyServer is an agency-scoped entry on testServer's base URL.
+func agencyServer(agencyID string) models.ObaServer {
+	server := testServer
+	server.AgencyID = agencyID
+	server.AgencyName = "Agency " + agencyID
+	return server
+}
+
+// agencyPublication is an agency-scoped publication with the agency's own
+// box, as storeStaticSnapshot builds it.
+func agencyPublication(agencyID, content string, publishedAt time.Time, lat float64) gtfs.StaticVersionPublication {
+	server := agencyServer(agencyID)
+	return gtfs.StaticVersionPublication{
+		Server:      server,
+		PublishedAt: publishedAt,
+		Feeds:       []gtfs.StaticFeedContent{{URL: testFeedURL, ContentSHA256: hashOf(content)}},
+		Agencies:    []gtfs.StaticPublishedAgency{{AgencyID: agencyID, AgencyName: server.AgencyName}},
+		BoundingBoxes: map[string]geo.BoundingBox{
+			server.ServerKey(): {MinLat: lat, MaxLat: lat + 0.5, MinLon: -122.5, MaxLon: -122.0},
+		},
+	}
+}
+
+// versionAgencies returns the external agency IDs recorded with a version.
+func versionAgencies(t *testing.T, pool *pgxpool.Pool, versionID int64) []string {
+	t.Helper()
+	rows, err := pool.Query(ctx, `
+		SELECT a.external_agency_id
+		FROM gtfs_static_version_agency va
+		JOIN agency a ON a.agency_id = va.agency_id
+		WHERE va.gtfs_static_version_id = $1
+		ORDER BY a.external_agency_id`, versionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ids
 }
 
 func latestVersionID(t *testing.T, pool *pgxpool.Pool) int64 {
@@ -54,7 +93,7 @@ func latestVersionID(t *testing.T, pool *pgxpool.Pool) int64 {
 
 func TestStaticVersion_Recorded(t *testing.T) {
 	pool := newMigratedPool(t)
-	h := NewHistoryService(pool, discardLogger(), "test-build", nil, testBoxes())
+	h := NewHistoryService(pool, discardLogger(), "test-build", nil)
 	publishedAt := time.Date(2026, 11, 19, 8, 30, 0, 0, time.UTC)
 
 	h.StaticVersionObserver()(testPublication("feed-v1", publishedAt))
@@ -133,12 +172,12 @@ func TestStaticVersion_Recorded(t *testing.T) {
 // a service that has no memory of them.
 func TestStaticVersion_UnchangedNotDuplicated(t *testing.T) {
 	pool := newMigratedPool(t)
-	first := NewHistoryService(pool, discardLogger(), "test-build", nil, testBoxes())
+	first := NewHistoryService(pool, discardLogger(), "test-build", nil)
 	first.StaticVersionObserver()(testPublication("feed-v1", time.Now().UTC()))
 	versionID := latestVersionID(t, pool)
 	wantBox, _ := first.CurrentBoundingBox(models.ServerKey(testServer.ObaBaseURL, "1"))
 
-	restarted := NewHistoryService(pool, discardLogger(), "test-build", nil, testBoxes())
+	restarted := NewHistoryService(pool, discardLogger(), "test-build", nil)
 	restarted.StaticVersionObserver()(testPublication("feed-v1", time.Now().UTC().Add(time.Hour)))
 
 	for table, want := range map[string]int{
@@ -160,7 +199,7 @@ func TestStaticVersion_UnchangedNotDuplicated(t *testing.T) {
 
 func TestStaticVersion_ChangedSource(t *testing.T) {
 	pool := newMigratedPool(t)
-	h := NewHistoryService(pool, discardLogger(), "test-build", nil, testBoxes())
+	h := NewHistoryService(pool, discardLogger(), "test-build", nil)
 	h.StaticVersionObserver()(testPublication("feed-v1", time.Now().UTC()))
 	firstID := latestVersionID(t, pool)
 	firstBox, _ := h.CurrentBoundingBox(models.ServerKey(testServer.ObaBaseURL, "1"))
@@ -197,16 +236,16 @@ func TestStaticVersion_ChangedSource(t *testing.T) {
 // version Watchdog no longer uses.
 func TestStaticVersion_FailedWriteClearsCurrent(t *testing.T) {
 	pool := newMigratedPool(t)
-	boxes := testBoxes()
-	h := NewHistoryService(pool, discardLogger(), "test-build", nil, boxes)
+	h := NewHistoryService(pool, discardLogger(), "test-build", nil)
 	h.StaticVersionObserver()(testPublication("feed-v1", time.Now().UTC()))
 	if _, ok := h.CurrentStaticVersion(testServer.ServerKey()); !ok {
 		t.Fatal("setup: no current version")
 	}
 
 	// A latitude outside [-90, 90] fails the schema's CHECK constraint.
-	boxes.Set(models.ServerKey(testServer.ObaBaseURL, "1"), geo.BoundingBox{MinLat: 0, MaxLat: 123.4, MinLon: 0, MaxLon: 1})
-	h.StaticVersionObserver()(testPublication("feed-v2", time.Now().UTC()))
+	failing := testPublication("feed-v2", time.Now().UTC())
+	failing.BoundingBoxes[models.ServerKey(testServer.ObaBaseURL, "1")] = geo.BoundingBox{MinLat: 0, MaxLat: 123.4, MinLon: 0, MaxLon: 1}
+	h.StaticVersionObserver()(failing)
 
 	if got := count(t, pool, "gtfs_static_version"); got != 1 {
 		t.Errorf("gtfs_static_version has %d rows, want the failed version rolled back", got)
@@ -235,9 +274,103 @@ func TestStaticVersion_CombinedHash(t *testing.T) {
 }
 
 func TestStaticVersion_NilPoolNoop(t *testing.T) {
-	h := NewHistoryService(nil, discardLogger(), "test-build", nil, testBoxes())
+	h := NewHistoryService(nil, discardLogger(), "test-build", nil)
 	h.StaticVersionObserver()(testPublication("feed-v1", time.Now().UTC()))
 	if _, ok := h.CurrentStaticVersion(testServer.ServerKey()); ok {
 		t.Fatal("a version became current with storage disabled")
+	}
+}
+
+// Two agency-scoped entries on one base URL share a database server. When
+// they publish the same feed, each records its own version with its own
+// agency and box, and neither disturbs the other's current box. A restart
+// reuses each entry's own version.
+func TestStaticVersion_AgencyEntriesSharedHash(t *testing.T) {
+	pool := newMigratedPool(t)
+	h := NewHistoryService(pool, discardLogger(), "test-build", nil)
+	now := time.Now().UTC()
+	one, forty := agencyServer("1"), agencyServer("40")
+
+	h.StaticVersionObserver()(agencyPublication("1", "shared-feed", now, 47.0))
+	h.StaticVersionObserver()(agencyPublication("40", "shared-feed", now.Add(time.Second), 45.0))
+
+	if got := count(t, pool, "gtfs_static_version"); got != 2 {
+		t.Fatalf("gtfs_static_version has %d rows, want one per agency entry", got)
+	}
+	versionOne, okOne := h.CurrentStaticVersion(one.ServerKey())
+	versionForty, okForty := h.CurrentStaticVersion(forty.ServerKey())
+	if !okOne || !okForty || versionOne == versionForty {
+		t.Fatalf("current versions = %d (%v), %d (%v); want two different versions", versionOne, okOne, versionForty, okForty)
+	}
+	if got := versionAgencies(t, pool, versionOne); len(got) != 1 || got[0] != "1" {
+		t.Errorf("agency 1's version lists agencies %v, want [1]", got)
+	}
+	if got := versionAgencies(t, pool, versionForty); len(got) != 1 || got[0] != "40" {
+		t.Errorf("agency 40's version lists agencies %v, want [40]", got)
+	}
+	boxOne, okOne := h.CurrentBoundingBox(one.ServerKey())
+	boxForty, okForty := h.CurrentBoundingBox(forty.ServerKey())
+	if !okOne || !okForty || boxOne == boxForty {
+		t.Fatalf("current boxes = %d (%v), %d (%v); want each agency's own box", boxOne, okOne, boxForty, okForty)
+	}
+
+	restarted := NewHistoryService(pool, discardLogger(), "test-build", nil)
+	restarted.StaticVersionObserver()(agencyPublication("40", "shared-feed", now.Add(time.Hour), 45.0))
+	restarted.StaticVersionObserver()(agencyPublication("1", "shared-feed", now.Add(time.Hour), 47.0))
+
+	if got := count(t, pool, "gtfs_static_version"); got != 2 {
+		t.Errorf("gtfs_static_version has %d rows after a restart, want 2", got)
+	}
+	if got, _ := restarted.CurrentStaticVersion(one.ServerKey()); got != versionOne {
+		t.Errorf("agency 1 reused version %d, want its own %d", got, versionOne)
+	}
+	if got, _ := restarted.CurrentStaticVersion(forty.ServerKey()); got != versionForty {
+		t.Errorf("agency 40 reused version %d, want its own %d", got, versionForty)
+	}
+	if got, ok := restarted.CurrentBoundingBox(one.ServerKey()); !ok || got != boxOne {
+		t.Errorf("agency 1's box = %d (%v), want %d", got, ok, boxOne)
+	}
+	if got, ok := restarted.CurrentBoundingBox(forty.ServerKey()); !ok || got != boxForty {
+		t.Errorf("agency 40's box = %d (%v), want %d", got, ok, boxForty)
+	}
+}
+
+// With different feeds, the two entries must not take turns being the
+// server's newest version: a restart records nothing new.
+func TestStaticVersion_AgencyEntriesDifferentHashes(t *testing.T) {
+	pool := newMigratedPool(t)
+	h := NewHistoryService(pool, discardLogger(), "test-build", nil)
+	now := time.Now().UTC()
+
+	h.StaticVersionObserver()(agencyPublication("1", "feed-one", now, 47.0))
+	h.StaticVersionObserver()(agencyPublication("40", "feed-forty", now.Add(time.Second), 45.0))
+	if got := count(t, pool, "gtfs_static_version"); got != 2 {
+		t.Fatalf("setup: gtfs_static_version has %d rows, want 2", got)
+	}
+
+	for restart := 1; restart <= 2; restart++ {
+		restarted := NewHistoryService(pool, discardLogger(), "test-build", nil)
+		at := now.Add(time.Duration(restart) * time.Hour)
+		restarted.StaticVersionObserver()(agencyPublication("1", "feed-one", at, 47.0))
+		restarted.StaticVersionObserver()(agencyPublication("40", "feed-forty", at, 45.0))
+		if got := count(t, pool, "gtfs_static_version"); got != 2 {
+			t.Fatalf("restart %d: gtfs_static_version has %d rows, want 2", restart, got)
+		}
+	}
+}
+
+// A slow write for an older publication must not replace the version a
+// newer publication already made current.
+func TestStaticVersion_OlderPublicationDoesNotReplaceNewer(t *testing.T) {
+	pool := newMigratedPool(t)
+	h := NewHistoryService(pool, discardLogger(), "test-build", nil)
+	now := time.Now().UTC()
+
+	h.StaticVersionObserver()(testPublication("feed-v2", now))
+	newer, _ := h.CurrentStaticVersion(testServer.ServerKey())
+	h.StaticVersionObserver()(testPublication("feed-v1", now.Add(-time.Minute)))
+
+	if got, _ := h.CurrentStaticVersion(testServer.ServerKey()); got != newer {
+		t.Errorf("CurrentStaticVersion = %d, want the newer publication's %d", got, newer)
 	}
 }

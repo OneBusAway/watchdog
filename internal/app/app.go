@@ -122,7 +122,7 @@ func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version s
 	// History records each static publication with the bounding boxes the
 	// collector computed for it. The observer returns at once when
 	// investigation storage is disabled.
-	historyService := history.NewHistoryService(investigationDB, logger, version, cfg.GetServers(), boundingBoxStore)
+	historyService := history.NewHistoryService(investigationDB, logger, version, cfg.GetServers())
 	gtfsService.SetStaticVersionObserver(historyService.StaticVersionObserver())
 
 	return &Application{

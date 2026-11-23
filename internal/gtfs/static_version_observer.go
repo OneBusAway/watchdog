@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"time"
 
+	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/models"
 )
 
@@ -36,6 +37,10 @@ type StaticVersionPublication struct {
 	// Agencies lists the agencies the snapshot was stored under, in the
 	// order they were published.
 	Agencies []StaticPublishedAgency
+	// BoundingBoxes holds the boxes the publication set, keyed like
+	// geo.BoundingBoxStore, captured under the refresh lock so a later
+	// publication cannot change them before they are recorded.
+	BoundingBoxes map[string]geo.BoundingBox
 }
 
 // StaticVersionObserver is called once per server each time a new static

@@ -10,22 +10,35 @@ import (
 	"time"
 )
 
-const getLatestGTFSStaticVersionForServer = `-- name: GetLatestGTFSStaticVersionForServer :one
-SELECT gtfs_static_version_id, combined_content_sha256
-FROM gtfs_static_version
-WHERE server_id = $1
-ORDER BY published_at DESC, gtfs_static_version_id DESC
+const getLatestGTFSStaticVersionForAgencies = `-- name: GetLatestGTFSStaticVersionForAgencies :one
+SELECT v.gtfs_static_version_id, v.combined_content_sha256
+FROM gtfs_static_version v
+CROSS JOIN LATERAL (
+    SELECT coalesce(array_agg(a.external_agency_id), '{}'::text[]) AS agency_ids
+    FROM gtfs_static_version_agency va
+    JOIN agency a ON a.agency_id = va.agency_id
+    WHERE va.gtfs_static_version_id = v.gtfs_static_version_id
+) recorded
+WHERE v.server_id = $1
+  AND recorded.agency_ids @> $2::text[]
+  AND recorded.agency_ids <@ $2::text[]
+ORDER BY v.published_at DESC, v.gtfs_static_version_id DESC
 LIMIT 1
 `
 
-type GetLatestGTFSStaticVersionForServerRow struct {
+type GetLatestGTFSStaticVersionForAgenciesParams struct {
+	ServerID  int64
+	AgencyIds []string
+}
+
+type GetLatestGTFSStaticVersionForAgenciesRow struct {
 	GtfsStaticVersionID   int64
 	CombinedContentSha256 *string
 }
 
-func (q *Queries) GetLatestGTFSStaticVersionForServer(ctx context.Context, serverID int64) (GetLatestGTFSStaticVersionForServerRow, error) {
-	row := q.db.QueryRow(ctx, getLatestGTFSStaticVersionForServer, serverID)
-	var i GetLatestGTFSStaticVersionForServerRow
+func (q *Queries) GetLatestGTFSStaticVersionForAgencies(ctx context.Context, arg GetLatestGTFSStaticVersionForAgenciesParams) (GetLatestGTFSStaticVersionForAgenciesRow, error) {
+	row := q.db.QueryRow(ctx, getLatestGTFSStaticVersionForAgencies, arg.ServerID, arg.AgencyIds)
+	var i GetLatestGTFSStaticVersionForAgenciesRow
 	err := row.Scan(&i.GtfsStaticVersionID, &i.CombinedContentSha256)
 	return i, err
 }
