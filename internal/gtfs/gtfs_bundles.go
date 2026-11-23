@@ -601,7 +601,7 @@ func fetchGTFSBundleData(ctx context.Context, client *http.Client, url, agencyID
 			Tags: utils.MakeMap("agency_id", agencyID),
 			ExtraContext: map[string]interface{}{
 				"url":    sanitizedURL,
-				"status": resp.Status,
+				"status": resp.StatusCode,
 			},
 		})
 		return nil, err
@@ -988,7 +988,7 @@ func parseGTFSRTFeed(ctx context.Context, server models.ObaServer, client *http.
 			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
 			ExtraContext: map[string]interface{}{
 				"vehicle_position_url": sanitizedURL,
-				"status":               resp.Status,
+				"status":               resp.StatusCode,
 			},
 		})
 		return nil, observation, err

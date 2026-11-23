@@ -1296,9 +1296,10 @@ func TestParseGTFSRTFeedRedactsCredentialsFromHTTPStatusError(t *testing.T) {
 	rec := report.CaptureSentry(t)
 
 	const (
-		username = "status-user-sentinel"
-		password = "status-password-sentinel"
-		queryKey = "status-query-secret-sentinel"
+		username  = "status-user-sentinel"
+		password  = "status-password-sentinel"
+		queryKey  = "status-query-secret-sentinel"
+		headerKey = "status-header-secret-sentinel"
 	)
 
 	rawURL := "https://" + username + ":" + password +
@@ -1308,7 +1309,7 @@ func TestParseGTFSRTFeedRedactsCredentialsFromHTTPStatusError(t *testing.T) {
 		Transport: gtfsRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
 			return &http.Response{
 				StatusCode: http.StatusServiceUnavailable,
-				Status:     "503 Service Unavailable",
+				Status:     "503 " + headerKey,
 				Header:     make(http.Header),
 				Body:       io.NopCloser(strings.NewReader("")),
 				Request:    req,
@@ -1321,6 +1322,8 @@ func TestParseGTFSRTFeedRedactsCredentialsFromHTTPStatusError(t *testing.T) {
 		AgencyID:   "agency-status",
 		GtfsRTFeeds: []models.GtfsRTFeed{{
 			VehiclePositionURL: rawURL,
+			GtfsRTAPIKey:       "X-Feed-Key",
+			GtfsRTAPIValue:     headerKey,
 		}},
 	}
 
@@ -1331,7 +1334,7 @@ func TestParseGTFSRTFeedRedactsCredentialsFromHTTPStatusError(t *testing.T) {
 		time.Now(),
 	)
 
-	if err == nil || !strings.Contains(err.Error(), "503 Service Unavailable") {
+	if err == nil || !strings.Contains(err.Error(), "503") {
 		t.Fatalf("expected HTTP 503 diagnostic, got %v", err)
 	}
 
@@ -1343,6 +1346,7 @@ func TestParseGTFSRTFeedRedactsCredentialsFromHTTPStatusError(t *testing.T) {
 		username,
 		password,
 		queryKey,
+		headerKey,
 	)
 }
 
@@ -1403,9 +1407,10 @@ func TestParseGTFSRTFeedRedactsCredentialsFromReadError(t *testing.T) {
 
 func TestFetchGTFSBundleDataRedactsCredentials(t *testing.T) {
 	const (
-		username = "static-user-sentinel"
-		password = "static-password-sentinel"
-		queryKey = "static-query-secret-sentinel"
+		username     = "static-user-sentinel"
+		password     = "static-password-sentinel"
+		queryKey     = "static-query-secret-sentinel"
+		statusSecret = "static-status-secret-sentinel"
 	)
 
 	rawURL := "https://" + username + ":" + password +
@@ -1433,7 +1438,7 @@ func TestFetchGTFSBundleDataRedactsCredentials(t *testing.T) {
 			transport: func(req *http.Request) (*http.Response, error) {
 				return &http.Response{
 					StatusCode: http.StatusServiceUnavailable,
-					Status:     "503 Service Unavailable",
+					Status:     "503 " + statusSecret,
 					Header:     make(http.Header),
 					Body:       io.NopCloser(strings.NewReader("")),
 					Request:    req,
@@ -1484,6 +1489,7 @@ func TestFetchGTFSBundleDataRedactsCredentials(t *testing.T) {
 				username,
 				password,
 				queryKey,
+				statusSecret,
 			)
 
 			var failure *StaticFeedError

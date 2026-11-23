@@ -25,21 +25,33 @@ func SanitizeErrorURL(err error, rawURL string, secrets ...string) error {
 		return nil
 	}
 	safeURL := SanitizeServerURL(rawURL)
-	message := embeddedHTTPURLPattern.ReplaceAllStringFunc(err.Error(), func(candidate string) string {
+	message := err.Error()
+	if rawURL != "" {
+		// Replace the complete configured URL before scanning embedded URLs.
+		// Otherwise, a URL containing an apostrophe can be partially matched
+		// by embeddedHTTPURLPattern, leaving the remainder of its query intact.
+		message = strings.ReplaceAll(message, rawURL, safeURL)
+		if parsed, parseErr := url.Parse(rawURL); parseErr == nil {
+			message = strings.ReplaceAll(message, parsed.String(), safeURL)
+			// net/http masks URL passwords in url.Error using URL.Redacted().
+			message = strings.ReplaceAll(message, parsed.Redacted(), safeURL)
+
+			if parsed.User != nil {
+				if _, hasPassword := parsed.User.Password(); hasPassword {
+					masked := *parsed
+					masked.User = url.UserPassword(parsed.User.Username(), "***")
+					message = strings.ReplaceAll(message, masked.String(), safeURL)
+				}
+			}
+		}
+	}
+	message = embeddedHTTPURLPattern.ReplaceAllStringFunc(message, func(candidate string) string {
 		safe := SanitizeServerURL(candidate)
 		if safe == "" {
 			return "[REDACTED URL]"
 		}
 		return safe
 	})
-	if rawURL != "" {
-		// Also cover configured URLs without an explicit scheme and any exact
-		// representation that was not recognized as an embedded HTTP(S) URL.
-		message = strings.ReplaceAll(message, rawURL, safeURL)
-		if parsed, parseErr := url.Parse(rawURL); parseErr == nil {
-			message = strings.ReplaceAll(message, parsed.String(), safeURL)
-		}
-	}
 	for _, secret := range secrets {
 		if secret == "" {
 			continue
