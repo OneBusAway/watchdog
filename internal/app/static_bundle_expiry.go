@@ -29,8 +29,11 @@ import (
 //     static bundle, is skipped and its series are retired. In server mode the
 //     pass is shared by every agency of the merged bundle, so it is skipped
 //     only once every reported agency is withheld.
+//   - The unmatched-stop lookup is skipped per agency, and its unresolved
+//     gauge is retired. Info and cluster series age out on their 24h TTL.
 //   - Everything that does not read the bundle keeps reporting: API ping,
-//     OBA API metrics, GTFS-RT fetch status, and the expiration gauges.
+//     the other OBA API metrics, GTFS-RT fetch status, and the expiration
+//     gauges.
 //   - Sentry hears about it once (a fatal event, tagged with its cause) and
 //     once more when it is over (an info event), never on every tick.
 //

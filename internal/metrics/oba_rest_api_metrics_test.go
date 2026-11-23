@@ -96,7 +96,7 @@ func TestFetchObaAPIMetrics(t *testing.T) {
 			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 			tracker := NewUnmatchedStopTracker()
 
-			err := fetchObaAPIMetrics(context.Background(), tt.agencyID, tt.agencyName, "test-server", baseURL, tt.apiKey, client, staticStore, logger, tracker, nil)
+			err := fetchObaAPIMetrics(context.Background(), tt.agencyID, tt.agencyName, "test-server", baseURL, tt.apiKey, client, staticStore, logger, tracker, nil, false)
 
 			if tt.wantErr {
 				if err == nil {
@@ -167,7 +167,7 @@ func TestFetchObaAPIMetricsDropsNeverUpdatedRealtimeAge(t *testing.T) {
 	err := fetchObaAPIMetrics(
 		context.Background(), agencyID, agencyName, serverName, server.URL, "key",
 		&http.Client{Timeout: 10 * time.Second}, gtfs.NewStaticStore(),
-		slog.New(slog.NewTextHandler(io.Discard, nil)), NewUnmatchedStopTracker(), nil,
+		slog.New(slog.NewTextHandler(io.Discard, nil)), NewUnmatchedStopTracker(), nil, false,
 	)
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
@@ -201,7 +201,7 @@ func TestFetchObaAPIMetricsRetiresRatiosWithoutObservations(t *testing.T) {
 	err := fetchObaAPIMetrics(
 		context.Background(), agencyID, agencyName, serverName, server.URL, "key",
 		&http.Client{Timeout: 10 * time.Second}, gtfs.NewStaticStore(),
-		slog.New(slog.NewTextHandler(io.Discard, nil)), NewUnmatchedStopTracker(), nil,
+		slog.New(slog.NewTextHandler(io.Discard, nil)), NewUnmatchedStopTracker(), nil, false,
 	)
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
@@ -250,14 +250,14 @@ func TestFetchObaAPIMetricsRetiresRelocatedStopSeries(t *testing.T) {
 	tracker := NewUnmatchedStopTracker()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	if err := fetchObaAPIMetrics(context.Background(), "relocation-agency", "Relocation Agency", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil); err != nil {
+	if err := fetchObaAPIMetrics(context.Background(), "relocation-agency", "Relocation Agency", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil, false); err != nil {
 		t.Fatalf("first fetch: %v", err)
 	}
 
 	staticStore.Set(serverKey, &models.StaticData{Stops: []remoteGtfs.Stop{{
 		Id: "stop-1", Name: "Stop One", Latitude: &newLat, Longitude: &newLon,
 	}}})
-	if err := fetchObaAPIMetrics(context.Background(), "relocation-agency", "Relocation Agency", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil); err != nil {
+	if err := fetchObaAPIMetrics(context.Background(), "relocation-agency", "Relocation Agency", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil, false); err != nil {
 		t.Fatalf("second fetch: %v", err)
 	}
 
@@ -288,7 +288,7 @@ func TestFetchObaAPIMetricsUsesMergedStop(t *testing.T) {
 	tracker := NewUnmatchedStopTracker()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	if err := fetchObaAPIMetrics(context.Background(), "collision-agency", "Collision Agency", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil); err != nil {
+	if err := fetchObaAPIMetrics(context.Background(), "collision-agency", "Collision Agency", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil, false); err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
 
@@ -326,7 +326,7 @@ func TestFetchObaAPIMetricsDuplicateUnmatchedStopIDs(t *testing.T) {
 	tracker := NewUnmatchedStopTracker()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	if err := fetchObaAPIMetrics(context.Background(), "test-agency", "Test Agency", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil); err != nil {
+	if err := fetchObaAPIMetrics(context.Background(), "test-agency", "Test Agency", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil, false); err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
 
@@ -356,7 +356,7 @@ func TestFetchObaAPIMetricsDuplicateMissingStopIDs(t *testing.T) {
 	tracker := NewUnmatchedStopTracker()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	if err := fetchObaAPIMetrics(context.Background(), "test-agency", "Test Agency", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil); err != nil {
+	if err := fetchObaAPIMetrics(context.Background(), "test-agency", "Test Agency", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil, false); err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
 
@@ -395,7 +395,7 @@ func TestFetchObaAPIMetrics_SanitizesServerURLLabel(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	tracker := NewUnmatchedStopTracker()
 
-	if err := fetchObaAPIMetrics(context.Background(), "42", "Sanitize Server", "test-server", serverBaseURL, apiKey, &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil); err != nil {
+	if err := fetchObaAPIMetrics(context.Background(), "42", "Sanitize Server", "test-server", serverBaseURL, apiKey, &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -446,10 +446,10 @@ func TestFetchObaAPIMetrics_LabelsWithConfiguredAgencyID(t *testing.T) {
 	tracker := NewUnmatchedStopTracker()
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	if err := fetchObaAPIMetrics(context.Background(), "unitrans-a", "Unitrans A", "test-server", serverA.URL, "key", client, staticStore, logger, tracker, nil); err != nil {
+	if err := fetchObaAPIMetrics(context.Background(), "unitrans-a", "Unitrans A", "test-server", serverA.URL, "key", client, staticStore, logger, tracker, nil, false); err != nil {
 		t.Fatalf("server A: unexpected error: %v", err)
 	}
-	if err := fetchObaAPIMetrics(context.Background(), "unitrans-b", "Unitrans B", "test-server", serverB.URL, "key", client, staticStore, logger, tracker, nil); err != nil {
+	if err := fetchObaAPIMetrics(context.Background(), "unitrans-b", "Unitrans B", "test-server", serverB.URL, "key", client, staticStore, logger, tracker, nil, false); err != nil {
 		t.Fatalf("server B: unexpected error: %v", err)
 	}
 
@@ -492,7 +492,7 @@ func TestFetchObaAPIMetrics_AgencyNotListedInResponse(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
 	tracker := NewUnmatchedStopTracker()
 
-	if err := fetchObaAPIMetrics(context.Background(), "requested", "Requested Server", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil); err != nil {
+	if err := fetchObaAPIMetrics(context.Background(), "requested", "Requested Server", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -533,7 +533,7 @@ func TestFetchObaAPIMetrics_DoesNotLeakAPIKeyInLogs(t *testing.T) {
 	staticStore := gtfs.NewStaticStore()
 	tracker := NewUnmatchedStopTracker()
 
-	if err := fetchObaAPIMetrics(context.Background(), "42", "No Leak Server", "test-server", serverBaseURL, apiKey, &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil); err != nil {
+	if err := fetchObaAPIMetrics(context.Background(), "42", "No Leak Server", "test-server", serverBaseURL, apiKey, &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -556,7 +556,7 @@ func TestFetchObaAPIMetrics_ErrorDoesNotLeakAPIKey(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	tracker := NewUnmatchedStopTracker()
 
-	err := fetchObaAPIMetrics(context.Background(), "42", "Error Server", "test-server", serverBaseURL, apiKey, &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil)
+	err := fetchObaAPIMetrics(context.Background(), "42", "Error Server", "test-server", serverBaseURL, apiKey, &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil, false)
 	if err == nil {
 		t.Fatal("expected error but got none")
 	}
@@ -606,7 +606,7 @@ func TestFetchObaAPIMetrics_EmitsNoAgencyMetricsOnFailure(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := fetchObaAPIMetrics(context.Background(), "fail-status", "Fail Status", "test-server", tt.baseURL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil)
+			err := fetchObaAPIMetrics(context.Background(), "fail-status", "Fail Status", "test-server", tt.baseURL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil, false)
 			if err == nil {
 				t.Fatal("expected error but got none")
 			}
@@ -650,7 +650,7 @@ func TestFetchObaAPIMetrics_StatusResetsFromOneToZero(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	tracker := NewUnmatchedStopTracker()
 
-	if err := fetchObaAPIMetrics(context.Background(), "status-reset", "Status Reset", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil); err != nil {
+	if err := fetchObaAPIMetrics(context.Background(), "status-reset", "Status Reset", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil, false); err != nil {
 		t.Fatalf("first call: unexpected error: %v", err)
 	}
 	// On a successful first call, the agency ID matches an entry in agencyIDs,
@@ -669,7 +669,7 @@ func TestFetchObaAPIMetrics_StatusResetsFromOneToZero(t *testing.T) {
 		t.Fatalf("expected oba_unmatched_stop_unresolved to be 0 after success, got %v", val)
 	}
 
-	if err := fetchObaAPIMetrics(context.Background(), "status-reset", "Status Reset", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil); err == nil {
+	if err := fetchObaAPIMetrics(context.Background(), "status-reset", "Status Reset", "test-server", server.URL, "key", &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil, false); err == nil {
 		t.Fatal("expected error on second call")
 	}
 }
@@ -679,7 +679,7 @@ func TestFetchObaAPIMetricsNilClient(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	tracker := NewUnmatchedStopTracker()
 
-	err := fetchObaAPIMetrics(context.Background(), "nil-client", "Nil Client", "test-server", "http://example.com", "key", nil, staticStore, logger, tracker, nil)
+	err := fetchObaAPIMetrics(context.Background(), "nil-client", "Nil Client", "test-server", "http://example.com", "key", nil, staticStore, logger, tracker, nil, false)
 	if err == nil {
 		t.Fatal("expected error when passing nil http client, got none")
 	}

@@ -656,7 +656,7 @@ func (app *Application) collectAgencyChecks(ctx context.Context, server models.O
 		})
 	}
 
-	err = app.MetricsService.FetchObaAPIMetrics(ctx, server.AgencyID, server.AgencyName, server.ServerName, server.ObaBaseURL, server.ObaApiKey, prefetchedMetrics)
+	err = app.MetricsService.FetchObaAPIMetrics(ctx, server.AgencyID, server.AgencyName, server.ServerName, server.ObaBaseURL, server.ObaApiKey, prefetchedMetrics, app.staticMetricsWithheld(server, time.Now().UTC()))
 	if err != nil {
 		if ctx.Err() != nil {
 			// Canceled by the cycle deadline or shutdown: incomplete

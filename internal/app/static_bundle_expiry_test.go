@@ -224,7 +224,14 @@ func TestBackendStaleAfterExpiry(t *testing.T) {
 	key := h.server.ServerKey()
 	labels := map[string]string{"agency_id": h.server.AgencyID, "server_url": utils.SanitizeServerURL(h.server.ObaBaseURL)}
 
+	// The stale hash must hold across a stable run before it is reported, so
+	// each poll stands in for one 30-second collection interval.
+	var elapsed atomic.Int64
+	h.app.GtfsService.SetStaticRefreshClock(func() time.Time {
+		return time.Now().Add(time.Duration(elapsed.Load()))
+	})
 	h.collectUntil(t, "the backend to be reported stale", func() bool {
+		elapsed.Add(int64(30 * time.Second))
 		entry := h.app.BundleExpiry.entry(key)
 		return entry.kind == withholdBackendBehind && entry.reported
 	})

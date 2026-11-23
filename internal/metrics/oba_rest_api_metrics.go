@@ -100,7 +100,7 @@ func reportUnlessCanceled(ctx context.Context, err error, opts report.SentryRepo
 	report.ReportErrorWithSentryOptions(err, opts)
 }
 
-func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, serverBaseUrl, apiKey string, client *http.Client, staticStore *gtfs.StaticStore, logger *slog.Logger, unmatchedStopTracker *UnmatchedStopTracker, prefetchedMetrics *OBAMetrics) error {
+func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, serverBaseUrl, apiKey string, client *http.Client, staticStore *gtfs.StaticStore, logger *slog.Logger, unmatchedStopTracker *UnmatchedStopTracker, prefetchedMetrics *OBAMetrics, staticWithheld bool) error {
 	serverKey := models.ServerKey(serverBaseUrl, agencyID)
 	serverURL := utils.SanitizeServerURL(serverBaseUrl)
 
@@ -270,6 +270,14 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 			logger.Warn("Ignoring invalid OBA realtime update age",
 				"agency_id", agencyID, "server_name", serverName, "age_seconds", seconds)
 		}
+	}
+
+	// The stop lookup below reads the static bundle. While that bundle is
+	// withheld, resolve nothing against it and report the unresolved count as
+	// unknown. Info and cluster series already recorded age out on their 24h TTL.
+	if staticWithheld {
+		ObaUnmatchedStopUnresolved.DeleteLabelValues(agencyID, agencyName, serverName, serverURL)
+		return nil
 	}
 
 	unmatchedStopIDs := entry.StopIDsUnmatched[agencyID]

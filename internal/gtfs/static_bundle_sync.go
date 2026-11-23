@@ -30,17 +30,19 @@ type StaticFeedCheck struct {
 type BackendBundleRelation int
 
 const (
-	// BackendBundleUnknown: no usable hash comparison yet, or Watchdog's
-	// snapshot changed since the last one.
+	// BackendBundleUnknown: no usable hash comparison yet, Watchdog's snapshot
+	// changed since the last one, or the replaced bundle's hash has not yet
+	// held long enough to call the backend behind.
 	BackendBundleUnknown BackendBundleRelation = iota
 	// BackendBundleMatch: the backend serves the bundle Watchdog holds.
 	BackendBundleMatch
 	// BackendBundleDiffers: the backend serves a bundle Watchdog does not
 	// hold. A backend_changed campaign follows it.
 	BackendBundleDiffers
-	// BackendBundleBehind: the backend still serves the bundle Watchdog's
-	// current snapshot replaced. Watchdog is ahead, so downloading the feed
-	// again would only fetch the bundle it already holds.
+	// BackendBundleBehind: the backend has kept serving the bundle Watchdog's
+	// current snapshot replaced across a stable run of reads. Watchdog is
+	// ahead, so downloading the feed again would only fetch the bundle it
+	// already holds.
 	BackendBundleBehind
 )
 
@@ -86,6 +88,13 @@ func (c *staticRefreshCoordinator) supersedesLocked(key, fingerprint, hash strin
 	return ok && previous.fingerprint == fingerprint && previous.hash == hash
 }
 
+// relationIsLocked reports whether the recorded relation for this configuration
+// is the given one. c.mu must be held.
+func (c *staticRefreshCoordinator) relationIsLocked(key, fingerprint string, relation BackendBundleRelation) bool {
+	state, ok := c.relations[key]
+	return ok && state.fingerprint == fingerprint && state.relation == relation
+}
+
 // setRelationLocked records the relation and reports whether it changed.
 // c.mu must be held.
 func (c *staticRefreshCoordinator) setRelationLocked(key, fingerprint string, relation BackendBundleRelation) bool {
@@ -118,6 +127,15 @@ func (gs *GtfsService) LastStaticFeedCheck(server models.ObaServer) (StaticFeedC
 		}
 	}
 	return StaticFeedCheck{}, false
+}
+
+// SetStaticRefreshClock replaces the clock that times backend hash runs, so
+// tests in other packages need not wait out the stable duration.
+func (gs *GtfsService) SetStaticRefreshClock(now func() time.Time) {
+	c := gs.refreshCoordinator
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = now
 }
 
 // BackendBundleRelation returns how the backend's bundle related to
