@@ -30,6 +30,7 @@ type HistoryService struct {
 	logger   *slog.Logger
 	version  string
 	resolver *ServerNameResolver
+	static   *currentStatic
 }
 
 // NewHistoryService builds the service from the investigation pool (which may
@@ -42,6 +43,7 @@ func NewHistoryService(pool *pgxpool.Pool, logger *slog.Logger, version string, 
 		logger:   logger,
 		version:  version,
 		resolver: NewServerNameResolver(servers),
+		static:   newCurrentStatic(),
 	}
 }
 

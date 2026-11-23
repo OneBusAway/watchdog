@@ -77,6 +77,7 @@ type StaticRefreshResult struct {
 	Server      models.ObaServer
 	AttemptedAt time.Time
 	Err         error
+	Publication *StaticVersionPublication
 }
 
 // downloadGTFSBundles fetches and processes GTFS static bundles concurrently for a list of OBA servers.
@@ -113,8 +114,9 @@ func downloadGTFSBundles(ctx context.Context, client *http.Client, servers []mod
 		go func() {
 			defer wg.Done()
 			attemptedAt := time.Now().UTC()
+			var publication *StaticVersionPublication
 			finish := func(err error) {
-				results <- StaticRefreshResult{Server: s, AttemptedAt: attemptedAt, Err: err}
+				results <- StaticRefreshResult{Server: s, AttemptedAt: attemptedAt, Err: err, Publication: publication}
 			}
 			scheduleStore := staticStore.ScheduleStore()
 			markScheduleUnavailable := func() {
@@ -163,11 +165,13 @@ func downloadGTFSBundles(ctx context.Context, client *http.Client, servers []mod
 					return
 				}
 				configured = true
-				storeErr = storeStaticForServer(s, bundle, staticStore, boundingBoxStore, routeAgencyIndex, observer, logger)
+				var published publishedStatic
+				published, storeErr = storeStaticSnapshot(s, bundle, staticStore, boundingBoxStore, routeAgencyIndex, observer, logger)
 				if storeErr != nil {
 					scheduleStore.MarkUnavailable(s)
 					return
 				}
+				publication = published.publication(s, []StaticFeedContent{{URL: gtfsURL, ContentSHA256: contentSHA256(rawData)}})
 				scheduleStore.Replace(s, schedules)
 				if mappingObserver != nil {
 					func() {
@@ -274,11 +278,49 @@ func classifyStaticFeedMappings(server models.ObaServer, feed downloadedStaticFe
 // observer, if non-nil, is invoked once per retained (server, agency) tuple.
 // A nil bundle retires an agency removed by a complete server-scoped refresh.
 func storeStaticForServer(server models.ObaServer, bundle *remoteGtfs.Static, staticStore *StaticStore, boundingBoxStore *geo.BoundingBoxStore, routeAgencyIndex *RouteAgencyIndex, observer StaticBundleObserver, logger *slog.Logger) error {
+	_, err := storeStaticSnapshot(server, bundle, staticStore, boundingBoxStore, routeAgencyIndex, observer, logger)
+	return err
+}
+
+// publishedStatic is what storeStaticSnapshot installed: the time passed to
+// ReplaceServerSnapshot and the agencies the snapshot was stored under.
+type publishedStatic struct {
+	publishedAt time.Time
+	agencies    []StaticPublishedAgency
+	boxes       map[string]geo.BoundingBox
+}
+
+// publication builds the observer's view of a successful store.
+func (p publishedStatic) publication(server models.ObaServer, feeds []StaticFeedContent) *StaticVersionPublication {
+	return &StaticVersionPublication{
+		Server:        server,
+		PublishedAt:   p.publishedAt,
+		Feeds:         feeds,
+		Agencies:      p.agencies,
+		BoundingBoxes: p.boxes,
+	}
+}
+
+// capturedBoxes copies the boxes stored under keys, skipping keys without one.
+func capturedBoxes(boundingBoxStore *geo.BoundingBoxStore, keys ...string) map[string]geo.BoundingBox {
+	boxes := make(map[string]geo.BoundingBox, len(keys))
+	for _, key := range keys {
+		if bbox, ok := boundingBoxStore.Get(key); ok {
+			boxes[key] = bbox
+		}
+	}
+	return boxes
+}
+
+// storeStaticSnapshot is storeStaticForServer, also reporting what it
+// published so the caller can notify the static version observer once the
+// refresh lock is released.
+func storeStaticSnapshot(server models.ObaServer, bundle *remoteGtfs.Static, staticStore *StaticStore, boundingBoxStore *geo.BoundingBoxStore, routeAgencyIndex *RouteAgencyIndex, observer StaticBundleObserver, logger *slog.Logger) (publishedStatic, error) {
 	if bundle == nil {
-		return fmt.Errorf("expected one upstream-merged static bundle")
+		return publishedStatic{}, fmt.Errorf("expected one upstream-merged static bundle")
 	}
 	if err := validateParsedStaticIDs(bundle); err != nil {
-		return err
+		return publishedStatic{}, err
 	}
 	if !server.IsServerScoped() {
 		result := buildAgencyStaticSnapshot(server, bundle, logger)
@@ -294,7 +336,8 @@ func storeStaticForServer(server models.ObaServer, bundle *remoteGtfs.Static, st
 				Level: sentry.LevelWarning,
 			})
 		}
-		staticStore.ReplaceServerSnapshot(server, map[string]*models.StaticData{serverKey: result.data}, time.Now().UTC())
+		publishedAt := time.Now().UTC()
+		staticStore.ReplaceServerSnapshot(server, map[string]*models.StaticData{serverKey: result.data}, publishedAt)
 		routeAgencyIndex.ReplaceCandidates(serverKey, result.routeIDs, result.tripIDs, result.agencyNames)
 
 		if bbox, err := geo.ComputeBoundingBox(result.data.Stops); err == nil {
@@ -315,7 +358,11 @@ func storeStaticForServer(server models.ObaServer, bundle *remoteGtfs.Static, st
 				observer(server, server.AgencyID, result.data.Agencies[0].Name, result.data)
 			}()
 		}
-		return nil
+		return publishedStatic{
+			publishedAt: publishedAt,
+			agencies:    []StaticPublishedAgency{{AgencyID: server.AgencyID, AgencyName: result.data.Agencies[0].Name}},
+			boxes:       capturedBoxes(boundingBoxStore, serverKey),
+		}, nil
 	}
 
 	staticData, declaredAgencies := staticDataAndAgencies(bundle)
@@ -333,7 +380,7 @@ func storeStaticForServer(server models.ObaServer, bundle *remoteGtfs.Static, st
 				Level: sentry.LevelWarning,
 			},
 		)
-		return fmt.Errorf("server %q (%s): no agency_id declared in any static feed", server.ServerName, server.ObaBaseURL)
+		return publishedStatic{}, fmt.Errorf("server %q (%s): no agency_id declared in any static feed", server.ServerName, server.ObaBaseURL)
 	}
 
 	// Keep the server-wide box for the server-scoped vehicle pass and as a
@@ -348,7 +395,8 @@ func storeStaticForServer(server models.ObaServer, bundle *remoteGtfs.Static, st
 	for _, declaredAgency := range storageAgencies {
 		snapshots[models.ServerKey(server.ObaBaseURL, declaredAgency.AgencyID)] = staticData
 	}
-	removedKeys := staticStore.ReplaceServerSnapshot(server, snapshots, time.Now().UTC())
+	publishedAt := time.Now().UTC()
+	removedKeys := staticStore.ReplaceServerSnapshot(server, snapshots, publishedAt)
 	for _, removedKey := range removedKeys {
 		boundingBoxStore.Delete(removedKey)
 		if observer != nil {
@@ -434,7 +482,17 @@ func storeStaticForServer(server models.ObaServer, bundle *remoteGtfs.Static, st
 	}
 	routeAgencyIndex.ReplaceCandidates(server.ServerKey(), routeMap, tripMap, names)
 
-	return nil
+	published := publishedStatic{
+		publishedAt: publishedAt,
+		agencies:    make([]StaticPublishedAgency, 0, len(storageAgencies)),
+	}
+	boxKeys := []string{models.ServerKey(server.ObaBaseURL, "")}
+	for _, declaredAgency := range storageAgencies {
+		published.agencies = append(published.agencies, StaticPublishedAgency{AgencyID: declaredAgency.AgencyID, AgencyName: declaredAgency.AgencyName})
+		boxKeys = append(boxKeys, models.ServerKey(server.ObaBaseURL, declaredAgency.AgencyID))
+	}
+	published.boxes = capturedBoxes(boundingBoxStore, boxKeys...)
+	return published, nil
 }
 
 // computedBoundingBoxes contains the complete transient result of the

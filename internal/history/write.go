@@ -65,23 +65,26 @@ type txBeginner interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
-// write runs fn in one read-write transaction. It never returns an error to
-// collection: a failure is logged, reported to Sentry and counted, and the
-// observation is lost. Nothing is buffered or retried.
-func (h *HistoryService) write(ctx context.Context, step string, tags writeTags, fn func(*dbgen.Queries) error) {
+// write runs fn in one read-write transaction and reports whether it
+// committed. It never returns an error to collection: a failure is logged,
+// reported to Sentry and counted, and the observation is lost. Nothing is
+// buffered or retried.
+func (h *HistoryService) write(ctx context.Context, step string, tags writeTags, fn func(*dbgen.Queries) error) bool {
 	if h == nil || h.pool == nil {
-		return
+		return false
 	}
-	write(ctx, h.pool, h.logger, step, tags, fn)
+	return write(ctx, h.pool, h.logger, step, tags, fn)
 }
 
-func write(ctx context.Context, db txBeginner, logger *slog.Logger, step string, tags writeTags, fn func(*dbgen.Queries) error) {
+func write(ctx context.Context, db txBeginner, logger *slog.Logger, step string, tags writeTags, fn func(*dbgen.Queries) error) bool {
 	ctx, cancel := context.WithTimeout(ctx, writeTimeout)
 	defer cancel()
 
 	if err := runInTx(ctx, db, fn); err != nil {
 		reportWriteFailure(logger, step, tags, err)
+		return false
 	}
+	return true
 }
 
 func runInTx(ctx context.Context, db txBeginner, fn func(*dbgen.Queries) error) error {
