@@ -289,12 +289,12 @@ func (app *Application) pruneAgencyOffsets(keep func(serverKey string) bool) {
 // in the static store under this server's oba_base_url, gated on whether OBA
 // reports the agency in its loaded static coverage.
 //
-// Two things happen exactly once per tick, regardless of how many agencies
-// the server serves: the RT feed is fetched (and stored under the
-// server-scoped key), and the vehicle pass walks it. The per-agency loop
-// covers only the checks that are genuinely per-agency. Walking the feed once
-// per agency would multiply transition observations and file every vehicle
-// under every agency's last-seen slot; attribution is the pass's job.
+// Three things happen exactly once per tick, regardless of how many agencies
+// the server serves: the server is pinged, the RT feed is fetched (and stored
+// under the server-scoped key), and the vehicle pass walks it. The per-agency
+// loop covers only the checks that are genuinely per-agency. Walking the feed
+// once per agency would multiply transition observations and file every
+// vehicle under every agency's last-seen slot; attribution is the pass's job.
 func (app *Application) collectForServerScope(ctx, campaignCtx context.Context, server models.ObaServer, scope config.ServerScope) {
 	if len(scope.StaticAgencies) == 0 {
 		app.Logger.Info("Server-scope entry has no static agencies yet; skipping tick", "server_name", server.ServerName)
@@ -310,9 +310,9 @@ func (app *Application) collectForServerScope(ctx, campaignCtx context.Context, 
 		return
 	}
 
-	// Server-ping once per server (the /current-time.json endpoint takes no
-	// agency parameter; per the metrics relabeling in this redesign, the
-	// ObaApiStatus gauge is server-scoped, not agency-scoped).
+	// Ping once per server: /current-time.json takes no agency parameter and
+	// the ObaApiStatus gauge is server-scoped. This result and the backoff
+	// under the agency-less key gate every per-agency check below.
 	ok := app.MetricsService.ServerPing(ctx, server)
 	if !ok {
 		if ctx.Err() != nil {
@@ -449,11 +449,9 @@ func (app *Application) collectForServerScope(ctx, campaignCtx context.Context, 
 
 	// Per-agency metric loop, run concurrently. Each worker runs only the
 	// agency-scoped checks (CheckBundleExpiration, FetchObaAPIMetrics,
-	// CountActiveVehiclesForAgency, ServerPing) — the GTFS-RT vehicle pass
-	// runs once for the whole server after this loop. ServerPing is
-	// intentionally called once per agency here because the gauge is
-	// server-scoped — the per-agency call is cheap (one HTTP probe) and keeps
-	// the metric series up-to-date even if a single agency's checks bail out.
+	// CountActiveVehiclesForAgency) — the shared ping above already gated
+	// them, and the GTFS-RT vehicle pass runs once for the whole server after
+	// this loop.
 	// prefetchedMetrics is read-only after probeReportedAgencies returns, so
 	// sharing it across workers is safe. reportedAgencyEntries is fixed
 	// before fan-out and each worker receives its own struct copy.
@@ -514,16 +512,17 @@ agencyLaunch:
 //
 // Ordering constraints:
 //   - Backoff is non-blocking and lives in BackoffStore — not a time.Sleep.
-//     Before each cycle collectAgencyChecks tests NextRetryAt; if a server is
+//     Before each cycle agencyEntryAvailable tests NextRetryAt; if an entry is
 //     still backing off, its entire collection is skipped this tick.
 //   - The GTFS-RT feed must be in the realtime store before the vehicle pass
 //     runs, so a failed fetch is a hard gate: we return rather than emit
 //     metrics derived from a stale (or absent) feed.
 func (app *Application) CollectMetricsForServer(ctx context.Context, server models.ObaServer) {
-	// nil: agency-mode fetches its own response.
-	if !app.collectAgencyChecks(ctx, server, nil) {
+	if !app.agencyEntryAvailable(ctx, server) {
 		return
 	}
+	// nil: agency-mode fetches its own response.
+	app.collectAgencyChecks(ctx, server, nil)
 
 	if err := app.GtfsService.FetchAndStoreGTFSRTFeed(ctx, server); err != nil {
 		if ctx.Err() != nil {
@@ -573,20 +572,12 @@ func (app *Application) CollectMetricsForServer(ctx context.Context, server mode
 	app.collectVehicleMetrics(server, nil)
 }
 
-// collectAgencyChecks runs the probes and validations that are scoped to a
-// single agency and do NOT read the realtime store: backoff, server ping,
-// bundle expiration, the OBA REST API metrics, and the vehicles-for-agency
-// count.
-//
-// It returns false when collection for this entry should stop for the tick —
-// either the entry is still backing off, or its ping failed (which grows the
-// backoff). Every other step logs-and-continues, because one failing probe
-// should not suppress the others.
-//
-// Server-mode calls this once per OBA-reported agency; agency-mode calls it once for
-// the configured entry. The GTFS-RT vehicle pass is deliberately NOT part of
-// it — that pass runs once per server, in the caller.
-func (app *Application) collectAgencyChecks(ctx context.Context, server models.ObaServer, prefetchedMetrics *metrics.OBAMetrics) bool {
+// agencyEntryAvailable applies the backoff and ping gate for one agency-scoped
+// entry. It returns false when collection for this entry should stop for the
+// tick: the entry is still backing off, or its ping failed (which grows the
+// backoff). Server mode does not use it; collectForServerScope gates all of a
+// server's agencies on one ping under the agency-less key.
+func (app *Application) agencyEntryAvailable(ctx context.Context, server models.ObaServer) bool {
 	// Check if server has an active backoff period
 	nextRetryAt, exists := app.ConfigService.BackoffStore.NextRetryAt(server.ServerKey())
 	if exists && time.Now().UTC().Before(nextRetryAt) {
@@ -637,7 +628,21 @@ func (app *Application) collectAgencyChecks(ctx context.Context, server models.O
 	app.Logger.Info("Server ping successful",
 		"agency_id", server.AgencyID, "agency_name", server.AgencyName, "server_name", server.ServerName)
 	app.ConfigService.BackoffStore.ResetBackoff(server.ServerKey())
+	return true
+}
 
+// collectAgencyChecks runs the probes and validations that are scoped to a
+// single agency and do NOT read the realtime store: bundle expiration, the OBA
+// REST API metrics, and the vehicles-for-agency count. Each step
+// logs-and-continues, because one failing probe should not suppress the
+// others.
+//
+// Callers must pass the availability gate first: agencyEntryAvailable in
+// agency mode, the shared server ping in server mode. Server-mode calls this
+// once per OBA-reported agency; agency-mode calls it once for the configured
+// entry. The GTFS-RT vehicle pass is deliberately NOT part of it — that pass
+// runs once per server, in the caller.
+func (app *Application) collectAgencyChecks(ctx context.Context, server models.ObaServer, prefetchedMetrics *metrics.OBAMetrics) {
 	_, _, err := app.MetricsService.CheckBundleExpiration(time.Now().UTC(), server)
 	if err != nil {
 		app.Logger.Error("Failed to check GTFS bundle expiration", "error", err)
@@ -692,8 +697,6 @@ func (app *Application) collectAgencyChecks(ctx context.Context, server models.O
 			})
 		}
 	}
-
-	return true
 }
 
 // collectVehicleMetrics runs the three metric functions that read from the

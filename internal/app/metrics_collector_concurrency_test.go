@@ -186,9 +186,9 @@ func TestServerScopeAgencyChecksRunConcurrently(t *testing.T) {
 	if got := maxActive.Load(); got < 2 {
 		t.Fatalf("expected concurrent agency checks (peak %d, want >=2)", got)
 	}
-	// Sequential agency checks would take >= 3 agencies x 300ms x ~2 blocking
-	// calls each; concurrent should finish well under that.
-	if elapsed >= 1500*time.Millisecond {
+	// One 300ms ping plus three sequential 300ms agency calls would take at
+	// least 1200ms; concurrent agency calls take about 600ms.
+	if elapsed >= 1100*time.Millisecond {
 		t.Fatalf("agency checks look sequential: took %v", elapsed)
 	}
 	if app.GtfsService.RealtimeStore.Get(server.ServerKey()) == nil {
