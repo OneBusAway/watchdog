@@ -164,6 +164,7 @@ func countActiveVehiclesForAgency(ctx context.Context, client *onebusaway.Client
 	response, err := client.VehiclesForAgency.List(ctx, server.AgencyID, onebusaway.VehiclesForAgencyListParams{})
 
 	if err != nil {
+		err = utils.SanitizeErrorURL(err, server.ObaBaseURL, server.ObaApiKey)
 		reportUnlessCanceled(ctx, err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"agency_id":   server.AgencyID,

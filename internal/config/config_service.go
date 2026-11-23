@@ -62,9 +62,11 @@ func LoadConfigFromFile(filePath string, logger *slog.Logger, droppedStore *Drop
 func LoadConfigFromURL(ctx context.Context, client *http.Client, url, authUser, authPass string, maxRetires int, logger *slog.Logger, droppedStore *DroppedServersStore) ([]models.ObaServer, error) {
 	servers, err := loadConfigFromURL(ctx, client, url, authUser, authPass, maxRetires, logger, droppedStore)
 	if err != nil {
-		err := fmt.Errorf("failed to load config from URL %s: %w", url, err)
+		safeURL := utils.SanitizeServerURL(url)
+		err = utils.SanitizeErrorURL(err, url)
+		err = fmt.Errorf("failed to load config from URL %s: %w", safeURL, err)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags:  utils.MakeMap("config_url", url),
+			Tags:  utils.MakeMap("config_url", safeURL),
 			Level: sentry.LevelError,
 		})
 		return nil, err

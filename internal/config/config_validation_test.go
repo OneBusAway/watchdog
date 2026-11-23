@@ -658,6 +658,7 @@ func TestReconcileReportsNoCredentials(t *testing.T) {
 
 	invalid := validServer()
 	invalid.ObaApiKey = "super-secret-key"
+	invalid.ObaBaseURL = "https://url-user:url-password@oba.example.com/api?token=url-token"
 	invalid.GtfsRTFeeds[0].GtfsRTAPIKey = "gtfs-secret"
 	invalid.GtfsRTFeeds[0].GtfsRTAPIValue = "gtfs-value"
 	invalid.GtfsStaticFeeds = nil
@@ -670,7 +671,7 @@ func TestReconcileReportsNoCredentials(t *testing.T) {
 	}
 	event := events[0]
 
-	for _, secret := range []string{"super-secret-key", "gtfs-secret", "gtfs-value"} {
+	for _, secret := range []string{"super-secret-key", "gtfs-secret", "gtfs-value", "url-user", "url-password", "url-token"} {
 		if strings.Contains(event.Message, secret) {
 			t.Errorf("report leaked credential %q in message", secret)
 		}

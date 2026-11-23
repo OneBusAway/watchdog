@@ -62,6 +62,7 @@ func ValidateConfigFlags(configFile, configURL *string) error {
 //     it reads or writes must be safe for concurrent access with the collection
 //     goroutines. app.OnConfigUpdated is the reference implementation.
 func refreshConfig(ctx context.Context, client *http.Client, configURL, configAuthUser, configAuthPass string, cfg *Config, droppedStore *DroppedServersStore, logger *slog.Logger, interval time.Duration, maxRetries int, onUpdated func([]models.ObaServer)) {
+	safeConfigURL := utils.SanitizeServerURL(configURL)
 	for {
 		select {
 		case <-ctx.Done():
@@ -71,7 +72,7 @@ func refreshConfig(ctx context.Context, client *http.Client, configURL, configAu
 			newServers, err := loadConfigFromURL(ctx, client, configURL, configAuthUser, configAuthPass, maxRetries, logger, droppedStore)
 			if err != nil {
 				report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-					Tags:  utils.MakeMap("config_url", configURL),
+					Tags:  utils.MakeMap("config_url", safeConfigURL),
 					Level: sentry.LevelError,
 				})
 				logger.Error("Failed to refresh remote config", "error", err)
@@ -86,11 +87,11 @@ func refreshConfig(ctx context.Context, client *http.Client, configURL, configAu
 				// refresh callback would prune every store and retire every
 				// series. Startup refuses to run with zero servers for the
 				// same reason; a refresh must not do what startup rejects.
-				err := fmt.Errorf("refreshed configuration from %s contained no valid servers; keeping the previous configuration", configURL)
+				err := fmt.Errorf("refreshed configuration from %s contained no valid servers; keeping the previous configuration", safeConfigURL)
 				logger.Warn("Ignoring empty refreshed configuration",
-					"config_url", configURL, "currently_configured", len(cfg.GetServers()))
+					"config_url", safeConfigURL, "currently_configured", len(cfg.GetServers()))
 				report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-					Tags:  utils.MakeMap("config_url", configURL),
+					Tags:  utils.MakeMap("config_url", safeConfigURL),
 					Level: sentry.LevelWarning,
 				})
 			} else {
@@ -161,10 +162,12 @@ func loadConfigFromFile(filePath string, logger *slog.Logger, droppedStore *Drop
 //
 // Errors are logged and reported to Sentry for observability.
 func loadConfigFromURL(ctx context.Context, client *http.Client, url, authUser, authPass string, maxRetries int, logger *slog.Logger, droppedStore *DroppedServersStore) ([]models.ObaServer, error) {
+	safeURL := utils.SanitizeServerURL(url)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
+		err = utils.SanitizeErrorURL(err, url)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags:  utils.MakeMap("config_url", url),
+			Tags:  utils.MakeMap("config_url", safeURL),
 			Level: sentry.LevelError,
 		})
 		return nil, fmt.Errorf("failed to create request: %v", err)
@@ -176,8 +179,9 @@ func loadConfigFromURL(ctx context.Context, client *http.Client, url, authUser, 
 
 	resp, err := utils.DoWithBackoff(ctx, client, req, maxRetries)
 	if err != nil {
+		err = utils.SanitizeErrorURL(err, url)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags:  utils.MakeMap("config_url", url),
+			Tags:  utils.MakeMap("config_url", safeURL),
 			Level: sentry.LevelError,
 		})
 		return nil, fmt.Errorf("failed to fetch remote config: %v", err)
@@ -188,7 +192,7 @@ func loadConfigFromURL(ctx context.Context, client *http.Client, url, authUser, 
 	if resp.StatusCode != http.StatusOK {
 		statusErr := fmt.Errorf("remote config returned status: %d", resp.StatusCode)
 		report.ReportErrorWithSentryOptions(statusErr, report.SentryReportOptions{
-			Tags:  utils.MakeMap("config_url", url),
+			Tags:  utils.MakeMap("config_url", safeURL),
 			Level: sentry.LevelError,
 		})
 		return nil, statusErr
@@ -197,7 +201,7 @@ func loadConfigFromURL(ctx context.Context, client *http.Client, url, authUser, 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags:  utils.MakeMap("config_url", url),
+			Tags:  utils.MakeMap("config_url", safeURL),
 			Level: sentry.LevelError,
 		})
 		return nil, fmt.Errorf("failed to read remote config: %v", err)
@@ -206,7 +210,7 @@ func loadConfigFromURL(ctx context.Context, client *http.Client, url, authUser, 
 	var rawEntries []json.RawMessage
 	if err := json.Unmarshal(data, &rawEntries); err != nil {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags:  utils.MakeMap("config_url", url),
+			Tags:  utils.MakeMap("config_url", safeURL),
 			Level: sentry.LevelError,
 		})
 		return nil, fmt.Errorf("failed to unmarshal JSON: %v", err)

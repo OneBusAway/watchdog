@@ -1,6 +1,10 @@
 package utils
 
-import "testing"
+import (
+	"errors"
+	"strings"
+	"testing"
+)
 
 func TestSanitizeServerURL(t *testing.T) {
 	tests := []struct {
@@ -76,5 +80,42 @@ func TestSanitizeServerURL(t *testing.T) {
 				t.Fatalf("SanitizeServerURL(%q) = %q, want %q", tt.input, got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestSanitizeErrorURL(t *testing.T) {
+	rawURL := "https://user:password@example.com/feed?api_key=super-secret"
+	err := errors.New("Get \"" + rawURL + "\": dial tcp: connection refused")
+	got := SanitizeErrorURL(err, rawURL)
+	if got == nil {
+		t.Fatal("expected sanitized error")
+	}
+	if strings.Contains(got.Error(), "password") || strings.Contains(got.Error(), "super-secret") || strings.Contains(got.Error(), "user:") {
+		t.Fatalf("sanitized error leaked URL credentials: %v", got)
+	}
+	if !strings.Contains(got.Error(), "https://example.com/feed") {
+		t.Fatalf("sanitized error should retain safe endpoint: %v", got)
+	}
+
+	apiKeyError := errors.New("request failed: https://example.com/api?key=separate-api-key")
+	got = SanitizeErrorURL(apiKeyError, "https://example.com", "separate-api-key")
+	if strings.Contains(got.Error(), "separate-api-key") {
+		t.Fatalf("sanitized error leaked separately configured API key: %v", got)
+	}
+}
+
+func TestSanitizeErrorURLRedactsHTTPErrorURLAfterUserinfoMasking(t *testing.T) {
+	err := errors.New(`Get "http://url-user:***@127.0.0.1:8080/config.json?api_key=query-secret": dial tcp: connection refused`)
+	got := SanitizeErrorURL(err, "http://url-user:url-password@127.0.0.1:8080/config.json?api_key=query-secret")
+	if got == nil {
+		t.Fatal("expected sanitized error")
+	}
+	for _, secret := range []string{"url-user", "query-secret", "api_key="} {
+		if strings.Contains(got.Error(), secret) {
+			t.Errorf("sanitized error leaked %q: %v", secret, got)
+		}
+	}
+	if !strings.Contains(got.Error(), "http://127.0.0.1:8080/config.json") {
+		t.Errorf("sanitized error should retain the safe endpoint: %v", got)
 	}
 }

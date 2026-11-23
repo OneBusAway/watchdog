@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/report"
 )
 
 func TestLoadConfigFromFile(t *testing.T) {
@@ -441,5 +442,41 @@ func TestRefreshConfigKeepsPreviousConfigWhenResponseIsEmpty(t *testing.T) {
 	case <-callbackFired:
 		t.Fatal("the refresh callback must not fire for an empty configuration; it prunes every store")
 	default:
+	}
+}
+
+func TestLoadConfigFromURLDoesNotExposeURLCredentials(t *testing.T) {
+	rec := report.CaptureSentry(t)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	credentialURL := strings.Replace(ts.URL, "http://", "http://url-user:url-password@", 1) + "/config.json?api_key=query-secret"
+	ts.Close() // Force a url.Error, which includes the requested URL in its message.
+	_, err := loadConfigFromURL(context.Background(), ts.Client(), credentialURL, "", "", 1, testLogger(), NewDroppedServersStore())
+	if err == nil {
+		t.Fatal("expected request to fail")
+	}
+
+	for _, secret := range []string{"url-user", "url-password", "query-secret"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("returned error leaked %q: %v", secret, err)
+		}
+	}
+
+	for _, event := range rec.Events() {
+		if len(event.Exception) > 0 {
+			for _, secret := range []string{"url-user", "url-password", "query-secret"} {
+				if strings.Contains(event.Exception[0].Value, secret) {
+					t.Errorf("Sentry exception leaked %q: %s", secret, event.Exception[0].Value)
+				}
+			}
+		}
+		for _, value := range event.Tags {
+			for _, secret := range []string{"url-user", "url-password", "query-secret"} {
+				if strings.Contains(value, secret) {
+					t.Errorf("Sentry tag leaked %q: %s", secret, value)
+				}
+			}
+		}
 	}
 }
