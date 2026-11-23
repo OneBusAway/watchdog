@@ -3,6 +3,8 @@ package gtfs
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -17,6 +19,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/report"
 )
 
 func TestDownloadGTFSBundles(t *testing.T) {
@@ -1171,5 +1174,428 @@ func TestStoreStaticForServerSkipsServerScopedBoxInAgencyMode(t *testing.T) {
 
 	if _, ok := boundingBoxStore.Get(models.ServerKey(server.ObaBaseURL, "")); ok {
 		t.Fatal("agency-mode should not publish a server-scoped bounding box")
+	}
+}
+
+type gtfsRoundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f gtfsRoundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+type failingGTFSBody struct {
+	err error
+}
+
+func (b failingGTFSBody) Read([]byte) (int, error) {
+	return 0, b.err
+}
+
+func (b failingGTFSBody) Close() error {
+	return nil
+}
+
+func assertGTFSRedaction(t *testing.T, rec *report.RecordingTransport, err error, safeURL string, secrets ...string) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+
+	// Verify that the sanitized error is safe to include in structured logs.
+	var logBuffer bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuffer, nil))
+	logger.Error("GTFS operation failed", "error", err)
+
+	logOutput := logBuffer.String()
+
+	for _, secret := range secrets {
+		if strings.Contains(logOutput, secret) {
+			t.Errorf("credential %q leaked in log output", secret)
+		}
+	}
+
+	if !strings.Contains(logOutput, safeURL) {
+		t.Errorf("sanitized endpoint %q missing from log output", safeURL)
+	}
+
+	// Verify the captured Sentry event.
+	events := rec.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected one Sentry event, got %d", len(events))
+	}
+
+	eventJSON, marshalErr := json.Marshal(events[0])
+	if marshalErr != nil {
+		t.Fatalf("marshal Sentry event: %v", marshalErr)
+	}
+
+	combined := err.Error() + string(eventJSON)
+
+	for _, secret := range secrets {
+		if strings.Contains(combined, secret) {
+			t.Errorf("credential %q leaked in returned error or Sentry event", secret)
+		}
+	}
+
+	if !strings.Contains(combined, safeURL) {
+		t.Errorf("sanitized endpoint %q missing from diagnostics: %s", safeURL, combined)
+	}
+}
+
+func TestParseGTFSRTFeedRedactsCredentialsFromFetchError(t *testing.T) {
+	rec := report.CaptureSentry(t)
+
+	const (
+		username   = "rt-user-sentinel"
+		password   = "rt-password-sentinel"
+		queryKey   = "rt-query-secret-sentinel"
+		headerKey  = "rt-header-secret-sentinel"
+		headerName = "X-Feed-Key"
+	)
+
+	rawURL := "https://" + username + ":" + password +
+		"@feed.example.com/vehicles.pb?api_key=" + queryKey
+
+	client := &http.Client{
+		Transport: gtfsRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			return nil, errors.New("synthetic transport failure: " + headerKey)
+		}),
+	}
+
+	server := models.ObaServer{
+		ServerName: "redaction-test",
+		AgencyID:   "agency-redaction",
+		GtfsRTFeeds: []models.GtfsRTFeed{{
+			VehiclePositionURL: rawURL,
+			GtfsRTAPIKey:       headerName,
+			GtfsRTAPIValue:     headerKey,
+		}},
+	}
+
+	_, _, err := parseGTFSRTFeed(
+		context.Background(),
+		server,
+		client,
+		time.Now(),
+	)
+
+	assertGTFSRedaction(
+		t,
+		rec,
+		err,
+		"https://feed.example.com/vehicles.pb",
+		username,
+		password,
+		queryKey,
+		headerKey,
+	)
+}
+
+func TestParseGTFSRTFeedRedactsCredentialsFromHTTPStatusError(t *testing.T) {
+	rec := report.CaptureSentry(t)
+
+	const (
+		username  = "status-user-sentinel"
+		password  = "status-password-sentinel"
+		queryKey  = "status-query-secret-sentinel"
+		headerKey = "status-header-secret-sentinel"
+	)
+
+	rawURL := "https://" + username + ":" + password +
+		"@feed.example.com/vehicles.pb?api_key=" + queryKey
+
+	client := &http.Client{
+		Transport: gtfsRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusServiceUnavailable,
+				Status:     "503 " + headerKey,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("")),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	server := models.ObaServer{
+		ServerName: "status-redaction-test",
+		AgencyID:   "agency-status",
+		GtfsRTFeeds: []models.GtfsRTFeed{{
+			VehiclePositionURL: rawURL,
+			GtfsRTAPIKey:       "X-Feed-Key",
+			GtfsRTAPIValue:     headerKey,
+		}},
+	}
+
+	_, _, err := parseGTFSRTFeed(
+		context.Background(),
+		server,
+		client,
+		time.Now(),
+	)
+
+	if err == nil || !strings.Contains(err.Error(), "503") {
+		t.Fatalf("expected HTTP 503 diagnostic, got %v", err)
+	}
+
+	assertGTFSRedaction(
+		t,
+		rec,
+		err,
+		"https://feed.example.com/vehicles.pb",
+		username,
+		password,
+		queryKey,
+		headerKey,
+	)
+}
+
+func TestParseGTFSRTFeedRedactsCredentialsFromReadError(t *testing.T) {
+	rec := report.CaptureSentry(t)
+
+	const (
+		username  = "read-user-sentinel"
+		password  = "read-password-sentinel"
+		queryKey  = "read-query-secret-sentinel"
+		headerKey = "read-header-secret-sentinel"
+	)
+
+	rawURL := "https://" + username + ":" + password +
+		"@feed.example.com/vehicles.pb?api_key=" + queryKey
+
+	client := &http.Client{
+		Transport: gtfsRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body: failingGTFSBody{
+					err: errors.New("synthetic read failure: " + headerKey),
+				},
+				Request: req,
+			}, nil
+		}),
+	}
+
+	server := models.ObaServer{
+		ServerName: "read-redaction-test",
+		AgencyID:   "agency-read",
+		GtfsRTFeeds: []models.GtfsRTFeed{{
+			VehiclePositionURL: rawURL,
+			GtfsRTAPIKey:       "X-Feed-Key",
+			GtfsRTAPIValue:     headerKey,
+		}},
+	}
+
+	_, _, err := parseGTFSRTFeed(
+		context.Background(),
+		server,
+		client,
+		time.Now(),
+	)
+
+	assertGTFSRedaction(
+		t,
+		rec,
+		err,
+		"https://feed.example.com/vehicles.pb",
+		username,
+		password,
+		queryKey,
+		headerKey,
+	)
+}
+
+func TestFetchGTFSBundleDataRedactsCredentials(t *testing.T) {
+	const (
+		username     = "static-user-sentinel"
+		password     = "static-password-sentinel"
+		queryKey     = "static-query-secret-sentinel"
+		statusSecret = "static-status-secret-sentinel"
+	)
+
+	rawURL := "https://" + username + ":" + password +
+		"@feed.example.com/static.zip?api_key=" + queryKey
+
+	safeURL := "https://feed.example.com/static.zip"
+
+	tests := []struct {
+		name       string
+		transport  gtfsRoundTripperFunc
+		wantStage  StaticFailureStage
+		wantReason StaticFailureReason
+		wantStatus int
+	}{
+		{
+			name: "network failure",
+			transport: func(req *http.Request) (*http.Response, error) {
+				return nil, errors.New("synthetic network failure")
+			},
+			wantStage:  StaticFailureRequest,
+			wantReason: StaticReasonConnection,
+		},
+		{
+			name: "HTTP status failure",
+			transport: func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusServiceUnavailable,
+					Status:     "503 " + statusSecret,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader("")),
+					Request:    req,
+				}, nil
+			},
+			wantStage:  StaticFailureHTTP,
+			wantReason: StaticReasonServerError,
+			wantStatus: http.StatusServiceUnavailable,
+		},
+		{
+			name: "response body read failure",
+			transport: func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body: failingGTFSBody{
+						err: errors.New("synthetic body read failure"),
+					},
+					Request: req,
+				}, nil
+			},
+			wantStage:  StaticFailureDownload,
+			wantReason: StaticReasonConnection,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := report.CaptureSentry(t)
+
+			client := &http.Client{
+				Transport: tt.transport,
+			}
+
+			_, err := fetchGTFSBundleData(
+				context.Background(),
+				client,
+				rawURL,
+				"agency-static",
+				1,
+			)
+
+			assertGTFSRedaction(
+				t,
+				rec,
+				err,
+				safeURL,
+				username,
+				password,
+				queryKey,
+				statusSecret,
+			)
+
+			var failure *StaticFeedError
+			if !errors.As(err, &failure) {
+				t.Fatalf("expected StaticFeedError, got %T: %v", err, err)
+			}
+
+			if failure.Stage != tt.wantStage {
+				t.Errorf("Stage = %q, want %q", failure.Stage, tt.wantStage)
+			}
+
+			if failure.Reason != tt.wantReason {
+				t.Errorf("Reason = %q, want %q", failure.Reason, tt.wantReason)
+			}
+
+			if failure.StatusCode != tt.wantStatus {
+				t.Errorf("StatusCode = %d, want %d", failure.StatusCode, tt.wantStatus)
+			}
+		})
+	}
+}
+
+func TestParseDownloadedGTFSBundleRedactsCredentials(t *testing.T) {
+	rec := report.CaptureSentry(t)
+
+	const (
+		username = "parser-user-sentinel"
+		password = "parser-password-sentinel"
+		queryKey = "parser-query-secret-sentinel"
+	)
+
+	rawURL := "https://" + username + ":" + password +
+		"@feed.example.com/static.zip?api_key=" + queryKey
+
+	safeURL := "https://feed.example.com/static.zip"
+
+	originalFailure := &StaticFeedError{
+		FeedURL:     rawURL,
+		Stage:       StaticFailureParse,
+		Reason:      StaticReasonDuplicateID,
+		StatusCode:  422,
+		RetryAfter:  15 * time.Second,
+		ContentHash: "test-content-hash",
+		Err: errors.New(
+			"failed to parse static feed from " + rawURL,
+		),
+	}
+
+	parser := func(
+		data []byte,
+		url string,
+		agencyID string,
+	) (*remoteGtfs.Static, error) {
+		if url != rawURL {
+			t.Fatalf("parser URL = %q, want original configured URL", url)
+		}
+		return nil, originalFailure
+	}
+
+	_, err := parseDownloadedGTFSBundle(
+		parser,
+		[]byte("test static feed"),
+		rawURL,
+		"agency-static",
+	)
+
+	assertGTFSRedaction(
+		t,
+		rec,
+		err,
+		safeURL,
+		username,
+		password,
+		queryKey,
+	)
+
+	var failure *StaticFeedError
+	if !errors.As(err, &failure) {
+		t.Fatalf("expected StaticFeedError, got %T: %v", err, err)
+	}
+
+	if failure == originalFailure {
+		t.Fatal("expected a sanitized copy, not the original error")
+	}
+
+	if failure.FeedURL != rawURL {
+		t.Error("internal FeedURL identity should remain unchanged")
+	}
+
+	if failure.Stage != originalFailure.Stage {
+		t.Errorf("Stage = %q, want %q", failure.Stage, originalFailure.Stage)
+	}
+
+	if failure.Reason != originalFailure.Reason {
+		t.Errorf("Reason = %q, want %q", failure.Reason, originalFailure.Reason)
+	}
+
+	if failure.StatusCode != originalFailure.StatusCode {
+		t.Errorf("StatusCode = %d, want %d", failure.StatusCode, originalFailure.StatusCode)
+	}
+
+	if failure.RetryAfter != originalFailure.RetryAfter {
+		t.Errorf("RetryAfter = %v, want %v", failure.RetryAfter, originalFailure.RetryAfter)
+	}
+
+	if failure.ContentHash != originalFailure.ContentHash {
+		t.Errorf("ContentHash = %q, want %q", failure.ContentHash, originalFailure.ContentHash)
 	}
 }

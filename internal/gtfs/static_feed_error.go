@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"watchdog.onebusaway.org/internal/utils"
 )
 
 type StaticFailureStage string
@@ -65,6 +67,24 @@ func (e *StaticFeedError) Error() string {
 }
 
 func (e *StaticFeedError) Unwrap() error { return e.Err }
+
+// sanitizeStaticFeedError removes credentials from a static-feed error while
+// preserving its failure classification and internal feed identity.
+func sanitizeStaticFeedError(err error, feedURL string) error {
+	if err == nil {
+		return nil
+	}
+
+	var failure *StaticFeedError
+	if !errors.As(err, &failure) {
+		return utils.SanitizeErrorURL(err, feedURL)
+	}
+
+	sanitized := *failure
+	sanitized.Err = utils.SanitizeErrorURL(failure.Err, feedURL)
+
+	return &sanitized
+}
 
 // staticPublicationFailure preserves duplicate classification when the parsed
 // bundle guard, rather than the raw ID validator, rejects an artifact.

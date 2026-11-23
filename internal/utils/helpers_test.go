@@ -2,6 +2,7 @@ package utils
 
 import (
 	"errors"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -117,5 +118,61 @@ func TestSanitizeErrorURLRedactsHTTPErrorURLAfterUserinfoMasking(t *testing.T) {
 	}
 	if !strings.Contains(got.Error(), "http://127.0.0.1:8080/config.json") {
 		t.Errorf("sanitized error should retain the safe endpoint: %v", got)
+	}
+}
+
+func TestSanitizeErrorURLReplacesConfiguredURLBeforeScanningEmbeddedURLs(t *testing.T) {
+	const (
+		username    = "apostrophe-user"
+		password    = "apostrophe-password"
+		querySecret = "apostrophe-query-secret"
+	)
+
+	rawURL := "https://" + username + ":" + password +
+		"@feed.example.com/static.zip?label=O'Reilly&api_key=" + querySecret
+
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatalf("parse configured URL: %v", err)
+	}
+
+	maskedAsteriskURL := *parsed
+	maskedAsteriskURL.User = url.UserPassword(username, "***")
+
+	safeURL := "https://feed.example.com/static.zip"
+
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{name: "configured URL", url: rawURL},
+		{name: "URL redacted password", url: parsed.Redacted()},
+		{name: "asterisk-masked password", url: maskedAsteriskURL.String()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := errors.New(`GET "` + tt.url + `": synthetic fetch failure`)
+			got := SanitizeErrorURL(err, rawURL)
+
+			if got == nil {
+				t.Fatal("expected sanitized error")
+			}
+
+			for _, secret := range []string{
+				username,
+				password,
+				querySecret,
+				"api_key=",
+			} {
+				if strings.Contains(got.Error(), secret) {
+					t.Errorf("sanitized error leaked %q: %v", secret, got)
+				}
+			}
+
+			if !strings.Contains(got.Error(), safeURL) {
+				t.Errorf("safe endpoint %q missing: %v", safeURL, got)
+			}
+		})
 	}
 }

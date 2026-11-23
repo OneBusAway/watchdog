@@ -597,13 +597,26 @@ func downloadGTFSBundleData(ctx context.Context, client *http.Client, url, agenc
 	return staticBundle, data, nil
 }
 
-// fetchGTFSBundleData downloads a feed's bytes, retrying with backoff, without
-// parsing them.
+// fetchGTFSBundleData downloads a static GTFS feed and returns its raw bytes.
+//
+// It retries failed requests using the configured backoff policy and limits
+// the response size to maxStaticFeedDownloadSize. Request, network, HTTP
+// status, response-body read, and oversized-response failures are represented
+// as StaticFeedError values with their corresponding failure classification.
+//
+// Errors are sanitized before being returned or reported to prevent
+// credentials embedded in the feed URL from being exposed.
 func fetchGTFSBundleData(ctx context.Context, client *http.Client, url, agencyID string, maxRetries int) ([]byte, error) {
 	sanitizedURL := utils.SanitizeServerURL(url)
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		err = &StaticFeedError{Stage: StaticFailureRequest, Reason: StaticReasonInvalidURL, Err: fmt.Errorf("failed to create request for %s: %w", url, err)}
+		err = sanitizeStaticFeedError(&StaticFeedError{
+			Stage:  StaticFailureRequest,
+			Reason: StaticReasonInvalidURL,
+			Err:    fmt.Errorf("failed to create request for %s: %w", url, err),
+		}, url)
+
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: utils.MakeMap("agency_id", agencyID),
 			ExtraContext: map[string]interface{}{
@@ -615,7 +628,11 @@ func fetchGTFSBundleData(ctx context.Context, client *http.Client, url, agencyID
 
 	resp, err := utils.DoWithBackoff(ctx, client, req, maxRetries)
 	if err != nil {
-		err = requestFailure(fmt.Errorf("failed to make GET request to %s: %w", url, err))
+		failure := requestFailure(
+			fmt.Errorf("failed to make GET request to %s: %w", url, err),
+		)
+		err = sanitizeStaticFeedError(failure, url)
+
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: utils.MakeMap("agency_id", agencyID),
 			ExtraContext: map[string]interface{}{
@@ -627,12 +644,22 @@ func fetchGTFSBundleData(ctx context.Context, client *http.Client, url, agencyID
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		err = statusFailure(resp.StatusCode, parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()), fmt.Errorf("unexpected response status %d when downloading GTFS bundle from %s", resp.StatusCode, url))
+		failure := statusFailure(
+			resp.StatusCode,
+			parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
+			fmt.Errorf(
+				"unexpected response status %d when downloading GTFS bundle from %s",
+				resp.StatusCode,
+				url,
+			),
+		)
+		err = sanitizeStaticFeedError(failure, url)
+
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: utils.MakeMap("agency_id", agencyID),
 			ExtraContext: map[string]interface{}{
 				"url":    sanitizedURL,
-				"status": resp.Status,
+				"status": resp.StatusCode,
 			},
 		})
 		return nil, err
@@ -640,12 +667,31 @@ func fetchGTFSBundleData(ctx context.Context, client *http.Client, url, agencyID
 
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxStaticFeedDownloadSize+1))
 	if err != nil {
-		err = &StaticFeedError{Stage: StaticFailureDownload, Reason: StaticReasonConnection, Err: fmt.Errorf("failed to read GTFS bundle response body from %s: %w", url, err)}
+		err = sanitizeStaticFeedError(&StaticFeedError{
+			Stage:  StaticFailureDownload,
+			Reason: StaticReasonConnection,
+			Err: fmt.Errorf(
+				"failed to read GTFS bundle response body from %s: %w",
+				url,
+				err,
+			),
+		}, url)
+
 		report.ReportError(err)
 		return nil, err
 	}
+
 	if int64(len(data)) > maxStaticFeedDownloadSize {
-		err = &StaticFeedError{Stage: StaticFailureDownload, Reason: StaticReasonResponseTooLarge, Err: fmt.Errorf("GTFS bundle from %s exceeds the %d-byte download limit", url, maxStaticFeedDownloadSize)}
+		err = sanitizeStaticFeedError(&StaticFeedError{
+			Stage:  StaticFailureDownload,
+			Reason: StaticReasonResponseTooLarge,
+			Err: fmt.Errorf(
+				"GTFS bundle from %s exceeds the %d-byte download limit",
+				url,
+				maxStaticFeedDownloadSize,
+			),
+		}, url)
+
 		report.ReportError(err)
 		return nil, err
 	}
@@ -653,11 +699,18 @@ func fetchGTFSBundleData(ctx context.Context, client *http.Client, url, agencyID
 	return data, nil
 }
 
-// parseDownloadedGTFSBundle parses a downloaded feed with parse, reporting a
-// failure to Sentry.
+// parseDownloadedGTFSBundle parses downloaded static GTFS data using the
+// supplied parser.
+//
+// If parsing fails, the error is sanitized before being reported to Sentry
+// and returned to the caller. Existing StaticFeedError classification and
+// metadata are preserved so downstream refresh logic can identify the
+// failure stage and reason.
 func parseDownloadedGTFSBundle(parse func(data []byte, url, agencyID string) (*remoteGtfs.Static, error), data []byte, url, agencyID string) (*remoteGtfs.Static, error) {
 	staticBundle, err := parse(data, url, agencyID)
 	if err != nil {
+		err = sanitizeStaticFeedError(err, url)
+
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: utils.MakeMap("agency_id", agencyID),
 			ExtraContext: map[string]interface{}{
@@ -670,6 +723,8 @@ func parseDownloadedGTFSBundle(parse func(data []byte, url, agencyID string) (*r
 }
 
 func parseStaticBundleData(data []byte, url, agencyID string) (*remoteGtfs.Static, error) {
+	sanitizedURL := utils.SanitizeServerURL(url)
+
 	if err := validateStaticIDs(data); err != nil {
 		var duplicate *duplicateIDError
 		stage, reason := StaticFailureArchive, StaticReasonInvalidZIP
@@ -688,11 +743,11 @@ func parseStaticBundleData(data []byte, url, agencyID string) (*remoteGtfs.Stati
 	})
 	if err != nil {
 		sum := sha256.Sum256(data)
-		return nil, &StaticFeedError{Stage: StaticFailureArchive, Reason: StaticReasonInvalidZIP, ContentHash: hex.EncodeToString(sum[:]), Err: fmt.Errorf("failed to parse GTFS static data from %s: %w", url, err)}
+		return nil, &StaticFeedError{Stage: StaticFailureArchive, Reason: StaticReasonInvalidZIP, ContentHash: hex.EncodeToString(sum[:]), Err: fmt.Errorf("failed to parse GTFS static data from %s: %w", sanitizedURL, err)}
 	}
 	if err := normalizeOmittedAgencyID(data, staticBundle); err != nil {
 		sum := sha256.Sum256(data)
-		return nil, &StaticFeedError{Stage: StaticFailureAgencyDiscovery, Reason: StaticReasonMissingAgencyFile, ContentHash: hex.EncodeToString(sum[:]), Err: fmt.Errorf("failed to inspect agency.txt in %s for agency %s: %w", url, agencyID, err)}
+		return nil, &StaticFeedError{Stage: StaticFailureAgencyDiscovery, Reason: StaticReasonMissingAgencyFile, ContentHash: hex.EncodeToString(sum[:]), Err: fmt.Errorf("failed to inspect agency.txt in %s for agency %s: %w", sanitizedURL, agencyID, err)}
 	}
 	return staticBundle, nil
 }
@@ -931,9 +986,20 @@ func parseGTFSRTFeed(ctx context.Context, server models.ObaServer, client *http.
 	feed := server.GtfsRTFeeds[0]
 	feedID := realtimeFeedID
 	sanitizedURL := utils.SanitizeServerURL(feed.VehiclePositionURL)
+
+	sanitizeFeedError := func(err error) error {
+		return utils.SanitizeErrorURL(
+			err,
+			feed.VehiclePositionURL,
+			feed.GtfsRTAPIValue,
+		)
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, feed.VehiclePositionURL, nil)
 	if err != nil {
-		err = fmt.Errorf("create GTFS-RT request: %w", err)
+		err = sanitizeFeedError(
+			fmt.Errorf("create GTFS-RT request: %w", err),
+		)
 		reportFetchErr(err, report.SentryReportOptions{
 			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
 			ExtraContext: map[string]interface{}{
@@ -947,7 +1013,9 @@ func parseGTFSRTFeed(ctx context.Context, server models.ObaServer, client *http.
 	}
 	resp, err := redirectSafeClient(client, feed.GtfsRTAPIKey).Do(req)
 	if err != nil {
-		err = fmt.Errorf("fetch GTFS-RT feed %s: %w", feed.VehiclePositionURL, err)
+		err = sanitizeFeedError(
+			fmt.Errorf("fetch GTFS-RT feed %s: %w", feed.VehiclePositionURL, err),
+		)
 		reportFetchErr(err, report.SentryReportOptions{
 			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
 			ExtraContext: map[string]interface{}{
@@ -959,7 +1027,9 @@ func parseGTFSRTFeed(ctx context.Context, server models.ObaServer, client *http.
 	data, readErr := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if readErr != nil {
-		err = fmt.Errorf("read GTFS-RT feed %s: %w", feed.VehiclePositionURL, readErr)
+		err = sanitizeFeedError(
+			fmt.Errorf("read GTFS-RT feed %s: %w", feed.VehiclePositionURL, readErr),
+		)
 		reportFetchErr(err, report.SentryReportOptions{
 			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
 			ExtraContext: map[string]interface{}{
@@ -969,12 +1039,14 @@ func parseGTFSRTFeed(ctx context.Context, server models.ObaServer, client *http.
 		return nil, observation, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		err = fmt.Errorf("GTFS-RT feed %s returned %s", feed.VehiclePositionURL, resp.Status)
+		err = sanitizeFeedError(
+			fmt.Errorf("GTFS-RT feed %s returned %s", feed.VehiclePositionURL, resp.Status),
+		)
 		reportFetchErr(err, report.SentryReportOptions{
 			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
 			ExtraContext: map[string]interface{}{
 				"vehicle_position_url": sanitizedURL,
-				"status":               resp.Status,
+				"status":               resp.StatusCode,
 			},
 		})
 		return nil, observation, err
