@@ -340,7 +340,15 @@ go test ./...
 
 ### Database Tests
 
-The tests in `internal/db` apply the migrations and check the schema's constraints against a real PostgreSQL. They skip unless `WATCHDOG_TEST_DATABASE_URL` is set; each test creates and drops its own schema in that database.
+The tests in `internal/db`, `internal/history`, and `internal/investigation` run against a real PostgreSQL. They skip unless `WATCHDOG_TEST_DATABASE_URL` is set, so `go test ./...` can pass without running them. Each test creates and drops its own schema in that database.
+
+If you don't have a PostgreSQL to use, start one with Docker:
+
+```bash
+docker run -d --rm --name watchdog-test-db -e POSTGRES_USER=watchdog -e POSTGRES_PASSWORD=watchdog -e POSTGRES_DB=watchdog -p 127.0.0.1:5432:5432 postgres:17
+```
+
+Then run the database tests:
 
 ```bash
 WATCHDOG_TEST_DATABASE_URL="postgres://watchdog:watchdog@localhost:5432/watchdog?sslmode=disable" make test-db
