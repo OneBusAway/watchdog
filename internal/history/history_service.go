@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"watchdog.onebusaway.org/internal/db/dbgen"
+	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/models"
 )
 
@@ -30,18 +31,23 @@ type HistoryService struct {
 	logger   *slog.Logger
 	version  string
 	resolver *ServerNameResolver
+	boxes    *geo.BoundingBoxStore
+	static   *currentStatic
 }
 
 // NewHistoryService builds the service from the investigation pool (which may
-// be nil), the logger, the Watchdog build version, and configured servers for
-// canonical display name resolution. The version is recorded with history that
-// depends on how Watchdog parsed its input.
-func NewHistoryService(pool *pgxpool.Pool, logger *slog.Logger, version string, servers []models.ObaServer) *HistoryService {
+// be nil), the logger, the Watchdog build version, configured servers for
+// canonical display name resolution, and the bounding box store whose boxes a
+// static version records (nil records no boxes). The version is recorded with
+// history that depends on how Watchdog parsed its input.
+func NewHistoryService(pool *pgxpool.Pool, logger *slog.Logger, version string, servers []models.ObaServer, boxes *geo.BoundingBoxStore) *HistoryService {
 	return &HistoryService{
 		pool:     pool,
 		logger:   logger,
 		version:  version,
 		resolver: NewServerNameResolver(servers),
+		boxes:    boxes,
+		static:   newCurrentStatic(),
 	}
 }
 

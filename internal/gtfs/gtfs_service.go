@@ -24,6 +24,7 @@ type GtfsService struct {
 	RefreshObserver     StaticRefreshObserver
 	BackendHashObserver func(models.ObaServer, *bool)
 	FeedObserver        StaticFeedRefreshObserver
+	VersionObserver     StaticVersionObserver
 	refreshCoordinator  *staticRefreshCoordinator
 	// staticParseSlot admits one static feed parse or publish at a time. A
 	// production merged feed costs hundreds of MB of heap to parse, so
@@ -130,6 +131,7 @@ func (gs *GtfsService) DownloadGTFSBundles(ctx context.Context, servers []models
 	for _, result := range downloadGTFSBundles(ctx, gs.Client, servers, gs.Logger, gs.BoundingBoxStore, gs.StaticStore, gs.RouteAgencyIndex, gs.Observer, gs.MappingObserver, maxRetries) {
 		var failure *StaticFeedError
 		if result.Err == nil {
+			gs.reportStaticVersion(result.Publication)
 			gs.reportStaticFeedRefresh(result.Server, result.Server.GtfsStaticFeeds[0], StaticFeedRefreshObservation{
 				AttemptedAt: result.AttemptedAt, Success: true,
 			})

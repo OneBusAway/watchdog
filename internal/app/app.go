@@ -119,6 +119,12 @@ func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version s
 
 	investigationService := investigation.NewInvestigationService(investigationDB, cfg.GetServers, investigationTokens, logger)
 
+	// History records each static publication with the bounding boxes the
+	// collector computed for it. The observer returns at once when
+	// investigation storage is disabled.
+	historyService := history.NewHistoryService(investigationDB, logger, version, cfg.GetServers(), boundingBoxStore)
+	gtfsService.SetStaticVersionObserver(historyService.StaticVersionObserver())
+
 	return &Application{
 		ConfigService:  configService,
 		GtfsService:    gtfsService,
@@ -132,7 +138,7 @@ func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version s
 		BundleExpiry:         NewBundleExpiryReporter(),
 		InvestigationDB:      investigationDB,
 		InvestigationService: investigationService,
-		HistoryService:       history.NewHistoryService(investigationDB, logger, version, cfg.GetServers()),
+		HistoryService:       historyService,
 		Logger:               logger,
 		Version:              version,
 	}

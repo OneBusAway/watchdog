@@ -664,12 +664,13 @@ func (gs *GtfsService) publishStaticCampaign(ctx context.Context, server models.
 
 	configured := false
 	var storeErr error
+	var published publishedStatic
 	gs.StaticStore.WithRefreshLock(func() {
 		if ctx.Err() != nil || !gs.StaticStore.IsConfigured(server) {
 			return
 		}
 		configured = true
-		storeErr = storeStaticForServer(server, bundle, gs.StaticStore, gs.BoundingBoxStore, gs.RouteAgencyIndex, gs.Observer, gs.Logger)
+		published, storeErr = storeStaticSnapshot(server, bundle, gs.StaticStore, gs.BoundingBoxStore, gs.RouteAgencyIndex, gs.Observer, gs.Logger)
 		if storeErr != nil {
 			gs.StaticStore.ScheduleStore().MarkUnavailable(server)
 			return
@@ -694,6 +695,11 @@ func (gs *GtfsService) publishStaticCampaign(ctx context.Context, server models.
 		report.ReportErrorWithSentryOptions(failure, report.SentryReportOptions{Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName}, Level: sentry.LevelError})
 		return failure
 	}
+	// Notify after the refresh lock is released: recording waits on the
+	// investigation database for up to its write timeout, which must not
+	// hold up other servers' publications.
+	artifact, _ := cache.Get(feedURL)
+	gs.reportStaticVersion(published.publication(server, []StaticFeedContent{{URL: feedURL, ContentSHA256: artifact.hash}}))
 	return nil
 }
 

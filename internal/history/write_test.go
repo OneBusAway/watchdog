@@ -36,7 +36,7 @@ func failureCount(t *testing.T, step string, tags writeTags) float64 {
 }
 
 func TestWrite_NilPoolNoop(t *testing.T) {
-	h := NewHistoryService(nil, discardLogger(), "test", nil)
+	h := NewHistoryService(nil, discardLogger(), "test", nil, nil)
 	called := false
 	h.write(context.Background(), "nil_pool_step", serverTags(testServer), func(*dbgen.Queries) error {
 		called = true
@@ -106,7 +106,7 @@ func TestWrite_FailingFnRollsBack(t *testing.T) {
 
 func TestWrite_Commits(t *testing.T) {
 	pool := newMigratedPool(t)
-	h := NewHistoryService(pool, discardLogger(), "test", nil)
+	h := NewHistoryService(pool, discardLogger(), "test", nil, nil)
 
 	h.write(context.Background(), "commits_step", serverTags(testServer), func(q *dbgen.Queries) error {
 		_, err := ensureServer(context.Background(), q, testServer, nil)
