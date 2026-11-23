@@ -1,13 +1,53 @@
 package utils
 
 import (
+	"errors"
 	"net/url"
+	"regexp"
 	"strings"
 )
+
+// embeddedHTTPURLPattern finds HTTP(S) URLs inside error strings, including the
+// URL formatting used by net/http when it masks URL passwords.
+var embeddedHTTPURLPattern = regexp.MustCompile(`(?i)https?://[^\s"'<>]+`)
 
 // MakeMap creates and returns a map[string]string containing a single key-value pair.
 func MakeMap(key, value string) map[string]string {
 	return map[string]string{key: value}
+}
+
+// SanitizeErrorURL removes a configured URL from an error message before the
+// error is returned, logged, or sent to an external error reporter. The original
+// error is deliberately not wrapped: its chain may contain a url.Error whose
+// URL field still includes credentials.
+func SanitizeErrorURL(err error, rawURL string, secrets ...string) error {
+	if err == nil {
+		return nil
+	}
+	safeURL := SanitizeServerURL(rawURL)
+	message := embeddedHTTPURLPattern.ReplaceAllStringFunc(err.Error(), func(candidate string) string {
+		safe := SanitizeServerURL(candidate)
+		if safe == "" {
+			return "[REDACTED URL]"
+		}
+		return safe
+	})
+	if rawURL != "" {
+		// Also cover configured URLs without an explicit scheme and any exact
+		// representation that was not recognized as an embedded HTTP(S) URL.
+		message = strings.ReplaceAll(message, rawURL, safeURL)
+		if parsed, parseErr := url.Parse(rawURL); parseErr == nil {
+			message = strings.ReplaceAll(message, parsed.String(), safeURL)
+		}
+	}
+	for _, secret := range secrets {
+		if secret == "" {
+			continue
+		}
+		message = strings.ReplaceAll(message, secret, "[REDACTED]")
+		message = strings.ReplaceAll(message, url.QueryEscape(secret), "[REDACTED]")
+	}
+	return errors.New(message)
 }
 
 // SanitizeServerURL reduces a URL to its scheme, host, and path, stripping any

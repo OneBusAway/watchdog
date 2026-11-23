@@ -9,6 +9,7 @@ import (
 	"github.com/getsentry/sentry-go"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/report"
+	"watchdog.onebusaway.org/internal/utils"
 )
 
 // DroppedServersStore remembers which servers have been reported to Sentry as
@@ -131,7 +132,7 @@ func (s *DroppedServersStore) Reconcile(rawEntries []json.RawMessage, logger *sl
 			fmt.Errorf("server %q recovered", name),
 			report.SentryReportOptions{
 				Tags:         recovered.tags,
-				ExtraContext: map[string]interface{}{"oba_base_url": recovered.server.ObaBaseURL},
+				ExtraContext: map[string]interface{}{"oba_base_url": utils.SanitizeServerURL(recovered.server.ObaBaseURL)},
 				Level:        sentry.LevelInfo,
 			},
 		)
@@ -178,7 +179,7 @@ func serverIdentityFromRaw(raw json.RawMessage) (identity string, tags map[strin
 	if fields.AgencyID != "" {
 		tags["agency_id"] = fields.AgencyID
 	}
-	extra = map[string]interface{}{"oba_base_url": fields.ObaBaseURL}
+	extra = map[string]interface{}{"oba_base_url": utils.SanitizeServerURL(fields.ObaBaseURL)}
 	if fields.ObaBaseURL == "" {
 		return "raw:" + string(raw), tags, extra
 	}

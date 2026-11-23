@@ -3,6 +3,7 @@ package metrics
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/report"
 	"watchdog.onebusaway.org/internal/utils"
 )
 
@@ -301,4 +303,42 @@ func TestTrackVehicleTelemetrySeparatesSameIDAcrossFeeds(t *testing.T) {
 
 func float32Ptr(v float32) *float32 {
 	return &v
+}
+
+func TestCountActiveVehiclesForAgencyRedactsAPIKeyFromErrors(t *testing.T) {
+	rec := report.CaptureSentry(t)
+	ts := setupObaServer(t, `{"error":"not found"}`, http.StatusNotFound)
+	defer ts.Close()
+
+	server := models.ObaServer{
+		AgencyID:   "agency-redaction-test",
+		AgencyName: "Agency Redaction Test",
+		ServerName: "redaction-test",
+		ObaBaseURL: ts.URL,
+		ObaApiKey:  "super-secret-api-key",
+	}
+	client := onebusaway.NewClient(
+		option.WithAPIKey(server.ObaApiKey),
+		option.WithBaseURL(server.ObaBaseURL),
+		option.WithMaxRetries(0),
+	)
+
+	_, err := countActiveVehiclesForAgency(context.Background(), client, server)
+	if err == nil {
+		t.Fatal("expected the upstream API request to fail")
+	}
+	if strings.Contains(err.Error(), server.ObaApiKey) || strings.Contains(err.Error(), "?key=") {
+		t.Errorf("returned error exposed the API key: %v", err)
+	}
+	if !strings.Contains(err.Error(), "/api/where/vehicles-for-agency/") {
+		t.Errorf("expected the sanitized error to retain the API endpoint: %v", err)
+	}
+
+	for _, event := range rec.Events() {
+		for _, exception := range event.Exception {
+			if strings.Contains(exception.Value, server.ObaApiKey) || strings.Contains(exception.Value, "?key=") {
+				t.Errorf("Sentry exception exposed the API key: %s", exception.Value)
+			}
+		}
+	}
 }
