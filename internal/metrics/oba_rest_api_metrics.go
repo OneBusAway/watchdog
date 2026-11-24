@@ -141,7 +141,7 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 		if resp.StatusCode != http.StatusOK {
 			var wrappedErr error
 			if resp.StatusCode == http.StatusNotFound {
-				wrappedErr = fmt.Errorf("server %s does not support metrics API", serverBaseUrl)
+				wrappedErr = fmt.Errorf("server %s does not support metrics API", serverURL)
 			} else {
 				wrappedErr = fmt.Errorf("unexpected status code from %s: %d", sanitizedURL, resp.StatusCode)
 			}

@@ -180,15 +180,16 @@ func discoverAgenciesForServer(obaBaseURL string, staticStore *gtfs.StaticStore,
 // reports an agency for which we have no static bundle yet. Kept here so the
 // tag set stays aligned with the rest of the config-layer reporting.
 func ReportAgencyMissingStaticFeed(obaBaseURL, agencyID, serverName string) {
+	sanitizedURL := utils.SanitizeServerURL(obaBaseURL)
 	report.ReportErrorWithSentryOptions(
-		&missingStaticFeedError{obaBaseURL: obaBaseURL, agencyID: agencyID},
+		&missingStaticFeedError{obaBaseURL: sanitizedURL, agencyID: agencyID},
 		report.SentryReportOptions{
 			Tags: map[string]string{
 				"agency_id":   agencyID,
 				"server_name": serverName,
 			},
 			ExtraContext: map[string]interface{}{
-				"oba_base_url": obaBaseURL,
+				"oba_base_url": sanitizedURL,
 			},
 			Level: sentry.LevelWarning,
 		},
