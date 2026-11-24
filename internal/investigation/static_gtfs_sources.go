@@ -86,6 +86,11 @@ func (s *InvestigationService) getStaticGTFSSource(w http.ResponseWriter, r *htt
 		return
 	}
 
-	// A source URL is immutable; no Last-Modified time is available.
-	s.writeJSON(w, r, body, cacheImmutable(time.Time{}))
+	// The source URL is immutable and has no Last-Modified time. An included
+	// resource can change, so use the short cache whenever one is requested.
+	cache := cacheImmutable(time.Time{})
+	if inc.requested() {
+		cache = cacheShort()
+	}
+	s.writeJSON(w, r, body, cache)
 }

@@ -173,3 +173,36 @@ func TestGetStaticGTFSSource_Head(t *testing.T) {
 		t.Errorf("HEAD body = %q, want none", headBody)
 	}
 }
+
+func TestGetStaticGTFSSource_CachePolicy(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	if err := dbtest.Exec(pool,
+		"INSERT INTO onebusaway_server (server_id, normalized_base_url, display_name) OVERRIDING SYSTEM VALUE VALUES (7, 'https://example.com', 'Example')"); err != nil {
+		t.Fatalf("insert server: %v", err)
+	}
+	if err := dbtest.Exec(pool,
+		"INSERT INTO static_gtfs_source (source_id, server_id, normalized_source_url) OVERRIDING SYSTEM VALUE VALUES (20, 7, 'https://example.com/gtfs.zip')"); err != nil {
+		t.Fatalf("insert source: %v", err)
+	}
+
+	router := newStaticGTFSSourceRouter(t, pool)
+	for _, tc := range []struct {
+		name, query, wantCache string
+	}{
+		{name: "without include", wantCache: "private, max-age=86400"},
+		{name: "with server include", query: "?include=server", wantCache: "private, max-age=30"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := doGet(t, router, staticGTFSSourcePath(20)+tc.query, nil)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body)
+			}
+			if got := rec.Header().Get("Cache-Control"); got != tc.wantCache {
+				t.Errorf("Cache-Control = %q, want %q", got, tc.wantCache)
+			}
+			if got := rec.Header().Get("Last-Modified"); got != "" {
+				t.Errorf("Last-Modified = %q, want none", got)
+			}
+		})
+	}
+}
