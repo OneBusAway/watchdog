@@ -1,10 +1,13 @@
 package config
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/report"
 )
 
 var _ = models.ObaServer{}
@@ -134,5 +137,49 @@ func TestResolveScopeIgnoresOtherServers(t *testing.T) {
 	}
 	if scope.StaticAgencies[0].AgencyID != "agency-Mine" {
 		t.Fatalf("expected agency-Mine, got %q", scope.StaticAgencies[0].AgencyID)
+	}
+}
+
+func TestReportAgencyMissingStaticFeedSanitizesURL(t *testing.T) {
+	rec := report.CaptureSentry(t)
+	rawURL := "https://url-user:url-password@oba.example.com/api?token=url-token"
+	safeURL := "https://oba.example.com/api"
+
+	ReportAgencyMissingStaticFeed(rawURL, "agency-1", "test-server")
+
+	events := rec.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 report, got %d", len(events))
+	}
+	event := events[0]
+	extra, ok := event.Contexts["extra"]
+	if !ok {
+		t.Fatalf("expected extra context, got %v", event.Contexts)
+	}
+	if got := extra["oba_base_url"]; got != safeURL {
+		t.Errorf("oba_base_url context = %v, want %q", got, safeURL)
+	}
+	if len(event.Exception) > 0 {
+		if !strings.Contains(event.Exception[0].Value, safeURL) {
+			t.Errorf("exception does not contain safeURL %q: %v", safeURL, event.Exception[0].Value)
+		}
+	}
+
+	for _, secret := range []string{"url-user", "url-password", "url-token"} {
+		if strings.Contains(event.Message, secret) || strings.Contains(fmt.Sprint(event.Exception), secret) {
+			t.Errorf("report leaked credential %q in message or exception", secret)
+		}
+		for _, tag := range event.Tags {
+			if strings.Contains(tag, secret) {
+				t.Errorf("report leaked credential %q in tag", secret)
+			}
+		}
+		for contextName, context := range event.Contexts {
+			for key, value := range context {
+				if strings.Contains(fmt.Sprint(value), secret) {
+					t.Errorf("report leaked credential %q in context %q field %q", secret, contextName, key)
+				}
+			}
+		}
 	}
 }

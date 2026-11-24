@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -1597,5 +1598,72 @@ func TestParseDownloadedGTFSBundleRedactsCredentials(t *testing.T) {
 
 	if failure.ContentHash != originalFailure.ContentHash {
 		t.Errorf("ContentHash = %q, want %q", failure.ContentHash, originalFailure.ContentHash)
+	}
+}
+
+func TestStoreStaticForServer_NoDeclaredAgenciesSanitizesURL(t *testing.T) {
+	rec := report.CaptureSentry(t)
+
+	const (
+		obaUser  = "oba-user-sentinel"
+		obaPass  = "oba-pass-sentinel"
+		obaToken = "oba-token-sentinel"
+	)
+	rawObaURL := fmt.Sprintf("https://%s:%s@oba.example.com/api?token=%s", obaUser, obaPass, obaToken)
+	safeObaURL := "https://oba.example.com/api"
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	server := models.ObaServer{
+		ServerName: "test-server",
+		AgencyID:   "",
+		ObaBaseURL: rawObaURL,
+		ObaApiKey:  "oba-api-key",
+	}
+
+	bundle := &remoteGtfs.Static{}
+	err := storeStaticForServer(server, bundle, NewStaticStore(), geo.NewBoundingBoxStore(), NewRouteAgencyIndex(), nil, logger)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	logStr := logBuf.String()
+	for _, secret := range []string{obaUser, obaPass, obaToken} {
+		if strings.Contains(logStr, secret) {
+			t.Errorf("log leaked credential %q", secret)
+		}
+	}
+	if !strings.Contains(logStr, safeObaURL) {
+		t.Errorf("log does not contain safeObaURL %q: %s", safeObaURL, logStr)
+	}
+
+	events := rec.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 Sentry event, got %d", len(events))
+	}
+	event := events[0]
+	if len(event.Exception) > 0 {
+		if !strings.Contains(event.Exception[0].Value, safeObaURL) {
+			t.Errorf("exception does not contain safeObaURL %q: %v", safeObaURL, event.Exception[0].Value)
+		}
+	}
+
+	for _, secret := range []string{obaUser, obaPass, obaToken, "oba-api-key"} {
+		if strings.Contains(event.Message, secret) || strings.Contains(fmt.Sprint(event.Exception), secret) {
+			t.Errorf("report leaked credential %q in message or exception", secret)
+		}
+		for _, tag := range event.Tags {
+			if strings.Contains(tag, secret) {
+				t.Errorf("report leaked credential %q in tag", secret)
+			}
+		}
+		for contextName, context := range event.Contexts {
+			for key, value := range context {
+				if strings.Contains(fmt.Sprint(value), secret) {
+					t.Errorf("report leaked credential %q in context %q field %q", secret, contextName, key)
+				}
+			}
+		}
 	}
 }

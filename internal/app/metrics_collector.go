@@ -315,23 +315,24 @@ func (app *Application) collectForServerScope(ctx, campaignCtx context.Context, 
 	// under the agency-less key gate every per-agency check below.
 	ok := app.MetricsService.ServerPing(ctx, server)
 	if !ok {
+		sanitizedURL := utils.SanitizeServerURL(server.ObaBaseURL)
 		if ctx.Err() != nil {
 			// The ping was canceled by the cycle deadline or shutdown:
 			// incomplete collection, not a server outage. Preserve the
 			// availability gauge written by earlier successful ticks and
 			// the backoff state.
 			app.Logger.Info("Skipping server-scope collection due to canceled ping",
-				"server_name", server.ServerName, "oba_base_url", server.ObaBaseURL)
+				"server_name", server.ServerName, "oba_base_url", sanitizedURL)
 			return
 		}
 		app.ConfigService.BackoffStore.UpdateBackoff(server.ServerKey())
 		app.Logger.Info("Skipping server-scope collection due to ping failure",
-			"server_name", server.ServerName, "oba_base_url", server.ObaBaseURL)
+			"server_name", server.ServerName, "oba_base_url", sanitizedURL)
 		report.ReportErrorWithSentryOptions(
 			utils.SanitizeErrorURL(fmt.Errorf("server ping failed for %s", server.ObaBaseURL), server.ObaBaseURL, server.ObaApiKey),
 			report.SentryReportOptions{
 				Tags:         map[string]string{"server_name": server.ServerName},
-				ExtraContext: map[string]interface{}{"oba_base_url": utils.SanitizeServerURL(server.ObaBaseURL)},
+				ExtraContext: map[string]interface{}{"oba_base_url": sanitizedURL},
 				Level:        sentry.LevelError,
 			},
 		)

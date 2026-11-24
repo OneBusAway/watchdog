@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	remoteGtfs "github.com/OneBusAway/go-gtfs"
-	"gopkg.in/dnaeon/go-vcr.v4/pkg/recorder"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,10 +14,14 @@ import (
 	"testing"
 	"time"
 
+	remoteGtfs "github.com/OneBusAway/go-gtfs"
+	"gopkg.in/dnaeon/go-vcr.v4/pkg/recorder"
+
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/report"
 	"watchdog.onebusaway.org/internal/utils"
 )
 
@@ -562,6 +564,52 @@ func TestFetchObaAPIMetrics_ErrorDoesNotLeakAPIKey(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), apiKey) || strings.Contains(err.Error(), "key=") || strings.Contains(err.Error(), "user:pass") {
 		t.Fatalf("credential leaked in error message: %v", err)
+	}
+}
+
+func TestFetchObaAPIMetrics_404DoesNotLeakCredentials(t *testing.T) {
+	rec := report.CaptureSentry(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	apiKey := "SUPERSECRETOBAKEY"
+	serverBaseURL := strings.Replace(server.URL, "://", "://user:pass@", 1)
+
+	staticStore := gtfs.NewStaticStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	tracker := NewUnmatchedStopTracker()
+
+	err := fetchObaAPIMetrics(context.Background(), "42", "404 Server", "test-server", serverBaseURL, apiKey, &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil, false)
+	if err == nil {
+		t.Fatal("expected error but got none")
+	}
+	if strings.Contains(err.Error(), apiKey) || strings.Contains(err.Error(), "key=") || strings.Contains(err.Error(), "user:pass") {
+		t.Fatalf("credential leaked in error message: %v", err)
+	}
+
+	events := rec.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 Sentry event, got %d", len(events))
+	}
+	event := events[0]
+	for _, secret := range []string{"user:pass", apiKey} {
+		if strings.Contains(event.Message, secret) || strings.Contains(fmt.Sprint(event.Exception), secret) {
+			t.Errorf("report leaked credential %q in message or exception", secret)
+		}
+		for _, tag := range event.Tags {
+			if strings.Contains(tag, secret) {
+				t.Errorf("report leaked credential %q in tag", secret)
+			}
+		}
+		for contextName, context := range event.Contexts {
+			for key, value := range context {
+				if strings.Contains(fmt.Sprint(value), secret) {
+					t.Errorf("report leaked credential %q in context %q field %q", secret, contextName, key)
+				}
+			}
+		}
 	}
 }
 

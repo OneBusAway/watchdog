@@ -1,8 +1,10 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -233,5 +235,86 @@ func TestAgencyBackoffSentryContextSanitizesObaBaseURL(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestServerScopePingLogsDoNotLeakCredentials(t *testing.T) {
+	rec := report.CaptureSentry(t)
+	stub := newPingCountingStub(t)
+	stub.pingStatus.Store(http.StatusServiceUnavailable)
+	app := newTestApplication(t)
+
+	var logBuf bytes.Buffer
+	app.Logger = slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	const (
+		obaUser  = "ping-user"
+		obaPass  = "ping-password"
+		obaToken = "ping-token"
+	)
+	rawObaURL := strings.Replace(stub.URL, "://", fmt.Sprintf("://%s:%s@", obaUser, obaPass), 1) + "?token=" + obaToken
+	safeObaURL := stub.URL
+
+	server, scope := serverScopeFixture(t, app, stub.URL)
+	server.ObaBaseURL = rawObaURL
+
+	// 1. Ping failure path: logs "Skipping server-scope collection due to ping failure"
+	app.collectForServerScope(context.Background(), context.Background(), server, scope)
+
+	logOutput := logBuf.String()
+	for _, secret := range []string{obaUser, obaPass, obaToken} {
+		if strings.Contains(logOutput, secret) {
+			t.Errorf("failure log leaked credential %q: %s", secret, logOutput)
+		}
+	}
+	if !strings.Contains(logOutput, safeObaURL) {
+		t.Errorf("sanitized URL %q missing from failure log: %s", safeObaURL, logOutput)
+	}
+
+	events := rec.Events()
+	if len(events) == 0 {
+		t.Fatalf("expected at least 1 report, got %d", len(events))
+	}
+	for i, event := range events {
+		if extra, ok := event.Contexts["extra"]; ok {
+			if got, exists := extra["oba_base_url"]; exists && got != safeObaURL {
+				t.Errorf("event %d oba_base_url context = %v, want %q", i, got, safeObaURL)
+			}
+		}
+		for _, secret := range []string{obaUser, obaPass, obaToken} {
+			if strings.Contains(event.Message, secret) || strings.Contains(fmt.Sprint(event.Exception), secret) {
+				t.Errorf("report %d leaked credential %q in message or exception", i, secret)
+			}
+			for _, tag := range event.Tags {
+				if strings.Contains(tag, secret) {
+					t.Errorf("report %d leaked credential %q in tag", i, secret)
+				}
+			}
+			for contextName, context := range event.Contexts {
+				for key, value := range context {
+					if strings.Contains(fmt.Sprint(value), secret) {
+						t.Errorf("report %d leaked credential %q in context %q field %q", i, secret, contextName, key)
+					}
+				}
+			}
+		}
+	}
+
+	// 2. Canceled context path: logs "Skipping server-scope collection due to canceled ping"
+	logBuf.Reset()
+	app.ConfigService.BackoffStore.ResetBackoff(server.ServerKey())
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	app.collectForServerScope(canceledCtx, context.Background(), server, scope)
+
+	logOutput = logBuf.String()
+	for _, secret := range []string{obaUser, obaPass, obaToken} {
+		if strings.Contains(logOutput, secret) {
+			t.Errorf("canceled log leaked credential %q: %s", secret, logOutput)
+		}
+	}
+	if !strings.Contains(logOutput, safeObaURL) {
+		t.Errorf("sanitized URL %q missing from canceled log: %s", safeObaURL, logOutput)
 	}
 }
