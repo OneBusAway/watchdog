@@ -206,6 +206,13 @@ func TestSanitizeErrorURLRedactsAppendedQueryAndRedirectApostrophe(t *testing.T)
 			safeURL: "https://redirect.example/feed",
 			secrets: []string{configuredSecret, redirectSecret, "api_key="},
 		},
+		{
+			name: "configured URL is a prefix of a longer query value",
+			errorURL: "https://configured.example/feed.zip?api_key=" +
+				configuredSecret + "-v2&server_key=" + appendedSecret,
+			safeURL: "https://configured.example/feed.zip",
+			secrets: []string{configuredSecret, appendedSecret, "server_key="},
+		},
 	}
 
 	for _, tt := range tests {

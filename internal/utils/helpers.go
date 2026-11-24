@@ -31,14 +31,16 @@ func SanitizeErrorURL(err error, rawURL string, secrets ...string) error {
 			return
 		}
 
-		// Include any server-appended query parameters. Otherwise replacing
-		// rawURL could leave an appended "&key=value" in the sanitized path.
+		// Match only a complete configured URL token. Consume server-appended
+		// query parameters, but require a URL boundary so a longer URL sharing
+		// the configured URL as a prefix is left for embedded URL sanitization.
 		pattern := regexp.MustCompile(
-			regexp.QuoteMeta(configuredURL) + `(?:&[^\s"<>]*)?`,
+			regexp.QuoteMeta(configuredURL) + `(?:&[^\s"<>]*)?([\s"<>]|$)`,
 		)
 
-		message = pattern.ReplaceAllStringFunc(message, func(string) string {
-			return safeURL
+		message = pattern.ReplaceAllStringFunc(message, func(match string) string {
+			submatch := pattern.FindStringSubmatch(match)
+			return safeURL + submatch[1]
 		})
 	}
 
