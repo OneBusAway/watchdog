@@ -42,8 +42,8 @@ once per backend, how the bundle is kept current:
    below).
 2. A failed read backs off on its own, separately from the API ping backoff, so
    a broken metadata endpoint never stops the rest of collection. A transient
-   failure (network error, timeout, a response body that stops arriving, 408,
-   429 or 5xx) backs off exponentially
+   failure (network error, timeout, a response body that stops arriving or is
+   cut off partway, 408, 429 or 5xx) backs off exponentially
    from the fetch interval up to 10 minutes. A backend with no usable hash
    (404, another 4xx, malformed JSON, a missing or invalid hash) is not asked
    again for an hour.

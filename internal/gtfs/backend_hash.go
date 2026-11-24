@@ -62,7 +62,8 @@ const (
 	// BackendHashOK means the backend reported a valid hash.
 	BackendHashOK
 	// BackendHashTransient means the request failed in a way that may clear up
-	// on its own: a network error, a timeout, or a server error.
+	// on its own: a network error, a timeout, a body that stops arriving or
+	// is cut off partway, or a server error.
 	BackendHashTransient
 	// BackendHashUnsupported means the backend answered but exposes no usable
 	// hash: the endpoint is missing or refused, or the body has no valid hash.
