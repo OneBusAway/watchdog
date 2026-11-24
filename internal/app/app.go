@@ -49,8 +49,11 @@ type Application struct {
 	// HistoryService records observations in InvestigationDB. It is always
 	// set, and does nothing when InvestigationDB is nil.
 	HistoryService *history.HistoryService
-	Logger         *slog.Logger
-	Version        string
+	// obaMetricsHistory records each successful OBA metrics response. It is
+	// HistoryService when InvestigationDB is set, and nil otherwise.
+	obaMetricsHistory obaMetricsRecorder
+	Logger            *slog.Logger
+	Version           string
 	// collectMu serializes collection cycles so a new tick never overlaps
 	// unfinished work from the previous tick. collectOnce takes it with
 	// TryLock and skips the tick when it is already held.
@@ -123,7 +126,12 @@ func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version s
 	// collector computed for it. The observer returns at once when
 	// investigation storage is disabled.
 	historyService := history.NewHistoryService(investigationDB, logger, version, cfg.GetServers())
+	historyService.SetStaticStore(staticStore)
 	gtfsService.SetStaticVersionObserver(historyService.StaticVersionObserver())
+	var obaMetricsHistory obaMetricsRecorder
+	if investigationDB != nil {
+		obaMetricsHistory = historyService
+	}
 
 	return &Application{
 		ConfigService:  configService,
@@ -139,6 +147,7 @@ func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version s
 		InvestigationDB:      investigationDB,
 		InvestigationService: investigationService,
 		HistoryService:       historyService,
+		obaMetricsHistory:    obaMetricsHistory,
 		Logger:               logger,
 		Version:              version,
 	}

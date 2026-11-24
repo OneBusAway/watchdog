@@ -180,6 +180,10 @@ func main() {
 
 	app := app.New(&cfg, logger, client, version, droppedStore, investigationDB, investigationTokens)
 
+	// Insert the stop cluster scheme investigation history assigns stops
+	// under, if it is missing. A no-op without the investigation store.
+	app.HistoryService.EnsureClusterScheme(ctx)
+
 	// Report the agencies Watchdog is tracking (those that passed config
 	// validation). This runs once at startup; it is re-triggered only when the
 	// remote config adds or removes an agency, never on the collection tick.
@@ -249,6 +253,9 @@ func main() {
 			report.ReportError(err, sentry.LevelError)
 			logger.Error("HTTP server shutdown failed", "error", err)
 		}
+		// Collection stops with ctx; save the last-reported times of open
+		// unmatched-stop episodes before the database pool closes.
+		app.FlushHistory()
 	case err := <-serverErr:
 		if err == nil || errors.Is(err, http.ErrServerClosed) {
 			return

@@ -1,0 +1,164 @@
+package app
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"sort"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"watchdog.onebusaway.org/internal/config"
+	"watchdog.onebusaway.org/internal/metrics"
+	"watchdog.onebusaway.org/internal/models"
+)
+
+// fakeOBAMetricsRecorder stands in for HistoryService and records each call.
+type fakeOBAMetricsRecorder struct {
+	mu    sync.Mutex
+	calls []recordedOBAMetrics
+}
+
+type recordedOBAMetrics struct {
+	server     models.ObaServer
+	agencyIDs  []string
+	response   *metrics.OBAMetrics
+	observedAt time.Time
+}
+
+func (f *fakeOBAMetricsRecorder) RecordOBAMetrics(_ context.Context, server models.ObaServer, agencies []models.ObaServer, response *metrics.OBAMetrics, observedAt time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ids := make([]string, len(agencies))
+	for i, agency := range agencies {
+		ids[i] = agency.AgencyID
+	}
+	sort.Strings(ids)
+	f.calls = append(f.calls, recordedOBAMetrics{server: server, agencyIDs: ids, response: response, observedAt: observedAt})
+}
+
+func (f *fakeOBAMetricsRecorder) recorded() []recordedOBAMetrics {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]recordedOBAMetrics(nil), f.calls...)
+}
+
+// agencyModeOBA serves current-time and a metrics.json with the given status
+// and body.
+func agencyModeOBA(t *testing.T, status int, metricsBody string) *httptest.Server {
+	t.Helper()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(r.URL.Path, "current-time"):
+			_, _ = w.Write([]byte(`{"code":200,"currentTime":1234567890000,"text":"OK","version":2,"data":{"entry":{"readableTime":"Test Time"}}}`))
+		case r.URL.Path == "/api/where/metrics.json":
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(metricsBody))
+		default:
+			_, _ = w.Write([]byte(`{"code":200,"data":{"list":[],"entry":{"readableTime":"now"}}}`))
+		}
+	}))
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+func TestCollector_NotCalledOnFailure(t *testing.T) {
+	ts := agencyModeOBA(t, http.StatusInternalServerError, `{}`)
+	app := newTestApplication(t)
+	recorder := &fakeOBAMetricsRecorder{}
+	app.obaMetricsHistory = recorder
+
+	app.CollectMetricsForServer(context.Background(), models.ObaServer{
+		ServerName: "failing",
+		AgencyID:   "agency-x",
+		AgencyName: "Agency X",
+		ObaBaseURL: ts.URL,
+		ObaApiKey:  "test-key",
+	})
+
+	if calls := recorder.recorded(); len(calls) != 0 {
+		t.Fatalf("a failed fetch recorded history %d times, want 0", len(calls))
+	}
+}
+
+func TestCollector_AgencyModeRecordsResponse(t *testing.T) {
+	ts := agencyModeOBA(t, http.StatusOK, `{"code":200,"version":2,"data":{"entry":{"agencyIDs":["agency-x"],"stopIDsUnmatched":{"agency-x":["s1"]}}}}`)
+	app := newTestApplication(t)
+	recorder := &fakeOBAMetricsRecorder{}
+	app.obaMetricsHistory = recorder
+	server := models.ObaServer{
+		ServerName: "agency-mode",
+		AgencyID:   "agency-x",
+		AgencyName: "Agency X",
+		ObaBaseURL: ts.URL,
+		ObaApiKey:  "test-key",
+	}
+
+	before := time.Now().UTC()
+	app.CollectMetricsForServer(context.Background(), server)
+
+	calls := recorder.recorded()
+	if len(calls) != 1 {
+		t.Fatalf("recorded history %d times, want 1", len(calls))
+	}
+	call := calls[0]
+	if len(call.agencyIDs) != 1 || call.agencyIDs[0] != "agency-x" {
+		t.Errorf("agencies = %v, want [agency-x]", call.agencyIDs)
+	}
+	if call.response == nil || len(call.response.Data.Entry.StopIDsUnmatched["agency-x"]) != 1 {
+		t.Errorf("recorded response does not carry the fetched stop IDs: %+v", call.response)
+	}
+	if call.observedAt.Before(before) {
+		t.Errorf("observedAt = %v, want the receive time (after %v)", call.observedAt, before)
+	}
+}
+
+func TestCollector_ServerModeRecordsOncePerTick(t *testing.T) {
+	var metricsCalls int
+	var mu sync.Mutex
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/where/metrics.json" {
+			mu.Lock()
+			metricsCalls++
+			mu.Unlock()
+			_, _ = w.Write([]byte(`{"code":200,"version":2,"data":{"entry":{"agencyIDs":["agency-a","agency-b"]}}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"code":200,"data":{"list":[],"entry":{"readableTime":"now"}}}`))
+	}))
+	t.Cleanup(ts.Close)
+
+	app := newTestApplication(t)
+	recorder := &fakeOBAMetricsRecorder{}
+	app.obaMetricsHistory = recorder
+	server := models.ObaServer{ServerName: "multi", ObaBaseURL: ts.URL, ObaApiKey: "test-key"}
+	for _, agencyID := range []string{"agency-a", "agency-b"} {
+		app.GtfsService.StaticStore.Set(models.ServerKey(ts.URL, agencyID), &models.StaticData{})
+	}
+	scope := config.ResolveScope(server, app.GtfsService.StaticStore, app.GtfsService.RouteAgencyIndex)
+	if _, ok := scope.(config.ServerScope); !ok {
+		t.Fatalf("expected a ServerScope, got %T", scope)
+	}
+
+	app.collectForScope(context.Background(), context.Background(), server, scope)
+
+	calls := recorder.recorded()
+	if len(calls) != 1 {
+		t.Fatalf("recorded history %d times, want once per server per tick", len(calls))
+	}
+	if got := calls[0].agencyIDs; len(got) != 2 || got[0] != "agency-a" || got[1] != "agency-b" {
+		t.Errorf("agencies = %v, want [agency-a agency-b]", got)
+	}
+	if calls[0].server.ServerName != "multi" || calls[0].observedAt.IsZero() {
+		t.Errorf("call = %+v, want the server entry and the probe's receive time", calls[0])
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if metricsCalls != 1 {
+		t.Errorf("metrics.json fetched %d times, want 1", metricsCalls)
+	}
+}

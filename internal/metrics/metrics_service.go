@@ -220,10 +220,11 @@ func (ms *MetricsService) ServerPing(ctx context.Context, server models.ObaServe
 	return serverPing(ctx, ms.NewObaClient(server), server)
 }
 
-// FetchObaAPIMetrics records the OBA API metrics. staticWithheld skips the
+// FetchObaAPIMetrics records the OBA API metrics and returns the response it
+// used with the time Watchdog received it. staticWithheld skips the
 // unmatched-stop lookup, which reads the static bundle.
-func (ms *MetricsService) FetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, serverBaseURL, apiKey string, prefetchedMetrics *OBAMetrics, staticWithheld bool) error {
-	return fetchObaAPIMetrics(ctx, agencyID, agencyName, serverName, serverBaseURL, apiKey, ms.Client, ms.StaticStore, ms.Logger, ms.UnmatchedStopTracker, prefetchedMetrics, staticWithheld)
+func (ms *MetricsService) FetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, serverBaseURL, apiKey string, prefetchedMetrics *OBAMetrics, prefetchedAt time.Time, staticWithheld bool) (*OBAMetrics, time.Time, error) {
+	return fetchObaAPIMetrics(ctx, agencyID, agencyName, serverName, serverBaseURL, apiKey, ms.Client, ms.StaticStore, ms.Logger, ms.UnmatchedStopTracker, prefetchedMetrics, prefetchedAt, staticWithheld)
 }
 
 // TrackVehicleTelemetry runs the per-vehicle telemetry pass exactly once per
