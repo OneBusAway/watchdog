@@ -13,6 +13,23 @@ WHERE v.server_id = @server_id
 ORDER BY v.published_at DESC, v.gtfs_static_version_id DESC
 LIMIT 1;
 
+-- name: GetLatestGTFSStaticVersionForServer :one
+-- The server's newest version whatever its agencies, and whether its agency
+-- set is exactly @agency_ids.
+SELECT v.gtfs_static_version_id, v.combined_content_sha256,
+    (recorded.agency_ids @> @agency_ids::text[]
+        AND recorded.agency_ids <@ @agency_ids::text[])::boolean AS same_agencies
+FROM gtfs_static_version v
+CROSS JOIN LATERAL (
+    SELECT coalesce(array_agg(a.external_agency_id), '{}'::text[]) AS agency_ids
+    FROM gtfs_static_version_agency va
+    JOIN agency a ON a.agency_id = va.agency_id
+    WHERE va.gtfs_static_version_id = v.gtfs_static_version_id
+) recorded
+WHERE v.server_id = @server_id
+ORDER BY v.published_at DESC, v.gtfs_static_version_id DESC
+LIMIT 1;
+
 -- name: InsertGTFSStaticVersion :one
 INSERT INTO gtfs_static_version (server_id, published_at, combined_content_sha256, parser_version)
 VALUES (@server_id, @published_at, @combined_content_sha256, @parser_version)

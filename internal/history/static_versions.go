@@ -186,8 +186,8 @@ func publicationTags(server models.ObaServer) writeTags {
 // staticVersionRecord is the outcome of recording one publication.
 type staticVersionRecord struct {
 	versionID int64
-	// created is false when the newest version with the same agencies
-	// already had the same combined hash and was reused.
+	// created is false when an existing version was reused (see
+	// reusableStaticVersion).
 	created bool
 	// boxes maps each bounding box key to the ID recorded for it.
 	boxes map[string]int64
@@ -197,9 +197,9 @@ type staticVersionRecord struct {
 //
 //  1. Ensure the server and each static source.
 //  2. Compute the combined content hash.
-//  3. If the newest version with the same agencies has the same combined
-//     hash, reuse it (a restart with unchanged feeds). Matching the agency
-//     set keeps agency-scoped entries on one base URL apart.
+//  3. If the newest version in the entry's scope has the same agencies and
+//     the same combined hash, reuse it (a restart with unchanged feeds). See
+//     reusableStaticVersion for each entry's scope.
 //  4. Otherwise insert the version, one source row per feed and one agency
 //     row per published agency.
 //  5. Insert the publication's bounding boxes for each published agency and
@@ -236,19 +236,16 @@ func recordStaticVersion(ctx context.Context, q *dbgen.Queries, publication gtfs
 	for i, agency := range agencies {
 		externalAgencyIDs[i] = agency.AgencyID
 	}
-	latest, err := q.GetLatestGTFSStaticVersionForAgencies(ctx, dbgen.GetLatestGTFSStaticVersionForAgenciesParams{
-		ServerID:  serverID,
-		AgencyIds: externalAgencyIDs,
-	})
-	switch {
-	case err == nil && latest.CombinedContentSha256 != nil && *latest.CombinedContentSha256 == combined:
-		recordedBoxes, err := recordedBoundingBoxes(ctx, q, server, externalAgencyIDs, latest.GtfsStaticVersionID)
+	reuseID, reuse, err := reusableStaticVersion(ctx, q, server, serverID, externalAgencyIDs, combined)
+	if err != nil {
+		return staticVersionRecord{}, err
+	}
+	if reuse {
+		recordedBoxes, err := recordedBoundingBoxes(ctx, q, server, externalAgencyIDs, reuseID)
 		if err != nil {
 			return staticVersionRecord{}, err
 		}
-		return staticVersionRecord{versionID: latest.GtfsStaticVersionID, boxes: recordedBoxes}, nil
-	case err != nil && !errors.Is(err, pgx.ErrNoRows):
-		return staticVersionRecord{}, fmt.Errorf("server %q: read latest static version: %w", server.ServerName, err)
+		return staticVersionRecord{versionID: reuseID, boxes: recordedBoxes}, nil
 	}
 
 	var parser *string
@@ -329,6 +326,49 @@ func recordStaticVersion(ctx context.Context, q *dbgen.Queries, publication gtfs
 	}
 
 	return staticVersionRecord{versionID: versionID, created: true, boxes: recordedBoxes}, nil
+}
+
+// reusableStaticVersion returns the version a publication can reuse instead
+// of recording a new one, if any. A version is reusable when it is the newest
+// version in the entry's scope and has the same agency set and combined hash.
+//
+// The scope depends on the entry. Agency-scoped entries on one base URL share
+// a database server, so each one's scope is the versions recorded with
+// exactly its agency; otherwise the entries would take turns being the
+// server's newest version and every restart would record a new one. A
+// server-scoped entry's agency set can change between publications, so its
+// scope is every version of the server. Matching on the agency set alone
+// there would treat a return to an earlier feed (H1 [A], H2 [A B], then H1
+// [A]) as unchanged, and history could not show the rollback.
+func reusableStaticVersion(ctx context.Context, q *dbgen.Queries, server models.ObaServer, serverID int64, agencyIDs []string, combined string) (int64, bool, error) {
+	var (
+		versionID int64
+		hash      *string
+		same      = true
+		err       error
+	)
+	if server.IsServerScoped() {
+		var latest dbgen.GetLatestGTFSStaticVersionForServerRow
+		latest, err = q.GetLatestGTFSStaticVersionForServer(ctx, dbgen.GetLatestGTFSStaticVersionForServerParams{
+			ServerID:  serverID,
+			AgencyIds: agencyIDs,
+		})
+		versionID, hash, same = latest.GtfsStaticVersionID, latest.CombinedContentSha256, latest.SameAgencies
+	} else {
+		var latest dbgen.GetLatestGTFSStaticVersionForAgenciesRow
+		latest, err = q.GetLatestGTFSStaticVersionForAgencies(ctx, dbgen.GetLatestGTFSStaticVersionForAgenciesParams{
+			ServerID:  serverID,
+			AgencyIds: agencyIDs,
+		})
+		versionID, hash = latest.GtfsStaticVersionID, latest.CombinedContentSha256
+	}
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return 0, false, nil
+	case err != nil:
+		return 0, false, fmt.Errorf("server %q: read latest static version: %w", server.ServerName, err)
+	}
+	return versionID, same && hash != nil && *hash == combined, nil
 }
 
 // recordedBoundingBoxes returns the boxes stored with a version for the
