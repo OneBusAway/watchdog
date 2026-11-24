@@ -33,22 +33,46 @@ func TestBackendBehindRequiresStableRun(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		h.tick(t, 30*time.Second)
 		h.wantRelation(t, BackendBundleUnknown, "before the stale hash has held")
+		if !h.service.BackendBundleDebouncing(h.server) {
+			t.Fatalf("tick %d: expected debouncing to be true", i)
+		}
 	}
 	h.tick(t, 30*time.Second)
 	h.wantRelation(t, BackendBundleBehind, "after the stale hash held")
+	if h.service.BackendBundleDebouncing(h.server) {
+		t.Fatal("expected debouncing to be false once behind is confirmed")
+	}
 }
 
 func TestBackendBehindIgnoresSingleLaggingNode(t *testing.T) {
 	h, hashA, hashB := newBackendBehindHarness(t)
 	for i := 0; i < 8; i++ {
 		if i%2 == 0 {
+			// One lagging node behind a load balancer still serves bundle A.
+			// Re-instate the superseded record so each lagging-node read is
+			// classified as behind (and debounced to unknown), rather than
+			// differs after an intervening match clears it.
+			h.service.refreshCoordinator.mu.Lock()
+			h.service.refreshCoordinator.superseded[h.server.ServerKey()] = publishedStaticContent{
+				fingerprint: staticConfigFingerprint(h.server),
+				hash:        hashA,
+			}
+			h.service.refreshCoordinator.mu.Unlock()
 			h.hash.Store(hashA)
 		} else {
 			h.hash.Store(hashB)
 		}
 		h.tick(t, 30*time.Second)
-		if got := h.service.BackendBundleRelation(h.server); got == BackendBundleBehind {
-			t.Fatalf("read %d: nodes answering with different hashes reported the backend as behind", i)
+		if i%2 == 0 {
+			h.wantRelation(t, BackendBundleUnknown, "lagging-node read before debounce completes")
+			if !h.service.BackendBundleDebouncing(h.server) {
+				t.Fatalf("read %d: expected debouncing to be true", i)
+			}
+		} else {
+			h.wantRelation(t, BackendBundleMatch, "updated-node read matches")
+			if h.service.BackendBundleDebouncing(h.server) {
+				t.Fatalf("read %d: expected debouncing to be false", i)
+			}
 		}
 	}
 }

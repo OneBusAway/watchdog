@@ -179,6 +179,11 @@ func (app *Application) staticWithholdKind(server models.ObaServer, now time.Tim
 	if app.GtfsService.BackendBundleRelation(server) == gtfs.BackendBundleBehind {
 		return withholdBackendBehind
 	}
+	if app.BundleExpiry != nil && app.GtfsService.BackendBundleDebouncing(server) {
+		if prior := app.BundleExpiry.entry(server.ServerKey()).kind; prior != withholdNone {
+			return prior
+		}
+	}
 	return withholdNone
 }
 

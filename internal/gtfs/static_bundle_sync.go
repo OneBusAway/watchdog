@@ -67,6 +67,7 @@ type feedCheckState struct {
 type backendRelationState struct {
 	fingerprint string
 	relation    BackendBundleRelation
+	debouncing  bool
 }
 
 // recordFeedCheck records the outcome of one completed feed attempt unless the
@@ -97,10 +98,10 @@ func (c *staticRefreshCoordinator) relationIsLocked(key, fingerprint string, rel
 
 // setRelationLocked records the relation and reports whether it changed.
 // c.mu must be held.
-func (c *staticRefreshCoordinator) setRelationLocked(key, fingerprint string, relation BackendBundleRelation) bool {
+func (c *staticRefreshCoordinator) setRelationLocked(key, fingerprint string, relation BackendBundleRelation, debouncing bool) bool {
 	previous, ok := c.relations[key]
-	changed := !ok || previous.fingerprint != fingerprint || previous.relation != relation
-	c.relations[key] = backendRelationState{fingerprint: fingerprint, relation: relation}
+	changed := !ok || previous.fingerprint != fingerprint || previous.relation != relation || previous.debouncing != debouncing
+	c.relations[key] = backendRelationState{fingerprint: fingerprint, relation: relation, debouncing: debouncing}
 	return changed
 }
 
@@ -150,4 +151,24 @@ func (gs *GtfsService) BackendBundleRelation(server models.ObaServer) BackendBun
 		}
 	}
 	return BackendBundleUnknown
+}
+
+// BackendBundleDebouncing reports whether the backend's bundle relation is
+// unknown while the replaced bundle's hash is being observed (a debounce run
+// is in progress).
+func (gs *GtfsService) BackendBundleDebouncing(server models.ObaServer) bool {
+	c := gs.refreshCoordinator
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, key := range lookupKeys(server) {
+		if state, ok := c.relations[key]; ok && state.debouncing {
+			return true
+		}
+		if _, ok := c.superseded[key]; ok {
+			if state, ok := c.relations[key]; !ok || state.relation == BackendBundleUnknown {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -44,7 +44,7 @@ func TestStaticSyncLookupFallsBackToServerScope(t *testing.T) {
 	serverScoped.AgencyID, serverScoped.AgencyName = "", ""
 	h.service.refreshCoordinator.recordFeedCheck(serverScoped, h.service.refreshCoordinator.now(), nil)
 	h.service.refreshCoordinator.mu.Lock()
-	h.service.refreshCoordinator.setRelationLocked(serverScoped.ServerKey(), staticConfigFingerprint(serverScoped), BackendBundleBehind)
+	h.service.refreshCoordinator.setRelationLocked(serverScoped.ServerKey(), staticConfigFingerprint(serverScoped), BackendBundleBehind, false)
 	h.service.refreshCoordinator.mu.Unlock()
 
 	agency := models.ObaServer{ServerName: h.server.ServerName, AgencyID: "B", ObaBaseURL: h.server.ObaBaseURL, GtfsStaticFeeds: h.server.GtfsStaticFeeds}
@@ -53,5 +53,15 @@ func TestStaticSyncLookupFallsBackToServerScope(t *testing.T) {
 	}
 	if got := h.service.BackendBundleRelation(agency); got != BackendBundleBehind {
 		t.Fatalf("relation = %v, want behind", got)
+	}
+	if got := h.service.BackendBundleDebouncing(agency); got {
+		t.Fatal("debouncing = true, want false")
+	}
+
+	h.service.refreshCoordinator.mu.Lock()
+	h.service.refreshCoordinator.setRelationLocked(serverScoped.ServerKey(), staticConfigFingerprint(serverScoped), BackendBundleUnknown, true)
+	h.service.refreshCoordinator.mu.Unlock()
+	if got := h.service.BackendBundleDebouncing(agency); !got {
+		t.Fatal("debouncing = false, want true")
 	}
 }

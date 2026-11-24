@@ -230,11 +230,24 @@ func TestBackendStaleAfterExpiry(t *testing.T) {
 	h.app.GtfsService.SetStaticRefreshClock(func() time.Time {
 		return time.Now().Add(time.Duration(elapsed.Load()))
 	})
+	var debounced bool
 	h.collectUntil(t, "the backend to be reported stale", func() bool {
 		elapsed.Add(int64(30 * time.Second))
 		entry := h.app.BundleExpiry.entry(key)
+		if h.app.GtfsService.BackendBundleDebouncing(h.server) {
+			debounced = true
+			if entry.kind == withholdNone {
+				t.Fatal("metrics flapped to not withheld while backend debounce was pending")
+			}
+			if v, found := gaugeValueFor(metrics.GtfsScheduleAvailable, labels); found && v != 0 {
+				t.Fatalf("schedule available flapped to %v while backend debounce was pending", v)
+			}
+		}
 		return entry.kind == withholdBackendBehind && entry.reported
 	})
+	if !debounced {
+		t.Fatal("expected debounce to run before backend was reported stale")
+	}
 	if entry := h.app.BundleExpiry.entry(key); entry.cause != withholdCauseBackendStale {
 		t.Fatalf("cause = %q, want backend_stale", entry.cause)
 	}
