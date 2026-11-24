@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -322,17 +321,23 @@ func (gs *GtfsService) fetchBackendHash(ctx context.Context, server models.ObaSe
 	var metadata struct {
 		StaticGtfsHash string `json:"staticGtfsHash"`
 	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&metadata); err != nil {
+	// Read the whole body before decoding it, so a body that stopped
+	// arriving is never mistaken for one that is not a metadata document:
+	// a connection closed partway through reads as io.ErrUnexpectedEOF,
+	// which the decoder would also return for a short document.
+	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if err != nil {
 		if callerCtx.Err() != nil {
 			return "", BackendHashNotChecked
 		}
-		if !isJSONContentError(err) {
-			// The body stopped arriving (the request deadline, a reset
-			// connection), which may clear up on its own, unlike a backend
-			// that answers with something that is not a metadata document.
-			gs.logBackendMetadataFailure(server, "body_read_failed")
-			return "", BackendHashTransient
-		}
+		// The body stopped arriving (the request deadline, a reset or
+		// closed connection), which may clear up on its own, unlike a
+		// backend that answers with something that is not a metadata
+		// document.
+		gs.logBackendMetadataFailure(server, "body_read_failed")
+		return "", BackendHashTransient
+	}
+	if err := json.Unmarshal(body, &metadata); err != nil {
 		gs.logBackendMetadataFailure(server, "malformed_json")
 		return "", BackendHashUnsupported
 	}
@@ -352,14 +357,6 @@ func (gs *GtfsService) fetchBackendHash(ctx context.Context, server models.ObaSe
 // backendMetadataTimeout bounds one metadata request, body included. A
 // variable so tests need not wait for it.
 var backendMetadataTimeout = 2 * time.Second
-
-// isJSONContentError reports whether a decode error comes from the body's
-// content (not JSON, or the wrong shape) rather than from reading it.
-func isJSONContentError(err error) bool {
-	var syntaxErr *json.SyntaxError
-	var typeErr *json.UnmarshalTypeError
-	return errors.As(err, &syntaxErr) || errors.As(err, &typeErr) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
-}
 
 // classifyBackendMetadataStatus maps a non-OK HTTP status to a check result.
 // Server errors and throttling may clear up soon. Anything else (a missing
