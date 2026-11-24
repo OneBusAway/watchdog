@@ -373,9 +373,12 @@ func storeStaticSnapshot(server models.ObaServer, bundle *remoteGtfs.Static, sta
 		logger.Warn("No agency_id declared in any static feed for server; skipping per-agency storage",
 			"server_name", server.ServerName,
 			"oba_base_url", utils.SanitizeServerURL(server.ObaBaseURL))
-		noAgencyErr := fmt.Errorf("server %q (%s): no agency_id declared in any static feed", server.ServerName, server.ObaBaseURL)
+		noAgencyErr := utils.SanitizeErrorURL(
+			fmt.Errorf("server %q (%s): no agency_id declared in any static feed", server.ServerName, server.ObaBaseURL),
+			server.ObaBaseURL, server.ObaApiKey,
+		)
 		report.ReportErrorWithSentryOptions(
-			utils.SanitizeErrorURL(noAgencyErr, server.ObaBaseURL, server.ObaApiKey),
+			noAgencyErr,
 			report.SentryReportOptions{
 				Tags:  utils.MakeMap("server_name", server.ServerName),
 				Level: sentry.LevelWarning,
