@@ -176,3 +176,63 @@ func TestSanitizeErrorURLReplacesConfiguredURLBeforeScanningEmbeddedURLs(t *test
 		})
 	}
 }
+
+func TestSanitizeErrorURLRedactsAppendedQueryAndRedirectApostrophe(t *testing.T) {
+	const (
+		configuredSecret = "configured-query-secret"
+		appendedSecret   = "server-appended-secret"
+		redirectSecret   = "redirect-query-secret"
+	)
+
+	configuredURL := "https://configured.example/feed.zip?api_key=" + configuredSecret
+
+	tests := []struct {
+		name     string
+		errorURL string
+		safeURL  string
+		secrets  []string
+	}{
+		{
+			name: "server-appended query parameters",
+			errorURL: configuredURL +
+				"&server_key=" + appendedSecret,
+			safeURL: "https://configured.example/feed.zip",
+			secrets: []string{configuredSecret, appendedSecret, "server_key="},
+		},
+		{
+			name: "redirect URL with apostrophe",
+			errorURL: "https://redirect.example/feed?label=O'Reilly&api_key=" +
+				redirectSecret,
+			safeURL: "https://redirect.example/feed",
+			secrets: []string{configuredSecret, redirectSecret, "api_key="},
+		},
+		{
+			name: "configured URL is a prefix of a longer query value",
+			errorURL: "https://configured.example/feed.zip?api_key=" +
+				configuredSecret + "-v2&server_key=" + appendedSecret,
+			safeURL: "https://configured.example/feed.zip",
+			secrets: []string{configuredSecret, appendedSecret, "server_key="},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := errors.New(`GET "` + tt.errorURL + `": synthetic redirect failure`)
+			got := SanitizeErrorURL(err, configuredURL)
+
+			if got == nil {
+				t.Fatal("expected sanitized error")
+			}
+
+			for _, secret := range tt.secrets {
+				if strings.Contains(got.Error(), secret) {
+					t.Errorf("sanitized error leaked %q: %v", secret, got)
+				}
+			}
+
+			if !strings.Contains(got.Error(), tt.safeURL) {
+				t.Errorf("safe endpoint %q missing: %v", tt.safeURL, got)
+			}
+		})
+	}
+}
