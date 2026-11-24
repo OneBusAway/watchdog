@@ -328,10 +328,10 @@ func (app *Application) collectForServerScope(ctx, campaignCtx context.Context, 
 		app.Logger.Info("Skipping server-scope collection due to ping failure",
 			"server_name", server.ServerName, "oba_base_url", server.ObaBaseURL)
 		report.ReportErrorWithSentryOptions(
-			fmt.Errorf("server ping failed for %s", server.ObaBaseURL),
+			utils.SanitizeErrorURL(fmt.Errorf("server ping failed for %s", server.ObaBaseURL), server.ObaBaseURL, server.ObaApiKey),
 			report.SentryReportOptions{
 				Tags:         map[string]string{"server_name": server.ServerName},
-				ExtraContext: map[string]interface{}{"oba_base_url": server.ObaBaseURL},
+				ExtraContext: map[string]interface{}{"oba_base_url": utils.SanitizeServerURL(server.ObaBaseURL)},
 				Level:        sentry.LevelError,
 			},
 		)
@@ -583,14 +583,15 @@ func (app *Application) agencyEntryAvailable(ctx context.Context, server models.
 	if exists && time.Now().UTC().Before(nextRetryAt) {
 		app.Logger.Info("Skipping metrics collection due to backoff",
 			"agency_id", server.AgencyID, "server_name", server.ServerName, "next_retry_at", nextRetryAt)
-		report.ReportErrorWithSentryOptions(fmt.Errorf("skipping metrics collection for server %s due to backoff", server.ObaBaseURL), report.SentryReportOptions{
+		err := fmt.Errorf("skipping metrics collection for server %s due to backoff", server.ObaBaseURL)
+		report.ReportErrorWithSentryOptions(utils.SanitizeErrorURL(err, server.ObaBaseURL, server.ObaApiKey), report.SentryReportOptions{
 			Tags: map[string]string{
 				"agency_id":   server.AgencyID,
 				"agency_name": server.AgencyName,
 				"server_name": server.ServerName,
 			},
 			ExtraContext: map[string]interface{}{
-				"oba_base_url": server.ObaBaseURL,
+				"oba_base_url": utils.SanitizeServerURL(server.ObaBaseURL),
 			},
 			Level: sentry.LevelInfo,
 		})
@@ -609,14 +610,15 @@ func (app *Application) agencyEntryAvailable(ctx context.Context, server models.
 		}
 		app.Logger.Error("Server ping failed",
 			"agency_id", server.AgencyID, "agency_name", server.AgencyName, "server_name", server.ServerName)
-		report.ReportErrorWithSentryOptions(fmt.Errorf("server ping failed for %s", server.ObaBaseURL), report.SentryReportOptions{
+		err := fmt.Errorf("server ping failed for %s", server.ObaBaseURL)
+		report.ReportErrorWithSentryOptions(utils.SanitizeErrorURL(err, server.ObaBaseURL, server.ObaApiKey), report.SentryReportOptions{
 			Tags: map[string]string{
 				"agency_id":   server.AgencyID,
 				"agency_name": server.AgencyName,
 				"server_name": server.ServerName,
 			},
 			ExtraContext: map[string]interface{}{
-				"oba_base_url": server.ObaBaseURL,
+				"oba_base_url": utils.SanitizeServerURL(server.ObaBaseURL),
 			},
 			Level: sentry.LevelError,
 		})
@@ -665,14 +667,14 @@ func (app *Application) collectAgencyChecks(ctx context.Context, server models.O
 				"agency_id", server.AgencyID, "server_name", server.ServerName)
 		} else {
 			app.Logger.Error("Failed to fetch OBA API metrics", "error", err)
-			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			report.ReportErrorWithSentryOptions(utils.SanitizeErrorURL(err, server.ObaBaseURL, server.ObaApiKey), report.SentryReportOptions{
 				Tags: map[string]string{
 					"agency_id":   server.AgencyID,
 					"agency_name": server.AgencyName,
 					"server_name": server.ServerName,
 				},
 				ExtraContext: map[string]interface{}{
-					"oba_base_url": server.ObaBaseURL,
+					"oba_base_url": utils.SanitizeServerURL(server.ObaBaseURL),
 				},
 				Level: sentry.LevelError,
 			})

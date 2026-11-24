@@ -148,10 +148,7 @@ func main() {
 		servers = nil
 	} else if len(servers) == 0 {
 		logger.Error("Remote configuration contained no valid servers; starting with no servers until a refresh succeeds")
-		report.ReportErrorWithSentryOptions(fmt.Errorf("initial remote configuration from %s contained no valid servers", *configURL), report.SentryReportOptions{
-			Tags:  utils.MakeMap("config_url", *configURL),
-			Level: sentry.LevelError,
-		})
+		reportInitialRemoteConfigNoValidServers(*configURL, configAuthPass)
 	}
 
 	cfg.UpdateConfig(servers)
@@ -261,6 +258,15 @@ func main() {
 		logger.Error(err.Error())
 		os.Exit(1)
 	}
+}
+
+func reportInitialRemoteConfigNoValidServers(configURL, configAuthPass string) {
+	err := fmt.Errorf("initial remote configuration from %s contained no valid servers", configURL)
+	err = utils.SanitizeErrorURL(err, configURL, configAuthPass)
+	report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+		Tags:  utils.MakeMap("config_url", utils.SanitizeServerURL(configURL)),
+		Level: sentry.LevelError,
+	})
 }
 
 // investigationDBStartupTimeout bounds connecting and migrating at startup, so

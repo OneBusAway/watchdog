@@ -2,13 +2,16 @@ package metrics
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	onebusaway "github.com/OneBusAway/go-sdk"
 	"github.com/OneBusAway/go-sdk/option"
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/report"
 	"watchdog.onebusaway.org/internal/utils"
 )
 
@@ -90,4 +93,52 @@ func TestCheckServer(t *testing.T) {
 			t.Errorf("Expected metric value to be 0 (request failure), got %v", metricValue)
 		}
 	})
+}
+
+func TestServerPingSentryContextSanitizesObaBaseURL(t *testing.T) {
+	rec := report.CaptureSentry(t)
+	ts := setupObaServer(t, `{"code":500,"text":"failure","version":2}`, http.StatusInternalServerError)
+	defer ts.Close()
+
+	testServer := models.ObaServer{
+		ServerName: "ping-context",
+		ObaBaseURL: "https://url-user:url-password@oba.example.com/api?token=url-token",
+		ObaApiKey:  "api-key-secret",
+	}
+	client := onebusaway.NewClient(
+		option.WithAPIKey(testServer.ObaApiKey),
+		option.WithBaseURL(ts.URL),
+	)
+	serverPing(context.Background(), client, testServer)
+
+	events := rec.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 report, got %d", len(events))
+	}
+	event := events[0]
+	extra, ok := event.Contexts["extra"]
+	if !ok {
+		t.Fatalf("expected extra context, got %v", event.Contexts)
+	}
+	if got, want := extra["oba_base_url"], "https://oba.example.com/api"; got != want {
+		t.Errorf("oba_base_url context = %v, want %q", got, want)
+	}
+
+	for _, secret := range []string{"url-user", "url-password", "url-token", "api-key-secret"} {
+		if strings.Contains(event.Message, secret) || strings.Contains(fmt.Sprint(event.Exception), secret) {
+			t.Errorf("report leaked credential %q in message or exception", secret)
+		}
+		for _, tag := range event.Tags {
+			if strings.Contains(tag, secret) {
+				t.Errorf("report leaked credential %q in tag", secret)
+			}
+		}
+		for contextName, context := range event.Contexts {
+			for key, value := range context {
+				if strings.Contains(fmt.Sprint(value), secret) {
+					t.Errorf("report leaked credential %q in context %q field %q", secret, contextName, key)
+				}
+			}
+		}
+	}
 }

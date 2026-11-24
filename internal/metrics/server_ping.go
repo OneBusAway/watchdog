@@ -44,10 +44,11 @@ func serverPing(ctx context.Context, client *onebusaway.Client, server models.Ob
 			return false
 		}
 		err := fmt.Errorf("failed to ping OBA server %s: %v", server.ObaBaseURL, err)
+		err = utils.SanitizeErrorURL(err, server.ObaBaseURL, server.ObaApiKey)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: utils.MakeMap("server_name", server.ServerName),
 			ExtraContext: map[string]interface{}{
-				"oba_base_url": server.ObaBaseURL,
+				"oba_base_url": serverURL,
 			},
 		})
 		ObaApiStatus.WithLabelValues(server.ServerName, serverURL).Set(0)
