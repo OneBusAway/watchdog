@@ -64,3 +64,47 @@ func (s *InvestigationService) listVehicleAnomalyTypes(w http.ResponseWriter, r 
 	}
 	s.writeJSON(w, r, body, cacheShort())
 }
+
+// kindVehicleAnomalyType is the include kind of one vehicle anomaly type (E31).
+// Its ID is anomaly_type_id; the URL uses the code.
+const kindVehicleAnomalyType resourceKind = "vehicle_anomaly_type"
+
+// getVehicleAnomalyType serves GET /v1/vehicle-anomaly-types/:anomaly_code (E31).
+// It takes no query parameters. An unknown code is a 404 from the no-rows path.
+func (s *InvestigationService) getVehicleAnomalyType(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	var bad invalidParams
+	parseQuery(r, &bad)
+	if len(bad) > 0 {
+		writeInvalidParams(w, bad)
+		return
+	}
+
+	var body vehicleAnomalyType
+	err := s.read(r.Context(), func(ctx context.Context, q *dbgen.Queries) error {
+		row, err := q.GetVehicleAnomalyType(ctx, ps.ByName("anomaly_code"))
+		if err != nil {
+			return err
+		}
+		body = vehicleAnomalyTypeRepresentation(row.AnomalyCode, row.Description)
+		return nil
+	})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.writeJSON(w, r, body, cacheShort())
+}
+
+// loadVehicleAnomalyTypes is the include loader for kindVehicleAnomalyType. It
+// returns each type's E31 representation, keyed by anomaly_type_id, in one query.
+func loadVehicleAnomalyTypes(ctx context.Context, q *dbgen.Queries, ids []int64) (map[int64]any, error) {
+	rows, err := q.ListVehicleAnomalyTypesByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int64]any, len(rows))
+	for _, row := range rows {
+		out[int64(row.AnomalyTypeID)] = vehicleAnomalyTypeRepresentation(row.AnomalyCode, row.Description)
+	}
+	return out, nil
+}

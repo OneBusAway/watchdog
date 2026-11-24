@@ -9,6 +9,25 @@ import (
 	"context"
 )
 
+const getVehicleAnomalyType = `-- name: GetVehicleAnomalyType :one
+SELECT anomaly_code, description
+FROM vehicle_anomaly_type
+WHERE anomaly_code = $1
+`
+
+type GetVehicleAnomalyTypeRow struct {
+	AnomalyCode string
+	Description string
+}
+
+// One vehicle anomaly type by its code, for E31.
+func (q *Queries) GetVehicleAnomalyType(ctx context.Context, anomalyCode string) (GetVehicleAnomalyTypeRow, error) {
+	row := q.db.QueryRow(ctx, getVehicleAnomalyType, anomalyCode)
+	var i GetVehicleAnomalyTypeRow
+	err := row.Scan(&i.AnomalyCode, &i.Description)
+	return i, err
+}
+
 const listVehicleAnomalyTypes = `-- name: ListVehicleAnomalyTypes :many
 SELECT anomaly_code, description
 FROM vehicle_anomaly_type
@@ -31,6 +50,34 @@ func (q *Queries) ListVehicleAnomalyTypes(ctx context.Context) ([]ListVehicleAno
 	for rows.Next() {
 		var i ListVehicleAnomalyTypesRow
 		if err := rows.Scan(&i.AnomalyCode, &i.Description); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVehicleAnomalyTypesByIDs = `-- name: ListVehicleAnomalyTypesByIDs :many
+SELECT anomaly_type_id, anomaly_code, description
+FROM vehicle_anomaly_type
+WHERE anomaly_type_id = ANY($1::bigint[])
+ORDER BY anomaly_type_id
+`
+
+// The vehicle anomaly types with the given IDs, for the include loader (E31).
+func (q *Queries) ListVehicleAnomalyTypesByIDs(ctx context.Context, anomalyTypeIds []int64) ([]VehicleAnomalyType, error) {
+	rows, err := q.db.Query(ctx, listVehicleAnomalyTypesByIDs, anomalyTypeIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VehicleAnomalyType
+	for rows.Next() {
+		var i VehicleAnomalyType
+		if err := rows.Scan(&i.AnomalyTypeID, &i.AnomalyCode, &i.Description); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
