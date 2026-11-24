@@ -359,6 +359,83 @@ func TestStaticVersion_AgencyEntriesDifferentHashes(t *testing.T) {
 	}
 }
 
+// serverPublication is a server-scoped publication of content that declares
+// agencyIDs, with no bounding boxes.
+func serverPublication(content string, publishedAt time.Time, agencyIDs ...string) gtfs.StaticVersionPublication {
+	agencies := make([]gtfs.StaticPublishedAgency, len(agencyIDs))
+	for i, id := range agencyIDs {
+		agencies[i] = gtfs.StaticPublishedAgency{AgencyID: id, AgencyName: "Agency " + id}
+	}
+	return gtfs.StaticVersionPublication{
+		Server:      testServer,
+		PublishedAt: publishedAt,
+		Feeds:       []gtfs.StaticFeedContent{{URL: testFeedURL, ContentSHA256: hashOf(content)}},
+		Agencies:    agencies,
+	}
+}
+
+// A server-scoped entry reuses a version only when it is the server's newest
+// one. A publication that returns to an earlier feed and agency set is a
+// rollback, so it gets a new version with its own published_at; otherwise
+// history could not show that the feed went back.
+func TestStaticVersion_ServerScopedReuse(t *testing.T) {
+	type step struct {
+		content  string
+		agencies []string
+	}
+	h1A := step{"feed-h1", []string{"A"}}
+	h2A := step{"feed-h2", []string{"A"}}
+	h2AB := step{"feed-h2", []string{"A", "B"}}
+
+	tests := []struct {
+		name         string
+		steps        []step
+		wantVersions int
+		// wantLastNew is whether the last publication recorded a new
+		// version rather than reusing an earlier one.
+		wantLastNew bool
+	}{
+		{"unchanged restart reuses", []step{h1A, h1A}, 1, false},
+		{"unchanged after agency change reuses", []step{h1A, h2AB, h2AB}, 2, false},
+		{"rollback after content change", []step{h1A, h2A, h1A}, 3, true},
+		{"rollback after agency set change", []step{h1A, h2AB, h1A}, 3, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pool := newMigratedPool(t)
+			h := NewHistoryService(pool, discardLogger(), "test-build", nil)
+			start := time.Date(2026, 11, 23, 8, 0, 0, 0, time.UTC)
+
+			var last time.Time
+			for i, s := range tt.steps {
+				last = start.Add(time.Duration(i) * time.Hour)
+				h.StaticVersionObserver()(serverPublication(s.content, last, s.agencies...))
+			}
+
+			if got := count(t, pool, "gtfs_static_version"); got != tt.wantVersions {
+				t.Errorf("gtfs_static_version has %d rows, want %d", got, tt.wantVersions)
+			}
+			current, ok := h.CurrentStaticVersion(testServer.ServerKey())
+			if !ok {
+				t.Fatal("no current static version")
+			}
+			if newest := latestVersionID(t, pool); current != newest {
+				t.Errorf("CurrentStaticVersion = %d, want the newest version %d", current, newest)
+			}
+			var publishedAt time.Time
+			if err := pool.QueryRow(ctx,
+				"SELECT published_at FROM gtfs_static_version WHERE gtfs_static_version_id = $1",
+				current).Scan(&publishedAt); err != nil {
+				t.Fatal(err)
+			}
+			if gotNew := publishedAt.Equal(last); gotNew != tt.wantLastNew {
+				t.Errorf("current version published_at = %v; last publication at %v recorded a new version = %v, want %v",
+					publishedAt, last, gotNew, tt.wantLastNew)
+			}
+		})
+	}
+}
+
 // A slow write for an older publication must not replace the version a
 // newer publication already made current.
 func TestStaticVersion_OlderPublicationDoesNotReplaceNewer(t *testing.T) {

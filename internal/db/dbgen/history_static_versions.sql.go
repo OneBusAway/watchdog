@@ -43,6 +43,42 @@ func (q *Queries) GetLatestGTFSStaticVersionForAgencies(ctx context.Context, arg
 	return i, err
 }
 
+const getLatestGTFSStaticVersionForServer = `-- name: GetLatestGTFSStaticVersionForServer :one
+SELECT v.gtfs_static_version_id, v.combined_content_sha256,
+    (recorded.agency_ids @> $1::text[]
+        AND recorded.agency_ids <@ $1::text[])::boolean AS same_agencies
+FROM gtfs_static_version v
+CROSS JOIN LATERAL (
+    SELECT coalesce(array_agg(a.external_agency_id), '{}'::text[]) AS agency_ids
+    FROM gtfs_static_version_agency va
+    JOIN agency a ON a.agency_id = va.agency_id
+    WHERE va.gtfs_static_version_id = v.gtfs_static_version_id
+) recorded
+WHERE v.server_id = $2
+ORDER BY v.published_at DESC, v.gtfs_static_version_id DESC
+LIMIT 1
+`
+
+type GetLatestGTFSStaticVersionForServerParams struct {
+	AgencyIds []string
+	ServerID  int64
+}
+
+type GetLatestGTFSStaticVersionForServerRow struct {
+	GtfsStaticVersionID   int64
+	CombinedContentSha256 *string
+	SameAgencies          bool
+}
+
+// The server's newest version whatever its agencies, and whether its agency
+// set is exactly @agency_ids.
+func (q *Queries) GetLatestGTFSStaticVersionForServer(ctx context.Context, arg GetLatestGTFSStaticVersionForServerParams) (GetLatestGTFSStaticVersionForServerRow, error) {
+	row := q.db.QueryRow(ctx, getLatestGTFSStaticVersionForServer, arg.AgencyIds, arg.ServerID)
+	var i GetLatestGTFSStaticVersionForServerRow
+	err := row.Scan(&i.GtfsStaticVersionID, &i.CombinedContentSha256, &i.SameAgencies)
+	return i, err
+}
+
 const insertBoundingBoxVersion = `-- name: InsertBoundingBoxVersion :one
 INSERT INTO bounding_box_version (
     gtfs_static_version_id, server_id, agency_id,
