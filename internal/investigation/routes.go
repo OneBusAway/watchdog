@@ -49,6 +49,8 @@ func (s *InvestigationService) registerRoutes(router *httprouter.Router) {
 	s.get(router, "/v1/reported-stops/:reported_stop_id", s.getReportedStop)
 	s.get(router, "/v1/reported-stops/:reported_stop_id/unmatched-stop-episodes", s.listReportedStopEpisodes)
 	s.registerLoader(kindReportedStop, loadReportedStops)
+	s.get(router, "/v1/gtfs-static-versions/:gtfs_static_version_id", s.getGTFSStaticVersion)
+	s.registerLoader(kindGTFSStaticVersion, loadGTFSStaticVersions)
 }
 
 // get registers a read-only endpoint: it serves GET and HEAD requests for
