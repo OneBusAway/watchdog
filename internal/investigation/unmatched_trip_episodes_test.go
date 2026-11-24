@@ -382,6 +382,41 @@ func TestListUnmatchedTripEpisodeStaticContexts_Head(t *testing.T) {
 	// net/http drops a HEAD body itself, so only the headers are compared here.
 }
 
+// TestListUnmatchedTripEpisodeStaticContexts_CachePolicy checks that a closed
+// episode's static contexts get the long policy only without include, as E16
+// and E18 do (#351).
+func TestListUnmatchedTripEpisodeStaticContexts_CachePolicy(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	tr := tripStaticFixture(t, pool, "trip-1")
+	closedAt := episodesNow.Add(-time.Hour)
+	closed := tr.episode(t, episodesNow.Add(-2*time.Hour), closedAt)
+	open := tr.episode(t, episodesNow.Add(-time.Minute), time.Time{})
+	for _, id := range []int64{closed, open} {
+		tr.linkStatic(t, id, episodesNow.Add(-3*time.Hour), true)
+	}
+	router := newTripStaticRouter(t, pool)
+
+	for _, tc := range []struct {
+		path, cacheControl, lastModified string
+	}{
+		{tripStaticContextsPath(closed), "private, max-age=86400", closedAt.Format(http.TimeFormat)},
+		{tripStaticContextsPath(closed) + "?include=gtfs_static_version", "private, max-age=30", ""},
+		{tripStaticContextsPath(open), "private, max-age=30", ""},
+		{tripStaticContextsPath(open) + "?include=gtfs_static_version", "private, max-age=30", ""},
+	} {
+		rec := doGet(t, router, tc.path, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200; body %s", tc.path, rec.Code, rec.Body)
+		}
+		if got := rec.Header().Get("Cache-Control"); got != tc.cacheControl {
+			t.Errorf("%s: Cache-Control = %q, want %q", tc.path, got, tc.cacheControl)
+		}
+		if got := rec.Header().Get("Last-Modified"); got != tc.lastModified {
+			t.Errorf("%s: Last-Modified = %q, want %q", tc.path, got, tc.lastModified)
+		}
+	}
+}
+
 func TestListUnmatchedTripEpisodeStaticContexts_AppliesRule(t *testing.T) {
 	pool := dbtest.NewMigratedPool(t)
 	tr := tripStaticFixture(t, pool, "trip-1")

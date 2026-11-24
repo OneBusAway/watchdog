@@ -287,8 +287,10 @@ func (s *InvestigationService) listUnmatchedTripEpisodeStaticContexts(w http.Res
 		s.fail(w, r, err)
 		return
 	}
+	// Any include gets the short policy, as in E16 and E18, so the rule does
+	// not depend on which names this endpoint can include.
 	cache := cacheShort()
-	if closedAt != nil {
+	if closedAt != nil && !inc.requested() {
 		cache = cacheImmutable(*closedAt)
 	}
 	s.writeJSON(w, r, body, cache)
