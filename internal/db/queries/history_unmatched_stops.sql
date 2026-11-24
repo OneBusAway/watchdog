@@ -56,15 +56,18 @@ WHERE unmatched_stop_episode_id = @unmatched_stop_episode_id
   AND closing_response_agency_id IS NULL;
 
 -- name: SaveUnmatchedStopLastReported :exec
--- Saves the last_reported_at of several open episodes in one statement. Times
--- are passed as microseconds since the Unix epoch, which converts exactly. A
--- stored value is only ever moved forward.
+-- Saves the last_reported_at of several open episodes in one statement.
+-- last_reported_us[i] is the time for episode_ids[i], in microseconds since
+-- the Unix epoch, which converts exactly. A stored value only moves forward.
 UPDATE unmatched_stop_episode e
-SET last_reported_at = 'epoch'::timestamptz + u.last_reported_us * interval '1 microsecond'
-FROM unnest(@episode_ids::bigint[], @last_reported_us::bigint[]) AS u(episode_id, last_reported_us)
-WHERE e.unmatched_stop_episode_id = u.episode_id
+SET last_reported_at = 'epoch'::timestamptz
+    + (@last_reported_us::bigint[])[array_position(@episode_ids::bigint[], e.unmatched_stop_episode_id)]
+      * interval '1 microsecond'
+WHERE e.unmatched_stop_episode_id = ANY(@episode_ids::bigint[])
   AND e.closing_response_agency_id IS NULL
-  AND e.last_reported_at < 'epoch'::timestamptz + u.last_reported_us * interval '1 microsecond';
+  AND e.last_reported_at < 'epoch'::timestamptz
+    + (@last_reported_us::bigint[])[array_position(@episode_ids::bigint[], e.unmatched_stop_episode_id)]
+      * interval '1 microsecond';
 
 -- name: GetNewestStopMetadataForStop :one
 -- The newest metadata row of a reported stop, by its version's published_at.

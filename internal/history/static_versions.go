@@ -139,9 +139,12 @@ func (h *HistoryService) CurrentBoundingBox(boxKey string) (int64, bool) {
 }
 
 // onStaticVersion is called after a new static version is recorded and
-// committed. It does nothing yet; the stop metadata (B3) and unmatched trip
-// (#157) recording hook in here.
-func (h *HistoryService) onStaticVersion(_ context.Context, _ models.ObaServer, _ int64) {}
+// committed. It writes stop metadata for the server's open unmatched-stop
+// episodes whose static facts changed (trigger 2). Unmatched trip recording
+// (#157) hooks in here too.
+func (h *HistoryService) onStaticVersion(ctx context.Context, server models.ObaServer, versionID int64) {
+	h.recordStopMetadataForVersion(ctx, server, versionID)
+}
 
 // recordStaticVersion records one publication in a single transaction and,
 // once it commits, makes the version and its boxes current.
