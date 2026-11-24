@@ -109,7 +109,7 @@ func newExpiryHarness(t *testing.T, startupFeed []byte) *expiryHarness {
 	h.app.GtfsService.StartStaticRefreshCampaigns(ctx, []models.ObaServer{h.server}, gtfs.StaticRefreshStartup, 1)
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		if check, ok := h.app.GtfsService.LastStaticFeedCheck(h.server); ok && check.Success {
+		if check, ok := h.app.GtfsService.LastStaticFeedCheck(h.server); ok && check.Success && !h.app.GtfsService.StaticCampaignActive(h.server) {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -260,6 +260,29 @@ func TestBackendStaleAfterExpiry(t *testing.T) {
 	h.collectUntil(t, "metrics to resume", func() bool { return h.app.BundleExpiry.entry(key).kind == withholdNone })
 	if v, found := gaugeValueFor(metrics.GtfsScheduleAvailable, labels); !found || v != 1 {
 		t.Fatalf("schedule available = %v (found %v), want 1 once the backend caught up", v, found)
+	}
+}
+
+// TestExpiryRecoveryWithoutBackendHash checks that when an expired bundle is
+// replaced by a current one on the feed URL and the backend exposes no metadata
+// hash (older backends or multi-feed configs), metrics resume (entry returns to
+// withholdNone) rather than staying withheld forever under debouncing.
+func TestExpiryRecoveryWithoutBackendHash(t *testing.T) {
+	ignoreEarlierFeedChecks(t)
+	expired := expiredTestFeed(t)
+	current := currentTestFeed(t)
+	h := newExpiryHarness(t, expired)
+	h.hash.Store("")
+	h.feed.Store(current)
+	key := h.server.ServerKey()
+	labels := map[string]string{"agency_id": h.server.AgencyID, "server_url": utils.SanitizeServerURL(h.server.ObaBaseURL)}
+
+	// Verify that the entry recovers to withholdNone once the new bundle loads.
+	h.collectUntil(t, "metrics to resume when backend publishes no hash", func() bool {
+		return h.app.BundleExpiry.entry(key).kind == withholdNone
+	})
+	if v, found := gaugeValueFor(metrics.GtfsScheduleAvailable, labels); !found || v != 1 {
+		t.Fatalf("schedule available = %v (found %v), want 1 once the new bundle loaded", v, found)
 	}
 }
 
