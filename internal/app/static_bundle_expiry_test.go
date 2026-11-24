@@ -109,7 +109,7 @@ func newExpiryHarness(t *testing.T, startupFeed []byte) *expiryHarness {
 	h.app.GtfsService.StartStaticRefreshCampaigns(ctx, []models.ObaServer{h.server}, gtfs.StaticRefreshStartup, 1)
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		if check, ok := h.app.GtfsService.LastStaticFeedCheck(h.server); ok && check.Success {
+		if check, ok := h.app.GtfsService.LastStaticFeedCheck(h.server); ok && check.Success && !h.app.GtfsService.StaticCampaignActive(h.server) {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -230,11 +230,24 @@ func TestBackendStaleAfterExpiry(t *testing.T) {
 	h.app.GtfsService.SetStaticRefreshClock(func() time.Time {
 		return time.Now().Add(time.Duration(elapsed.Load()))
 	})
+	var debounced bool
 	h.collectUntil(t, "the backend to be reported stale", func() bool {
 		elapsed.Add(int64(30 * time.Second))
 		entry := h.app.BundleExpiry.entry(key)
+		if h.app.GtfsService.BackendBundleDebouncing(h.server) {
+			debounced = true
+			if entry.kind == withholdNone {
+				t.Fatal("metrics flapped to not withheld while backend debounce was pending")
+			}
+			if v, found := gaugeValueFor(metrics.GtfsScheduleAvailable, labels); found && v != 0 {
+				t.Fatalf("schedule available flapped to %v while backend debounce was pending", v)
+			}
+		}
 		return entry.kind == withholdBackendBehind && entry.reported
 	})
+	if !debounced {
+		t.Fatal("expected debounce to run before backend was reported stale")
+	}
 	if entry := h.app.BundleExpiry.entry(key); entry.cause != withholdCauseBackendStale {
 		t.Fatalf("cause = %q, want backend_stale", entry.cause)
 	}
@@ -247,6 +260,29 @@ func TestBackendStaleAfterExpiry(t *testing.T) {
 	h.collectUntil(t, "metrics to resume", func() bool { return h.app.BundleExpiry.entry(key).kind == withholdNone })
 	if v, found := gaugeValueFor(metrics.GtfsScheduleAvailable, labels); !found || v != 1 {
 		t.Fatalf("schedule available = %v (found %v), want 1 once the backend caught up", v, found)
+	}
+}
+
+// TestExpiryRecoveryWithoutBackendHash checks that when an expired bundle is
+// replaced by a current one on the feed URL and the backend exposes no metadata
+// hash (older backends or multi-feed configs), metrics resume (entry returns to
+// withholdNone) rather than staying withheld forever under debouncing.
+func TestExpiryRecoveryWithoutBackendHash(t *testing.T) {
+	ignoreEarlierFeedChecks(t)
+	expired := expiredTestFeed(t)
+	current := currentTestFeed(t)
+	h := newExpiryHarness(t, expired)
+	h.hash.Store("")
+	h.feed.Store(current)
+	key := h.server.ServerKey()
+	labels := map[string]string{"agency_id": h.server.AgencyID, "server_url": utils.SanitizeServerURL(h.server.ObaBaseURL)}
+
+	// Verify that the entry recovers to withholdNone once the new bundle loads.
+	h.collectUntil(t, "metrics to resume when backend publishes no hash", func() bool {
+		return h.app.BundleExpiry.entry(key).kind == withholdNone
+	})
+	if v, found := gaugeValueFor(metrics.GtfsScheduleAvailable, labels); !found || v != 1 {
+		t.Fatalf("schedule available = %v (found %v), want 1 once the new bundle loaded", v, found)
 	}
 }
 

@@ -38,6 +38,20 @@ func TestBackendBehindRequiresStableRun(t *testing.T) {
 	h.wantRelation(t, BackendBundleBehind, "after the stale hash held")
 }
 
+func TestBackendBehindDebounceFlag(t *testing.T) {
+	h, _, _ := newBackendBehindHarness(t)
+	for i := 0; i < 3; i++ {
+		h.tick(t, 30*time.Second)
+		if !h.service.BackendBundleDebouncing(h.server) {
+			t.Fatalf("tick %d: expected debouncing to be true while stale hash run is pending", i)
+		}
+	}
+	h.tick(t, 30*time.Second)
+	if h.service.BackendBundleDebouncing(h.server) {
+		t.Fatal("expected debouncing to be false once behind is confirmed")
+	}
+}
+
 func TestBackendBehindIgnoresSingleLaggingNode(t *testing.T) {
 	h, hashA, hashB := newBackendBehindHarness(t)
 	for i := 0; i < 8; i++ {

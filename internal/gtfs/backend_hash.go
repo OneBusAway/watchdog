@@ -135,6 +135,7 @@ func (gs *GtfsService) CheckBackendBundles(ctx, campaignCtx context.Context, ser
 			}
 			run, startCampaign, warn := c.observeBackendRunLocked(server, fingerprint, hash, localHash, match)
 			published := relation
+			debouncing := false
 			if relation == BackendBundleBehind {
 				// One read can come from a single lagging node behind a load
 				// balancer, so report the backend as behind only once the
@@ -142,6 +143,7 @@ func (gs *GtfsService) CheckBackendBundles(ctx, campaignCtx context.Context, ser
 				// gap, which restarts the run but is no evidence of a catch-up.
 				if !run.stable() && !c.relationIsLocked(server.ServerKey(), fingerprint, BackendBundleBehind) {
 					published = BackendBundleUnknown
+					debouncing = true
 				}
 				// Watchdog already replaced the bundle the backend serves, so
 				// downloading the feed now would fetch the same newer bundle
@@ -155,7 +157,7 @@ func (gs *GtfsService) CheckBackendBundles(ctx, campaignCtx context.Context, ser
 				}
 				warn = false
 			}
-			relationChanged := c.setRelationLocked(server.ServerKey(), fingerprint, published)
+			relationChanged := c.setRelationLocked(server.ServerKey(), fingerprint, published, debouncing)
 			c.mu.Unlock()
 			gs.StaticStore.mu.RUnlock()
 			if match != nil && *match {

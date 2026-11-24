@@ -67,6 +67,7 @@ type feedCheckState struct {
 type backendRelationState struct {
 	fingerprint string
 	relation    BackendBundleRelation
+	debouncing  bool
 }
 
 // recordFeedCheck records the outcome of one completed feed attempt unless the
@@ -97,10 +98,10 @@ func (c *staticRefreshCoordinator) relationIsLocked(key, fingerprint string, rel
 
 // setRelationLocked records the relation and reports whether it changed.
 // c.mu must be held.
-func (c *staticRefreshCoordinator) setRelationLocked(key, fingerprint string, relation BackendBundleRelation) bool {
+func (c *staticRefreshCoordinator) setRelationLocked(key, fingerprint string, relation BackendBundleRelation, debouncing bool) bool {
 	previous, ok := c.relations[key]
-	changed := !ok || previous.fingerprint != fingerprint || previous.relation != relation
-	c.relations[key] = backendRelationState{fingerprint: fingerprint, relation: relation}
+	changed := !ok || previous.fingerprint != fingerprint || previous.relation != relation || previous.debouncing != debouncing
+	c.relations[key] = backendRelationState{fingerprint: fingerprint, relation: relation, debouncing: debouncing}
 	return changed
 }
 
@@ -129,6 +130,20 @@ func (gs *GtfsService) LastStaticFeedCheck(server models.ObaServer) (StaticFeedC
 	return StaticFeedCheck{}, false
 }
 
+// StaticCampaignActive reports whether a static refresh campaign is currently
+// active for the server.
+func (gs *GtfsService) StaticCampaignActive(server models.ObaServer) bool {
+	c := gs.refreshCoordinator
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, key := range lookupKeys(server) {
+		if _, ok := c.active[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 // SetStaticRefreshClock replaces the clock that times backend hash runs, so
 // tests in other packages need not wait out the stable duration.
 func (gs *GtfsService) SetStaticRefreshClock(now func() time.Time) {
@@ -138,16 +153,42 @@ func (gs *GtfsService) SetStaticRefreshClock(now func() time.Time) {
 	c.now = now
 }
 
-// BackendBundleRelation returns how the backend's bundle related to
-// Watchdog's snapshot at the last usable hash comparison.
-func (gs *GtfsService) BackendBundleRelation(server models.ObaServer) BackendBundleRelation {
+// staticConfigFingerprintForKey returns the fingerprint expected for server
+// under key, falling back to server-scoped configuration for agency entries.
+func staticConfigFingerprintForKey(server models.ObaServer, key string) string {
+	if server.AgencyID != "" && key == models.ServerKey(server.ObaBaseURL, "") {
+		serverScoped := server
+		serverScoped.AgencyID, serverScoped.AgencyName = "", ""
+		return staticConfigFingerprint(serverScoped)
+	}
+	return staticConfigFingerprint(server)
+}
+
+// BackendBundleSyncState returns the backend's relation to Watchdog's bundle
+// and whether a debounce run is currently in progress, under a single lock acquisition.
+func (gs *GtfsService) BackendBundleSyncState(server models.ObaServer) (BackendBundleRelation, bool) {
 	c := gs.refreshCoordinator
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, key := range lookupKeys(server) {
-		if state, ok := c.relations[key]; ok {
-			return state.relation
+		expectedFP := staticConfigFingerprintForKey(server, key)
+		if state, ok := c.relations[key]; ok && state.fingerprint == expectedFP {
+			return state.relation, state.debouncing
 		}
 	}
-	return BackendBundleUnknown
+	return BackendBundleUnknown, false
+}
+
+// BackendBundleRelation returns how the backend's bundle related to
+// Watchdog's snapshot at the last usable hash comparison.
+func (gs *GtfsService) BackendBundleRelation(server models.ObaServer) BackendBundleRelation {
+	relation, _ := gs.BackendBundleSyncState(server)
+	return relation
+}
+
+// BackendBundleDebouncing reports whether the backend's bundle relation is
+// unknown while a debounce run is in progress.
+func (gs *GtfsService) BackendBundleDebouncing(server models.ObaServer) bool {
+	_, debouncing := gs.BackendBundleSyncState(server)
+	return debouncing
 }

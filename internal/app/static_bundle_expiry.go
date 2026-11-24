@@ -176,8 +176,14 @@ func (app *Application) staticWithholdKind(server models.ObaServer, now time.Tim
 	if app.MetricsService.StaticBundleExpired(server, now) {
 		return withholdExpired
 	}
-	if app.GtfsService.BackendBundleRelation(server) == gtfs.BackendBundleBehind {
+	relation, debouncing := app.GtfsService.BackendBundleSyncState(server)
+	if relation == gtfs.BackendBundleBehind {
 		return withholdBackendBehind
+	}
+	if debouncing && app.BundleExpiry != nil {
+		if prior := app.BundleExpiry.entry(server.ServerKey()).kind; prior != withholdNone {
+			return prior
+		}
 	}
 	return withholdNone
 }

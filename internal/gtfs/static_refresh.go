@@ -276,7 +276,13 @@ func (c *staticRefreshCoordinator) recordPublished(ctx context.Context, server m
 		// A newer bundle replaced the snapshot. A backend still reporting the
 		// old one's hash is behind Watchdog, not ahead of it.
 		c.superseded[key] = previous
-		delete(c.relations, key)
+		if _, hadRelation := c.relations[key]; hadRelation {
+			c.relations[key] = backendRelationState{
+				fingerprint: content.fingerprint,
+				relation:    BackendBundleUnknown,
+				debouncing:  true,
+			}
+		}
 	} else if !ok || previous.fingerprint != content.fingerprint {
 		delete(c.superseded, key)
 		delete(c.relations, key)
