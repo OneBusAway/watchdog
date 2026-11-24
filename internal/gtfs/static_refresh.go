@@ -646,7 +646,12 @@ func (gs *GtfsService) publishStaticCampaign(ctx context.Context, server models.
 	}
 	data, err := cache.Read(feedURL)
 	if err != nil {
-		return nil, &StaticFeedError{Stage: StaticFailureCompleteValidate, Reason: StaticReasonUnknown, Err: err}
+		return nil, sanitizeStaticFeedError(&StaticFeedError{
+			FeedURL: feedURL,
+			Stage:   StaticFailureCompleteValidate,
+			Reason:  StaticReasonUnknown,
+			Err:     err,
+		}, feedURL)
 	}
 	bundle, err := gs.parseStatic(data, feedURL, server.AgencyID)
 	if err != nil {

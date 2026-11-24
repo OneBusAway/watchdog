@@ -302,6 +302,78 @@ func TestParsedStaticDuplicateRetainsFailureClassification(t *testing.T) {
 	}
 }
 
+func TestPublishStaticCampaignRedactsCredentialsFromCacheMissError(t *testing.T) {
+	const (
+		username = "cache-user-secret"
+		password = "cache-password-secret"
+		apiKey   = "cache-query-secret"
+	)
+
+	feedURL := "https://" + username + ":" + password +
+		"@feeds.example.com/static.zip?api_key=" + apiKey
+	safeURL := "https://feeds.example.com/static.zip"
+
+	cache, err := newStaticArtifactCache(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+
+	service := &GtfsService{}
+	server := models.ObaServer{
+		ServerName: "cache-miss-test",
+		AgencyID:   "agency-A",
+	}
+
+	_, err = service.publishStaticCampaign(
+		context.Background(),
+		server,
+		feedURL,
+		cache,
+	)
+
+	if err == nil {
+		t.Fatal("expected cache-miss error")
+	}
+
+	var failure *StaticFeedError
+	if !errors.As(err, &failure) {
+		t.Fatalf("expected StaticFeedError, got %T: %v", err, err)
+	}
+
+	if failure.FeedURL != feedURL {
+		t.Errorf("FeedURL = %q, want original configured URL", failure.FeedURL)
+	}
+
+	if failure.Stage != StaticFailureCompleteValidate {
+		t.Errorf("Stage = %q, want %q", failure.Stage, StaticFailureCompleteValidate)
+	}
+
+	if failure.Reason != StaticReasonUnknown {
+		t.Errorf("Reason = %q, want %q", failure.Reason, StaticReasonUnknown)
+	}
+
+	for _, secret := range []string{username, password, apiKey} {
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("cache-miss error leaked credential %q: %v", secret, err)
+		}
+	}
+
+	if !strings.Contains(err.Error(), safeURL) {
+		t.Errorf("safe endpoint %q missing from error: %v", safeURL, err)
+	}
+
+	var logBuffer bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuffer, nil))
+	logger.Error("Static publication failed", "error", err)
+
+	for _, secret := range []string{username, password, apiKey} {
+		if strings.Contains(logBuffer.String(), secret) {
+			t.Errorf("cache-miss log leaked credential %q", secret)
+		}
+	}
+}
+
 func TestStaleInvalidCampaignPreservesCurrentSchedule(t *testing.T) {
 	server := scheduleServer("A", "https://merged.example/static.zip")
 	data := makeScheduleZip(t, basicScheduleFiles("UTC", "08:00:00", "09:00:00"))

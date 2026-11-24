@@ -9,7 +9,7 @@ import (
 
 // embeddedHTTPURLPattern finds HTTP(S) URLs inside error strings, including the
 // URL formatting used by net/http when it masks URL passwords.
-var embeddedHTTPURLPattern = regexp.MustCompile(`(?i)https?://[^\s"'<>]+`)
+var embeddedHTTPURLPattern = regexp.MustCompile(`(?i)https?://[^\s"<>]+`)
 
 // MakeMap creates and returns a map[string]string containing a single key-value pair.
 func MakeMap(key, value string) map[string]string {
@@ -26,21 +26,35 @@ func SanitizeErrorURL(err error, rawURL string, secrets ...string) error {
 	}
 	safeURL := SanitizeServerURL(rawURL)
 	message := err.Error()
+	replaceConfiguredURL := func(configuredURL string) {
+		if configuredURL == "" {
+			return
+		}
+
+		// Include any server-appended query parameters. Otherwise replacing
+		// rawURL could leave an appended "&key=value" in the sanitized path.
+		pattern := regexp.MustCompile(
+			regexp.QuoteMeta(configuredURL) + `(?:&[^\s"<>]*)?`,
+		)
+
+		message = pattern.ReplaceAllStringFunc(message, func(string) string {
+			return safeURL
+		})
+	}
+
 	if rawURL != "" {
-		// Replace the complete configured URL before scanning embedded URLs.
-		// Otherwise, a URL containing an apostrophe can be partially matched
-		// by embeddedHTTPURLPattern, leaving the remainder of its query intact.
-		message = strings.ReplaceAll(message, rawURL, safeURL)
+		// Replace configured URL representations before scanning other URLs.
+		replaceConfiguredURL(rawURL)
+
 		if parsed, parseErr := url.Parse(rawURL); parseErr == nil {
-			message = strings.ReplaceAll(message, parsed.String(), safeURL)
-			// net/http masks URL passwords in url.Error using URL.Redacted().
-			message = strings.ReplaceAll(message, parsed.Redacted(), safeURL)
+			replaceConfiguredURL(parsed.String())
+			replaceConfiguredURL(parsed.Redacted())
 
 			if parsed.User != nil {
 				if _, hasPassword := parsed.User.Password(); hasPassword {
 					masked := *parsed
 					masked.User = url.UserPassword(parsed.User.Username(), "***")
-					message = strings.ReplaceAll(message, masked.String(), safeURL)
+					replaceConfiguredURL(masked.String())
 				}
 			}
 		}
