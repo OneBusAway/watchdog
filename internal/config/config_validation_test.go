@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -683,12 +684,26 @@ func TestReconcileReportsNoCredentials(t *testing.T) {
 				t.Errorf("report leaked credential %q in tag", secret)
 			}
 		}
+		for contextName, context := range event.Contexts {
+			for key, value := range context {
+				if strings.Contains(fmt.Sprint(value), secret) {
+					t.Errorf("report leaked credential %q in context %q field %q", secret, contextName, key)
+				}
+			}
+		}
 	}
 
 	for _, want := range []string{"agency_id", "server_name"} {
 		if _, ok := event.Tags[want]; !ok {
 			t.Errorf("expected tag %q to be present, got %v", want, event.Tags)
 		}
+	}
+	extra, ok := event.Contexts["extra"]
+	if !ok {
+		t.Fatalf("expected extra context, got %v", event.Contexts)
+	}
+	if got, want := extra["oba_base_url"], "https://oba.example.com/api"; got != want {
+		t.Errorf("oba_base_url context = %v, want %q", got, want)
 	}
 }
 

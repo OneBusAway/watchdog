@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/metrics"
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/report"
 )
 
 var pingTestAgencies = []string{"agency-a", "agency-b", "agency-c"}
@@ -183,5 +185,53 @@ func TestAgencyModePingsPerEntry(t *testing.T) {
 	}
 	if _, exists := app.ConfigService.BackoffStore.NextRetryAt(first.ServerKey()); !exists {
 		t.Fatal("failed agency-mode ping did not grow that entry's backoff")
+	}
+}
+
+func TestAgencyBackoffSentryContextSanitizesObaBaseURL(t *testing.T) {
+	rec := report.CaptureSentry(t)
+	app := newTestApplication(t)
+	server := models.ObaServer{
+		ServerName: "backoff-context",
+		AgencyID:   "agency-a",
+		AgencyName: "Agency A",
+		ObaBaseURL: "https://url-user:url-password@oba.example.com/api?token=url-token",
+		ObaApiKey:  "api-key-secret",
+	}
+	app.ConfigService.BackoffStore.UpdateBackoff(server.ServerKey())
+
+	if app.agencyEntryAvailable(context.Background(), server) {
+		t.Fatal("agencyEntryAvailable returned true during backoff")
+	}
+
+	events := rec.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 report, got %d", len(events))
+	}
+	event := events[0]
+	extra, ok := event.Contexts["extra"]
+	if !ok {
+		t.Fatalf("expected extra context, got %v", event.Contexts)
+	}
+	if got, want := extra["oba_base_url"], "https://oba.example.com/api"; got != want {
+		t.Errorf("oba_base_url context = %v, want %q", got, want)
+	}
+
+	for _, secret := range []string{"url-user", "url-password", "url-token", "api-key-secret"} {
+		if strings.Contains(event.Message, secret) || strings.Contains(fmt.Sprint(event.Exception), secret) {
+			t.Errorf("report leaked credential %q in message or exception", secret)
+		}
+		for _, tag := range event.Tags {
+			if strings.Contains(tag, secret) {
+				t.Errorf("report leaked credential %q in tag", secret)
+			}
+		}
+		for contextName, context := range event.Contexts {
+			for key, value := range context {
+				if strings.Contains(fmt.Sprint(value), secret) {
+					t.Errorf("report leaked credential %q in context %q field %q", secret, contextName, key)
+				}
+			}
+		}
 	}
 }
