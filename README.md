@@ -211,7 +211,7 @@ Both v1 and v2 configurations accept one static feed and one realtime source per
     export DATABASE_URL="postgres://user:password@host:5432/watchdog?sslmode=require"
 ```
 
-When `DATABASE_URL` is set, Watchdog connects to PostgreSQL at startup and applies any pending schema migrations. This database will hold durable investigation history ([ADR 0001](docs/adr/0001-durable-historical-investigation-storage.md), [schema](docs/historical-investigation-schema.md)). It is optional: if `DATABASE_URL` is unset, or the database is unreachable at startup, Watchdog logs it and keeps collecting and exporting Prometheus metrics without it. Docker Compose starts a local PostgreSQL and sets `DATABASE_URL` for you.
+When `DATABASE_URL` is set, Watchdog connects to PostgreSQL at startup and applies any pending schema migrations. It holds durable investigation history ([ADR 0001](docs/adr/0001-durable-historical-investigation-storage.md), [schema](docs/historical-investigation-schema.md)). So far Watchdog records each static GTFS version, with its servers, agencies, sources and bounding boxes; episode recording is still in progress. It is optional: if `DATABASE_URL` is unset, or the database is unreachable at startup, Watchdog logs it and keeps collecting and exporting Prometheus metrics without it. Docker Compose starts a local PostgreSQL and sets `DATABASE_URL` for you.
 
 - **Investigation API token (optional)**
 
