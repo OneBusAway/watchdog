@@ -1628,6 +1628,16 @@ func TestStoreStaticForServer_NoDeclaredAgenciesSanitizesURL(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 
+	errStr := err.Error()
+	for _, secret := range []string{obaUser, obaPass, obaToken, "oba-api-key"} {
+		if strings.Contains(errStr, secret) {
+			t.Errorf("returned error leaked credential %q: %s", secret, errStr)
+		}
+	}
+	if !strings.Contains(errStr, safeObaURL) {
+		t.Errorf("returned error does not contain safeObaURL %q: %s", safeObaURL, errStr)
+	}
+
 	logStr := logBuf.String()
 	for _, secret := range []string{obaUser, obaPass, obaToken} {
 		if strings.Contains(logStr, secret) {
