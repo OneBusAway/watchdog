@@ -1,4 +1,8 @@
 -- name: GetLatestGTFSStaticVersionForAgencies :one
+-- The newest agency-scoped version whose agency set is exactly @agency_ids.
+-- Server-scoped versions are excluded: a server entry on this base URL can
+-- later publish that same agency, and treating its row as newer makes an
+-- unchanged agency restart insert a duplicate.
 SELECT v.gtfs_static_version_id, v.combined_content_sha256
 FROM gtfs_static_version v
 CROSS JOIN LATERAL (
@@ -8,6 +12,7 @@ CROSS JOIN LATERAL (
     WHERE va.gtfs_static_version_id = v.gtfs_static_version_id
 ) recorded
 WHERE v.server_id = @server_id
+  AND NOT v.server_scoped
   AND recorded.agency_ids @> @agency_ids::text[]
   AND recorded.agency_ids <@ @agency_ids::text[]
 ORDER BY v.published_at DESC, v.gtfs_static_version_id DESC

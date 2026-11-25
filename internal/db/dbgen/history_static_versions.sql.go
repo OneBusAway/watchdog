@@ -20,6 +20,7 @@ CROSS JOIN LATERAL (
     WHERE va.gtfs_static_version_id = v.gtfs_static_version_id
 ) recorded
 WHERE v.server_id = $1
+  AND NOT v.server_scoped
   AND recorded.agency_ids @> $2::text[]
   AND recorded.agency_ids <@ $2::text[]
 ORDER BY v.published_at DESC, v.gtfs_static_version_id DESC
@@ -36,6 +37,10 @@ type GetLatestGTFSStaticVersionForAgenciesRow struct {
 	CombinedContentSha256 *string
 }
 
+// The newest agency-scoped version whose agency set is exactly @agency_ids.
+// Server-scoped versions are excluded: a server entry on this base URL can
+// later publish that same agency, and treating its row as newer makes an
+// unchanged agency restart insert a duplicate.
 func (q *Queries) GetLatestGTFSStaticVersionForAgencies(ctx context.Context, arg GetLatestGTFSStaticVersionForAgenciesParams) (GetLatestGTFSStaticVersionForAgenciesRow, error) {
 	row := q.db.QueryRow(ctx, getLatestGTFSStaticVersionForAgencies, arg.ServerID, arg.AgencyIds)
 	var i GetLatestGTFSStaticVersionForAgenciesRow

@@ -496,7 +496,9 @@ func TestStaticVersion_OlderPublicationDoesNotReplaceNewer(t *testing.T) {
 
 // An agency-scoped publication on the same base URL is not the server
 // entry's newest version. An unchanged server restart reuses the server
-// version. A later change of the server feed still records a new one.
+// version. A later change of the server feed still records a new one, and
+// that version does not become the agency entry's latest: an unchanged
+// agency restart reuses the agency version.
 func TestStaticVersion_ServerScopeIgnoresAgencyEntries(t *testing.T) {
 	pool := newMigratedPool(t)
 	h := NewHistoryService(pool, discardLogger(), "test-build", nil)

@@ -325,16 +325,17 @@ func recordStaticVersion(ctx context.Context, q *dbgen.Queries, publication gtfs
 // version in the entry's scope and has the same agency set and combined hash.
 //
 // The scope depends on the entry. Agency-scoped entries on one base URL share
-// a database server, so each one's scope is the versions recorded with
-// exactly its agency; otherwise the entries would take turns being the
-// server's newest version and every restart would record a new one. A
-// server-scoped entry's agency set can change between publications, so its
-// scope is the server-scoped versions only. Matching on the agency set alone
-// there would treat a return to an earlier feed (H1 [A], H2 [A B], then H1
-// [A]) as unchanged, and history could not show the rollback. Agency-scoped
-// versions are outside that sequence: they share the server row, and taking
-// the newest of them as the server entry's latest would insert another copy
-// of an unchanged server feed on restart.
+// a database server, so each one's scope is the agency-scoped versions
+// recorded with exactly its agency. Server-scoped versions are outside that
+// sequence: a server entry can later publish the same agency, and taking
+// that newer row as the agency entry's latest would insert another copy of
+// an unchanged agency feed. A server-scoped entry's agency set can change
+// between publications, so its scope is the server-scoped versions only.
+// Matching on the agency set alone there would treat a return to an earlier
+// feed (H1 [A], H2 [A B], then H1 [A]) as unchanged, and history could not
+// show the rollback. Agency-scoped versions are outside that sequence too:
+// they share the server row, and taking the newest of them as the server
+// entry's latest would insert another copy of an unchanged server feed.
 func reusableStaticVersion(ctx context.Context, q *dbgen.Queries, server models.ObaServer, serverID int64, agencyIDs []string, combined string) (int64, bool, error) {
 	var (
 		versionID int64
