@@ -230,17 +230,8 @@ launch:
 func (app *Application) collectForScope(ctx, campaignCtx context.Context, server models.ObaServer, scope config.Scope) {
 	switch s := scope.(type) {
 	case config.AgencyScope:
-		now := time.Now().UTC()
-		app.observeStaticBundle(server, now)
-		app.MetricsService.ReportScheduledService(now, server, app.staticMetricsWithheld(server, now))
 		app.CollectMetricsForServer(ctx, server)
 	case config.ServerScope:
-		now := time.Now().UTC()
-		for _, agency := range s.StaticAgencies {
-			entry := serverForAgency(server, agency.AgencyID, agency.AgencyName)
-			app.observeStaticBundle(entry, now)
-			app.MetricsService.ReportScheduledService(now, entry, app.staticMetricsWithheld(entry, now))
-		}
 		app.collectForServerScope(ctx, campaignCtx, server, s)
 	default:
 		app.Logger.Error("Unknown scope type", "server_name", server.ServerName)
@@ -299,6 +290,17 @@ func (app *Application) collectForServerScope(ctx, campaignCtx context.Context, 
 	if len(scope.StaticAgencies) == 0 {
 		app.Logger.Info("Server-scope entry has no static agencies yet; skipping tick", "server_name", server.ServerName)
 		return
+	}
+
+	// Observe all static agencies before the API availability gate, and use
+	// the same decisions throughout the tick even if metadata changes.
+	now := app.BundleExpiry.now().UTC()
+	withheldByAgency := make(map[string]bool, len(scope.StaticAgencies))
+	for _, agency := range scope.StaticAgencies {
+		entry := serverForAgency(server, agency.AgencyID, agency.AgencyName)
+		withheld := app.observeStaticBundle(entry, now)
+		app.MetricsService.ReportScheduledService(now, entry, withheld)
+		withheldByAgency[agency.AgencyID] = withheld
 	}
 
 	// Honour the backoff written below on ping failure. Without this check the
@@ -375,6 +377,7 @@ func (app *Application) collectForServerScope(ctx, campaignCtx context.Context, 
 	// labels the vehicle pass emits, and the pass consults the route/trip index
 	// to decide which of them owns each vehicle in the merged feed.
 	reportedAgencyEntries := make([]models.ObaServer, 0, len(scope.StaticAgencies))
+	allReportedAgenciesWithheld := true
 	// Every other metric labels server_url with the sanitized base URL, and the
 	// dashboard's $server_url variable is sourced from those series. Use the
 	// same form here so these gauges join with the rest (and so credentials
@@ -391,6 +394,7 @@ func (app *Application) collectForServerScope(ctx, campaignCtx context.Context, 
 
 		if reportedByOBA {
 			reportedAgencyEntries = append(reportedAgencyEntries, serverForAgency(server, agency.AgencyID, agency.AgencyName))
+			allReportedAgenciesWithheld = allReportedAgenciesWithheld && withheldByAgency[agency.AgencyID]
 		} else {
 			app.MetricsService.RetireInactiveVehicleAgency(serverForAgency(server, agency.AgencyID, agency.AgencyName))
 		}
@@ -484,7 +488,7 @@ agencyLaunch:
 		go func(s models.ObaServer) {
 			defer agencyWg.Done()
 			defer func() { <-agencySem }()
-			app.collectAgencyChecks(ctx, s, prefetchedMetrics)
+			app.collectAgencyChecks(ctx, s, prefetchedMetrics, withheldByAgency[s.AgencyID])
 		}(agencyServer)
 	}
 	agencyWg.Wait()
@@ -498,7 +502,7 @@ agencyLaunch:
 	}
 	// The pass is shared by every agency of the merged bundle, so it is
 	// withheld only when every one of them is (expired or backend behind).
-	if app.staticMetricsWithheldForAll(reportedAgencyEntries, time.Now().UTC()) {
+	if allReportedAgenciesWithheld {
 		for _, entry := range reportedAgencyEntries {
 			app.MetricsService.RetireStaticDerivedVehicleSeries(entry)
 		}
@@ -519,11 +523,15 @@ agencyLaunch:
 //     runs, so a failed fetch is a hard gate: we return rather than emit
 //     metrics derived from a stale (or absent) feed.
 func (app *Application) CollectMetricsForServer(ctx context.Context, server models.ObaServer) {
+	now := app.BundleExpiry.now().UTC()
+	withheld := app.observeStaticBundle(server, now)
+	app.MetricsService.ReportScheduledService(now, server, withheld)
+
 	if !app.agencyEntryAvailable(ctx, server) {
 		return
 	}
 	// nil: agency-mode fetches its own response.
-	app.collectAgencyChecks(ctx, server, nil)
+	app.collectAgencyChecks(ctx, server, nil, withheld)
 
 	if err := app.GtfsService.FetchAndStoreGTFSRTFeed(ctx, server); err != nil {
 		if ctx.Err() != nil {
@@ -564,7 +572,7 @@ func (app *Application) CollectMetricsForServer(ctx context.Context, server mode
 	// Vehicles are attributed and bounds-checked with the static bundle, so
 	// an expired bundle, or one the backend does not serve yet, withholds the
 	// pass rather than report results from the wrong bundle.
-	if app.staticMetricsWithheld(server, time.Now().UTC()) {
+	if withheld {
 		app.MetricsService.RetireStaticDerivedVehicleSeries(server)
 		return
 	}
@@ -645,7 +653,7 @@ func (app *Application) agencyEntryAvailable(ctx context.Context, server models.
 // once per OBA-reported agency; agency-mode calls it once for the configured
 // entry. The GTFS-RT vehicle pass is deliberately NOT part of it — that pass
 // runs once per server, in the caller.
-func (app *Application) collectAgencyChecks(ctx context.Context, server models.ObaServer, prefetchedMetrics *metrics.OBAMetrics) {
+func (app *Application) collectAgencyChecks(ctx context.Context, server models.ObaServer, prefetchedMetrics *metrics.OBAMetrics, withheld bool) {
 	_, _, err := app.MetricsService.CheckBundleExpiration(time.Now().UTC(), server)
 	if err != nil {
 		app.Logger.Error("Failed to check GTFS bundle expiration", "error", err)
@@ -659,7 +667,7 @@ func (app *Application) collectAgencyChecks(ctx context.Context, server models.O
 		})
 	}
 
-	err = app.MetricsService.FetchObaAPIMetrics(ctx, server.AgencyID, server.AgencyName, server.ServerName, server.ObaBaseURL, server.ObaApiKey, prefetchedMetrics, app.staticMetricsWithheld(server, time.Now().UTC()))
+	err = app.MetricsService.FetchObaAPIMetrics(ctx, server.AgencyID, server.AgencyName, server.ServerName, server.ObaBaseURL, server.ObaApiKey, prefetchedMetrics, withheld)
 	if err != nil {
 		if ctx.Err() != nil {
 			// Canceled by the cycle deadline or shutdown: incomplete
