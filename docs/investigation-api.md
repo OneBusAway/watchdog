@@ -1,6 +1,6 @@
 # Watchdog Investigation REST API
 
-**Status:** Design. Not implemented yet.
+**Status:** Partly implemented. 32 of the 41 endpoints are served; E07, E26, E28, E29, E32, E33, E34, E36 and E37 are not yet, and return `404`. The routes are registered in `internal/investigation/routes.go`.
 **Builds on:** [ADR 0001](adr/0001-durable-historical-investigation-storage.md) and the [historical investigation schema](historical-investigation-schema.md).
 
 This document defines the read-only HTTP API that investigators and OBACloud use to query Watchdog's PostgreSQL investigation history. Section 1 lists every supported endpoint. Section 2 defines the investigation use cases and the questions the stored data can answer. Section 3 defines the conventions all endpoints follow, and Section 4 describes each endpoint. Resource and URI design follows the REST API Design Rulebook (chapters 1–4).
