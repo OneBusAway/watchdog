@@ -1677,3 +1677,37 @@ func TestStoreStaticForServer_NoDeclaredAgenciesSanitizesURL(t *testing.T) {
 		}
 	}
 }
+
+// A server-mode bundle without usable coordinates must not keep the previous
+// bundle's boxes: vehicle checks would use them, and the static version would
+// record a box it never produced.
+func TestStoreStaticSnapshotServerModeDropsBoxesWithoutUsableCoordinates(t *testing.T) {
+	server := models.ObaServer{ServerName: "multi", ObaBaseURL: "https://example.com"}
+	agencyKey := models.ServerKey(server.ObaBaseURL, "agency-A")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	store, boxes := NewStaticStore(), geo.NewBoundingBoxStore()
+
+	good := makeSyntheticBundle(t, "agency-A", "Agency A", "https://a.example", []remoteGtfs.Stop{
+		{Id: "S1", Latitude: floatPtr(47.60), Longitude: floatPtr(-122.30)},
+	})
+	if _, err := storeStaticSnapshot(server, good, store, boxes, NewRouteAgencyIndex(), nil, logger); err != nil {
+		t.Fatalf("store good bundle: %v", err)
+	}
+	if _, ok := boxes.Get(agencyKey); !ok {
+		t.Fatal("expected a box from the good bundle")
+	}
+
+	broken := makeSyntheticBundle(t, "agency-A", "Agency A", "https://a.example", []remoteGtfs.Stop{{Id: "S1"}})
+	published, err := storeStaticSnapshot(server, broken, store, boxes, NewRouteAgencyIndex(), nil, logger)
+	if err != nil {
+		t.Fatalf("store broken bundle: %v", err)
+	}
+	for _, key := range []string{agencyKey, server.ServerKey()} {
+		if got, ok := boxes.Get(key); ok {
+			t.Errorf("box for %q = %+v, want none after a bundle without coordinates", key, got)
+		}
+	}
+	if len(published.boxes) != 0 {
+		t.Errorf("published boxes = %+v, want none", published.boxes)
+	}
+}

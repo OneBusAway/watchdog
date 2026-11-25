@@ -441,6 +441,10 @@ func storeStaticSnapshot(server models.ObaServer, bundle *remoteGtfs.Static, sta
 						Level: sentry.LevelError,
 					},
 				)
+				// As in agency mode, a successful refresh must not leave the
+				// previous bundle's box in place: vehicle checks would use it,
+				// and this version would be recorded with it.
+				boundingBoxStore.Delete(serverKey)
 			} else {
 				if agencyBoxFailed {
 					logger.Warn("Could not compute agency bounding box; using server-wide bounding box",
@@ -465,9 +469,12 @@ func storeStaticSnapshot(server models.ObaServer, bundle *remoteGtfs.Static, sta
 			boundingBoxStore.Set(serverKey, bbox)
 		}
 		// The server-scoped key intentionally remains the union box because
-		// the vehicle pass uses it for unattributed vehicles.
-		if server.IsServerScoped() && unionBoxErr == nil {
+		// the vehicle pass uses it for unattributed vehicles. Without a union
+		// box, drop the previous bundle's one for the same reason as above.
+		if unionBoxErr == nil {
 			boundingBoxStore.Set(models.ServerKey(server.ObaBaseURL, ""), unionBox)
+		} else {
+			boundingBoxStore.Delete(models.ServerKey(server.ObaBaseURL, ""))
 		}
 
 		if observer != nil {
