@@ -166,6 +166,39 @@ func TestLoadConfigFromURL(t *testing.T) {
 	})
 }
 
+func TestLoadConfigFromURLResponseSizeLimit(t *testing.T) {
+	tests := []struct {
+		name      string
+		bodySize  int
+		wantError bool
+	}{
+		{name: "at limit is accepted", bodySize: maxRemoteConfigSize},
+		{name: "over limit is rejected", bodySize: maxRemoteConfigSize + 1, wantError: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := append([]byte("[]"), bytes.Repeat([]byte(" "), tt.bodySize-2)...)
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(body)
+			}))
+			defer ts.Close()
+
+			servers, err := loadConfigFromURL(context.Background(), ts.Client(), ts.URL, "", "", 1, testLogger(), NewDroppedServersStore())
+			if (err != nil) != tt.wantError {
+				t.Fatalf("loadConfigFromURL error = %v, wantError %v", err, tt.wantError)
+			}
+			if !tt.wantError && len(servers) != 0 {
+				t.Fatalf("expected empty config array, got %d servers", len(servers))
+			}
+			if tt.wantError && !strings.Contains(err.Error(), "exceeds maximum size") {
+				t.Fatalf("expected size-limit error, got: %v", err)
+			}
+		})
+	}
+}
+
 func TestValidateConfig(t *testing.T) {
 	tests := []struct {
 		name        string
