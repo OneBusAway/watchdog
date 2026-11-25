@@ -109,3 +109,24 @@ func TestBackendBehindDebounceClearedWhenIneligible(t *testing.T) {
 	}
 	h.wantRelation(t, BackendBundleUnknown, "after deployment becomes ineligible")
 }
+
+func TestBackendBehindConfirmedDroppedWhenUnsupported(t *testing.T) {
+	h, _, _ := newBackendBehindHarness(t)
+	h.ticks(t, 4, 30*time.Second)
+	h.wantRelation(t, BackendBundleBehind, "confirmed")
+
+	h.hash.Store("")
+	h.tick(t, 30*time.Second)
+	h.wantRelation(t, BackendBundleUnknown, "after backend stops reporting hash")
+}
+
+func TestBackendBehindConfirmedDroppedWhenIneligible(t *testing.T) {
+	h, _, _ := newBackendBehindHarness(t)
+	h.ticks(t, 4, 30*time.Second)
+	h.wantRelation(t, BackendBundleBehind, "confirmed")
+
+	ineligibleServer := h.server
+	ineligibleServer.GtfsStaticFeeds = nil
+	h.service.CheckBackendBundles(h.ctx, h.ctx, []models.ObaServer{ineligibleServer})
+	h.wantRelation(t, BackendBundleUnknown, "after deployment becomes ineligible")
+}

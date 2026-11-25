@@ -102,9 +102,7 @@ func (gs *GtfsService) CheckBackendBundles(ctx, campaignCtx context.Context, ser
 		c.mu.Lock()
 		for _, server := range servers {
 			for _, key := range lookupKeys(server) {
-				if state, ok := c.relations[key]; ok && state.debouncing {
-					delete(c.relations, key)
-				}
+				delete(c.relations, key)
 			}
 		}
 		c.mu.Unlock()
