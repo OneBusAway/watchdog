@@ -270,12 +270,7 @@ func TestFetchInterval_ResponseWithInclude(t *testing.T) {
 	}
 }
 
-func TestFetchInterval_AccessorAndNil(t *testing.T) {
-	var nilService *InvestigationService
-	if got := nilService.shortCacheDuration(); got != changingMaxAge {
-		t.Errorf("nil shortCacheDuration = %v, want %v", got, changingMaxAge)
-	}
-
+func TestFetchInterval_Accessor(t *testing.T) {
 	s, _ := newTestService(t)
 	if got := s.FetchInterval(); got != changingMaxAge {
 		t.Errorf("default FetchInterval = %v, want %v", got, changingMaxAge)

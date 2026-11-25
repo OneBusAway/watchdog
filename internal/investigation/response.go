@@ -15,12 +15,11 @@ import (
 // How long a client may reuse a response before asking again. After that it
 // revalidates with If-None-Match, which costs only a 304 when nothing changed.
 const (
-	// changingMaxAge is for data that can change on any collection tick: an
-	// open episode's last_reported_at moves forward every poll, and a new
-	// episode can open on any poll. It matches the default --fetch-interval,
-	// so a client is never more than one tick behind. It is the most stale a
-	// client may let such a response get: a longer value would let a
-	// dashboard hide a newly opened episode for that long.
+	// changingMaxAge is the fallback max-age for data that can change on
+	// any collection tick, used when no fetch interval is configured. The
+	// configured fetch interval is the real bound: it ensures a client is
+	// never more than one tick behind. A longer value would let a dashboard
+	// hide a newly opened episode for that long.
 	changingMaxAge = 30 * time.Second
 	// unchangingMaxAge is for records that never change once written, such as
 	// closed episodes. Staleness cannot happen there, so a day only saves
@@ -38,9 +37,6 @@ type cachePolicy struct {
 // shortCacheDuration returns the max-age for short-cached responses on this
 // service. If unset or non-positive, changingMaxAge is used.
 func (s *InvestigationService) shortCacheDuration() time.Duration {
-	if s == nil {
-		return changingMaxAge
-	}
 	d := time.Duration(s.fetchInterval.Load())
 	if d <= 0 {
 		return changingMaxAge
@@ -49,7 +45,8 @@ func (s *InvestigationService) shortCacheDuration() time.Duration {
 }
 
 // cacheShort is for anything that can still change: open episodes,
-// collections, clusters and counts.
+// collections, clusters and counts. writeJSON replaces its default max-age
+// with the service's configured fetch interval.
 func cacheShort() cachePolicy {
 	return cachePolicy{control: cacheControl(changingMaxAge), short: true}
 }
