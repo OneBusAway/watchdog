@@ -79,13 +79,13 @@ func gtfsStaticVersionLinks(versionID, serverID int64) itemLinks {
 	}
 }
 
-func gtfsStaticVersionBaseFields(row dbgen.GtfsStaticVersion) gtfsStaticVersionFields {
+func gtfsStaticVersionBaseFields(id, serverID int64, publishedAt time.Time, combined, parser *string) gtfsStaticVersionFields {
 	return gtfsStaticVersionFields{
-		GTFSStaticVersionID:   row.GtfsStaticVersionID,
-		ServerID:              row.ServerID,
-		PublishedAt:           newAPITime(row.PublishedAt),
-		CombinedContentSHA256: row.CombinedContentSha256,
-		ParserVersion:         row.ParserVersion,
+		GTFSStaticVersionID:   id,
+		ServerID:              serverID,
+		PublishedAt:           newAPITime(publishedAt),
+		CombinedContentSHA256: combined,
+		ParserVersion:         parser,
 	}
 }
 
@@ -103,7 +103,7 @@ func (s *InvestigationService) gtfsStaticVersionPage(ctx context.Context, q *dbg
 	for _, row := range rows {
 		l := gtfsStaticVersionLinks(row.GtfsStaticVersionID, row.ServerID)
 		body.Items = append(body.Items, gtfsStaticVersionListItem{
-			gtfsStaticVersionFields: gtfsStaticVersionBaseFields(row),
+			gtfsStaticVersionFields: gtfsStaticVersionBaseFields(row.GtfsStaticVersionID, row.ServerID, row.PublishedAt, row.CombinedContentSha256, row.ParserVersion),
 			Links:                   l.links(),
 		})
 		allLinks = append(allLinks, l)
@@ -152,9 +152,9 @@ func (s *InvestigationService) listGTFSStaticVersions(w http.ResponseWriter, r *
 // agency rows to E35. sources must be ordered by source_id and agencies by
 // agency_id, as the queries return them. Neither array is ever nil, so a
 // version with no rows of either kind encodes [] rather than null.
-func gtfsStaticVersionRepresentation(row dbgen.GtfsStaticVersion, sources []dbgen.ListGTFSStaticVersionSourcesRow, agencies []dbgen.ListGTFSStaticVersionAgenciesRow) gtfsStaticVersion {
+func gtfsStaticVersionRepresentation(row dbgen.GetGTFSStaticVersionRow, sources []dbgen.ListGTFSStaticVersionSourcesRow, agencies []dbgen.ListGTFSStaticVersionAgenciesRow) gtfsStaticVersion {
 	rep := gtfsStaticVersion{
-		gtfsStaticVersionFields: gtfsStaticVersionBaseFields(row),
+		gtfsStaticVersionFields: gtfsStaticVersionBaseFields(row.GtfsStaticVersionID, row.ServerID, row.PublishedAt, row.CombinedContentSha256, row.ParserVersion),
 		Sources:                 make([]gtfsStaticVersionSource, 0, len(sources)),
 		Agencies:                make([]gtfsStaticVersionAgency, 0, len(agencies)),
 		Links:                   gtfsStaticVersionLinks(row.GtfsStaticVersionID, row.ServerID).links(),

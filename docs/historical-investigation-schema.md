@@ -337,7 +337,7 @@ Do not use the zero-based configuration index as an identity. The same URL on on
 | `published_at` | `TIMESTAMPTZ NOT NULL` | When Watchdog accepted and published this complete static version. |
 | `combined_content_sha256` | `CHAR(64)` | Optional SHA-256 fingerprint for comparison and provenance only. |
 | `parser_version` | `TEXT` | Watchdog parser/build version when available. |
-| `server_scoped` | `BOOLEAN NOT NULL` | True when a server-scoped entry recorded the version. False when an agency-scoped entry did. Rows from before this column existed are true. |
+| `server_scoped` | `BOOLEAN NOT NULL DEFAULT TRUE` | True when a server-scoped entry recorded the version. False when an agency-scoped entry did. The default covers rows from before this column existed and inserts that do not set it. |
 
 This identifies the GTFS data Watchdog had loaded. It does not identify the Java or Maglev backend's own static data; the OBA metrics response currently provides no source GTFS hash to prove both sides used identical files.
 

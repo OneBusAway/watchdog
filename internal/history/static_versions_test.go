@@ -549,7 +549,11 @@ func TestStaticVersion_ServerScopeIgnoresAgencyEntries(t *testing.T) {
 	if got := versionAgencies(t, pool, current); len(got) != 1 || got[0] != "A" {
 		t.Errorf("new server version agencies = %v, want [A]", got)
 	}
+	restarted.StaticVersionObserver()(agencyPublication("A", "agency-feed", now.Add(3*time.Hour), 47))
+	if got := count(t, pool, "gtfs_static_version"); got != 3 {
+		t.Fatalf("agency restart has %d versions, want 3", got)
+	}
 	if got, _ := restarted.CurrentStaticVersion(agency.ServerKey()); got != agencyVersion {
-		t.Errorf("agency current version = %d, want its own %d", got, agencyVersion)
+		t.Errorf("agency reused version %d, want %d", got, agencyVersion)
 	}
 }
