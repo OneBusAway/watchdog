@@ -57,6 +57,7 @@ func (s *InvestigationService) registerRoutes(router *httprouter.Router) {
 	s.get(router, "/v1/reported-stops/:reported_stop_id/unmatched-stop-episodes", s.listReportedStopEpisodes)
 	s.registerLoader(kindReportedStop, loadReportedStops)
 	s.get(router, "/v1/static-gtfs-sources/:source_id", s.getStaticGTFSSource)
+	s.get(router, "/v1/gtfs-static-versions", s.listGTFSStaticVersions)
 	s.get(router, "/v1/gtfs-static-versions/:gtfs_static_version_id", s.getGTFSStaticVersion)
 	s.registerLoader(kindGTFSStaticVersion, loadGTFSStaticVersions)
 }
