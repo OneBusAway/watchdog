@@ -15,8 +15,27 @@ import (
 // Every link named gtfs_static_version points to one.
 const kindGTFSStaticVersion resourceKind = "gtfs_static_version"
 
-// gtfsStaticVersionIncludable names the links E35 can include.
+// gtfsStaticVersionIncludable names the links E34 and E35 can include.
 var gtfsStaticVersionIncludable = map[string]resourceKind{"server": kindServer}
+
+type gtfsStaticVersionFields struct {
+	GTFSStaticVersionID   int64   `json:"gtfs_static_version_id"`
+	ServerID              int64   `json:"server_id"`
+	PublishedAt           apiTime `json:"published_at"`
+	CombinedContentSHA256 *string `json:"combined_content_sha256"`
+	ParserVersion         *string `json:"parser_version"`
+}
+
+type gtfsStaticVersionListItem struct {
+	gtfsStaticVersionFields
+	Links links `json:"links"`
+}
+
+type gtfsStaticVersionsBody struct {
+	Items    []gtfsStaticVersionListItem `json:"items"`
+	Links    links                       `json:"links"`
+	Included included                    `json:"included,omitzero"`
+}
 
 // gtfsStaticVersionSource is one source file a static version was built from,
 // with that file's content hash in this version.
@@ -35,14 +54,10 @@ type gtfsStaticVersionAgency struct {
 // gtfsStaticVersion is the E35 representation of one static version, which
 // the gtfs_static_version loader also returns.
 type gtfsStaticVersion struct {
-	GTFSStaticVersionID   int64                     `json:"gtfs_static_version_id"`
-	ServerID              int64                     `json:"server_id"`
-	PublishedAt           apiTime                   `json:"published_at"`
-	CombinedContentSHA256 *string                   `json:"combined_content_sha256"`
-	ParserVersion         *string                   `json:"parser_version"`
-	Sources               []gtfsStaticVersionSource `json:"sources"`
-	Agencies              []gtfsStaticVersionAgency `json:"agencies"`
-	Links                 links                     `json:"links"`
+	gtfsStaticVersionFields
+	Sources  []gtfsStaticVersionSource `json:"sources"`
+	Agencies []gtfsStaticVersionAgency `json:"agencies"`
+	Links    links                     `json:"links"`
 }
 
 // gtfsStaticVersionBody is the E35 response.
@@ -64,20 +79,85 @@ func gtfsStaticVersionLinks(versionID, serverID int64) itemLinks {
 	}
 }
 
+func gtfsStaticVersionBaseFields(row dbgen.GtfsStaticVersion) gtfsStaticVersionFields {
+	return gtfsStaticVersionFields{
+		GTFSStaticVersionID:   row.GtfsStaticVersionID,
+		ServerID:              row.ServerID,
+		PublishedAt:           newAPITime(row.PublishedAt),
+		CombinedContentSHA256: row.CombinedContentSha256,
+		ParserVersion:         row.ParserVersion,
+	}
+}
+
+func (s *InvestigationService) gtfsStaticVersionPage(ctx context.Context, q *dbgen.Queries, r *http.Request,
+	params dbgen.ListGTFSStaticVersionsParams, p page, inc include) (gtfsStaticVersionsBody, error) {
+	var body gtfsStaticVersionsBody
+	rows, err := q.ListGTFSStaticVersions(ctx, params)
+	if err != nil {
+		return body, err
+	}
+	rows, hasMore := trimPage(rows, p)
+	body.Items = make([]gtfsStaticVersionListItem, 0, len(rows))
+	allLinks := make([]itemLinks, 0, len(rows))
+	var lastID int64
+	for _, row := range rows {
+		l := gtfsStaticVersionLinks(row.GtfsStaticVersionID, row.ServerID)
+		body.Items = append(body.Items, gtfsStaticVersionListItem{
+			gtfsStaticVersionFields: gtfsStaticVersionBaseFields(row),
+			Links:                   l.links(),
+		})
+		allLinks = append(allLinks, l)
+		lastID = row.GtfsStaticVersionID
+	}
+	body.Links = pageLinks(r, lastID, hasMore)
+	body.Included, err = s.loadIncluded(ctx, q, allLinks, inc)
+	return body, err
+}
+
+// listGTFSStaticVersions serves GET /v1/gtfs-static-versions.
+func (s *InvestigationService) listGTFSStaticVersions(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	var bad invalidParams
+	values := parseQuery(r, &bad, "server_id", "published_from", "published_to", "page_size", "cursor", "include")
+	serverID := paramID(values, "server_id", &bad)
+	win := s.parseWindow(values, unboundedWindowOptions("published_from", "published_to"), &bad)
+	p := parsePage(values, &bad)
+	inc := s.parseInclude(values, gtfsStaticVersionIncludable, &bad)
+	if len(bad) > 0 {
+		writeInvalidParams(w, bad)
+		return
+	}
+
+	limit := p.Limit()
+	params := dbgen.ListGTFSStaticVersionsParams{
+		ServerID:      serverID,
+		PublishedFrom: win.From,
+		PublishedTo:   win.To,
+		AfterID:       p.AfterID,
+		PageLimit:     &limit,
+	}
+	var body gtfsStaticVersionsBody
+	err := s.read(r.Context(), func(ctx context.Context, q *dbgen.Queries) error {
+		var err error
+		body, err = s.gtfsStaticVersionPage(ctx, q, r, params, p, inc)
+		return err
+	})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.writeJSON(w, r, body, cacheShort())
+}
+
 // gtfsStaticVersionRepresentation maps one version row and its source and
 // agency rows to E35. sources must be ordered by source_id and agencies by
 // agency_id, as the queries return them. Neither array is ever nil, so a
 // version with no rows of either kind encodes [] rather than null.
 func gtfsStaticVersionRepresentation(row dbgen.GtfsStaticVersion, sources []dbgen.ListGTFSStaticVersionSourcesRow, agencies []dbgen.ListGTFSStaticVersionAgenciesRow) gtfsStaticVersion {
 	rep := gtfsStaticVersion{
-		GTFSStaticVersionID:   row.GtfsStaticVersionID,
-		ServerID:              row.ServerID,
-		PublishedAt:           newAPITime(row.PublishedAt),
-		CombinedContentSHA256: row.CombinedContentSha256,
-		ParserVersion:         row.ParserVersion,
-		Sources:               make([]gtfsStaticVersionSource, 0, len(sources)),
-		Agencies:              make([]gtfsStaticVersionAgency, 0, len(agencies)),
-		Links:                 gtfsStaticVersionLinks(row.GtfsStaticVersionID, row.ServerID).links(),
+		gtfsStaticVersionFields: gtfsStaticVersionBaseFields(row),
+		Sources:                 make([]gtfsStaticVersionSource, 0, len(sources)),
+		Agencies:                make([]gtfsStaticVersionAgency, 0, len(agencies)),
+		Links:                   gtfsStaticVersionLinks(row.GtfsStaticVersionID, row.ServerID).links(),
 	}
 	for _, s := range sources {
 		rep.Sources = append(rep.Sources, gtfsStaticVersionSource{
