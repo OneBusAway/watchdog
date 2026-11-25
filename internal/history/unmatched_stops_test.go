@@ -592,3 +592,43 @@ func TestCluster_NoStationNull(t *testing.T) {
 		t.Errorf("root station = %v %v, want null", stationID, stationName)
 	}
 }
+
+// TestRecordOBAMetrics_ReloadsAfterCommitReportedAsFailed covers a write that
+// commits in the database while the client sees an error: memory then lacks
+// an episode the database has. The next open hits the one-open-episode index
+// and fails; the poll after that must reload and recover.
+func TestRecordOBAMetrics_ReloadsAfterCommitReportedAsFailed(t *testing.T) {
+	h, pool, _ := newCountedHistory(t)
+	agencies := stopAgencies("a")
+	reported := stopsResponse([]string{"a"}, map[string][]string{"a": {"1"}})
+	h.RecordOBAMetrics(ctx, stopServer, agencies, reported, stopT0)
+
+	// The commit succeeded but memory never learned of it.
+	entry := h.stops.forServer(utils.SanitizeServerURL(stopServer.ObaBaseURL), stopServer)
+	entry.mu.Lock()
+	delete(entry.open, unmatchedStopKey{agencyID: "a", stopID: "1"})
+	entry.mu.Unlock()
+
+	// Plans an open the database already has: the write fails.
+	h.RecordOBAMetrics(ctx, stopServer, agencies, reported, stopT0.Add(30*time.Second))
+	if n := count(t, pool, "unmatched_stop_episode"); n != 1 {
+		t.Fatalf("got %d episodes, want the original only", n)
+	}
+
+	// The next poll reloads from the database and sees the episode as open.
+	lastSeen := stopT0.Add(time.Minute)
+	h.RecordOBAMetrics(ctx, stopServer, agencies, reported, lastSeen)
+	if memoryEpisode(t, h, "a", "1") == nil {
+		t.Fatal("open episode not reloaded after the failed write")
+	}
+
+	// And recording works again: the omission closes it with the exact time.
+	h.RecordOBAMetrics(ctx, stopServer, agencies, stopsResponse([]string{"a"}, map[string][]string{}), stopT0.Add(2*time.Minute))
+	episode := onlyEpisode(t, pool)
+	if episode.closeReason == nil || *episode.closeReason != "not_reported" {
+		t.Fatalf("close_reason = %v, want not_reported", episode.closeReason)
+	}
+	if !episode.lastReportedAt.Equal(lastSeen) {
+		t.Errorf("last_reported_at = %v, want %v", episode.lastReportedAt, lastSeen)
+	}
+}

@@ -263,8 +263,11 @@ func (h *HistoryService) RecordOBAMetrics(ctx context.Context, server models.Oba
 		return nil
 	})
 	if !committed {
-		// Memory still holds the difference, so the next poll records it,
-		// with that poll's time.
+		// The commit may have reached the database even though the client
+		// saw an error, so memory can no longer be trusted: reload open
+		// episodes on the next poll, which then records any difference with
+		// its own time.
+		entry.loaded = false
 		return
 	}
 	for key, episode := range opened {
