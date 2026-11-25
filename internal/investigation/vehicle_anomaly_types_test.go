@@ -3,6 +3,7 @@ package investigation
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -306,14 +307,155 @@ func TestRuleVersionLoader(t *testing.T) {
 	if len(loaded) != len(ids) {
 		t.Fatalf("loader returned %d values, want %d", len(loaded), len(ids))
 	}
-	rows, err := q.GetVehicleAnomalyRuleVersion(context.Background(), ids)
-	if err != nil {
-		t.Fatalf("query: %v", err)
-	}
-	for _, row := range rows {
-		want := vehicleAnomalyRuleVersionRepresentation(row, vehicleAnomalyRuleVersionLinks(row))
-		if !reflect.DeepEqual(loaded[row.RuleVersionID], want) {
-			t.Errorf("rule version %d: loader = %+v, want %+v", row.RuleVersionID, loaded[row.RuleVersionID], want)
+	router := newVehicleAnomalyRuleVersionsRouter(t, pool)
+	for _, id := range ids {
+		want := decodeEpisodeBody(t, doGet(t, router, ruleVersionPath(id), nil))
+		raw, err := json.Marshal(loaded[id])
+		if err != nil {
+			t.Fatalf("marshal loader value: %v", err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatalf("decode loader value: %v", err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("rule version %d: loader value =\n%v\nwant endpoint body\n%v", id, got, want)
 		}
 	}
+}
+
+// newVehicleAnomalyRuleVersionsRouter mounts E33 for GET and HEAD on a service
+// using pool. The service has every include loader registered.
+func newVehicleAnomalyRuleVersionsRouter(t *testing.T, pool *pgxpool.Pool) http.Handler {
+	t.Helper()
+	s, _ := newTestService(t)
+	s.Pool = pool
+	router := httprouter.New()
+	router.GET(vehicleAnomalyRuleVersionsPath+":rule_version_id", s.getVehicleAnomalyRuleVersion)
+	router.HEAD(vehicleAnomalyRuleVersionsPath+":rule_version_id", s.getVehicleAnomalyRuleVersion)
+	return router
+}
+
+// ruleVersionPath is the E33 path of one rule version.
+func ruleVersionPath(id int64) string {
+	return fmt.Sprintf("%s%d", vehicleAnomalyRuleVersionsPath, id)
+}
+
+func TestGetVehicleAnomalyRuleVersion_ReturnsRepresentation(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	build := "v1.2.3"
+	stale := int32(150)
+	speed := 0.5
+	// A non-UTC offset checks the output is converted to UTC.
+	effective := time.Date(2026, 10, 1, 5, 0, 0, 123456000, time.FixedZone("PDT", -7*3600))
+	full := insertRuleVersion(t, pool, "stale_source_timestamp", 3, "stale > 150s", &build, effective, &stale, &speed)
+	empty := insertRuleVersion(t, pool, "invalid_coordinate", 1, "logic 1", nil, effective, nil, nil)
+	router := newVehicleAnomalyRuleVersionsRouter(t, pool)
+
+	got := decodeEpisodeBody(t, doGet(t, router, ruleVersionPath(full), nil))
+	want := map[string]any{
+		"rule_version_id":              float64(full),
+		"anomaly_type":                 "stale_source_timestamp",
+		"rule_logic_version":           float64(3),
+		"version_name":                 "stale > 150s",
+		"watchdog_build_version":       "v1.2.3",
+		"effective_at":                 "2026-10-01T12:00:00.123456Z",
+		"stale_age_threshold_seconds":  float64(150),
+		"reported_speed_threshold_mps": 0.5,
+		"links": map[string]any{
+			"self":         ruleVersionPath(full),
+			"anomaly_type": "/v1/vehicle-anomaly-types/stale_source_timestamp",
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("body =\n%v\nwant\n%v", got, want)
+	}
+
+	// Nullable fields are present as null.
+	got = decodeEpisodeBody(t, doGet(t, router, ruleVersionPath(empty), nil))
+	for _, name := range []string{"watchdog_build_version", "stale_age_threshold_seconds", "reported_speed_threshold_mps"} {
+		v, ok := got[name]
+		if !ok || v != nil {
+			t.Errorf("%s = %v (present %v), want null", name, v, ok)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("body has %d fields, want %d: %v", len(got), len(want), got)
+	}
+
+	// include=anomaly_type adds the E31 body under its link URL.
+	typeURL := "/v1/vehicle-anomaly-types/stale_source_timestamp"
+	got = decodeEpisodeBody(t, doGet(t, router, ruleVersionPath(full)+"?include=anomaly_type", nil))
+	inc, ok := got["included"].(map[string]any)
+	if !ok || len(inc) != 1 {
+		t.Fatalf("included = %v, want one entry", got["included"])
+	}
+	wantType := decodeEpisodeBody(t, doGet(t, newVehicleAnomalyTypesRouter(t, pool), typeURL, nil))
+	if !reflect.DeepEqual(inc[typeURL], wantType) {
+		t.Errorf("included[%s] = %v, want %v", typeURL, inc[typeURL], wantType)
+	}
+}
+
+func TestGetVehicleAnomalyRuleVersion_UnknownIDReturns404(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	wantNotFound(t, doGet(t, newVehicleAnomalyRuleVersionsRouter(t, pool), ruleVersionPath(999999), nil))
+}
+
+func TestGetVehicleAnomalyRuleVersion_MalformedIDReturns404(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	router := newVehicleAnomalyRuleVersionsRouter(t, pool)
+	for _, id := range []string{"abc", "0", "-1"} {
+		t.Run(id, func(t *testing.T) {
+			wantNotFound(t, doGet(t, router, vehicleAnomalyRuleVersionsPath+id, nil))
+		})
+	}
+}
+
+func TestGetVehicleAnomalyRuleVersion_RejectsUnknownParameter(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	id := insertRuleVersion(t, pool, "invalid_coordinate", 1, "logic 1", nil, time.Now(), nil, nil)
+	wantInvalidParam(t, doGet(t, newVehicleAnomalyRuleVersionsRouter(t, pool), ruleVersionPath(id)+"?foo=1", nil), "foo")
+}
+
+func TestGetVehicleAnomalyRuleVersion_ETag(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	id := insertRuleVersion(t, pool, "invalid_coordinate", 1, "logic 1", nil, time.Now(), nil, nil)
+	router := newVehicleAnomalyRuleVersionsRouter(t, pool)
+
+	first := doGet(t, router, ruleVersionPath(id), nil)
+	etag := first.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("missing ETag")
+	}
+	if got := first.Header().Get("Cache-Control"); got != "private, max-age=86400" {
+		t.Errorf("Cache-Control = %q, want private, max-age=86400", got)
+	}
+	if got := first.Header().Get("Last-Modified"); got != "" {
+		t.Errorf("Last-Modified = %q, want none", got)
+	}
+	second := doGet(t, router, ruleVersionPath(id), map[string]string{"If-None-Match": etag})
+	if second.Code != http.StatusNotModified {
+		t.Fatalf("status = %d, want 304", second.Code)
+	}
+	if second.Body.Len() != 0 {
+		t.Errorf("304 body = %q, want empty", second.Body)
+	}
+}
+
+func TestGetVehicleAnomalyRuleVersion_Head(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	id := insertRuleVersion(t, pool, "invalid_coordinate", 1, "logic 1", nil, time.Now(), nil, nil)
+	router := newVehicleAnomalyRuleVersionsRouter(t, pool)
+
+	get := doGet(t, router, ruleVersionPath(id), nil)
+	head := headRequest(t, router, ruleVersionPath(id))
+	if head.Code != get.Code {
+		t.Errorf("HEAD status = %d, GET status = %d", head.Code, get.Code)
+	}
+	for _, h := range []string{"Cache-Control", "ETag", "Content-Type"} {
+		if head.Header().Get(h) != get.Header().Get(h) {
+			t.Errorf("HEAD %s = %q, GET %s = %q", h, head.Header().Get(h), h, get.Header().Get(h))
+		}
+	}
+	// net/http drops a HEAD body itself, so only the headers are compared here.
 }

@@ -4,7 +4,9 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/julienschmidt/httprouter"
 	"watchdog.onebusaway.org/internal/db/dbgen"
 )
@@ -174,4 +176,50 @@ func loadVehicleAnomalyRuleVersions(ctx context.Context, q *dbgen.Queries, ids [
 		out[row.RuleVersionID] = vehicleAnomalyRuleVersionRepresentation(row, vehicleAnomalyRuleVersionLinks(row))
 	}
 	return out, nil
+}
+
+// vehicleAnomalyRuleVersionBody is the E33 response: the rule version and,
+// when include asks for it, the included object.
+type vehicleAnomalyRuleVersionBody struct {
+	vehicleAnomalyRuleVersion
+	Included included `json:"included,omitzero"`
+}
+
+// getVehicleAnomalyRuleVersion serves GET
+// /v1/vehicle-anomaly-rule-versions/:rule_version_id (E33). It takes only
+// include. A malformed or unknown ID is a 404 from the no-rows path.
+func (s *InvestigationService) getVehicleAnomalyRuleVersion(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	id, ok := pathID(ps, "rule_version_id")
+	if !ok {
+		s.fail(w, r, pgx.ErrNoRows)
+		return
+	}
+	var bad invalidParams
+	values := parseQuery(r, &bad, "include")
+	inc := s.parseInclude(values, vehicleAnomalyRuleVersionIncludable, &bad)
+	if len(bad) > 0 {
+		writeInvalidParams(w, bad)
+		return
+	}
+
+	var body vehicleAnomalyRuleVersionBody
+	err := s.read(r.Context(), func(ctx context.Context, q *dbgen.Queries) error {
+		rows, err := q.GetVehicleAnomalyRuleVersion(ctx, []int64{id})
+		if err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			return pgx.ErrNoRows
+		}
+		l := vehicleAnomalyRuleVersionLinks(rows[0])
+		body.vehicleAnomalyRuleVersion = vehicleAnomalyRuleVersionRepresentation(rows[0], l)
+		body.Included, err = s.loadIncluded(ctx, q, []itemLinks{l}, inc)
+		return err
+	})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	// A rule version never changes once recorded; it has no Last-Modified.
+	s.writeJSON(w, r, body, cacheImmutable(time.Time{}))
 }
