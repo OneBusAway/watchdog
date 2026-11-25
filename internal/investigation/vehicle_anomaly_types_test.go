@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/julienschmidt/httprouter"
@@ -269,6 +270,50 @@ func TestAnomalyTypeLoader(t *testing.T) {
 		}
 		if !reflect.DeepEqual(fromLoader, endpoint) {
 			t.Errorf("%s: loader = %v, endpoint = %v", code, fromLoader, endpoint)
+		}
+	}
+}
+
+// insertRuleVersion inserts a rule version for the seeded anomaly type code and
+// returns its rule_version_id.
+func insertRuleVersion(t *testing.T, pool *pgxpool.Pool, code string, logic int32, name string,
+	build *string, effectiveAt time.Time, stale *int32, speed *float64) int64 {
+	t.Helper()
+	return dbtest.ID(t, pool, `INSERT INTO vehicle_anomaly_rule_version
+		(anomaly_type_id, rule_logic_version, version_name, watchdog_build_version,
+		 effective_at, stale_age_threshold_seconds, reported_speed_threshold_mps)
+		SELECT anomaly_type_id, $2, $3, $4, $5, $6, $7 FROM vehicle_anomaly_type WHERE anomaly_code = $1
+		RETURNING rule_version_id`, code, logic, name, build, effectiveAt, stale, speed)
+}
+
+func TestRuleVersionLoader(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	build := "v1.2.3"
+	stale := int32(150)
+	speed := 45.5
+	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	ids := []int64{
+		insertRuleVersion(t, pool, "stale_source_timestamp", 1, "stale > 150s", &build, base, &stale, nil),
+		insertRuleVersion(t, pool, "invalid_coordinate", 1, "logic 1", nil, base.Add(time.Hour), nil, nil),
+		insertRuleVersion(t, pool, "stopped_out_of_bounds", 2, "speed cap", nil, base.Add(2*time.Hour), nil, &speed),
+	}
+
+	q := dbgen.New(pool)
+	loaded, err := loadVehicleAnomalyRuleVersions(context.Background(), q, ids)
+	if err != nil {
+		t.Fatalf("loader: %v", err)
+	}
+	if len(loaded) != len(ids) {
+		t.Fatalf("loader returned %d values, want %d", len(loaded), len(ids))
+	}
+	rows, err := q.GetVehicleAnomalyRuleVersion(context.Background(), ids)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	for _, row := range rows {
+		want := vehicleAnomalyRuleVersionRepresentation(row, vehicleAnomalyRuleVersionLinks(row))
+		if !reflect.DeepEqual(loaded[row.RuleVersionID], want) {
+			t.Errorf("rule version %d: loader = %+v, want %+v", row.RuleVersionID, loaded[row.RuleVersionID], want)
 		}
 	}
 }
