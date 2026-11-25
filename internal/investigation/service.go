@@ -6,6 +6,7 @@ package investigation
 
 import (
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -30,6 +31,10 @@ type InvestigationService struct {
 	now func() time.Time
 	// loaders hold one loader per includable resource kind; see include.go.
 	loaders map[resourceKind]loader
+
+	// fetchInterval is the duration between collection ticks, used as the
+	// max-age for short-cached responses. It defaults to changingMaxAge.
+	fetchInterval atomic.Int64 // nanoseconds
 }
 
 // NewInvestigationService builds the service. pool may be nil. tokens are the
@@ -41,7 +46,7 @@ func NewInvestigationService(pool *pgxpool.Pool, servers func() []models.ObaServ
 			accepted = append(accepted, []byte(token))
 		}
 	}
-	return &InvestigationService{
+	s := &InvestigationService{
 		Pool:    pool,
 		Servers: servers,
 		Logger:  logger,
@@ -49,4 +54,20 @@ func NewInvestigationService(pool *pgxpool.Pool, servers func() []models.ObaServ
 		now:     time.Now,
 		loaders: map[resourceKind]loader{},
 	}
+	s.fetchInterval.Store(int64(changingMaxAge))
+	return s
+}
+
+// SetFetchInterval sets the collection interval used for short-cached responses.
+// When non-positive, changingMaxAge (30 seconds) is used.
+func (s *InvestigationService) SetFetchInterval(interval time.Duration) {
+	if interval <= 0 {
+		interval = changingMaxAge
+	}
+	s.fetchInterval.Store(int64(interval))
+}
+
+// FetchInterval returns the collection interval used for short-cached responses.
+func (s *InvestigationService) FetchInterval() time.Duration {
+	return s.shortCacheDuration()
 }

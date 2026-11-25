@@ -32,12 +32,32 @@ const (
 type cachePolicy struct {
 	control      string
 	lastModified time.Time // zero means no Last-Modified header
+	short        bool      // short indicates this response uses the dynamic short cache
+}
+
+// shortCacheDuration returns the max-age for short-cached responses on this
+// service. If unset or non-positive, changingMaxAge is used.
+func (s *InvestigationService) shortCacheDuration() time.Duration {
+	if s == nil {
+		return changingMaxAge
+	}
+	d := time.Duration(s.fetchInterval.Load())
+	if d <= 0 {
+		return changingMaxAge
+	}
+	return d
+}
+
+// cacheShort returns the short cache policy using this service's configured
+// fetch interval.
+func (s *InvestigationService) cacheShort() cachePolicy {
+	return cachePolicy{control: cacheControl(s.shortCacheDuration()), short: true}
 }
 
 // cacheShort is for anything that can still change: open episodes,
 // collections, clusters and counts.
 func cacheShort() cachePolicy {
-	return cachePolicy{control: cacheControl(changingMaxAge)}
+	return cachePolicy{control: cacheControl(changingMaxAge), short: true}
 }
 
 // cacheImmutable is for records that no longer change. lastModified is the
@@ -58,6 +78,9 @@ func cacheControl(maxAge time.Duration) string {
 // client's If-None-Match already names this body's ETag. If body cannot be
 // encoded, the request fails with 500 instead.
 func (s *InvestigationService) writeJSON(w http.ResponseWriter, r *http.Request, body any, cache cachePolicy) {
+	if cache.short {
+		cache.control = cacheControl(s.shortCacheDuration())
+	}
 	data, err := encodeJSON(body)
 	if err != nil {
 		s.fail(w, r, fmt.Errorf("encode response: %w", err))
