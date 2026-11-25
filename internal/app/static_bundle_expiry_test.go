@@ -282,7 +282,39 @@ func TestExpiryRecoveryWithoutBackendHash(t *testing.T) {
 		return h.app.BundleExpiry.entry(key).kind == withholdNone
 	})
 	if v, found := gaugeValueFor(metrics.GtfsScheduleAvailable, labels); !found || v != 1 {
-		t.Fatalf("schedule available = %v (found %v), want 1 once the new bundle loaded", v, found)
+		t.Fatalf("schedule available = %v (found %v), want 1 once bundle replaced", v, found)
+	}
+}
+
+// TestExpiryRecoveryWhenBackendStopsReportingHash checks that when an expired bundle
+// was previously related to a backend hash, is replaced by a current bundle, and then
+// the backend stops reporting a hash (status Unsupported), debouncing is cleared and
+// the entry returns to withholdNone.
+func TestExpiryRecoveryWhenBackendStopsReportingHash(t *testing.T) {
+	ignoreEarlierFeedChecks(t)
+	expired := expiredTestFeed(t)
+	current := currentTestFeed(t)
+	h := newExpiryHarness(t, expired)
+	h.hash.Store(feedHash(expired))
+	h.feed.Store(current)
+	key := h.server.ServerKey()
+	labels := map[string]string{"agency_id": h.server.AgencyID, "server_url": utils.SanitizeServerURL(h.server.ObaBaseURL)}
+
+	// Wait until the new bundle is loaded and debounce starts while the backend
+	// still reports the old hash.
+	h.collectUntil(t, "debounce to start", func() bool {
+		return h.app.GtfsService.BackendBundleDebouncing(h.server)
+	})
+
+	// The backend stops publishing a hash (status Unsupported).
+	h.hash.Store("")
+
+	// Verify that the entry recovers to withholdNone once debouncing is cleared.
+	h.collectUntil(t, "metrics to resume when backend stops publishing hash", func() bool {
+		return h.app.BundleExpiry.entry(key).kind == withholdNone
+	})
+	if v, found := gaugeValueFor(metrics.GtfsScheduleAvailable, labels); !found || v != 1 {
+		t.Fatalf("schedule available = %v (found %v), want 1 once debounce cleared", v, found)
 	}
 }
 
