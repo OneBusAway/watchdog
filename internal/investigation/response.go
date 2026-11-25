@@ -48,12 +48,6 @@ func (s *InvestigationService) shortCacheDuration() time.Duration {
 	return d
 }
 
-// cacheShort returns the short cache policy using this service's configured
-// fetch interval.
-func (s *InvestigationService) cacheShort() cachePolicy {
-	return cachePolicy{control: cacheControl(s.shortCacheDuration()), short: true}
-}
-
 // cacheShort is for anything that can still change: open episodes,
 // collections, clusters and counts.
 func cacheShort() cachePolicy {

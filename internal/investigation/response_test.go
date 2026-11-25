@@ -269,3 +269,30 @@ func TestFetchInterval_ResponseWithInclude(t *testing.T) {
 		t.Errorf("with include: Cache-Control = %q, want private, max-age=45", got)
 	}
 }
+
+func TestFetchInterval_AccessorAndNil(t *testing.T) {
+	var nilService *InvestigationService
+	if got := nilService.shortCacheDuration(); got != changingMaxAge {
+		t.Errorf("nil shortCacheDuration = %v, want %v", got, changingMaxAge)
+	}
+
+	s, _ := newTestService(t)
+	if got := s.FetchInterval(); got != changingMaxAge {
+		t.Errorf("default FetchInterval = %v, want %v", got, changingMaxAge)
+	}
+
+	s.SetFetchInterval(10 * time.Second)
+	if got := s.FetchInterval(); got != 10*time.Second {
+		t.Errorf("FetchInterval = %v, want 10s", got)
+	}
+
+	s.fetchInterval.Store(0)
+	if got := s.shortCacheDuration(); got != changingMaxAge {
+		t.Errorf("zero store shortCacheDuration = %v, want %v", got, changingMaxAge)
+	}
+
+	s.SetFetchInterval(-1 * time.Second)
+	if got := s.FetchInterval(); got != changingMaxAge {
+		t.Errorf("negative FetchInterval = %v, want %v", got, changingMaxAge)
+	}
+}
