@@ -260,19 +260,6 @@ func TestGetVehiclePositionEvidence_TripStartDateFormat(t *testing.T) {
 	}
 }
 
-// TestGetVehiclePositionEvidence_IncludeWithoutLoaderReturns400 checks that a
-// link whose target loader does not exist yet cannot be included.
-func TestGetVehiclePositionEvidence_IncludeWithoutLoaderReturns400(t *testing.T) {
-	pool := dbtest.NewMigratedPool(t)
-	f := newEvidenceFixture(t, pool)
-	id := insertFullEvidence(t, pool, f)
-	router := newVehiclePositionEvidenceRouter(t, pool)
-	for _, name := range []string{"response"} {
-		rec := doGet(t, router, fmt.Sprintf("%s/%d?include=%s", vehiclePositionEvidencePath, id, name), nil)
-		wantInvalidParam(t, rec, "include")
-	}
-}
-
 // TestGetVehiclePositionEvidence_IncludeBoundingBoxVersion exercises the
 // bounding_box_version include loader end-to-end.
 func TestGetVehiclePositionEvidence_IncludeBoundingBoxVersion(t *testing.T) {
@@ -372,5 +359,30 @@ func assertJSONEqual(t *testing.T, want string, got []byte) {
 	}
 	if !reflect.DeepEqual(w, g) {
 		t.Errorf("body =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestGetVehiclePositionEvidence_IncludeResponse checks that response can be
+// included now that the vehicle response loader (E28) exists. The included
+// object is keyed by the response's URL.
+func TestGetVehiclePositionEvidence_IncludeResponse(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	f := newEvidenceFixture(t, pool)
+	id := insertFullEvidence(t, pool, f)
+	router := newVehiclePositionEvidenceRouter(t, pool)
+
+	rec := doGet(t, router, fmt.Sprintf("%s/%d?include=response", vehiclePositionEvidencePath, id), nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		Included map[string]json.RawMessage `json:"included"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	responseURL := fmt.Sprintf("/v1/vehicle-position-responses/%d", f.responseID)
+	if _, ok := body.Included[responseURL]; !ok {
+		t.Errorf("included has no %s; keys = %v", responseURL, body.Included)
 	}
 }
