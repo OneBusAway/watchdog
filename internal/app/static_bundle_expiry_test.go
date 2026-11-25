@@ -112,18 +112,23 @@ func newExpiryHarness(t *testing.T, startupFeed []byte) *expiryHarness {
 	h.ctx = ctx
 	// Start the way main does, so the bundle's hash is recorded.
 	h.app.GtfsService.StartStaticRefreshCampaigns(ctx, []models.ObaServer{h.server}, gtfs.StaticRefreshStartup, 1)
+	h.waitForStaticCampaign(t)
+	t.Cleanup(func() { metrics.DeleteSeriesForServer(utils.SanitizeServerURL(h.server.ObaBaseURL)) })
+	return h
+}
+
+func (h *expiryHarness) waitForStaticCampaign(t *testing.T) {
+	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if check, ok := h.app.GtfsService.LastStaticFeedCheck(h.server); ok && check.Success && !h.app.GtfsService.StaticCampaignActive(h.server) {
-			break
+			return
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("fixture bundle was not published")
 		}
 		time.Sleep(time.Millisecond)
 	}
-	t.Cleanup(func() { metrics.DeleteSeriesForServer(utils.SanitizeServerURL(h.server.ObaBaseURL)) })
-	return h
 }
 
 // collectUntil runs ticks until done reports true, or fails after a few seconds.
@@ -362,40 +367,93 @@ func TestExpiryRecoveryWhenConfirmedBehindBackendStopsReportingHash(t *testing.T
 	}
 }
 
-// TestExpiryRecoveryWhenMetadataFailsTransientlyPastDeadline checks that when
-// an expired bundle is replaced and debounce begins, sustained transient
-// metadata failures (BackendHashTransient) past debounceWithholdMax clear the
-// withhold and allow metrics to resume (withholdNone).
-func TestExpiryRecoveryWhenMetadataFailsTransientlyPastDeadline(t *testing.T) {
-	ignoreEarlierFeedChecks(t)
-	savedMax := debounceWithholdMax
-	debounceWithholdMax = 50 * time.Millisecond
-	t.Cleanup(func() { debounceWithholdMax = savedMax })
-
+func newDebouncingExpiryHarness(t *testing.T, clock func() time.Time, interval time.Duration) *expiryHarness {
+	t.Helper()
 	expired := expiredTestFeed(t)
-	current := currentTestFeed(t)
 	h := newExpiryHarness(t, expired)
+	h.app.BundleExpiry.now = clock
+	h.app.GtfsService.SetStaticRefreshClock(clock)
+	h.app.GtfsService.SetBackendCheckInterval(interval)
+
 	h.hash.Store(feedHash(expired))
-	h.feed.Store(current)
-	key := h.server.ServerKey()
-	labels := map[string]string{"agency_id": h.server.AgencyID, "server_url": utils.SanitizeServerURL(h.server.ObaBaseURL)}
+	h.checkMetadata(t, gtfs.BackendHashOK)
+	h.app.CollectMetricsForServer(h.ctx, h.server)
 
-	// Wait until debounce starts while the backend serves the old hash.
-	h.collectUntil(t, "debounce to start", func() bool {
-		return h.app.GtfsService.BackendBundleDebouncing(h.server)
-	})
-
-	// Metadata endpoint begins returning sustained 500 errors (BackendHashTransient).
-	h.metadataStatus.Store(http.StatusInternalServerError)
-
-	// Verify that once the debounce deadline passes, debounce withholding falls back
-	// to withholdNone and metrics resume.
-	h.collectUntil(t, "metrics to resume after debounce deadline under transient metadata failures", func() bool {
-		return h.app.BundleExpiry.entry(key).kind == withholdNone
-	})
-	if v, found := gaugeValueFor(metrics.GtfsScheduleAvailable, labels); !found || v != 1 {
-		t.Fatalf("schedule available = %v (found %v), want 1 once debounce deadline exceeded", v, found)
+	h.feed.Store(currentTestFeed(t))
+	h.app.GtfsService.StartStaticRefreshCampaigns(h.ctx, []models.ObaServer{h.server}, gtfs.StaticRefreshFallback, 1)
+	h.waitForStaticCampaign(t)
+	h.app.CollectMetricsForServer(h.ctx, h.server)
+	entry := h.app.BundleExpiry.entry(h.server.ServerKey())
+	if entry.kind != withholdExpired || entry.debounceSince.IsZero() {
+		t.Fatalf("entry = %+v, want expiry withholding to carry over after publication", entry)
 	}
+	h.wantScheduleAvailable(t, 0)
+	return h
+}
+
+func (h *expiryHarness) checkMetadata(t *testing.T, want gtfs.BackendHashStatus) {
+	t.Helper()
+	if status := h.app.GtfsService.CheckBackendBundles(h.ctx, h.ctx, []models.ObaServer{h.server}); status != want {
+		t.Fatalf("metadata status = %v, want %v", status, want)
+	}
+}
+
+func (h *expiryHarness) wantScheduleAvailable(t *testing.T, want float64) {
+	t.Helper()
+	labels := map[string]string{"agency_id": h.server.AgencyID, "server_url": utils.SanitizeServerURL(h.server.ObaBaseURL)}
+	if v, found := gaugeValueFor(metrics.GtfsScheduleAvailable, labels); !found || v != want {
+		t.Fatalf("schedule available = %v (found %v), want %v", v, found, want)
+	}
+}
+
+func TestExpiryRecoveryWhenMetadataFailsTransientlyPastDeadline(t *testing.T) {
+	start := time.Now().UTC()
+	now := start
+	h := newDebouncingExpiryHarness(t, func() time.Time { return now }, 30*time.Second)
+	key := h.server.ServerKey()
+
+	// A successful read of the old hash starts the run. Real HTTP 500
+	// responses then leave it pending until the injected clock hits the limit.
+	h.checkMetadata(t, gtfs.BackendHashOK)
+	h.metadataStatus.Store(http.StatusInternalServerError)
+	for _, elapsed := range []time.Duration{30 * time.Second, 10*time.Minute - time.Second} {
+		now = start.Add(elapsed)
+		h.checkMetadata(t, gtfs.BackendHashTransient)
+		h.app.CollectMetricsForServer(h.ctx, h.server)
+		if entry := h.app.BundleExpiry.entry(key); entry.kind != withholdExpired || !entry.debounceSince.Equal(start) {
+			t.Fatalf("entry at %s = %+v, want the original hold to continue", elapsed, entry)
+		}
+		h.wantScheduleAvailable(t, 0)
+	}
+
+	now = start.Add(10 * time.Minute)
+	h.checkMetadata(t, gtfs.BackendHashTransient)
+	h.app.CollectMetricsForServer(h.ctx, h.server)
+	if h.app.GtfsService.BackendBundleDebouncing(h.server) || h.app.BundleExpiry.entry(key).kind != withholdNone {
+		t.Fatal("pending debounce hold remained at the deadline")
+	}
+	h.wantScheduleAvailable(t, 1)
+}
+
+func TestExpiryDebounceAllowsConfirmationAtLongFetchInterval(t *testing.T) {
+	const interval = 5 * time.Minute
+	now := time.Now().UTC()
+	h := newDebouncingExpiryHarness(t, func() time.Time { return now }, interval)
+
+	// Model publication just after a metadata check, followed by ticks in
+	// which the concurrent metadata result arrives after metric collection.
+	for range 3 {
+		now = now.Add(interval)
+		h.app.CollectMetricsForServer(h.ctx, h.server)
+		h.wantScheduleAvailable(t, 0)
+		h.checkMetadata(t, gtfs.BackendHashOK)
+	}
+	now = now.Add(interval)
+	h.app.CollectMetricsForServer(h.ctx, h.server)
+	if entry := h.app.BundleExpiry.entry(h.server.ServerKey()); entry.kind != withholdBackendBehind || entry.cause != withholdCauseBackendStale {
+		t.Fatalf("entry = %+v, want confirmed backend_stale", entry)
+	}
+	h.wantScheduleAvailable(t, 0)
 }
 
 // TestExpiryWithoutFeedCheckIsReportedAfterAWait checks that an expiry is not
@@ -418,22 +476,22 @@ func TestBundleExpiryReporterTracksKindChanges(t *testing.T) {
 	r := NewBundleExpiryReporter()
 	const key = "https://oba.example|a"
 	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	if before, after := r.update(key, withholdExpired, t0); before.kind != withholdNone || after.since != t0 {
+	if before, after := r.update(key, withholdExpired, time.Time{}, t0); before.kind != withholdNone || after.since != t0 {
 		t.Fatalf("first expiry: before %+v after %+v", before, after)
 	}
 	r.markReported(key, withholdCauseNoNewerBundle, "")
 	// Still expired: the entry, and that it was reported, carry over.
-	if _, after := r.update(key, withholdExpired, t0.Add(time.Hour)); !after.reported || after.since != t0 {
+	if _, after := r.update(key, withholdExpired, time.Time{}, t0.Add(time.Hour)); !after.reported || after.since != t0 {
 		t.Fatalf("still expired: %+v", after)
 	}
 	// A new reason to withhold starts a new, unreported entry.
-	if _, after := r.update(key, withholdBackendBehind, t0.Add(2*time.Hour)); after.reported || after.kind != withholdBackendBehind {
+	if _, after := r.update(key, withholdBackendBehind, time.Time{}, t0.Add(2*time.Hour)); after.reported || after.kind != withholdBackendBehind {
 		t.Fatalf("backend behind: %+v", after)
 	}
-	if before, _ := r.update(key, withholdNone, t0.Add(3*time.Hour)); before.kind != withholdBackendBehind {
+	if before, _ := r.update(key, withholdNone, time.Time{}, t0.Add(3*time.Hour)); before.kind != withholdBackendBehind {
 		t.Fatalf("recovery saw %+v", before)
 	}
-	r.update(key, withholdExpired, t0)
+	r.update(key, withholdExpired, time.Time{}, t0)
 	r.Prune(func(string) bool { return false })
 	if r.entry(key).kind != withholdNone {
 		t.Fatal("pruned state was kept")
