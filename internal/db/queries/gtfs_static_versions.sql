@@ -1,3 +1,13 @@
+-- name: ListGTFSStaticVersions :many
+SELECT gtfs_static_version_id, server_id, published_at, combined_content_sha256, parser_version
+FROM gtfs_static_version
+WHERE (sqlc.narg('server_id')::bigint IS NULL OR server_id = sqlc.narg('server_id')::bigint)
+  AND (sqlc.narg('published_from')::timestamptz IS NULL OR published_at >= sqlc.narg('published_from')::timestamptz)
+  AND (sqlc.narg('published_to')::timestamptz IS NULL OR published_at < sqlc.narg('published_to')::timestamptz)
+  AND (sqlc.narg('after_id')::bigint IS NULL OR gtfs_static_version_id < sqlc.narg('after_id')::bigint)
+ORDER BY gtfs_static_version_id DESC
+LIMIT sqlc.arg('page_limit');
+
 -- name: GetGTFSStaticVersion :many
 -- The static versions with the given IDs; IDs with no row are left out. This
 -- and the two queries below are E35's reads. Each takes a batch of IDs, so E35

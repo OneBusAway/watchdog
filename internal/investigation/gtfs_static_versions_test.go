@@ -3,10 +3,13 @@ package investigation
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -212,9 +215,17 @@ func TestGetGTFSStaticVersion_ETag(t *testing.T) {
 // its body read.
 func sendRequest(t *testing.T, method, url string) (*http.Response, []byte) {
 	t.Helper()
+	return sendRequestWithHeaders(t, method, url, nil)
+}
+
+func sendRequestWithHeaders(t *testing.T, method, url string, headers map[string]string) (*http.Response, []byte) {
+	t.Helper()
 	req, err := http.NewRequest(method, url, nil)
 	if err != nil {
 		t.Fatalf("new %s request: %v", method, err)
+	}
+	for name, value := range headers {
+		req.Header.Set(name, value)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -398,6 +409,201 @@ func TestGTFSStaticVersionLoader(t *testing.T) {
 		if string(data) != rec.Body.String() {
 			t.Errorf("version %d: loaded\n%s\nGET returned\n%s", id, data, rec.Body)
 		}
+	}
+}
+
+const staticVersionListPath = "/v1/gtfs-static-versions"
+
+func newStaticVersionListTest(t *testing.T) (*pgxpool.Pool, http.Handler) {
+	t.Helper()
+	s, router := newTestService(t)
+	s.Pool = dbtest.NewMigratedPool(t)
+	return s.Pool, router
+}
+
+func staticVersionListHeaders() map[string]string {
+	return map[string]string{"Authorization": "Bearer " + testToken}
+}
+
+func getStaticVersionPage(t *testing.T, router http.Handler, path string, wantIDs ...int64) links {
+	t.Helper()
+	rec := doGet(t, router, path, staticVersionListHeaders())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET %s: status = %d, want 200; body %s", path, rec.Code, rec.Body)
+	}
+	var body struct {
+		Items []struct {
+			ID int64 `json:"gtfs_static_version_id"`
+		} `json:"items"`
+		Links links `json:"links"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if body.Items == nil {
+		t.Fatal("items must be a JSON array")
+	}
+	ids := make([]int64, 0, len(body.Items))
+	for _, item := range body.Items {
+		ids = append(ids, item.ID)
+	}
+	if !slices.Equal(ids, wantIDs) {
+		t.Errorf("GET %s: version IDs = %v, want %v", path, ids, wantIDs)
+	}
+	return body.Links
+}
+
+func TestListGTFSStaticVersions_ReturnsNewestFirst(t *testing.T) {
+	pool, router := newStaticVersionListTest(t)
+	serverID := insertServer(t, pool, "https://example.com", "Example")
+	first := insertStaticVersion(t, pool, serverID, staticPublished, nil, nil)
+	second := insertStaticVersion(t, pool, serverID, staticPublished.Add(time.Hour), nil, nil)
+	third := insertStaticVersion(t, pool, serverID, staticPublished.Add(-time.Hour), nil, nil)
+	getStaticVersionPage(t, router, staticVersionListPath, third, second, first)
+}
+
+func TestListGTFSStaticVersions_Paginates(t *testing.T) {
+	pool, router := newStaticVersionListTest(t)
+	serverID := insertServer(t, pool, "https://example.com", "Example")
+	otherServerID := insertServer(t, pool, "https://other.example.com", "Other")
+	first := insertStaticVersion(t, pool, serverID, staticPublished, nil, nil)
+	insertStaticVersion(t, pool, otherServerID, staticPublished, nil, nil)
+	second := insertStaticVersion(t, pool, serverID, staticPublished, nil, nil)
+	third := insertStaticVersion(t, pool, serverID, staticPublished, nil, nil)
+	path := staticVersionListPath + "?page_size=2&server_id=" + strconv.FormatInt(serverID, 10)
+	page := getStaticVersionPage(t, router, path, third, second)
+	if page["self"] != path {
+		t.Errorf("self link = %q, want %q", page["self"], path)
+	}
+	next := page["next"]
+	if next == "" {
+		t.Fatal("first page has no next link")
+	}
+	last := getStaticVersionPage(t, router, next, first)
+	if _, ok := last["next"]; ok {
+		t.Errorf("last page has a next link: %v", last)
+	}
+}
+
+func TestListGTFSStaticVersions_EmptyResult(t *testing.T) {
+	_, router := newStaticVersionListTest(t)
+	page := getStaticVersionPage(t, router, staticVersionListPath)
+	want := links{"self": staticVersionListPath}
+	if !reflect.DeepEqual(page, want) {
+		t.Errorf("links = %v, want %v", page, want)
+	}
+}
+
+func TestListGTFSStaticVersions_RejectsBadPageSize(t *testing.T) {
+	_, router := newStaticVersionListTest(t)
+	for _, value := range []string{"0", "201"} {
+		t.Run(value, func(t *testing.T) {
+			rec := doGet(t, router, staticVersionListPath+"?page_size="+value, staticVersionListHeaders())
+			wantInvalidParam(t, rec, "page_size")
+		})
+	}
+}
+
+func TestListGTFSStaticVersions_RejectsBadCursor(t *testing.T) {
+	_, router := newStaticVersionListTest(t)
+	query := url.Values{"cursor": {"%%%"}}
+	rec := doGet(t, router, staticVersionListPath+"?"+query.Encode(), staticVersionListHeaders())
+	wantInvalidParam(t, rec, "cursor")
+}
+
+func TestListGTFSStaticVersions_Filter_server_id(t *testing.T) {
+	pool, router := newStaticVersionListTest(t)
+	serverID := insertServer(t, pool, "https://example.com", "Example")
+	otherServerID := insertServer(t, pool, "https://other.example.com", "Other")
+	want := insertStaticVersion(t, pool, serverID, staticPublished, nil, nil)
+	insertStaticVersion(t, pool, otherServerID, staticPublished, nil, nil)
+	getStaticVersionPage(t, router, staticVersionListPath+"?server_id="+strconv.FormatInt(serverID, 10), want)
+}
+
+func TestListGTFSStaticVersions_RejectsUnknownParameter(t *testing.T) {
+	_, router := newStaticVersionListTest(t)
+	rec := doGet(t, router, staticVersionListPath+"?foo=1", staticVersionListHeaders())
+	wantInvalidParam(t, rec, "foo")
+}
+
+func TestListGTFSStaticVersions_Head(t *testing.T) {
+	pool, router := newStaticVersionListTest(t)
+	serverID := insertServer(t, pool, "https://example.com", "Example")
+	insertStaticVersion(t, pool, serverID, staticPublished, nil, nil)
+	srv := httptest.NewServer(router)
+	t.Cleanup(srv.Close)
+	path := srv.URL + staticVersionListPath
+	get, getBody := sendRequestWithHeaders(t, http.MethodGet, path, staticVersionListHeaders())
+	head, headBody := sendRequestWithHeaders(t, http.MethodHead, path, staticVersionListHeaders())
+	if get.StatusCode != http.StatusOK || head.StatusCode != get.StatusCode {
+		t.Errorf("GET status = %d, HEAD status = %d, want both 200", get.StatusCode, head.StatusCode)
+	}
+	get.Header.Del("Date")
+	head.Header.Del("Date")
+	if !reflect.DeepEqual(head.Header, get.Header) {
+		t.Errorf("HEAD headers = %v, GET headers = %v", head.Header, get.Header)
+	}
+	if len(getBody) == 0 || len(headBody) != 0 {
+		t.Errorf("GET body has %d bytes and HEAD body has %d bytes", len(getBody), len(headBody))
+	}
+}
+
+func TestListGTFSStaticVersions_PublishedWindow(t *testing.T) {
+	pool, router := newStaticVersionListTest(t)
+	serverID := insertServer(t, pool, "https://example.com", "Example")
+	from := staticPublished.AddDate(0, -1, 0).In(time.FixedZone("UTC+02", 2*60*60))
+	to := staticPublished.AddDate(0, 1, 0)
+	insertStaticVersion(t, pool, serverID, from.Add(-time.Second), nil, nil)
+	atStart := insertStaticVersion(t, pool, serverID, from, nil, nil)
+	inside := insertStaticVersion(t, pool, serverID, staticPublished, nil, nil)
+	insertStaticVersion(t, pool, serverID, to, nil, nil)
+	query := url.Values{
+		"published_from": {from.Format(time.RFC3339)},
+		"published_to":   {to.Format(time.RFC3339)},
+	}
+	getStaticVersionPage(t, router, staticVersionListPath+"?"+query.Encode(), inside, atStart)
+}
+
+func TestListGTFSStaticVersions_PublishedPairRule(t *testing.T) {
+	_, router := newStaticVersionListTest(t)
+	rec := doGet(t, router, staticVersionListPath+"?published_from="+staticPublished.Format(time.RFC3339), staticVersionListHeaders())
+	wantInvalidParam(t, rec, "published_to")
+}
+
+func TestListGTFSStaticVersions_RepresentationAndCache(t *testing.T) {
+	pool, router := newStaticVersionListTest(t)
+	serverID := insertServer(t, pool, "https://example.com", "Example")
+	versionID := insertStaticVersion(t, pool, serverID, staticPublished, nil, nil)
+	serverPath := "/v1/servers/" + strconv.FormatInt(serverID, 10)
+	path := staticVersionListPath + "?include=server"
+	headers := staticVersionListHeaders()
+	rec := doGet(t, router, path, headers)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body)
+	}
+	server := doGet(t, router, serverPath, headers)
+	if server.Code != http.StatusOK {
+		t.Fatalf("server detail status = %d, want 200; body %s", server.Code, server.Body)
+	}
+	want := fmt.Sprintf(`{"items":[{"gtfs_static_version_id":%d,"server_id":%d,"published_at":%q,`+
+		`"combined_content_sha256":null,"parser_version":null,"links":{"self":%q,"server":%q}}],`+
+		`"links":{"self":%q},"included":{%q:%s}}`+"\n",
+		versionID, serverID, staticPublished.Format(time.RFC3339Nano), gtfsStaticVersionPath(versionID), serverPath,
+		path, serverPath, strings.TrimSpace(server.Body.String()))
+	if got := rec.Body.String(); got != want {
+		t.Errorf("body = %s, want %s", got, want)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "private, max-age=30" {
+		t.Errorf("Cache-Control = %q, want private, max-age=30", got)
+	}
+	tag := rec.Header().Get("ETag")
+	if !strings.HasPrefix(tag, `"`) || !strings.HasSuffix(tag, `"`) {
+		t.Fatalf("ETag = %q, want a strong ETag", tag)
+	}
+	headers["If-None-Match"] = tag
+	match := doGet(t, router, path, headers)
+	if match.Code != http.StatusNotModified || match.Body.Len() != 0 {
+		t.Errorf("conditional response = %d %q, want 304 with an empty body", match.Code, match.Body.String())
 	}
 }
 

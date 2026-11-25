@@ -15,8 +15,23 @@ import (
 // Every link named gtfs_static_version points to one.
 const kindGTFSStaticVersion resourceKind = "gtfs_static_version"
 
-// gtfsStaticVersionIncludable names the links E35 can include.
+// gtfsStaticVersionIncludable names the links E34 and E35 can include.
 var gtfsStaticVersionIncludable = map[string]resourceKind{"server": kindServer}
+
+type gtfsStaticVersionListItem struct {
+	GTFSStaticVersionID   int64   `json:"gtfs_static_version_id"`
+	ServerID              int64   `json:"server_id"`
+	PublishedAt           apiTime `json:"published_at"`
+	CombinedContentSHA256 *string `json:"combined_content_sha256"`
+	ParserVersion         *string `json:"parser_version"`
+	Links                 links   `json:"links"`
+}
+
+type gtfsStaticVersionsBody struct {
+	Items    []gtfsStaticVersionListItem `json:"items"`
+	Links    links                       `json:"links"`
+	Included included                    `json:"included,omitzero"`
+}
 
 // gtfsStaticVersionSource is one source file a static version was built from,
 // with that file's content hash in this version.
@@ -62,6 +77,64 @@ func gtfsStaticVersionLinks(versionID, serverID int64) itemLinks {
 			URL:  "/v1/servers/" + strconv.FormatInt(serverID, 10),
 		},
 	}
+}
+
+func gtfsStaticVersionListRepresentation(row dbgen.GtfsStaticVersion, l itemLinks) gtfsStaticVersionListItem {
+	return gtfsStaticVersionListItem{
+		GTFSStaticVersionID:   row.GtfsStaticVersionID,
+		ServerID:              row.ServerID,
+		PublishedAt:           newAPITime(row.PublishedAt),
+		CombinedContentSHA256: row.CombinedContentSha256,
+		ParserVersion:         row.ParserVersion,
+		Links:                 l.links(),
+	}
+}
+
+// listGTFSStaticVersions serves GET /v1/gtfs-static-versions.
+func (s *InvestigationService) listGTFSStaticVersions(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	var bad invalidParams
+	values := parseQuery(r, &bad, "server_id", "published_from", "published_to", "page_size", "cursor", "include")
+	serverID := paramID(values, "server_id", &bad)
+	win := s.parseWindow(values, unboundedWindowOptions("published_from", "published_to"), &bad)
+	p := parsePage(values, &bad)
+	inc := s.parseInclude(values, gtfsStaticVersionIncludable, &bad)
+	if len(bad) > 0 {
+		writeInvalidParams(w, bad)
+		return
+	}
+
+	params := dbgen.ListGTFSStaticVersionsParams{
+		ServerID:      serverID,
+		PublishedFrom: win.From,
+		PublishedTo:   win.To,
+		AfterID:       p.AfterID,
+		PageLimit:     p.Limit(),
+	}
+	var body gtfsStaticVersionsBody
+	err := s.read(r.Context(), func(ctx context.Context, q *dbgen.Queries) error {
+		rows, err := q.ListGTFSStaticVersions(ctx, params)
+		if err != nil {
+			return err
+		}
+		rows, hasMore := trimPage(rows, p)
+		body.Items = make([]gtfsStaticVersionListItem, 0, len(rows))
+		allLinks := make([]itemLinks, 0, len(rows))
+		var lastID int64
+		for _, row := range rows {
+			l := gtfsStaticVersionLinks(row.GtfsStaticVersionID, row.ServerID)
+			body.Items = append(body.Items, gtfsStaticVersionListRepresentation(row, l))
+			allLinks = append(allLinks, l)
+			lastID = row.GtfsStaticVersionID
+		}
+		body.Links = pageLinks(r, lastID, hasMore)
+		body.Included, err = s.loadIncluded(ctx, q, allLinks, inc)
+		return err
+	})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.writeJSON(w, r, body, cacheShort())
 }
 
 // gtfsStaticVersionRepresentation maps one version row and its source and
