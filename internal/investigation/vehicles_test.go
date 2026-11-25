@@ -256,12 +256,54 @@ func TestVehicleItems_Representation(t *testing.T) {
 	}
 }
 
-func TestListVehicles_IncludeEndpointRejectedWithoutLoader(t *testing.T) {
-	router := newVehiclesRouter(t, nil)
-	rec := doGet(t, router, "/v1/vehicles?vehicle_id=1&endpoint_id=1&include=endpoint", nil)
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400; body %s", rec.Code, rec.Body)
+// newVehicleEndpointRouter mounts E21, E22 and E07 on one service, so an
+// included endpoint can be compared with its GET body.
+func newVehicleEndpointRouter(t *testing.T, pool *pgxpool.Pool) http.Handler {
+	t.Helper()
+	s, _ := newTestService(t)
+	s.Pool = pool
+	router := httprouter.New()
+	router.GET("/v1/vehicles", s.listVehicles)
+	router.GET("/v1/vehicles/:vehicle_entity_id", s.getVehicle)
+	router.GET("/v1/vehicle-position-endpoints/:endpoint_id", s.getVehiclePositionEndpoint)
+	return router
+}
+
+// wantIncludedEndpoint checks that a 200 body includes exactly the endpoint,
+// as GET /v1/vehicle-position-endpoints/{endpoint_id} returns it.
+func wantIncludedEndpoint(t *testing.T, router http.Handler, rec *httptest.ResponseRecorder, endpointID int64) {
+	t.Helper()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body)
 	}
+	var body struct {
+		Included map[string]json.RawMessage `json:"included"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	endpointURL := "/v1/vehicle-position-endpoints/" + strconv.FormatInt(endpointID, 10)
+	if len(body.Included) != 1 {
+		t.Fatalf("included has %d entries, want 1: %v", len(body.Included), body.Included)
+	}
+	get := doGet(t, router, endpointURL, nil)
+	if get.Code != http.StatusOK {
+		t.Fatalf("GET %s: status = %d", endpointURL, get.Code)
+	}
+	if got := string(body.Included[endpointURL]) + "\n"; got != get.Body.String() {
+		t.Errorf("included endpoint =\n%s\nGET returned\n%s", got, get.Body)
+	}
+}
+
+func TestListVehicles_IncludeEndpoint(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	serverID := insertVehicleServer(t, pool, "https://example.com/api")
+	endpointID := insertVehicleEndpoint(t, pool, serverID, "https://example.com/vp.pb")
+	insertVehicle(t, pool, endpointID, "8049")
+	router := newVehicleEndpointRouter(t, pool)
+
+	path := "/v1/vehicles?vehicle_id=8049&endpoint_id=" + strconv.FormatInt(endpointID, 10) + "&include=endpoint"
+	wantIncludedEndpoint(t, router, doGet(t, router, path, nil), endpointID)
 }
 
 // newVehicleDetailRouter mounts E21 and E22 on a bare router, skipping the
@@ -350,9 +392,14 @@ func TestGetVehicle_RejectsUnknownParameter(t *testing.T) {
 	wantInvalidParam(t, doGet(t, router, vehiclePath(7)+"?foo=1", nil), "foo")
 }
 
-func TestGetVehicle_IncludeEndpointRejectedWithoutLoader(t *testing.T) {
-	router := newVehicleDetailRouter(t, nil)
-	wantInvalidParam(t, doGet(t, router, vehiclePath(7)+"?include=endpoint", nil), "include")
+func TestGetVehicle_IncludeEndpoint(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	serverID := insertVehicleServer(t, pool, "https://example.com/api")
+	endpointID := insertVehicleEndpoint(t, pool, serverID, "https://example.com/vp.pb")
+	id := insertVehicle(t, pool, endpointID, "8049")
+	router := newVehicleEndpointRouter(t, pool)
+
+	wantIncludedEndpoint(t, router, doGet(t, router, vehiclePath(id)+"?include=endpoint", nil), endpointID)
 }
 
 func TestGetVehicle_ETag(t *testing.T) {
@@ -391,7 +438,8 @@ func TestGetVehicle_IncludeCacheControl(t *testing.T) {
 
 	s, _ := newTestService(t)
 	s.Pool = pool
-	// Stand in for the endpoint loader until E07 registers the real one.
+	// Replace the endpoint loader with a stub, so this test checks only the
+	// cache headers and not the endpoint's representation.
 	delete(s.loaders, kindEndpoint)
 	s.registerLoader(kindEndpoint, func(_ context.Context, _ *dbgen.Queries, ids []int64) (map[int64]any, error) {
 		reps := make(map[int64]any, len(ids))
