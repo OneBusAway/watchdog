@@ -267,9 +267,39 @@ func TestGetVehiclePositionEvidence_IncludeWithoutLoaderReturns400(t *testing.T)
 	f := newEvidenceFixture(t, pool)
 	id := insertFullEvidence(t, pool, f)
 	router := newVehiclePositionEvidenceRouter(t, pool)
-	for _, name := range []string{"response", "bounding_box_version"} {
+	for _, name := range []string{"response"} {
 		rec := doGet(t, router, fmt.Sprintf("%s/%d?include=%s", vehiclePositionEvidencePath, id, name), nil)
 		wantInvalidParam(t, rec, "include")
+	}
+}
+
+// TestGetVehiclePositionEvidence_IncludeBoundingBoxVersion exercises the
+// bounding_box_version include loader end-to-end.
+func TestGetVehiclePositionEvidence_IncludeBoundingBoxVersion(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	f := newEvidenceFixture(t, pool)
+	id := insertFullEvidence(t, pool, f)
+	router := newVehiclePositionEvidenceRouter(t, pool)
+
+	rec := doGet(t, router, fmt.Sprintf("%s/%d?include=bounding_box_version", vehiclePositionEvidencePath, id), nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Included map[string]struct {
+			BoundingBoxVersionID int64 `json:"bounding_box_version_id"`
+		} `json:"included"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	wantURL := fmt.Sprintf("/v1/bounding-box-versions/%d", f.boxID)
+	box, ok := body.Included[wantURL]
+	if !ok {
+		t.Fatalf("included missing %q, got: %s", wantURL, rec.Body.String())
+	}
+	if box.BoundingBoxVersionID != f.boxID {
+		t.Errorf("bounding_box_version_id = %d, want %d", box.BoundingBoxVersionID, f.boxID)
 	}
 }
 
