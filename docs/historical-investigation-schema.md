@@ -41,6 +41,7 @@ erDiagram
         bigint server_id FK
         timestamptz published_at
         text combined_content_sha256
+        boolean server_scoped
     }
     GTFS_STATIC_VERSION_SOURCE {
         bigint gtfs_static_version_id PK, FK
@@ -336,6 +337,7 @@ Do not use the zero-based configuration index as an identity. The same URL on on
 | `published_at` | `TIMESTAMPTZ NOT NULL` | When Watchdog accepted and published this complete static version. |
 | `combined_content_sha256` | `CHAR(64)` | Optional SHA-256 fingerprint for comparison and provenance only. |
 | `parser_version` | `TEXT` | Watchdog parser/build version when available. |
+| `server_scoped` | `BOOLEAN NOT NULL` | True when a server-scoped entry recorded the version. False when an agency-scoped entry did. Rows from before this column existed are true. |
 
 This identifies the GTFS data Watchdog had loaded. It does not identify the Java or Maglev backend's own static data; the OBA metrics response currently provides no source GTFS hash to prove both sides used identical files.
 
@@ -345,10 +347,10 @@ Require each supplied SHA-256 value to contain 64 hexadecimal characters. Hashes
 
 **`gtfs_static_version_agency`** has `gtfs_static_version_id BIGINT NOT NULL` and `agency_id BIGINT NOT NULL`, both foreign keys, with a composite primary key on those columns.
 
-**When a static version row is written.** Watchdog records every static GTFS publication: the startup load and each refresh, including a rollback to earlier content. It does not always add a row. If the newest version in the entry's scope has the same agencies and the same `combined_content_sha256`, Watchdog reuses that version and its bounding boxes, so a restart with unchanged feeds adds nothing. Otherwise it inserts a version with one source row per feed, one agency row per published agency and the publication's bounding boxes. The scope depends on how the server is configured:
+**When a static version row is written.** Watchdog records every static GTFS publication: the startup load and each refresh, including a rollback to earlier content. A snapshot that is already installed is recorded even when the refresh campaign is canceled afterward. It does not always add a row. If the newest version in the entry's scope has the same agencies and the same `combined_content_sha256`, Watchdog reuses that version and its bounding boxes, so a restart with unchanged feeds adds nothing. A reused version also gains a `gtfs_static_version_source` row for a feed URL it did not already name, so the same bytes served from a new URL stay tied to that version; a source that was already linked keeps its stored hash. Otherwise it inserts a version with one source row per feed, one agency row per published agency and the publication's bounding boxes. The scope depends on how the server is configured:
 
 - **Agency-scoped entries** compare only with versions recorded for exactly their agency. Several agency entries can share one base URL and so one `onebusaway_server` row; comparing with the server's newest version would let them take turns being newest, and every restart would add a version.
-- **Server-scoped entries** compare with the newest version of the whole server. Their agency set can change between publications, so a return to earlier content (hash H1 with agencies [A], then H2 with [A, B], then H1 with [A] again) adds a new row, and the history shows the rollback.
+- **Server-scoped entries** compare with the newest version that a server-scoped entry recorded (`server_scoped`). Agency-scoped versions on the same base URL are not part of that sequence. Their agency set can change between publications, so a return to earlier content (hash H1 with agencies [A], then H2 with [A, B], then H1 with [A] again) adds a new row, and the history shows the rollback.
 
 `combined_content_sha256` is the SHA-256 of the feeds' content hashes joined with `\n` in configured order. Deciding reuse with it only compares two publications Watchdog retrieved, so it is consistent with the rule below.
 

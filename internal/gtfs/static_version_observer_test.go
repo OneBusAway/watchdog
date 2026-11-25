@@ -148,6 +148,32 @@ func TestStaticVersion_ObserverOnDownloadGTFSBundles(t *testing.T) {
 	}
 }
 
+// Canceling the campaign after the snapshot is installed must still report
+// the publication. The coordinator does not treat that campaign as the
+// published hash, so it cannot overwrite a newer one.
+func TestStaticVersion_RecordedWhenCanceledAfterInstall(t *testing.T) {
+	h := newUnchangedFeedHarness(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.service.SetFeedMappingObserver(func(models.ObaServer, StaticFeedMappingObservation) {
+		cancel()
+	})
+	recorder := recordPublications(h)
+
+	h.service.runStaticRefreshCampaign(ctx, h.server, StaticRefreshStartup, 1, fastStaticRefreshPolicy)
+
+	if _, ok := h.store.Get(h.server.ServerKey()); !ok {
+		t.Fatal("snapshot was not installed")
+	}
+	if got := len(recorder.all()); got != 1 {
+		t.Fatalf("observer called %d times, want 1", got)
+	}
+	hash := contentSHA256(h.body.Load().([]byte))
+	if h.service.refreshCoordinator.unchanged(h.server, hash) {
+		t.Fatal("canceled campaign updated the published hash")
+	}
+}
+
 // A panicking observer must not break publication.
 func TestStaticVersion_ObserverPanicIsContained(t *testing.T) {
 	h := newUnchangedFeedHarness(t)

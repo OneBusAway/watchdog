@@ -198,7 +198,8 @@ type staticVersionRecord struct {
 //  1. Ensure the server and each static source.
 //  2. Compute the combined content hash.
 //  3. If the newest version in the entry's scope has the same agencies and
-//     the same combined hash, reuse it (a restart with unchanged feeds). See
+//     the same combined hash, reuse it (a restart with unchanged feeds) and
+//     link any feed URL the version does not already name. See
 //     reusableStaticVersion for each entry's scope.
 //  4. Otherwise insert the version, one source row per feed and one agency
 //     row per published agency.
@@ -241,6 +242,9 @@ func recordStaticVersion(ctx context.Context, q *dbgen.Queries, publication gtfs
 		return staticVersionRecord{}, err
 	}
 	if reuse {
+		if err := linkUnrecordedStaticSources(ctx, q, server, reuseID, sourceIDs, hashes); err != nil {
+			return staticVersionRecord{}, err
+		}
 		recordedBoxes, err := recordedBoundingBoxes(ctx, q, server, externalAgencyIDs, reuseID)
 		if err != nil {
 			return staticVersionRecord{}, err
@@ -257,26 +261,14 @@ func recordStaticVersion(ctx context.Context, q *dbgen.Queries, publication gtfs
 		PublishedAt:           publication.PublishedAt.UTC(),
 		CombinedContentSha256: &combined,
 		ParserVersion:         parser,
+		ServerScoped:          server.IsServerScoped(),
 	})
 	if err != nil {
 		return staticVersionRecord{}, fmt.Errorf("server %q: insert static version: %w", server.ServerName, err)
 	}
 
-	// Two configured URLs that normalize to the same source are one source
-	// row; the first one's hash is kept.
-	seenSources := make(map[int64]bool, len(sourceIDs))
-	for i, sourceID := range sourceIDs {
-		if seenSources[sourceID] {
-			continue
-		}
-		seenSources[sourceID] = true
-		if err := q.InsertGTFSStaticVersionSource(ctx, dbgen.InsertGTFSStaticVersionSourceParams{
-			GtfsStaticVersionID: versionID,
-			SourceID:            sourceID,
-			SourceContentSha256: hashes[i],
-		}); err != nil {
-			return staticVersionRecord{}, fmt.Errorf("server %q: insert static version source %d: %w", server.ServerName, i+1, err)
-		}
+	if err := insertStaticVersionSources(ctx, q, server, versionID, sourceIDs, hashes, nil); err != nil {
+		return staticVersionRecord{}, err
 	}
 
 	agencyIDs := make(map[string]int64, len(agencies))
@@ -337,9 +329,12 @@ func recordStaticVersion(ctx context.Context, q *dbgen.Queries, publication gtfs
 // exactly its agency; otherwise the entries would take turns being the
 // server's newest version and every restart would record a new one. A
 // server-scoped entry's agency set can change between publications, so its
-// scope is every version of the server. Matching on the agency set alone
+// scope is the server-scoped versions only. Matching on the agency set alone
 // there would treat a return to an earlier feed (H1 [A], H2 [A B], then H1
-// [A]) as unchanged, and history could not show the rollback.
+// [A]) as unchanged, and history could not show the rollback. Agency-scoped
+// versions are outside that sequence: they share the server row, and taking
+// the newest of them as the server entry's latest would insert another copy
+// of an unchanged server feed on restart.
 func reusableStaticVersion(ctx context.Context, q *dbgen.Queries, server models.ObaServer, serverID int64, agencyIDs []string, combined string) (int64, bool, error) {
 	var (
 		versionID int64
@@ -369,6 +364,44 @@ func reusableStaticVersion(ctx context.Context, q *dbgen.Queries, server models.
 		return 0, false, fmt.Errorf("server %q: read latest static version: %w", server.ServerName, err)
 	}
 	return versionID, same && hash != nil && *hash == combined, nil
+}
+
+// linkUnrecordedStaticSources attaches feed URLs a reused version does not
+// already name. The same bytes from a new URL keep the version, and history
+// can still say which URL served them. A source that is already linked keeps
+// the hash stored with it.
+func linkUnrecordedStaticSources(ctx context.Context, q *dbgen.Queries, server models.ObaServer, versionID int64, sourceIDs []int64, hashes []string) error {
+	linked, err := q.ListRecordedStaticVersionSourceIDs(ctx, versionID)
+	if err != nil {
+		return fmt.Errorf("server %q: read sources of static version %d: %w", server.ServerName, versionID, err)
+	}
+	present := make(map[int64]bool, len(linked))
+	for _, sourceID := range linked {
+		present[sourceID] = true
+	}
+	return insertStaticVersionSources(ctx, q, server, versionID, sourceIDs, hashes, present)
+}
+
+// insertStaticVersionSources links each feed to versionID. Two configured
+// URLs that normalize to the same source are one row, and the first one's
+// hash is kept. Sources in skip are already linked.
+func insertStaticVersionSources(ctx context.Context, q *dbgen.Queries, server models.ObaServer, versionID int64, sourceIDs []int64, hashes []string, skip map[int64]bool) error {
+	seen := make(map[int64]bool, len(sourceIDs))
+	for i, sourceID := range sourceIDs {
+		if seen[sourceID] || skip[sourceID] {
+			seen[sourceID] = true
+			continue
+		}
+		seen[sourceID] = true
+		if err := q.InsertGTFSStaticVersionSource(ctx, dbgen.InsertGTFSStaticVersionSourceParams{
+			GtfsStaticVersionID: versionID,
+			SourceID:            sourceID,
+			SourceContentSha256: hashes[i],
+		}); err != nil {
+			return fmt.Errorf("server %q: insert static version source %d: %w", server.ServerName, i+1, err)
+		}
+	}
+	return nil
 }
 
 // recordedBoundingBoxes returns the boxes stored with a version for the

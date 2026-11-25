@@ -14,8 +14,10 @@ ORDER BY v.published_at DESC, v.gtfs_static_version_id DESC
 LIMIT 1;
 
 -- name: GetLatestGTFSStaticVersionForServer :one
--- The server's newest version whatever its agencies, and whether its agency
--- set is exactly @agency_ids.
+-- The newest server-scoped version, whatever its agencies, and whether its
+-- agency set is exactly @agency_ids. Agency-scoped versions are excluded:
+-- those entries share this server row but publish their own snapshots, and
+-- treating one as newer makes an unchanged server restart insert a duplicate.
 SELECT v.gtfs_static_version_id, v.combined_content_sha256,
     (recorded.agency_ids @> @agency_ids::text[]
         AND recorded.agency_ids <@ @agency_ids::text[])::boolean AS same_agencies
@@ -27,13 +29,26 @@ CROSS JOIN LATERAL (
     WHERE va.gtfs_static_version_id = v.gtfs_static_version_id
 ) recorded
 WHERE v.server_id = @server_id
+  AND v.server_scoped
 ORDER BY v.published_at DESC, v.gtfs_static_version_id DESC
 LIMIT 1;
 
 -- name: InsertGTFSStaticVersion :one
-INSERT INTO gtfs_static_version (server_id, published_at, combined_content_sha256, parser_version)
-VALUES (@server_id, @published_at, @combined_content_sha256, @parser_version)
+INSERT INTO gtfs_static_version (
+    server_id, published_at, combined_content_sha256, parser_version, server_scoped
+)
+VALUES (
+    @server_id, @published_at, @combined_content_sha256, @parser_version, @server_scoped
+)
 RETURNING gtfs_static_version_id;
+
+-- name: ListRecordedStaticVersionSourceIDs :many
+-- Sources already linked to a version. A reused version keeps those rows and
+-- only gains a link for a feed URL it did not have.
+SELECT source_id
+FROM gtfs_static_version_source
+WHERE gtfs_static_version_id = @gtfs_static_version_id
+ORDER BY source_id;
 
 -- name: InsertGTFSStaticVersionSource :exec
 INSERT INTO gtfs_static_version_source (gtfs_static_version_id, source_id, source_content_sha256)
