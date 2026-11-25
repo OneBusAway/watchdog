@@ -97,6 +97,18 @@ func (gs *GtfsService) CheckBackendBundles(ctx, campaignCtx context.Context, ser
 	if eligible {
 		hash, status = gs.fetchBackendHash(ctx, servers[0])
 	}
+	if !eligible || status == BackendHashUnsupported {
+		c := gs.refreshCoordinator
+		c.mu.Lock()
+		for _, server := range servers {
+			for _, key := range lookupKeys(server) {
+				if state, ok := c.relations[key]; ok && state.debouncing {
+					delete(c.relations, key)
+				}
+			}
+		}
+		c.mu.Unlock()
+	}
 	// A gauge describes a deployment, so aggregate siblings before emitting
 	// once per label set. An unknown local snapshot makes the result unknown.
 	results := make(map[string]*bool)
