@@ -554,11 +554,15 @@ func (gs *GtfsService) runStaticRefreshCampaign(ctx context.Context, server mode
 				return
 			}
 			if err == nil {
-				if gs.refreshCoordinator.recordPublished(ctx, server, hash) {
-					// Recording waits on the investigation database for up
-					// to its write timeout, so it runs once the parse slot
-					// is free for other servers.
-					gs.reportStaticVersion(publication)
+				// The snapshot is already installed. Record it even when
+				// this campaign has been canceled. recordPublished still
+				// leaves coordinator state unchanged after cancel, so a
+				// superseded campaign cannot overwrite a newer publish.
+				// Recording waits on the investigation database for up to
+				// its write timeout, so it runs once the parse slot is free.
+				recorded := gs.refreshCoordinator.recordPublished(ctx, server, hash)
+				gs.reportStaticVersion(publication)
+				if recorded {
 					reportSuccess()
 				}
 				return

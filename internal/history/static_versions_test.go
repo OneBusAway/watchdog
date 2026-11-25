@@ -197,6 +197,48 @@ func TestStaticVersion_UnchangedNotDuplicated(t *testing.T) {
 	}
 }
 
+// The same bytes from a new feed URL reuse the version and link that URL, so
+// history names the source that is configured now. The original link stays.
+func TestStaticVersion_NewURLLinksReusedVersion(t *testing.T) {
+	pool := newMigratedPool(t)
+	h := NewHistoryService(pool, discardLogger(), "test-build", nil)
+	now := time.Now().UTC()
+	h.StaticVersionObserver()(testPublication("feed-v1", now))
+	versionID := latestVersionID(t, pool)
+
+	again := testPublication("feed-v1", now.Add(time.Hour))
+	const movedURL = "https://feeds.test-transit.example/moved.zip"
+	again.Feeds[0].URL = movedURL
+	h.StaticVersionObserver()(again)
+
+	if got := count(t, pool, "gtfs_static_version"); got != 1 {
+		t.Fatalf("gtfs_static_version has %d rows, want the reused version", got)
+	}
+	if got := count(t, pool, "static_gtfs_source"); got != 2 {
+		t.Errorf("static_gtfs_source has %d rows, want the old URL and the new one", got)
+	}
+	if got := count(t, pool, "gtfs_static_version_source"); got != 2 {
+		t.Errorf("gtfs_static_version_source has %d rows, want both URLs on the reused version", got)
+	}
+	var linked int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM gtfs_static_version_source vs
+		JOIN static_gtfs_source s ON s.source_id = vs.source_id
+		WHERE vs.gtfs_static_version_id = $1
+		  AND s.normalized_source_url = $2
+		  AND vs.source_content_sha256 = $3`,
+		versionID, movedURL, hashOf("feed-v1")).Scan(&linked); err != nil {
+		t.Fatal(err)
+	}
+	if linked != 1 {
+		t.Errorf("new URL linked %d times with the feed hash, want 1", linked)
+	}
+	if got, ok := h.CurrentStaticVersion(testServer.ServerKey()); !ok || got != versionID {
+		t.Errorf("CurrentStaticVersion = %d, %v; want reused %d", got, ok, versionID)
+	}
+}
+
 func TestStaticVersion_ChangedSource(t *testing.T) {
 	pool := newMigratedPool(t)
 	h := NewHistoryService(pool, discardLogger(), "test-build", nil)
@@ -374,10 +416,10 @@ func serverPublication(content string, publishedAt time.Time, agencyIDs ...strin
 	}
 }
 
-// A server-scoped entry reuses a version only when it is the server's newest
-// one. A publication that returns to an earlier feed and agency set is a
-// rollback, so it gets a new version with its own published_at; otherwise
-// history could not show that the feed went back.
+// A server-scoped entry reuses a version only when it is the newest
+// server-scoped one. A publication that returns to an earlier feed and
+// agency set is a rollback, so it gets a new version with its own
+// published_at; otherwise history could not show that the feed went back.
 func TestStaticVersion_ServerScopedReuse(t *testing.T) {
 	type step struct {
 		content  string
@@ -449,5 +491,71 @@ func TestStaticVersion_OlderPublicationDoesNotReplaceNewer(t *testing.T) {
 
 	if got, _ := h.CurrentStaticVersion(testServer.ServerKey()); got != newer {
 		t.Errorf("CurrentStaticVersion = %d, want the newer publication's %d", got, newer)
+	}
+}
+
+// An agency-scoped publication on the same base URL is not the server
+// entry's newest version. An unchanged server restart reuses the server
+// version. A later change of the server feed still records a new one, and
+// that version does not become the agency entry's latest: an unchanged
+// agency restart reuses the agency version.
+func TestStaticVersion_ServerScopeIgnoresAgencyEntries(t *testing.T) {
+	pool := newMigratedPool(t)
+	h := NewHistoryService(pool, discardLogger(), "test-build", nil)
+	now := time.Date(2026, 11, 25, 9, 0, 0, 0, time.UTC)
+	agency := agencyServer("A")
+
+	h.StaticVersionObserver()(serverPublication("server-feed", now, "A", "B"))
+	serverVersion, ok := h.CurrentStaticVersion(testServer.ServerKey())
+	if !ok {
+		t.Fatal("no server version")
+	}
+	h.StaticVersionObserver()(agencyPublication("A", "agency-feed", now.Add(time.Minute), 47))
+	agencyVersion, ok := h.CurrentStaticVersion(agency.ServerKey())
+	if !ok {
+		t.Fatal("no agency version")
+	}
+	if got := count(t, pool, "gtfs_static_version"); got != 2 {
+		t.Fatalf("setup: gtfs_static_version has %d rows, want 2", got)
+	}
+	assertServerScoped := func(versionID int64, want bool) {
+		t.Helper()
+		var scoped bool
+		if err := pool.QueryRow(ctx, "SELECT server_scoped FROM gtfs_static_version WHERE gtfs_static_version_id = $1", versionID).Scan(&scoped); err != nil {
+			t.Fatal(err)
+		}
+		if scoped != want {
+			t.Errorf("version %d server_scoped = %v, want %v", versionID, scoped, want)
+		}
+	}
+	assertServerScoped(serverVersion, true)
+	assertServerScoped(agencyVersion, false)
+
+	restarted := NewHistoryService(pool, discardLogger(), "test-build", nil)
+	restarted.StaticVersionObserver()(serverPublication("server-feed", now.Add(time.Hour), "A", "B"))
+	if got := count(t, pool, "gtfs_static_version"); got != 2 {
+		t.Fatalf("unchanged server restart has %d versions, want 2", got)
+	}
+	if got, _ := restarted.CurrentStaticVersion(testServer.ServerKey()); got != serverVersion {
+		t.Errorf("server reused version %d, want %d", got, serverVersion)
+	}
+
+	restarted.StaticVersionObserver()(serverPublication("server-feed-v2", now.Add(2*time.Hour), "A"))
+	if got := count(t, pool, "gtfs_static_version"); got != 3 {
+		t.Fatalf("server feed change has %d versions, want 3", got)
+	}
+	current, _ := restarted.CurrentStaticVersion(testServer.ServerKey())
+	if current == serverVersion {
+		t.Fatal("changed server feed reused the old version")
+	}
+	if got := versionAgencies(t, pool, current); len(got) != 1 || got[0] != "A" {
+		t.Errorf("new server version agencies = %v, want [A]", got)
+	}
+	restarted.StaticVersionObserver()(agencyPublication("A", "agency-feed", now.Add(3*time.Hour), 47))
+	if got := count(t, pool, "gtfs_static_version"); got != 3 {
+		t.Fatalf("agency restart has %d versions, want 3", got)
+	}
+	if got, _ := restarted.CurrentStaticVersion(agency.ServerKey()); got != agencyVersion {
+		t.Errorf("agency reused version %d, want %d", got, agencyVersion)
 	}
 }

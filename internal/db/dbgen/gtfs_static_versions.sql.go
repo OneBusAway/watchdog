@@ -17,19 +17,27 @@ WHERE gtfs_static_version_id = ANY($1::bigint[])
 ORDER BY gtfs_static_version_id
 `
 
+type GetGTFSStaticVersionRow struct {
+	GtfsStaticVersionID   int64
+	ServerID              int64
+	PublishedAt           time.Time
+	CombinedContentSha256 *string
+	ParserVersion         *string
+}
+
 // The static versions with the given IDs; IDs with no row are left out. This
 // and the two queries below are E35's reads. Each takes a batch of IDs, so E35
 // (one ID) and its include loader (every ID a response links to) run the same
 // three queries, however many IDs there are.
-func (q *Queries) GetGTFSStaticVersion(ctx context.Context, gtfsStaticVersionIds []int64) ([]GtfsStaticVersion, error) {
+func (q *Queries) GetGTFSStaticVersion(ctx context.Context, gtfsStaticVersionIds []int64) ([]GetGTFSStaticVersionRow, error) {
 	rows, err := q.db.Query(ctx, getGTFSStaticVersion, gtfsStaticVersionIds)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []GtfsStaticVersion
+	var items []GetGTFSStaticVersionRow
 	for rows.Next() {
-		var i GtfsStaticVersion
+		var i GetGTFSStaticVersionRow
 		if err := rows.Scan(
 			&i.GtfsStaticVersionID,
 			&i.ServerID,
@@ -144,7 +152,15 @@ type ListGTFSStaticVersionsParams struct {
 	PageLimit     *int32
 }
 
-func (q *Queries) ListGTFSStaticVersions(ctx context.Context, arg ListGTFSStaticVersionsParams) ([]GtfsStaticVersion, error) {
+type ListGTFSStaticVersionsRow struct {
+	GtfsStaticVersionID   int64
+	ServerID              int64
+	PublishedAt           time.Time
+	CombinedContentSha256 *string
+	ParserVersion         *string
+}
+
+func (q *Queries) ListGTFSStaticVersions(ctx context.Context, arg ListGTFSStaticVersionsParams) ([]ListGTFSStaticVersionsRow, error) {
 	rows, err := q.db.Query(ctx, listGTFSStaticVersions,
 		arg.ServerID,
 		arg.PublishedFrom,
@@ -156,9 +172,9 @@ func (q *Queries) ListGTFSStaticVersions(ctx context.Context, arg ListGTFSStatic
 		return nil, err
 	}
 	defer rows.Close()
-	var items []GtfsStaticVersion
+	var items []ListGTFSStaticVersionsRow
 	for rows.Next() {
-		var i GtfsStaticVersion
+		var i ListGTFSStaticVersionsRow
 		if err := rows.Scan(
 			&i.GtfsStaticVersionID,
 			&i.ServerID,

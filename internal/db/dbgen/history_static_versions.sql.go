@@ -20,6 +20,7 @@ CROSS JOIN LATERAL (
     WHERE va.gtfs_static_version_id = v.gtfs_static_version_id
 ) recorded
 WHERE v.server_id = $1
+  AND NOT v.server_scoped
   AND recorded.agency_ids @> $2::text[]
   AND recorded.agency_ids <@ $2::text[]
 ORDER BY v.published_at DESC, v.gtfs_static_version_id DESC
@@ -36,6 +37,10 @@ type GetLatestGTFSStaticVersionForAgenciesRow struct {
 	CombinedContentSha256 *string
 }
 
+// The newest agency-scoped version whose agency set is exactly @agency_ids.
+// Server-scoped versions are excluded: a server entry on this base URL can
+// later publish that same agency, and treating its row as newer makes an
+// unchanged agency restart insert a duplicate.
 func (q *Queries) GetLatestGTFSStaticVersionForAgencies(ctx context.Context, arg GetLatestGTFSStaticVersionForAgenciesParams) (GetLatestGTFSStaticVersionForAgenciesRow, error) {
 	row := q.db.QueryRow(ctx, getLatestGTFSStaticVersionForAgencies, arg.ServerID, arg.AgencyIds)
 	var i GetLatestGTFSStaticVersionForAgenciesRow
@@ -55,6 +60,7 @@ CROSS JOIN LATERAL (
     WHERE va.gtfs_static_version_id = v.gtfs_static_version_id
 ) recorded
 WHERE v.server_id = $2
+  AND v.server_scoped
 ORDER BY v.published_at DESC, v.gtfs_static_version_id DESC
 LIMIT 1
 `
@@ -70,8 +76,10 @@ type GetLatestGTFSStaticVersionForServerRow struct {
 	SameAgencies          bool
 }
 
-// The server's newest version whatever its agencies, and whether its agency
-// set is exactly @agency_ids.
+// The newest server-scoped version, whatever its agencies, and whether its
+// agency set is exactly @agency_ids. Agency-scoped versions are excluded:
+// those entries share this server row but publish their own snapshots, and
+// treating one as newer makes an unchanged server restart insert a duplicate.
 func (q *Queries) GetLatestGTFSStaticVersionForServer(ctx context.Context, arg GetLatestGTFSStaticVersionForServerParams) (GetLatestGTFSStaticVersionForServerRow, error) {
 	row := q.db.QueryRow(ctx, getLatestGTFSStaticVersionForServer, arg.AgencyIds, arg.ServerID)
 	var i GetLatestGTFSStaticVersionForServerRow
@@ -117,8 +125,12 @@ func (q *Queries) InsertBoundingBoxVersion(ctx context.Context, arg InsertBoundi
 }
 
 const insertGTFSStaticVersion = `-- name: InsertGTFSStaticVersion :one
-INSERT INTO gtfs_static_version (server_id, published_at, combined_content_sha256, parser_version)
-VALUES ($1, $2, $3, $4)
+INSERT INTO gtfs_static_version (
+    server_id, published_at, combined_content_sha256, parser_version, server_scoped
+)
+VALUES (
+    $1, $2, $3, $4, $5
+)
 RETURNING gtfs_static_version_id
 `
 
@@ -127,6 +139,7 @@ type InsertGTFSStaticVersionParams struct {
 	PublishedAt           time.Time
 	CombinedContentSha256 *string
 	ParserVersion         *string
+	ServerScoped          bool
 }
 
 func (q *Queries) InsertGTFSStaticVersion(ctx context.Context, arg InsertGTFSStaticVersionParams) (int64, error) {
@@ -135,6 +148,7 @@ func (q *Queries) InsertGTFSStaticVersion(ctx context.Context, arg InsertGTFSSta
 		arg.PublishedAt,
 		arg.CombinedContentSha256,
 		arg.ParserVersion,
+		arg.ServerScoped,
 	)
 	var gtfs_static_version_id int64
 	err := row.Scan(&gtfs_static_version_id)
@@ -198,6 +212,35 @@ func (q *Queries) ListBoundingBoxVersionsForStaticVersion(ctx context.Context, g
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRecordedStaticVersionSourceIDs = `-- name: ListRecordedStaticVersionSourceIDs :many
+SELECT source_id
+FROM gtfs_static_version_source
+WHERE gtfs_static_version_id = $1
+ORDER BY source_id
+`
+
+// Sources already linked to a version. A reused version keeps those rows and
+// only gains a link for a feed URL it did not have.
+func (q *Queries) ListRecordedStaticVersionSourceIDs(ctx context.Context, gtfsStaticVersionID int64) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listRecordedStaticVersionSourceIDs, gtfsStaticVersionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var source_id int64
+		if err := rows.Scan(&source_id); err != nil {
+			return nil, err
+		}
+		items = append(items, source_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
