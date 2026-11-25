@@ -68,11 +68,12 @@ func feedHash(feed []byte) string {
 // expiryHarness is one agency whose feed URL and backend metadata hash the
 // test controls, collected through the real tick loop.
 type expiryHarness struct {
-	app    *Application
-	server models.ObaServer
-	feed   atomic.Value // []byte; an empty slice serves 404
-	hash   atomic.Value // string; "" serves no hash
-	ctx    context.Context
+	app            *Application
+	server         models.ObaServer
+	feed           atomic.Value // []byte; an empty slice serves 404
+	hash           atomic.Value // string; "" serves no hash
+	metadataStatus atomic.Int32
+	ctx            context.Context
 }
 
 func newExpiryHarness(t *testing.T, startupFeed []byte) *expiryHarness {
@@ -89,6 +90,10 @@ func newExpiryHarness(t *testing.T, startupFeed []byte) *expiryHarness {
 			}
 			http.NotFound(w, r)
 		case "/api/v2/metadata.json":
+			if status := h.metadataStatus.Load(); status != 0 {
+				w.WriteHeader(int(status))
+				return
+			}
 			fmt.Fprintf(w, `{"staticGtfsHash":%q}`, h.hash.Load().(string))
 		case "/api/where/current-time.json":
 			w.Header().Set("Content-Type", "application/json")
@@ -315,6 +320,81 @@ func TestExpiryRecoveryWhenBackendStopsReportingHash(t *testing.T) {
 	})
 	if v, found := gaugeValueFor(metrics.GtfsScheduleAvailable, labels); !found || v != 1 {
 		t.Fatalf("schedule available = %v (found %v), want 1 once debounce cleared", v, found)
+	}
+}
+
+// TestExpiryRecoveryWhenConfirmedBehindBackendStopsReportingHash checks that
+// when an expired bundle is replaced and the backend is confirmed behind
+// (BackendBundleBehind), and then the backend stops publishing a staticGtfsHash
+// (status Unsupported), the confirmed Behind relation is dropped and the entry
+// returns to withholdNone.
+func TestExpiryRecoveryWhenConfirmedBehindBackendStopsReportingHash(t *testing.T) {
+	ignoreEarlierFeedChecks(t)
+	expired := expiredTestFeed(t)
+	current := currentTestFeed(t)
+	h := newExpiryHarness(t, expired)
+	h.hash.Store(feedHash(expired))
+	h.feed.Store(current)
+	key := h.server.ServerKey()
+	labels := map[string]string{"agency_id": h.server.AgencyID, "server_url": utils.SanitizeServerURL(h.server.ObaBaseURL)}
+
+	var elapsed atomic.Int64
+	h.app.GtfsService.SetStaticRefreshClock(func() time.Time {
+		return time.Now().Add(time.Duration(elapsed.Load()))
+	})
+
+	// Wait until the backend is confirmed behind (debounce completes).
+	h.collectUntil(t, "backend to be confirmed behind", func() bool {
+		elapsed.Add(int64(30 * time.Second))
+		entry := h.app.BundleExpiry.entry(key)
+		return entry.kind == withholdBackendBehind && entry.reported
+	})
+
+	// The backend stops publishing a hash (status Unsupported).
+	h.hash.Store("")
+
+	// Verify that the confirmed Behind relation is dropped and metrics resume (withholdNone).
+	h.collectUntil(t, "metrics to resume when confirmed-behind backend drops hash", func() bool {
+		return h.app.BundleExpiry.entry(key).kind == withholdNone
+	})
+	if v, found := gaugeValueFor(metrics.GtfsScheduleAvailable, labels); !found || v != 1 {
+		t.Fatalf("schedule available = %v (found %v), want 1 once backend drops hash", v, found)
+	}
+}
+
+// TestExpiryRecoveryWhenMetadataFailsTransientlyPastDeadline checks that when
+// an expired bundle is replaced and debounce begins, sustained transient
+// metadata failures (BackendHashTransient) past debounceWithholdMax clear the
+// withhold and allow metrics to resume (withholdNone).
+func TestExpiryRecoveryWhenMetadataFailsTransientlyPastDeadline(t *testing.T) {
+	ignoreEarlierFeedChecks(t)
+	savedMax := debounceWithholdMax
+	debounceWithholdMax = 50 * time.Millisecond
+	t.Cleanup(func() { debounceWithholdMax = savedMax })
+
+	expired := expiredTestFeed(t)
+	current := currentTestFeed(t)
+	h := newExpiryHarness(t, expired)
+	h.hash.Store(feedHash(expired))
+	h.feed.Store(current)
+	key := h.server.ServerKey()
+	labels := map[string]string{"agency_id": h.server.AgencyID, "server_url": utils.SanitizeServerURL(h.server.ObaBaseURL)}
+
+	// Wait until debounce starts while the backend serves the old hash.
+	h.collectUntil(t, "debounce to start", func() bool {
+		return h.app.GtfsService.BackendBundleDebouncing(h.server)
+	})
+
+	// Metadata endpoint begins returning sustained 500 errors (BackendHashTransient).
+	h.metadataStatus.Store(http.StatusInternalServerError)
+
+	// Verify that once the debounce deadline passes, debounce withholding falls back
+	// to withholdNone and metrics resume.
+	h.collectUntil(t, "metrics to resume after debounce deadline under transient metadata failures", func() bool {
+		return h.app.BundleExpiry.entry(key).kind == withholdNone
+	})
+	if v, found := gaugeValueFor(metrics.GtfsScheduleAvailable, labels); !found || v != 1 {
+		t.Fatalf("schedule available = %v (found %v), want 1 once debounce deadline exceeded", v, found)
 	}
 }
 

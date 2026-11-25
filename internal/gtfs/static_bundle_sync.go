@@ -192,3 +192,15 @@ func (gs *GtfsService) BackendBundleDebouncing(server models.ObaServer) bool {
 	_, debouncing := gs.BackendBundleSyncState(server)
 	return debouncing
 }
+
+// ClearBackendDebounce clears any pending debounce state for the server.
+func (gs *GtfsService) ClearBackendDebounce(server models.ObaServer) {
+	c := gs.refreshCoordinator
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, key := range lookupKeys(server) {
+		if state, ok := c.relations[key]; ok && state.debouncing {
+			delete(c.relations, key)
+		}
+	}
+}
