@@ -198,13 +198,21 @@ func loadConfigFromURL(ctx context.Context, client *http.Client, url, authUser, 
 		return nil, statusErr
 	}
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxRemoteConfigSize+1))
 	if err != nil {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags:  utils.MakeMap("config_url", safeURL),
 			Level: sentry.LevelError,
 		})
 		return nil, fmt.Errorf("failed to read remote config: %v", err)
+	}
+	if len(data) > maxRemoteConfigSize {
+		sizeErr := fmt.Errorf("remote config response exceeds maximum size of %d bytes", maxRemoteConfigSize)
+		report.ReportErrorWithSentryOptions(sizeErr, report.SentryReportOptions{
+			Tags:  utils.MakeMap("config_url", safeURL),
+			Level: sentry.LevelError,
+		})
+		return nil, sizeErr
 	}
 
 	var rawEntries []json.RawMessage
@@ -218,3 +226,8 @@ func loadConfigFromURL(ctx context.Context, client *http.Client, url, authUser, 
 
 	return decodeServers(rawEntries, logger, droppedStore), nil
 }
+
+// maxRemoteConfigSize limits the amount of data read from a remote config
+// endpoint. The extra byte read below lets us distinguish a response that is
+// exactly at the limit from one that exceeds it.
+const maxRemoteConfigSize = 1 << 20 // 1 MiB
