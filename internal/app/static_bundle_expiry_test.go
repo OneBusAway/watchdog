@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"watchdog.onebusaway.org/internal/config"
 	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/metrics"
 	"watchdog.onebusaway.org/internal/models"
@@ -364,21 +365,16 @@ func TestExpiryRecoveryWhenConfirmedBehindBackendStopsReportingHash(t *testing.T
 
 // TestExpiryRecoveryWhenMetadataFailsTransientlyPastDeadline checks that when
 // an expired bundle is replaced and debounce begins, sustained transient
-// metadata failures (BackendHashTransient) past debounceWithholdMax clear the
-// withhold and allow metrics to resume (withholdNone).
+// metadata failures (BackendHashTransient) past the debounce deadline clear the
+// withhold and allow metrics to resume (withholdNone), verified using explicit timestamps.
 func TestExpiryRecoveryWhenMetadataFailsTransientlyPastDeadline(t *testing.T) {
 	ignoreEarlierFeedChecks(t)
-	savedMax := debounceWithholdMax
-	debounceWithholdMax = 50 * time.Millisecond
-	t.Cleanup(func() { debounceWithholdMax = savedMax })
-
 	expired := expiredTestFeed(t)
 	current := currentTestFeed(t)
 	h := newExpiryHarness(t, expired)
 	h.hash.Store(feedHash(expired))
 	h.feed.Store(current)
 	key := h.server.ServerKey()
-	labels := map[string]string{"agency_id": h.server.AgencyID, "server_url": utils.SanitizeServerURL(h.server.ObaBaseURL)}
 
 	// Wait until debounce starts while the backend serves the old hash.
 	h.collectUntil(t, "debounce to start", func() bool {
@@ -388,13 +384,51 @@ func TestExpiryRecoveryWhenMetadataFailsTransientlyPastDeadline(t *testing.T) {
 	// Metadata endpoint begins returning sustained 500 errors (BackendHashTransient).
 	h.metadataStatus.Store(http.StatusInternalServerError)
 
-	// Verify that once the debounce deadline passes, debounce withholding falls back
-	// to withholdNone and metrics resume.
-	h.collectUntil(t, "metrics to resume after debounce deadline under transient metadata failures", func() bool {
-		return h.app.BundleExpiry.entry(key).kind == withholdNone
-	})
-	if v, found := gaugeValueFor(metrics.GtfsScheduleAvailable, labels); !found || v != 1 {
-		t.Fatalf("schedule available = %v (found %v), want 1 once debounce deadline exceeded", v, found)
+	// Collect once to ensure the transient error is observed and debouncing remains active.
+	h.app.collectOnce(h.ctx)
+	if !h.app.GtfsService.BackendBundleDebouncing(h.server) {
+		t.Fatal("expected debounce to remain active under transient metadata errors")
+	}
+
+	// Verify that before the deadline, observeStaticBundle keeps prior withhold.
+	now := time.Now().UTC()
+	h.app.observeStaticBundle(h.server, now)
+	if h.app.BundleExpiry.entry(key).kind == withholdNone {
+		t.Fatal("metrics should stay withheld while debouncing before deadline")
+	}
+
+	// Advance time past the debounce deadline without waiting on wall-clock time.
+	pastDeadline := now.Add(h.app.debounceWithholdDeadline() + time.Second)
+	h.app.observeStaticBundle(h.server, pastDeadline)
+
+	// Verify debounce is cleared and metrics resume.
+	if h.app.GtfsService.BackendBundleDebouncing(h.server) {
+		t.Fatal("expected debounce to be cleared once deadline passed")
+	}
+	if got := h.app.BundleExpiry.entry(key).kind; got != withholdNone {
+		t.Fatalf("withhold kind = %v, want withholdNone after debounce deadline", got)
+	}
+	if h.app.staticMetricsWithheld(h.server, pastDeadline) {
+		t.Fatal("static metrics should not be withheld after debounce deadline")
+	}
+}
+
+// TestDebounceWithholdDeadlineScalesWithFetchInterval verifies that the debounce
+// withhold deadline scales with FetchInterval while preserving the 10-minute floor.
+func TestDebounceWithholdDeadlineScalesWithFetchInterval(t *testing.T) {
+	app := &Application{}
+	if got := app.debounceWithholdDeadline(); got != 10*time.Minute {
+		t.Fatalf("default deadline = %v, want 10m", got)
+	}
+
+	app.ConfigService = &config.ConfigService{Config: &config.Config{FetchInterval: 300}}
+	if got := app.debounceWithholdDeadline(); got != 100*time.Minute {
+		t.Fatalf("300s interval deadline = %v, want 100m", got)
+	}
+
+	app.ConfigService = &config.ConfigService{Config: &config.Config{FetchInterval: 5}}
+	if got := app.debounceWithholdDeadline(); got != 10*time.Minute {
+		t.Fatalf("5s interval deadline = %v, want 10m floor", got)
 	}
 }
 

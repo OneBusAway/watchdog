@@ -186,18 +186,35 @@ func (r *BundleExpiryReporter) Prune(keep func(serverKey string) bool) {
 	}
 }
 
-// debounceWithholdMax is how long static metrics may remain withheld
-// while awaiting backend hash confirmation before falling back to withholdNone.
-// A variable so tests need not wait for it.
-var debounceWithholdMax = 10 * time.Minute
+// debounceWithholdBase is the minimum debounce withhold deadline (10 minutes).
+const debounceWithholdBase = 10 * time.Minute
+
+// debounceWithholdTicks is the number of ticks allowed for confirming Behind.
+// At the 30s default, 20 ticks = 10 minutes.
+const debounceWithholdTicks = 20
+
+// debounceWithholdMax overrides the debounce withhold deadline when non-zero.
+// Used in tests so they need not wait for the full duration.
+var debounceWithholdMax time.Duration
+
+// debounceWithholdDeadline calculates how long static metrics may remain withheld
+// while awaiting backend hash confirmation before falling back to withholdNone,
+// scaling with the fetch interval.
+func (app *Application) debounceWithholdDeadline() time.Duration {
+	if debounceWithholdMax > 0 {
+		return debounceWithholdMax
+	}
+	interval := 30 * time.Second
+	if app.ConfigService != nil && app.ConfigService.Config.FetchInterval > 0 {
+		interval = time.Duration(app.ConfigService.Config.FetchInterval) * time.Second
+	}
+	return max(debounceWithholdBase, time.Duration(debounceWithholdTicks)*interval)
+}
 
 // staticWithholdKind decides whether the entry's static-derived metrics are
-// withheld now, and why.
+// withheld now, and why. It is a pure read without side effects.
 func (app *Application) staticWithholdKind(server models.ObaServer, now time.Time) withholdKind {
 	if app.MetricsService.StaticBundleExpired(server, now) {
-		if app.BundleExpiry != nil {
-			app.BundleExpiry.setDebounceSince(server.ServerKey(), time.Time{})
-		}
 		return withholdExpired
 	}
 	relation, debouncing := app.GtfsService.BackendBundleSyncState(server)
@@ -207,14 +224,7 @@ func (app *Application) staticWithholdKind(server models.ObaServer, now time.Tim
 	if debouncing && app.BundleExpiry != nil {
 		if prior := app.BundleExpiry.entry(server.ServerKey()).kind; prior != withholdNone {
 			debounceStart := app.BundleExpiry.debounceSince(server.ServerKey())
-			if debounceStart.IsZero() {
-				app.BundleExpiry.setDebounceSince(server.ServerKey(), now)
-				debounceStart = now
-			}
-			if now.Sub(debounceStart) >= debounceWithholdMax {
-				app.Logger.Warn("Static GTFS bundle debounce timed out after sustained metadata failures; falling back to withholdNone",
-					"agency_id", server.AgencyID, "server_name", server.ServerName, "server_url", utils.SanitizeServerURL(server.ObaBaseURL))
-				app.GtfsService.ClearBackendDebounce(server)
+			if !debounceStart.IsZero() && now.Sub(debounceStart) >= app.debounceWithholdDeadline() {
 				if rel, _ := app.GtfsService.BackendBundleSyncState(server); rel == gtfs.BackendBundleBehind {
 					return withholdBackendBehind
 				}
@@ -246,20 +256,55 @@ func (app *Application) staticMetricsWithheldForAll(entries []models.ObaServer, 
 // observeStaticBundle reports a change in whether the agency entry withholds
 // its static-derived metrics. Call it once per agency entry per tick.
 func (app *Application) observeStaticBundle(server models.ObaServer, now time.Time) {
+	serverKey := server.ServerKey()
+	serverURL := utils.SanitizeServerURL(server.ObaBaseURL)
+
+	if app.MetricsService.StaticBundleExpired(server, now) {
+		if app.BundleExpiry != nil {
+			app.BundleExpiry.setDebounceSince(serverKey, time.Time{})
+		}
+	} else if app.BundleExpiry != nil {
+		_, debouncing := app.GtfsService.BackendBundleSyncState(server)
+		if debouncing {
+			if prior := app.BundleExpiry.entry(serverKey).kind; prior != withholdNone {
+				debounceStart := app.BundleExpiry.debounceSince(serverKey)
+				if debounceStart.IsZero() {
+					app.BundleExpiry.setDebounceSince(serverKey, now)
+					debounceStart = now
+				}
+				if now.Sub(debounceStart) >= app.debounceWithholdDeadline() {
+					app.Logger.Warn("Static GTFS bundle debounce timed out awaiting confirmation; falling back to withholdNone",
+						"agency_id", server.AgencyID, "server_name", server.ServerName, "server_url", serverURL)
+					app.GtfsService.ClearBackendDebounce(server)
+					app.BundleExpiry.setDebounceSince(serverKey, time.Time{})
+				}
+			} else {
+				app.BundleExpiry.setDebounceSince(serverKey, time.Time{})
+			}
+		} else {
+			app.BundleExpiry.setDebounceSince(serverKey, time.Time{})
+		}
+	}
+
 	kind := app.staticWithholdKind(server, now)
-	before, after := app.BundleExpiry.update(server.ServerKey(), kind, now)
+	before, after := app.BundleExpiry.update(serverKey, kind, now)
 	tags := map[string]string{
 		"agency_id":   server.AgencyID,
 		"agency_name": server.AgencyName,
 		"server_name": server.ServerName,
 	}
-	serverURL := utils.SanitizeServerURL(server.ObaBaseURL)
 	if kind == withholdNone {
 		if before.kind == withholdNone {
 			return
 		}
-		app.Logger.Info("Static GTFS bundle is current and matches the backend; resuming schedule and vehicle metrics",
-			"agency_id", server.AgencyID, "server_name", server.ServerName, "server_url", serverURL)
+		relation, _ := app.GtfsService.BackendBundleSyncState(server)
+		if relation == gtfs.BackendBundleMatch {
+			app.Logger.Info("Static GTFS bundle is current and matches the backend; resuming schedule and vehicle metrics",
+				"agency_id", server.AgencyID, "server_name", server.ServerName, "server_url", serverURL)
+		} else {
+			app.Logger.Info("Static GTFS bundle is usable; resuming schedule and vehicle metrics",
+				"agency_id", server.AgencyID, "server_name", server.ServerName, "server_url", serverURL)
+		}
 		if before.reported {
 			report.ReportErrorWithSentryOptions(fmt.Errorf("static GTFS bundle for %s agency %s is usable again", serverURL, server.AgencyID),
 				report.SentryReportOptions{Tags: tags, Level: sentry.LevelInfo})

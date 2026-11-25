@@ -164,10 +164,15 @@ Watchdog withholds the metrics it derives from the static bundle in two cases:
   checked against a different bundle. One read is not enough, because a
   single lagging node behind a load balancer can answer it: the stale hash must
   hold for at least three reads spanning 90 seconds. While those reads are
-  still being taken, metrics that were already withheld stay withheld. This
+  still being taken, metrics that were already withheld stay withheld, up to a
+  debounce deadline (10 minutes by default, scaled with `--fetch-interval`).
+  If the deadline expires without confirming Behind, debounce falls back to
+  allowing metrics to resume. A confirmed Behind status is dropped when the
+  backend's metadata becomes Unsupported or the deployment becomes Ineligible,
+  so metrics resume rather than remaining permanently withheld. This
   covers the case where Watchdog replaces an expired bundle and the backend may
   still be behind: the metrics come back only once the reads show the backend
-  is not behind, instead of switching on and then off again.
+  is not behind (or debounce times out), instead of switching on and then off again.
 
 While withheld, Watchdog reports the schedule as unknown (`gtfs_schedule_available` 0), skips the unmatched-stop location lookup and deletes `oba_unmatched_stop_unresolved` (existing `oba_unmatched_stop_info` and cluster series age out on their 24-hour TTL), skips the vehicle pass, which attributes vehicles and checks bounds with the bundle, and deletes the gauges that pass writes: `realtime_vehicle_positions_count_gtfs_rt`, `gtfs_rt_tracked_vehicles_count`, `gtfs_rt_invalid_vehicle_coordinates`, `gtfs_rt_stopped_out_of_bounds_vehicles`, `gtfs_rt_vehicle_computed_speed`, `gtfs_rt_vehicle_speed_discrepancy_ratio`, `gtfs_rt_vehicle_source_timestamp_seconds`, `gtfs_rt_vehicle_speed_last_computed_timestamp_seconds` and `gtfs_rt_vehicle_state_last_changed_timestamp_seconds`. Counters are kept and simply stop increasing. In server mode the pass is shared by the merged bundle, so it is skipped only once every reported agency is withheld. API ping, OBA API metrics, GTFS-RT fetch status and the expiration gauges (`gtfs_bundle_days_until_earliest_expiration` and `gtfs_bundle_days_until_latest_expiration`) keep reporting.
 
