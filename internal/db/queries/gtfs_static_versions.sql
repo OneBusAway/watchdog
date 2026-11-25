@@ -6,7 +6,7 @@ WHERE (sqlc.narg('server_id')::bigint IS NULL OR server_id = sqlc.narg('server_i
   AND (sqlc.narg('published_to')::timestamptz IS NULL OR published_at < sqlc.narg('published_to')::timestamptz)
   AND (sqlc.narg('after_id')::bigint IS NULL OR gtfs_static_version_id < sqlc.narg('after_id')::bigint)
 ORDER BY gtfs_static_version_id DESC
-LIMIT sqlc.arg('page_limit');
+LIMIT sqlc.narg('page_limit')::integer;
 
 -- name: GetGTFSStaticVersion :many
 -- The static versions with the given IDs; IDs with no row are left out. This

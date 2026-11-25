@@ -18,13 +18,17 @@ const kindGTFSStaticVersion resourceKind = "gtfs_static_version"
 // gtfsStaticVersionIncludable names the links E34 and E35 can include.
 var gtfsStaticVersionIncludable = map[string]resourceKind{"server": kindServer}
 
-type gtfsStaticVersionListItem struct {
+type gtfsStaticVersionFields struct {
 	GTFSStaticVersionID   int64   `json:"gtfs_static_version_id"`
 	ServerID              int64   `json:"server_id"`
 	PublishedAt           apiTime `json:"published_at"`
 	CombinedContentSHA256 *string `json:"combined_content_sha256"`
 	ParserVersion         *string `json:"parser_version"`
-	Links                 links   `json:"links"`
+}
+
+type gtfsStaticVersionListItem struct {
+	gtfsStaticVersionFields
+	Links links `json:"links"`
 }
 
 type gtfsStaticVersionsBody struct {
@@ -50,14 +54,10 @@ type gtfsStaticVersionAgency struct {
 // gtfsStaticVersion is the E35 representation of one static version, which
 // the gtfs_static_version loader also returns.
 type gtfsStaticVersion struct {
-	GTFSStaticVersionID   int64                     `json:"gtfs_static_version_id"`
-	ServerID              int64                     `json:"server_id"`
-	PublishedAt           apiTime                   `json:"published_at"`
-	CombinedContentSHA256 *string                   `json:"combined_content_sha256"`
-	ParserVersion         *string                   `json:"parser_version"`
-	Sources               []gtfsStaticVersionSource `json:"sources"`
-	Agencies              []gtfsStaticVersionAgency `json:"agencies"`
-	Links                 links                     `json:"links"`
+	gtfsStaticVersionFields
+	Sources  []gtfsStaticVersionSource `json:"sources"`
+	Agencies []gtfsStaticVersionAgency `json:"agencies"`
+	Links    links                     `json:"links"`
 }
 
 // gtfsStaticVersionBody is the E35 response.
@@ -79,15 +79,39 @@ func gtfsStaticVersionLinks(versionID, serverID int64) itemLinks {
 	}
 }
 
-func gtfsStaticVersionListRepresentation(row dbgen.GtfsStaticVersion, l itemLinks) gtfsStaticVersionListItem {
-	return gtfsStaticVersionListItem{
+func gtfsStaticVersionBaseFields(row dbgen.GtfsStaticVersion) gtfsStaticVersionFields {
+	return gtfsStaticVersionFields{
 		GTFSStaticVersionID:   row.GtfsStaticVersionID,
 		ServerID:              row.ServerID,
 		PublishedAt:           newAPITime(row.PublishedAt),
 		CombinedContentSHA256: row.CombinedContentSha256,
 		ParserVersion:         row.ParserVersion,
-		Links:                 l.links(),
 	}
+}
+
+func (s *InvestigationService) gtfsStaticVersionPage(ctx context.Context, q *dbgen.Queries, r *http.Request,
+	params dbgen.ListGTFSStaticVersionsParams, p page, inc include) (gtfsStaticVersionsBody, error) {
+	var body gtfsStaticVersionsBody
+	rows, err := q.ListGTFSStaticVersions(ctx, params)
+	if err != nil {
+		return body, err
+	}
+	rows, hasMore := trimPage(rows, p)
+	body.Items = make([]gtfsStaticVersionListItem, 0, len(rows))
+	allLinks := make([]itemLinks, 0, len(rows))
+	var lastID int64
+	for _, row := range rows {
+		l := gtfsStaticVersionLinks(row.GtfsStaticVersionID, row.ServerID)
+		body.Items = append(body.Items, gtfsStaticVersionListItem{
+			gtfsStaticVersionFields: gtfsStaticVersionBaseFields(row),
+			Links:                   l.links(),
+		})
+		allLinks = append(allLinks, l)
+		lastID = row.GtfsStaticVersionID
+	}
+	body.Links = pageLinks(r, lastID, hasMore)
+	body.Included, err = s.loadIncluded(ctx, q, allLinks, inc)
+	return body, err
 }
 
 // listGTFSStaticVersions serves GET /v1/gtfs-static-versions.
@@ -103,31 +127,18 @@ func (s *InvestigationService) listGTFSStaticVersions(w http.ResponseWriter, r *
 		return
 	}
 
+	limit := p.Limit()
 	params := dbgen.ListGTFSStaticVersionsParams{
 		ServerID:      serverID,
 		PublishedFrom: win.From,
 		PublishedTo:   win.To,
 		AfterID:       p.AfterID,
-		PageLimit:     p.Limit(),
+		PageLimit:     &limit,
 	}
 	var body gtfsStaticVersionsBody
 	err := s.read(r.Context(), func(ctx context.Context, q *dbgen.Queries) error {
-		rows, err := q.ListGTFSStaticVersions(ctx, params)
-		if err != nil {
-			return err
-		}
-		rows, hasMore := trimPage(rows, p)
-		body.Items = make([]gtfsStaticVersionListItem, 0, len(rows))
-		allLinks := make([]itemLinks, 0, len(rows))
-		var lastID int64
-		for _, row := range rows {
-			l := gtfsStaticVersionLinks(row.GtfsStaticVersionID, row.ServerID)
-			body.Items = append(body.Items, gtfsStaticVersionListRepresentation(row, l))
-			allLinks = append(allLinks, l)
-			lastID = row.GtfsStaticVersionID
-		}
-		body.Links = pageLinks(r, lastID, hasMore)
-		body.Included, err = s.loadIncluded(ctx, q, allLinks, inc)
+		var err error
+		body, err = s.gtfsStaticVersionPage(ctx, q, r, params, p, inc)
 		return err
 	})
 	if err != nil {
@@ -143,14 +154,10 @@ func (s *InvestigationService) listGTFSStaticVersions(w http.ResponseWriter, r *
 // version with no rows of either kind encodes [] rather than null.
 func gtfsStaticVersionRepresentation(row dbgen.GtfsStaticVersion, sources []dbgen.ListGTFSStaticVersionSourcesRow, agencies []dbgen.ListGTFSStaticVersionAgenciesRow) gtfsStaticVersion {
 	rep := gtfsStaticVersion{
-		GTFSStaticVersionID:   row.GtfsStaticVersionID,
-		ServerID:              row.ServerID,
-		PublishedAt:           newAPITime(row.PublishedAt),
-		CombinedContentSHA256: row.CombinedContentSha256,
-		ParserVersion:         row.ParserVersion,
-		Sources:               make([]gtfsStaticVersionSource, 0, len(sources)),
-		Agencies:              make([]gtfsStaticVersionAgency, 0, len(agencies)),
-		Links:                 gtfsStaticVersionLinks(row.GtfsStaticVersionID, row.ServerID).links(),
+		gtfsStaticVersionFields: gtfsStaticVersionBaseFields(row),
+		Sources:                 make([]gtfsStaticVersionSource, 0, len(sources)),
+		Agencies:                make([]gtfsStaticVersionAgency, 0, len(agencies)),
+		Links:                   gtfsStaticVersionLinks(row.GtfsStaticVersionID, row.ServerID).links(),
 	}
 	for _, s := range sources {
 		rep.Sources = append(rep.Sources, gtfsStaticVersionSource{

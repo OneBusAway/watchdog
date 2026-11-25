@@ -133,7 +133,7 @@ WHERE ($1::bigint IS NULL OR server_id = $1::bigint)
   AND ($3::timestamptz IS NULL OR published_at < $3::timestamptz)
   AND ($4::bigint IS NULL OR gtfs_static_version_id < $4::bigint)
 ORDER BY gtfs_static_version_id DESC
-LIMIT $5
+LIMIT $5::integer
 `
 
 type ListGTFSStaticVersionsParams struct {
@@ -141,7 +141,7 @@ type ListGTFSStaticVersionsParams struct {
 	PublishedFrom *time.Time
 	PublishedTo   *time.Time
 	AfterID       *int64
-	PageLimit     int32
+	PageLimit     *int32
 }
 
 func (q *Queries) ListGTFSStaticVersions(ctx context.Context, arg ListGTFSStaticVersionsParams) ([]GtfsStaticVersion, error) {
