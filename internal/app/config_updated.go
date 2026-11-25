@@ -50,6 +50,11 @@ func (app *Application) OnConfigUpdated(ctx context.Context, updated []models.Ob
 		app.HistoryService.SetServers(updated)
 	}
 
+	// Save a removed server's unmatched-stop history before its other state
+	// is pruned. It writes to the database, so it runs outside the refresh
+	// lock, which collection and static publication also take.
+	app.flushRemovedServerHistory(updated)
+
 	var newcomers []models.ObaServer
 	app.GtfsService.StaticStore.WithRefreshLock(func() {
 		app.GtfsService.StaticStore.SetConfiguredServers(updated)

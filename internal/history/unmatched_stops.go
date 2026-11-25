@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -122,7 +123,7 @@ func (o *openStopEpisodes) baseURLs() []string {
 }
 
 // TrackedServerURLs returns the sanitized base URLs whose open episodes are
-// held in memory. app.PruneStaleServers flushes those no longer configured.
+// held in memory. app.OnConfigUpdated flushes those no longer configured.
 func (h *HistoryService) TrackedServerURLs() []string {
 	if h == nil || h.stops == nil {
 		return nil
@@ -350,7 +351,7 @@ func (h *HistoryService) recordEpisodeChanges(ctx context.Context, q *dbgen.Quer
 		responseAgencyIDs[agency.AgencyID] = responseAgencyID
 	}
 
-	versionID, hasVersion := h.CurrentStaticVersion(server.ServerKey())
+	version, hasVersion := h.static.currentVersion(server.ServerKey())
 	stops := newStaticStopIndex(h.staticStore, server)
 	opened := make(map[unmatchedStopKey]*openStopEpisode, len(plan.opens))
 	for _, key := range plan.opens {
@@ -374,9 +375,11 @@ func (h *HistoryService) recordEpisodeChanges(ctx context.Context, q *dbgen.Quer
 			agencyID:       agencyID,
 			lastReportedAt: observedAt,
 		}
-		if hasVersion {
+		// While a newer snapshot is visible but its version is not recorded
+		// yet, link nothing; trigger 2 adds the link.
+		if hasVersion && stops.matches(version, key.agencyID) {
 			stop, found := stops.lookup(key.agencyID, key.stopID)
-			if err := linkOpenedEpisodeMetadata(ctx, q, versionID, episode, stop, found); err != nil {
+			if err := linkOpenedEpisodeMetadata(ctx, q, version.id, episode, stop, found); err != nil {
 				return nil, fmt.Errorf("server %q: metadata for unmatched stop %q: %w", server.ServerName, key.stopID, err)
 			}
 		}
@@ -414,14 +417,14 @@ func saveLastReported(ctx context.Context, q *dbgen.Queries, episodes []*openSto
 		return nil
 	}
 	ids := make([]int64, len(episodes))
-	times := make([]int64, len(episodes))
+	times := make([]time.Time, len(episodes))
 	for i, episode := range episodes {
 		ids[i] = episode.episodeID
-		times[i] = episode.lastReportedAt.UnixMicro()
+		times[i] = episode.lastReportedAt
 	}
 	if err := q.SaveUnmatchedStopLastReported(ctx, dbgen.SaveUnmatchedStopLastReportedParams{
 		EpisodeIds:     ids,
-		LastReportedUs: times,
+		LastReportedAt: times,
 	}); err != nil {
 		return fmt.Errorf("save last_reported_at of %d unmatched-stop episodes: %w", len(episodes), err)
 	}
@@ -429,7 +432,7 @@ func saveLastReported(ctx context.Context, q *dbgen.Queries, episodes []*openSto
 }
 
 // FlushServer saves the last_reported_at of a removed server's open episodes,
-// then drops the server from memory. app.PruneStaleServers calls it before
+// then drops the server from memory. app.OnConfigUpdated calls it before
 // the server's other state is removed.
 func (h *HistoryService) FlushServer(ctx context.Context, baseURL string) {
 	if h == nil || h.pool == nil || h.stops == nil {
@@ -482,6 +485,12 @@ func latestReported(episodes []*openStopEpisode) time.Time {
 	return latest
 }
 
+// cleanText makes GTFS text storable: PostgreSQL rejects invalid UTF-8 and
+// NUL, and one rejected row would roll back the whole write.
+func cleanText(s string) string {
+	return strings.ReplaceAll(strings.ToValidUTF8(s, "\uFFFD"), "\x00", "")
+}
+
 // stopFacts are the static facts of a stop_metadata_version row.
 type stopFacts struct {
 	found           bool
@@ -500,14 +509,14 @@ func stopFactsFor(stop remoteGtfs.Stop, found bool) stopFacts {
 	if !found {
 		return stopFacts{}
 	}
-	name := stop.Name
+	name := cleanText(stop.Name)
 	facts := stopFacts{found: true, name: &name}
 	if stop.Latitude != nil && stop.Longitude != nil && geo.IsValidLatLon(*stop.Latitude, *stop.Longitude) {
 		lat, lon := *stop.Latitude, *stop.Longitude
 		facts.latitude, facts.longitude = &lat, &lon
 	}
 	if stop.Parent != nil {
-		parentID := stop.Parent.Id
+		parentID := cleanText(stop.Parent.Id)
 		facts.parentStationID = &parentID
 	}
 	if t := int(stop.Type); t >= 0 && t <= 5 {
@@ -549,21 +558,25 @@ func equalPtr[T comparable](a, b *T) bool {
 type staticStopIndex struct {
 	store  *gtfs.StaticStore
 	server models.ObaServer
-	byKey  map[string]map[string]remoteGtfs.Stop
+	// data pins the snapshot read for each key, so matches and lookup see
+	// the same one.
+	data  map[string]*models.StaticData
+	byKey map[string]map[string]remoteGtfs.Stop
 }
 
 func newStaticStopIndex(store *gtfs.StaticStore, server models.ObaServer) *staticStopIndex {
-	return &staticStopIndex{store: store, server: server, byKey: make(map[string]map[string]remoteGtfs.Stop)}
+	return &staticStopIndex{
+		store:  store,
+		server: server,
+		data:   make(map[string]*models.StaticData),
+		byKey:  make(map[string]map[string]remoteGtfs.Stop),
+	}
 }
 
 // lookup finds a stop in the agency's snapshot, falling back to the server
 // key's snapshot in server mode.
 func (x *staticStopIndex) lookup(agencyID, stopID string) (remoteGtfs.Stop, bool) {
-	keys := []string{models.ServerKey(x.server.ObaBaseURL, agencyID)}
-	if x.server.IsServerScoped() {
-		keys = append(keys, x.server.ServerKey())
-	}
-	for _, key := range keys {
+	for _, key := range x.keys(agencyID) {
 		if stop, ok := x.stops(key)[stopID]; ok {
 			return stop, true
 		}
@@ -571,19 +584,54 @@ func (x *staticStopIndex) lookup(agencyID, stopID string) (remoteGtfs.Stop, bool
 	return remoteGtfs.Stop{}, false
 }
 
+func (x *staticStopIndex) keys(agencyID string) []string {
+	keys := []string{models.ServerKey(x.server.ObaBaseURL, agencyID)}
+	if x.server.IsServerScoped() {
+		keys = append(keys, x.server.ServerKey())
+	}
+	return keys
+}
+
+// matches reports whether the snapshots a lookup for agencyID reads are the
+// ones version was recorded from.
+func (x *staticStopIndex) matches(version staticVersion, agencyID string) bool {
+	for _, key := range x.keys(agencyID) {
+		if x.snapshot(key) != version.snapshots[key] {
+			return false
+		}
+	}
+	return true
+}
+
+func (x *staticStopIndex) snapshot(serverKey string) *models.StaticData {
+	if data, ok := x.data[serverKey]; ok {
+		return data
+	}
+	data := staticSnapshot(x.store, serverKey)
+	x.data[serverKey] = data
+	return data
+}
+
+// staticSnapshot returns the snapshot stored under serverKey, or nil.
+func staticSnapshot(store *gtfs.StaticStore, serverKey string) *models.StaticData {
+	if store == nil {
+		return nil
+	}
+	data, _ := store.Get(serverKey)
+	return data
+}
+
 func (x *staticStopIndex) stops(serverKey string) map[string]remoteGtfs.Stop {
 	if stops, ok := x.byKey[serverKey]; ok {
 		return stops
 	}
 	var stops map[string]remoteGtfs.Stop
-	if x.store != nil {
-		if data, ok := x.store.Get(serverKey); ok && data != nil {
-			stops = make(map[string]remoteGtfs.Stop, len(data.Stops))
-			for _, stop := range data.Stops {
-				// Keep the first occurrence, as gtfs.GetStopLocationsByIDs does.
-				if _, seen := stops[stop.Id]; !seen {
-					stops[stop.Id] = stop
-				}
+	if data := x.snapshot(serverKey); data != nil {
+		stops = make(map[string]remoteGtfs.Stop, len(data.Stops))
+		for _, stop := range data.Stops {
+			// Keep the first occurrence, as gtfs.GetStopLocationsByIDs does.
+			if _, seen := stops[stop.Id]; !seen {
+				stops[stop.Id] = stop
 			}
 		}
 	}
@@ -648,9 +696,17 @@ func (h *HistoryService) recordStopMetadataForVersion(ctx context.Context, serve
 		return
 	}
 
+	version, ok := h.static.currentVersion(server.ServerKey())
+	if !ok || version.id != versionID {
+		// A newer publication replaced this one and runs its own trigger.
+		return
+	}
 	stops := newStaticStopIndex(h.staticStore, server)
 	h.write(ctx, unmatchedStopMetadataStep, publicationTags(server), func(q *dbgen.Queries) error {
 		for _, c := range episodes {
+			if !stops.matches(version, c.key.agencyID) {
+				continue
+			}
 			stop, found := stops.lookup(c.key.agencyID, c.key.stopID)
 			facts := stopFactsFor(stop, found)
 			newest, err := q.GetNewestLinkedStopMetadata(ctx, c.episode.episodeID)
@@ -733,9 +789,9 @@ func recordClusterAssignment(ctx context.Context, q *dbgen.Queries, metadataID i
 	}
 	var stationID, stationName *string
 	if cluster.StationID != geo.NoStationID {
-		id := cluster.StationID
+		id := cleanText(cluster.StationID)
 		stationID = &id
-		stationName = rootStationName(stop, id)
+		stationName = rootStationName(stop, cluster.StationID) // original ID
 	}
 	if err := q.InsertStopClusterAssignment(ctx, dbgen.InsertStopClusterAssignmentParams{
 		StopMetadataVersionID: metadataID,
@@ -754,7 +810,7 @@ func recordClusterAssignment(ctx context.Context, q *dbgen.Queries, metadataID i
 func rootStationName(stop remoteGtfs.Stop, stationID string) *string {
 	for s := &stop; s != nil; s = s.Parent {
 		if s.Id == stationID {
-			name := s.Name
+			name := cleanText(s.Name)
 			return &name
 		}
 	}

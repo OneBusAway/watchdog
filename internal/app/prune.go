@@ -37,10 +37,6 @@ func (app *Application) PruneStaleServers(servers []models.ObaServer) {
 		configuredURLs[utils.SanitizeServerURL(server.ObaBaseURL)] = true
 	}
 
-	// Save the last-reported times of a removed server's open
-	// unmatched-stop episodes before the rest of its state goes.
-	app.flushRemovedServerHistory(configuredURLs)
-
 	// models.ObaServer.OwnsServerKey is the single definition of the ownership
 	// rule described above; keeping it there means this predicate, the scope
 	// resolver, and anything added later cannot drift apart on it.

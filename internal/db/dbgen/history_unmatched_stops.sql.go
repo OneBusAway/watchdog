@@ -384,26 +384,26 @@ func (q *Queries) ListOpenUnmatchedStopEpisodesForServer(ctx context.Context, no
 
 const saveUnmatchedStopLastReported = `-- name: SaveUnmatchedStopLastReported :exec
 UPDATE unmatched_stop_episode e
-SET last_reported_at = 'epoch'::timestamptz
-    + ($1::bigint[])[array_position($2::bigint[], e.unmatched_stop_episode_id)]
-      * interval '1 microsecond'
-WHERE e.unmatched_stop_episode_id = ANY($2::bigint[])
+SET last_reported_at = v.last_reported_at
+FROM (
+    SELECT unnest($1::bigint[]) AS episode_id,
+           unnest($2::timestamptz[]) AS last_reported_at
+) v
+WHERE e.unmatched_stop_episode_id = v.episode_id
   AND e.closing_response_agency_id IS NULL
-  AND e.last_reported_at < 'epoch'::timestamptz
-    + ($1::bigint[])[array_position($2::bigint[], e.unmatched_stop_episode_id)]
-      * interval '1 microsecond'
+  AND e.last_reported_at < v.last_reported_at
 `
 
 type SaveUnmatchedStopLastReportedParams struct {
-	LastReportedUs []int64
 	EpisodeIds     []int64
+	LastReportedAt []time.Time
 }
 
 // Saves the last_reported_at of several open episodes in one statement.
-// last_reported_us[i] is the time for episode_ids[i], in microseconds since
-// the Unix epoch, which converts exactly. A stored value only moves forward.
+// last_reported_at[i] is the time for episode_ids[i]. A stored value only
+// moves forward.
 func (q *Queries) SaveUnmatchedStopLastReported(ctx context.Context, arg SaveUnmatchedStopLastReportedParams) error {
-	_, err := q.db.Exec(ctx, saveUnmatchedStopLastReported, arg.LastReportedUs, arg.EpisodeIds)
+	_, err := q.db.Exec(ctx, saveUnmatchedStopLastReported, arg.EpisodeIds, arg.LastReportedAt)
 	return err
 }
 

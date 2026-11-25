@@ -166,7 +166,11 @@ func withStaticVersion(t *testing.T, h *HistoryService, pool *pgxpool.Pool, stor
 	})
 	store.Set(models.ServerKey(stopServer.ObaBaseURL, "a"), &models.StaticData{Stops: stops})
 	h.SetStaticStore(store)
-	h.static.set(stopServer.ServerKey(), publishedAt, versionID, nil)
+	snapshot, _ := store.Get(models.ServerKey(stopServer.ObaBaseURL, "a"))
+	h.static.set(stopServer.ServerKey(), publishedAt, staticVersion{
+		id:        versionID,
+		snapshots: map[string]*models.StaticData{models.ServerKey(stopServer.ObaBaseURL, "a"): snapshot},
+	}, nil)
 	return versionID
 }
 

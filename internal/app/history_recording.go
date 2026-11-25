@@ -6,6 +6,7 @@ import (
 
 	"watchdog.onebusaway.org/internal/metrics"
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/utils"
 )
 
 // historyFlushTimeout bounds a flush of investigation history run outside a
@@ -32,9 +33,13 @@ func (app *Application) recordOBAMetricsHistory(ctx context.Context, server mode
 // flushRemovedServerHistory saves the last-reported times of open
 // unmatched-stop episodes for servers no longer configured, and drops those
 // servers from history's memory.
-func (app *Application) flushRemovedServerHistory(configuredURLs map[string]bool) {
+func (app *Application) flushRemovedServerHistory(servers []models.ObaServer) {
 	if app.HistoryService == nil {
 		return
+	}
+	configuredURLs := make(map[string]bool, len(servers))
+	for _, server := range servers {
+		configuredURLs[utils.SanitizeServerURL(server.ObaBaseURL)] = true
 	}
 	for _, baseURL := range app.HistoryService.TrackedServerURLs() {
 		if configuredURLs[baseURL] {
