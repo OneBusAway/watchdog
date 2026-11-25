@@ -1,6 +1,7 @@
 package investigation
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,14 +12,16 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/julienschmidt/httprouter"
+	"watchdog.onebusaway.org/internal/db/dbgen"
 	"watchdog.onebusaway.org/internal/db/dbtest"
 	"watchdog.onebusaway.org/internal/models"
 )
 
 // newEndpointsRouter returns a router serving
-// listServerVehiclePositionEndpoints, and getServer so included servers can
-// be compared with their GET body, on a service using pool (nil for tests
-// that never reach the database) and servers as its current configuration.
+// listServerVehiclePositionEndpoints, getVehiclePositionEndpoint, and
+// getServer so included servers can be compared with their GET body, on a
+// service using pool (nil for tests that never reach the database) and
+// servers as its current configuration.
 //
 // Like newServersRouter, it mounts the handlers without the request pipeline:
 // until #197 replaces the authenticate stub, every request through s.get is
@@ -32,6 +35,8 @@ func newEndpointsRouter(t *testing.T, pool *pgxpool.Pool, servers ...models.ObaS
 	router := httprouter.New()
 	router.GET("/v1/servers/:server_id/vehicle-position-endpoints", s.listServerVehiclePositionEndpoints)
 	router.HEAD("/v1/servers/:server_id/vehicle-position-endpoints", s.listServerVehiclePositionEndpoints)
+	router.GET("/v1/vehicle-position-endpoints/:endpoint_id", s.getVehiclePositionEndpoint)
+	router.HEAD("/v1/vehicle-position-endpoints/:endpoint_id", s.getVehiclePositionEndpoint)
 	router.GET("/v1/servers/:server_id", s.getServer)
 	return router
 }
@@ -315,5 +320,230 @@ func TestConfiguredVehiclePositionURLs(t *testing.T) {
 	want := map[string]bool{"https://feeds.example.com/a": true, "https://feeds.example.com/b": true}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("configured = %v, want %v", got, want)
+	}
+}
+
+func endpointPath(endpointID int64) string {
+	return "/v1/vehicle-position-endpoints/" + strconv.FormatInt(endpointID, 10)
+}
+
+func TestGetVehiclePositionEndpoint_Registered(t *testing.T) {
+	_, router := newTestService(t)
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		if h, _, _ := router.Lookup(method, "/v1/vehicle-position-endpoints/1"); h == nil {
+			t.Errorf("%s /v1/vehicle-position-endpoints/:endpoint_id is not registered", method)
+		}
+	}
+}
+
+func TestGetVehiclePositionEndpoint_ReturnsRepresentation(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	if err := dbtest.Exec(pool,
+		"INSERT INTO onebusaway_server (server_id, normalized_base_url, display_name) OVERRIDING SYSTEM VALUE VALUES (7, 'https://example.com', 'Example')"); err != nil {
+		t.Fatalf("insert server: %v", err)
+	}
+	created := time.Date(2026, 10, 24, 14, 5, 30, 123456000, time.UTC)
+	for _, row := range []struct {
+		id  int64
+		url string
+	}{{50, "https://feeds.example.com/vp"}, {51, "https://feeds.example.com/retired"}} {
+		if err := dbtest.Exec(pool,
+			"INSERT INTO vehicle_position_endpoint (endpoint_id, server_id, normalized_vehicle_position_url, created_at) OVERRIDING SYSTEM VALUE VALUES ($1, 7, $2, $3)",
+			row.id, row.url, created); err != nil {
+			t.Fatalf("insert endpoint %d: %v", row.id, err)
+		}
+	}
+	// The configuration holds the URL unnormalized, as config.json would.
+	router := newEndpointsRouter(t, pool,
+		configuredServer("https://example.com", "https://feeds.example.com/vp?key=secret"))
+
+	for _, tc := range []struct {
+		id         int64
+		url        string
+		configured string
+	}{
+		{50, "https://feeds.example.com/vp", "true"},
+		{51, "https://feeds.example.com/retired", "false"},
+	} {
+		t.Run(strconv.FormatInt(tc.id, 10), func(t *testing.T) {
+			rec := doGet(t, router, endpointPath(tc.id), nil)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body)
+			}
+			if got := rec.Header().Get("Content-Type"); got != "application/json" {
+				t.Errorf("Content-Type = %q, want application/json", got)
+			}
+			id := strconv.FormatInt(tc.id, 10)
+			want := `{"endpoint_id":` + id + `,"server_id":7,` +
+				`"normalized_vehicle_position_url":"` + tc.url + `",` +
+				`"created_at":"2026-10-24T14:05:30.123456Z","configured":` + tc.configured + `,"links":{` +
+				`"self":"/v1/vehicle-position-endpoints/` + id + `",` +
+				`"server":"/v1/servers/7",` +
+				`"vehicle_anomaly_episodes":"/v1/vehicle-anomaly-episodes?endpoint_id=` + id + `"}}` + "\n"
+			if got := rec.Body.String(); got != want {
+				t.Errorf("body =\n%s\nwant\n%s", got, want)
+			}
+		})
+	}
+}
+
+func TestGetVehiclePositionEndpoint_UnknownIDReturns404(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	id := insertServer(t, pool, "https://example.com", "Example")
+	insertEndpoint(t, pool, id, "https://feeds.example.com/vp")
+	router := newEndpointsRouter(t, pool)
+	wantNotFound(t, doGet(t, router, endpointPath(999999), nil))
+}
+
+func TestGetVehiclePositionEndpoint_MalformedIDReturns404(t *testing.T) {
+	// No database: a malformed ID must be rejected before any query.
+	router := newEndpointsRouter(t, nil)
+	for _, id := range []string{"abc", "0", "-1", "07"} {
+		t.Run(id, func(t *testing.T) {
+			wantNotFound(t, doGet(t, router, "/v1/vehicle-position-endpoints/"+id, nil))
+		})
+	}
+}
+
+func TestGetVehiclePositionEndpoint_RejectsUnknownParameter(t *testing.T) {
+	router := newEndpointsRouter(t, nil)
+	wantInvalidParam(t, doGet(t, router, endpointPath(1)+"?foo=1", nil), "foo")
+}
+
+func TestGetVehiclePositionEndpoint_RejectsBadInclude(t *testing.T) {
+	router := newEndpointsRouter(t, nil)
+	for _, query := range []string{"include=self", "include=vehicle_anomaly_episodes", "include=", "include=server,server"} {
+		t.Run(query, func(t *testing.T) {
+			wantInvalidParam(t, doGet(t, router, endpointPath(1)+"?"+query, nil), "include")
+		})
+	}
+}
+
+// TestGetVehiclePositionEndpoint_IncludeServer checks include=server adds the
+// server exactly as GET /v1/servers/{server_id} returns it.
+func TestGetVehiclePositionEndpoint_IncludeServer(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	serverID := insertServer(t, pool, "https://example.com", "Example")
+	endpointID := insertEndpoint(t, pool, serverID, "https://feeds.example.com/vp")
+	router := newEndpointsRouter(t, pool)
+
+	rec := doGet(t, router, endpointPath(endpointID)+"?include=server", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "private, max-age=30" {
+		t.Errorf("Cache-Control = %q, want private, max-age=30", got)
+	}
+	var body struct {
+		Included map[string]json.RawMessage `json:"included"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	serverURL := "/v1/servers/" + strconv.FormatInt(serverID, 10)
+	if len(body.Included) != 1 {
+		t.Fatalf("included has %d entries, want 1: %v", len(body.Included), body.Included)
+	}
+	get := doGet(t, router, serverURL, nil)
+	if get.Code != http.StatusOK {
+		t.Fatalf("GET %s: status = %d", serverURL, get.Code)
+	}
+	if got := string(body.Included[serverURL]) + "\n"; got != get.Body.String() {
+		t.Errorf("included server =\n%s\nGET returned\n%s", got, get.Body)
+	}
+}
+
+func TestGetVehiclePositionEndpoint_ETag(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	serverID := insertServer(t, pool, "https://example.com", "Example")
+	endpointID := insertEndpoint(t, pool, serverID, "https://feeds.example.com/vp")
+	router := newEndpointsRouter(t, pool)
+
+	first := doGet(t, router, endpointPath(endpointID), nil)
+	if first.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", first.Code, first.Body)
+	}
+	tag := first.Header().Get("ETag")
+	if tag == "" {
+		t.Fatal("no ETag header")
+	}
+	if got := first.Header().Get("Cache-Control"); got != "private, max-age=30" {
+		t.Errorf("Cache-Control = %q, want private, max-age=30", got)
+	}
+	second := doGet(t, router, endpointPath(endpointID), map[string]string{"If-None-Match": tag})
+	if second.Code != http.StatusNotModified {
+		t.Fatalf("status = %d, want 304", second.Code)
+	}
+	if second.Body.Len() != 0 {
+		t.Errorf("304 body = %q, want empty", second.Body)
+	}
+}
+
+func TestGetVehiclePositionEndpoint_Head(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	serverID := insertServer(t, pool, "https://example.com", "Example")
+	endpointID := insertEndpoint(t, pool, serverID, "https://feeds.example.com/vp")
+	router := newEndpointsRouter(t, pool)
+	path := endpointPath(endpointID)
+
+	get := doGet(t, router, path, nil)
+	head := httptest.NewRecorder()
+	router.ServeHTTP(head, httptest.NewRequest(http.MethodHead, path, nil))
+
+	if head.Code != get.Code {
+		t.Errorf("HEAD status = %d, GET status = %d", head.Code, get.Code)
+	}
+	if !reflect.DeepEqual(head.Header(), get.Header()) {
+		t.Errorf("HEAD headers = %v, GET headers = %v", head.Header(), get.Header())
+	}
+	if get.Body.Len() == 0 {
+		t.Error("GET body is empty")
+	}
+}
+
+// TestEndpointLoader checks that endpoints on two servers load in one query,
+// each exactly as GET /v1/vehicle-position-endpoints/{endpoint_id} returns
+// it, including configured.
+func TestEndpointLoader(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	a := insertServer(t, pool, "https://a.example.com", "A")
+	b := insertServer(t, pool, "https://b.example.com", "B")
+	ids := []int64{
+		insertEndpoint(t, pool, a, "https://feeds.example.com/a-current"),
+		insertEndpoint(t, pool, a, "https://feeds.example.com/a-retired"),
+		insertEndpoint(t, pool, b, "https://feeds.example.com/b-current"),
+	}
+	insertEndpoint(t, pool, b, "https://feeds.example.com/not-asked")
+	servers := []models.ObaServer{
+		configuredServer("https://a.example.com", "https://feeds.example.com/a-current"),
+		configuredServer("https://b.example.com", "https://feeds.example.com/b-current"),
+	}
+	router := newEndpointsRouter(t, pool, servers...)
+
+	s, _ := newTestService(t)
+	s.Servers = func() []models.ObaServer { return servers }
+	db := &countingDB{DBTX: pool}
+	got, err := s.loaders[kindEndpoint](context.Background(), dbgen.New(db), ids)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if db.queries != 1 {
+		t.Errorf("loader ran %d queries, want 1", db.queries)
+	}
+	if len(got) != len(ids) {
+		t.Errorf("loader returned %d endpoints, want %d", len(got), len(ids))
+	}
+	for _, id := range ids {
+		data, err := encodeJSON(got[id])
+		if err != nil {
+			t.Fatalf("encode endpoint %d: %v", id, err)
+		}
+		rec := doGet(t, router, endpointPath(id), nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET endpoint %d: status = %d", id, rec.Code)
+		}
+		if string(data) != rec.Body.String() {
+			t.Errorf("endpoint %d: loaded\n%s\nGET returned\n%s", id, data, rec.Body)
+		}
 	}
 }

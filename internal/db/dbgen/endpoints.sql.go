@@ -9,6 +9,33 @@ import (
 	"context"
 )
 
+const getVehiclePositionEndpoint = `-- name: GetVehiclePositionEndpoint :one
+SELECT e.endpoint_id, e.server_id, e.normalized_vehicle_position_url, e.created_at, s.normalized_base_url
+FROM vehicle_position_endpoint e
+JOIN onebusaway_server s ON s.server_id = e.server_id
+WHERE e.endpoint_id = $1
+`
+
+type GetVehiclePositionEndpointRow struct {
+	VehiclePositionEndpoint VehiclePositionEndpoint
+	NormalizedBaseUrl       string
+}
+
+// One vehicle-position feed URL by ID (E07), with its server's base URL,
+// which selects the configuration entries that decide configured.
+func (q *Queries) GetVehiclePositionEndpoint(ctx context.Context, endpointID int64) (GetVehiclePositionEndpointRow, error) {
+	row := q.db.QueryRow(ctx, getVehiclePositionEndpoint, endpointID)
+	var i GetVehiclePositionEndpointRow
+	err := row.Scan(
+		&i.VehiclePositionEndpoint.EndpointID,
+		&i.VehiclePositionEndpoint.ServerID,
+		&i.VehiclePositionEndpoint.NormalizedVehiclePositionUrl,
+		&i.VehiclePositionEndpoint.CreatedAt,
+		&i.NormalizedBaseUrl,
+	)
+	return i, err
+}
+
 const listServerVehiclePositionEndpoints = `-- name: ListServerVehiclePositionEndpoints :many
 SELECT endpoint_id, server_id, normalized_vehicle_position_url, created_at
 FROM vehicle_position_endpoint
@@ -32,6 +59,47 @@ func (q *Queries) ListServerVehiclePositionEndpoints(ctx context.Context, server
 			&i.ServerID,
 			&i.NormalizedVehiclePositionUrl,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVehiclePositionEndpointsByIDs = `-- name: ListVehiclePositionEndpointsByIDs :many
+SELECT e.endpoint_id, e.server_id, e.normalized_vehicle_position_url, e.created_at, s.normalized_base_url
+FROM vehicle_position_endpoint e
+JOIN onebusaway_server s ON s.server_id = e.server_id
+WHERE e.endpoint_id = ANY($1::bigint[])
+ORDER BY e.endpoint_id
+`
+
+type ListVehiclePositionEndpointsByIDsRow struct {
+	VehiclePositionEndpoint VehiclePositionEndpoint
+	NormalizedBaseUrl       string
+}
+
+// The vehicle-position feed URLs with the given IDs and their servers' base
+// URLs, for the include loader. IDs with no row are left out.
+func (q *Queries) ListVehiclePositionEndpointsByIDs(ctx context.Context, endpointIds []int64) ([]ListVehiclePositionEndpointsByIDsRow, error) {
+	rows, err := q.db.Query(ctx, listVehiclePositionEndpointsByIDs, endpointIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListVehiclePositionEndpointsByIDsRow
+	for rows.Next() {
+		var i ListVehiclePositionEndpointsByIDsRow
+		if err := rows.Scan(
+			&i.VehiclePositionEndpoint.EndpointID,
+			&i.VehiclePositionEndpoint.ServerID,
+			&i.VehiclePositionEndpoint.NormalizedVehiclePositionUrl,
+			&i.VehiclePositionEndpoint.CreatedAt,
+			&i.NormalizedBaseUrl,
 		); err != nil {
 			return nil, err
 		}
