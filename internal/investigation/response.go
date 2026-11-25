@@ -40,10 +40,10 @@ func cacheShort() cachePolicy {
 	return cachePolicy{control: cacheControl(changingMaxAge)}
 }
 
-// cacheImmutable is for records that no longer change: closed episodes, their
-// static contexts and evidence, static versions, rule versions, bounding boxes
-// and responses. lastModified is the episode's closed_at or the record's own
-// time; pass the zero time to send no Last-Modified header.
+// cacheImmutable is for records that no longer change. lastModified is the
+// episode's closed_at or the record's own time (such as published_at for static
+// versions); pass the zero time when the record has no single modification time
+// to offer so no Last-Modified header is sent.
 func cacheImmutable(lastModified time.Time) cachePolicy {
 	return cachePolicy{control: cacheControl(unchangingMaxAge), lastModified: lastModified}
 }
