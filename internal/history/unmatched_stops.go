@@ -283,15 +283,18 @@ func (h *HistoryService) RecordOBAMetrics(ctx context.Context, server models.Oba
 	}
 }
 
-// loadOpenEpisodes reads the server's open episodes into entry. It reports
-// whether it succeeded; on failure entry stays unloaded and the next call
-// tries again.
+// loadOpenEpisodes replaces entry's open episodes with the server's open
+// episodes in the database. It reports whether it succeeded; on failure entry
+// is unchanged and stays unloaded, and the next call tries again.
 func (h *HistoryService) loadOpenEpisodes(ctx context.Context, server models.ObaServer, baseURL string, entry *serverStopEpisodes, now time.Time) bool {
 	rows, err := dbgen.New(h.pool).ListOpenUnmatchedStopEpisodesForServer(ctx, baseURL)
 	if err != nil {
 		reportWriteFailure(h.logger, unmatchedStopLoadStep, publicationTags(server), fmt.Errorf("load open unmatched-stop episodes: %w", err))
 		return false
 	}
+	// Replace memory, not merge into it: after a failed write it may hold an
+	// episode the database has already closed.
+	entry.open = make(map[unmatchedStopKey]*openStopEpisode, len(rows))
 	for _, row := range rows {
 		entry.open[unmatchedStopKey{agencyID: row.ExternalAgencyID, stopID: row.ObaStopID}] = &openStopEpisode{
 			episodeID:      row.UnmatchedStopEpisodeID,

@@ -632,3 +632,41 @@ func TestRecordOBAMetrics_ReloadsAfterCommitReportedAsFailed(t *testing.T) {
 		t.Errorf("last_reported_at = %v, want %v", episode.lastReportedAt, lastSeen)
 	}
 }
+
+// TestRecordOBAMetrics_ReloadsAfterCloseReportedAsFailed is the close side:
+// a close commits in the database while the client sees an error, so memory
+// still holds the closed episode. The reload must drop it, so a later report
+// of the stop opens a new episode.
+func TestRecordOBAMetrics_ReloadsAfterCloseReportedAsFailed(t *testing.T) {
+	h, pool, _ := newCountedHistory(t)
+	agencies := stopAgencies("a")
+	reported := stopsResponse([]string{"a"}, map[string][]string{"a": {"1"}})
+	key := unmatchedStopKey{agencyID: "a", stopID: "1"}
+	h.RecordOBAMetrics(ctx, stopServer, agencies, reported, stopT0)
+	closed := memoryEpisode(t, h, "a", "1")
+
+	h.RecordOBAMetrics(ctx, stopServer, agencies, stopsResponse([]string{"a"}, map[string][]string{}), stopT0.Add(time.Minute))
+
+	entry := h.stops.forServer(utils.SanitizeServerURL(stopServer.ObaBaseURL), stopServer)
+	entry.mu.Lock()
+	entry.open[key] = closed
+	entry.loaded = false
+	entry.mu.Unlock()
+
+	reopenedAt := stopT0.Add(2 * time.Minute)
+	h.RecordOBAMetrics(ctx, stopServer, agencies, reported, reopenedAt)
+
+	episodes := storedEpisodes(t, pool)
+	if len(episodes) != 2 {
+		t.Fatalf("got %d episodes, want the closed one and a new one: %+v", len(episodes), episodes)
+	}
+	if episodes[0].closeReason == nil {
+		t.Error("first episode is open, want closed")
+	}
+	if episodes[1].closeReason != nil || !episodes[1].openedAt.Equal(reopenedAt) {
+		t.Errorf("second episode = %+v, want open at %v", episodes[1], reopenedAt)
+	}
+	if got := memoryEpisode(t, h, "a", "1"); got == nil || got.episodeID == closed.episodeID {
+		t.Error("memory still holds the closed episode")
+	}
+}
