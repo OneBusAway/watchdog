@@ -564,11 +564,13 @@ The following cannot be established from the stored data. The API must not prese
 
 | Representation | `Cache-Control` | Validators |
 |---|---|---|
-| Closed episodes, their static contexts and evidence, static versions, rule versions, bounding boxes, responses | `private, max-age=86400` (they do not change, except as noted below) | Strong `ETag`; `Last-Modified` = `closed_at` or the record's own time |
+| Closed episodes, their static contexts, and static versions | `private, max-age=86400` (they do not change, except as noted below) | Strong `ETag`; `Last-Modified` (`closed_at` for closed episodes and their static contexts; `published_at` for static versions) |
+| Other unchanging records: cluster schemes, evidence, static sources, rule versions, bounding boxes, responses, reported stops/trips, vehicles | `private, max-age=86400` (they do not change, except as noted below) | Strong `ETag` |
 | Open episodes, collections, clusters, counts | `private, max-age=30` (one collection interval) | Strong `ETag` |
 
 - `private` keeps shared caches from storing authenticated data.
 - The `ETag` is a hash of the response body, and a matching `If-None-Match` returns `304`.
+- When `include` is requested on an unchanging record, the cache drops to `max-age=30` so embedded related resources stay fresh.
 - A closed episode's `previous_episode_count` drops when retention deletes an earlier episode of the same identity (D28), and its `ETag` changes with it. A day of staleness is acceptable for that count, so closed episodes keep `max-age=86400`.
 
 ### Hypermedia links
