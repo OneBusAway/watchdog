@@ -7,6 +7,7 @@ package dbgen
 
 import (
 	"context"
+	"time"
 )
 
 const getStaticGTFSSource = `-- name: GetStaticGTFSSource :one
@@ -21,4 +22,46 @@ func (q *Queries) GetStaticGTFSSource(ctx context.Context, sourceID int64) (Stat
 	var i StaticGtfsSource
 	err := row.Scan(&i.SourceID, &i.ServerID, &i.NormalizedSourceUrl)
 	return i, err
+}
+
+const listStaticGTFSSourceVersions = `-- name: ListStaticGTFSSourceVersions :many
+SELECT vs.gtfs_static_version_id, v.published_at, vs.source_content_sha256
+FROM gtfs_static_version_source AS vs
+JOIN gtfs_static_version AS v ON v.gtfs_static_version_id = vs.gtfs_static_version_id
+WHERE vs.source_id = $1
+  AND ($2::bigint IS NULL OR vs.gtfs_static_version_id < $2::bigint)
+ORDER BY vs.gtfs_static_version_id DESC
+LIMIT $3::integer
+`
+
+type ListStaticGTFSSourceVersionsParams struct {
+	SourceID  int64
+	AfterID   *int64
+	PageLimit int32
+}
+
+type ListStaticGTFSSourceVersionsRow struct {
+	GtfsStaticVersionID int64
+	PublishedAt         time.Time
+	SourceContentSha256 string
+}
+
+func (q *Queries) ListStaticGTFSSourceVersions(ctx context.Context, arg ListStaticGTFSSourceVersionsParams) ([]ListStaticGTFSSourceVersionsRow, error) {
+	rows, err := q.db.Query(ctx, listStaticGTFSSourceVersions, arg.SourceID, arg.AfterID, arg.PageLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListStaticGTFSSourceVersionsRow
+	for rows.Next() {
+		var i ListStaticGTFSSourceVersionsRow
+		if err := rows.Scan(&i.GtfsStaticVersionID, &i.PublishedAt, &i.SourceContentSha256); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
