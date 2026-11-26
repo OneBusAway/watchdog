@@ -119,6 +119,7 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 				Tags: map[string]string{
 					"agency_id":   agencyID,
+					"agency_name": agencyName,
 					"server_name": serverName,
 				},
 			})
@@ -129,13 +130,21 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
-			return nil, time.Time{}, fmt.Errorf("failed to create metrics request: %w", err)
+			// The parse error can echo the request URL, which carries the API key.
+			err = utils.SanitizeErrorURL(fmt.Errorf("failed to create metrics request: %w", err), serverBaseUrl, apiKey)
+			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+				Tags: map[string]string{"agency_id": agencyID, "agency_name": agencyName, "server_name": serverName},
+				ExtraContext: map[string]interface{}{
+					"url": sanitizedURL,
+				},
+			})
+			return nil, time.Time{}, err
 		}
 		resp, err := client.Do(req)
 		if err != nil {
 			err = fmt.Errorf("failed to fetch metrics from %s: %v", sanitizedURL, err)
 			reportUnlessCanceled(ctx, err, report.SentryReportOptions{
-				Tags: map[string]string{"agency_id": agencyID, "server_name": serverName},
+				Tags: map[string]string{"agency_id": agencyID, "agency_name": agencyName, "server_name": serverName},
 				ExtraContext: map[string]interface{}{
 					"url": sanitizedURL,
 				},
@@ -152,7 +161,7 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 				wrappedErr = fmt.Errorf("unexpected status code from %s: %d", sanitizedURL, resp.StatusCode)
 			}
 			report.ReportErrorWithSentryOptions(wrappedErr, report.SentryReportOptions{
-				Tags: map[string]string{"agency_id": agencyID, "server_name": serverName},
+				Tags: map[string]string{"agency_id": agencyID, "agency_name": agencyName, "server_name": serverName},
 				ExtraContext: map[string]interface{}{
 					"url":         sanitizedURL,
 					"status_code": resp.StatusCode,
@@ -165,7 +174,7 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 		if err := json.NewDecoder(resp.Body).Decode(&metrics); err != nil {
 			err = fmt.Errorf("failed to decode metrics from %s: %v", sanitizedURL, err)
 			reportUnlessCanceled(ctx, err, report.SentryReportOptions{
-				Tags: map[string]string{"agency_id": agencyID, "server_name": serverName},
+				Tags: map[string]string{"agency_id": agencyID, "agency_name": agencyName, "server_name": serverName},
 				ExtraContext: map[string]interface{}{
 					"url": sanitizedURL,
 				},

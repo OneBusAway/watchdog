@@ -613,6 +613,53 @@ func TestFetchObaAPIMetrics_404DoesNotLeakCredentials(t *testing.T) {
 	}
 }
 
+// The collector no longer reports metrics API errors itself, so a request
+// that can't be built must be reported here, without the credentials that
+// the URL parse error echoes.
+func TestFetchObaAPIMetrics_RequestBuildFailureReportsSanitizedError(t *testing.T) {
+	rec := report.CaptureSentry(t)
+
+	apiKey := "SUPERSECRETOBAKEY"
+	// A control character makes http.NewRequestWithContext reject the URL.
+	serverBaseURL := "http://user:pass@example.com/\x7f"
+
+	staticStore := gtfs.NewStaticStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	tracker := NewUnmatchedStopTracker()
+
+	_, _, err := fetchObaAPIMetrics(context.Background(), "42", "Bad URL Agency", "test-server", serverBaseURL, apiKey, &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil, time.Time{}, false)
+	if err == nil {
+		t.Fatal("expected error but got none")
+	}
+	if !strings.Contains(err.Error(), "failed to create metrics request") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	events := rec.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 Sentry event, got %d", len(events))
+	}
+	event := events[0]
+	if got := event.Tags["agency_name"]; got != "Bad URL Agency" {
+		t.Errorf("agency_name tag = %q, want %q", got, "Bad URL Agency")
+	}
+	for _, secret := range []string{"user:pass", apiKey} {
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("error leaked credential %q: %v", secret, err)
+		}
+		if strings.Contains(event.Message, secret) || strings.Contains(fmt.Sprint(event.Exception), secret) {
+			t.Errorf("report leaked credential %q in message or exception", secret)
+		}
+		for contextName, context := range event.Contexts {
+			for key, value := range context {
+				if strings.Contains(fmt.Sprint(value), secret) {
+					t.Errorf("report leaked credential %q in context %q field %q", secret, contextName, key)
+				}
+			}
+		}
+	}
+}
+
 // A failing /metrics.json call must surface an error and must not emit any
 // per-agency series. It deliberately does NOT assert on oba_api_status: that
 // gauge is owned by serverPing now, and getMetricValue would create the series
