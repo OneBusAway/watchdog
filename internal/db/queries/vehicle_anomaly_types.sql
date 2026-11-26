@@ -27,3 +27,14 @@ FROM vehicle_anomaly_rule_version r
 JOIN vehicle_anomaly_type t ON t.anomaly_type_id = r.anomaly_type_id
 WHERE r.rule_version_id = ANY(sqlc.arg('rule_version_ids')::bigint[])
 ORDER BY r.rule_version_id;
+
+-- name: ListVehicleAnomalyRuleVersions :many
+-- The rule versions of one anomaly type, newest effective_at first, for E32.
+-- effective_at is unique per type, so the order has no ties.
+SELECT r.rule_version_id, r.anomaly_type_id, t.anomaly_code,
+       r.rule_logic_version, r.version_name, r.watchdog_build_version,
+       r.effective_at, r.stale_age_threshold_seconds, r.reported_speed_threshold_mps
+FROM vehicle_anomaly_rule_version r
+JOIN vehicle_anomaly_type t ON t.anomaly_type_id = r.anomaly_type_id
+WHERE t.anomaly_code = sqlc.arg('anomaly_code')
+ORDER BY r.effective_at DESC;
