@@ -53,17 +53,18 @@ type StaticStore struct {
 //   - *StaticStore: A new, empty StaticStore instance.
 func NewStaticStore() *StaticStore {
 	s := &StaticStore{}
-	s.schedules = s.newScheduleStore()
+	s.schedules = s.newScheduleStore(true)
 	return s
 }
 
-func (s *StaticStore) newScheduleStore() *ScheduleStore {
+// newScheduleStore builds the ScheduleStore that s owns. It takes
+// tripIndexEnabled instead of reading s.tripIndexDisabled itself, because the
+// lazy branch of ScheduleStore calls it while holding s.mu and sync.RWMutex is
+// not re-entrant. Callers read the flag under whichever lock they already hold.
+func (s *StaticStore) newScheduleStore(tripIndexEnabled bool) *ScheduleStore {
 	schedules := NewScheduleStore()
 	schedules.preserve = s.isConfiguredAgencyEntry
-	s.mu.RLock()
-	tripIndexDisabled := s.tripIndexDisabled
-	s.mu.RUnlock()
-	schedules.SetTripIndexEnabled(!tripIndexDisabled)
+	schedules.SetTripIndexEnabled(tripIndexEnabled)
 	return schedules
 }
 
@@ -94,7 +95,7 @@ func (s *StaticStore) ScheduleStore() *ScheduleStore {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.schedules == nil {
-		s.schedules = s.newScheduleStore()
+		s.schedules = s.newScheduleStore(!s.tripIndexDisabled)
 	}
 	return s.schedules
 }
