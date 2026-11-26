@@ -613,10 +613,6 @@ func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, agencies
 // vehicle with no position, a half-populated one, or coordinates outside the
 // WGS-84 range reports false.
 func vehicleLatLon(v remoteGtfs.Vehicle) (lat, lon float64, valid bool) {
-	if v.Position == nil || v.Position.Latitude == nil || v.Position.Longitude == nil {
-		return 0, 0, false
-	}
-	lat = float64(*v.Position.Latitude)
-	lon = float64(*v.Position.Longitude)
-	return lat, lon, geo.IsValidLatLon(lat, lon)
+	lat, lon, reason := geo.VehiclePosition(v)
+	return lat, lon, reason == ""
 }
