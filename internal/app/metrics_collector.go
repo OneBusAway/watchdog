@@ -690,18 +690,10 @@ func (app *Application) collectAgencyChecks(ctx context.Context, server models.O
 			app.Logger.Info("Skipping OBA API metrics due to canceled context",
 				"agency_id", server.AgencyID, "server_name", server.ServerName)
 		} else {
+			// fetchObaAPIMetrics reports each of its failures to Sentry with
+			// the status code and sanitized URL. Reporting here as well would
+			// send every failure twice per tick, so this only logs.
 			app.Logger.Error("Failed to fetch OBA API metrics", "error", err)
-			report.ReportErrorWithSentryOptions(utils.SanitizeErrorURL(err, server.ObaBaseURL, server.ObaApiKey), report.SentryReportOptions{
-				Tags: map[string]string{
-					"agency_id":   server.AgencyID,
-					"agency_name": server.AgencyName,
-					"server_name": server.ServerName,
-				},
-				ExtraContext: map[string]interface{}{
-					"oba_base_url": utils.SanitizeServerURL(server.ObaBaseURL),
-				},
-				Level: sentry.LevelError,
-			})
 		}
 	}
 
