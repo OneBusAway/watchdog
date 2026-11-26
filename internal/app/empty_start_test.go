@@ -41,6 +41,9 @@ func TestEmptyStartPicksUpFirstServersOnRefresh(t *testing.T) {
 	defer feed.Close()
 
 	app := newEmptyApplication(t)
+	if app.GtfsService.StaticStore.TripIndexEnabled() {
+		t.Fatal("expected trip index retention to be disabled when InvestigationDB is nil")
+	}
 	server := models.NewObaServer("Late", "Sound Transit", "40", "https://late.example.com", "key", []string{feed.URL}, nil)
 
 	app.ConfigService.Config.UpdateConfig([]models.ObaServer{*server})

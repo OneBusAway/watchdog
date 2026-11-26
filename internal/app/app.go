@@ -87,6 +87,7 @@ func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version s
 
 	staticStore := gtfs.NewStaticStore()
 	staticStore.SetConfiguredServers(cfg.GetServers())
+	staticStore.SetTripIndexEnabled(investigationDB != nil)
 	realtimeStore := gtfs.NewRealtimeStore()
 	boundingBoxStore := geo.NewBoundingBoxStore()
 	routeAgencyIndex := gtfs.NewRouteAgencyIndex()
