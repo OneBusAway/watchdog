@@ -156,3 +156,75 @@ func endpointRepresentation(row dbgen.VehiclePositionEndpoint, l itemLinks, conf
 		Links:                        out,
 	}
 }
+
+// vehiclePositionEndpointBody is the E07 body: one endpoint and, when
+// requested, its included server.
+type vehiclePositionEndpointBody struct {
+	vehiclePositionEndpoint
+	Included included `json:"included,omitzero"`
+}
+
+// getVehiclePositionEndpoint serves
+// GET /v1/vehicle-position-endpoints/:endpoint_id: one vehicle-position feed
+// URL, and whether its server's current configuration still fetches it.
+func (s *InvestigationService) getVehiclePositionEndpoint(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	id, ok := pathID(ps, "endpoint_id")
+	if !ok {
+		writeNotFound(w)
+		return
+	}
+	var bad invalidParams
+	values := parseQuery(r, &bad, "include")
+	inc := s.parseInclude(values, endpointIncludable, &bad)
+	if len(bad) > 0 {
+		writeInvalidParams(w, bad)
+		return
+	}
+
+	var body vehiclePositionEndpointBody
+	err := s.read(r.Context(), func(ctx context.Context, q *dbgen.Queries) error {
+		// pgx.ErrNoRows for an unknown endpoint becomes a 404 in fail.
+		row, err := q.GetVehiclePositionEndpoint(ctx, id)
+		if err != nil {
+			return err
+		}
+		l := endpointLinks(row.VehiclePositionEndpoint)
+		configured := configuredVehiclePositionURLs(s.Servers(), row.NormalizedBaseUrl)
+		body.vehiclePositionEndpoint = endpointRepresentation(row.VehiclePositionEndpoint, l, configured)
+		body.Included, err = s.loadIncluded(ctx, q, []itemLinks{l}, inc)
+		return err
+	})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.writeJSON(w, r, body, cacheShort())
+}
+
+// loadVehiclePositionEndpoints is the include loader for kindEndpoint.
+func (s *InvestigationService) loadVehiclePositionEndpoints(ctx context.Context, q *dbgen.Queries, ids []int64) (map[int64]any, error) {
+	return loadVehiclePositionEndpoints(ctx, q, ids, s.Servers())
+}
+
+// loadVehiclePositionEndpoints returns the E07 representation of each
+// endpoint in ids, in one query. servers is the current configuration; the
+// endpoints can belong to different servers, so configured is worked out
+// once per server base URL.
+func loadVehiclePositionEndpoints(ctx context.Context, q *dbgen.Queries, ids []int64, servers []models.ObaServer) (map[int64]any, error) {
+	rows, err := q.ListVehiclePositionEndpointsByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	configuredByServer := map[string]map[string]bool{}
+	out := make(map[int64]any, len(rows))
+	for _, row := range rows {
+		configured, ok := configuredByServer[row.NormalizedBaseUrl]
+		if !ok {
+			configured = configuredVehiclePositionURLs(servers, row.NormalizedBaseUrl)
+			configuredByServer[row.NormalizedBaseUrl] = configured
+		}
+		endpoint := row.VehiclePositionEndpoint
+		out[endpoint.EndpointID] = endpointRepresentation(endpoint, endpointLinks(endpoint), configured)
+	}
+	return out, nil
+}

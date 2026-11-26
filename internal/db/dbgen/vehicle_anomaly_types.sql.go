@@ -7,7 +7,62 @@ package dbgen
 
 import (
 	"context"
+	"time"
 )
+
+const getVehicleAnomalyRuleVersion = `-- name: GetVehicleAnomalyRuleVersion :many
+SELECT r.rule_version_id, r.anomaly_type_id, t.anomaly_code,
+       r.rule_logic_version, r.version_name, r.watchdog_build_version,
+       r.effective_at, r.stale_age_threshold_seconds, r.reported_speed_threshold_mps
+FROM vehicle_anomaly_rule_version r
+JOIN vehicle_anomaly_type t ON t.anomaly_type_id = r.anomaly_type_id
+WHERE r.rule_version_id = ANY($1::bigint[])
+ORDER BY r.rule_version_id
+`
+
+type GetVehicleAnomalyRuleVersionRow struct {
+	RuleVersionID             int64
+	AnomalyTypeID             int16
+	AnomalyCode               string
+	RuleLogicVersion          int32
+	VersionName               string
+	WatchdogBuildVersion      *string
+	EffectiveAt               time.Time
+	StaleAgeThresholdSeconds  *int32
+	ReportedSpeedThresholdMps *float64
+}
+
+// The rule versions with the given IDs and their anomaly type, for E33 and its
+// include loader. Array form so the loader batches in one query.
+func (q *Queries) GetVehicleAnomalyRuleVersion(ctx context.Context, ruleVersionIds []int64) ([]GetVehicleAnomalyRuleVersionRow, error) {
+	rows, err := q.db.Query(ctx, getVehicleAnomalyRuleVersion, ruleVersionIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetVehicleAnomalyRuleVersionRow
+	for rows.Next() {
+		var i GetVehicleAnomalyRuleVersionRow
+		if err := rows.Scan(
+			&i.RuleVersionID,
+			&i.AnomalyTypeID,
+			&i.AnomalyCode,
+			&i.RuleLogicVersion,
+			&i.VersionName,
+			&i.WatchdogBuildVersion,
+			&i.EffectiveAt,
+			&i.StaleAgeThresholdSeconds,
+			&i.ReportedSpeedThresholdMps,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
 
 const getVehicleAnomalyType = `-- name: GetVehicleAnomalyType :one
 SELECT anomaly_code, description

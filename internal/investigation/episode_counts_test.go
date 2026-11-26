@@ -1113,15 +1113,17 @@ func TestGetEpisodeCounts_IncludeTruncatedLinks(t *testing.T) {
 	}
 }
 
-func TestGetEpisodeCounts_VehicleResponseIncludeRejection(t *testing.T) {
-	router := newEpisodeCountsRouter(t, nil)
+// TestGetEpisodeCounts_VehicleResponseIncludeAccepted checks that opening_response
+// and closing_response can be included for a vehicle type, now that the vehicle
+// response loader (E28) exists.
+func TestGetEpisodeCounts_VehicleResponseIncludeAccepted(t *testing.T) {
+	router := newEpisodeCountsRouter(t, dbtest.NewMigratedPool(t))
 	fromTo := "from=2026-10-17T00:00:00Z&to=2026-10-24T00:00:00Z"
 
-	// opening_response with vehicle type -> 400
-	rec := doGet(t, router, "/v1/episode-counts?"+fromTo+"&episode_type=invalid_coordinate&group_by=opening_response&include=opening_response", nil)
-	wantInvalidParam(t, rec, "include")
-
-	// closing_response with vehicle type -> 400
-	recClose := doGet(t, router, "/v1/episode-counts?"+fromTo+"&episode_type=invalid_coordinate&group_by=closing_response&include=closing_response", nil)
-	wantInvalidParam(t, recClose, "include")
+	for _, name := range []string{"opening_response", "closing_response"} {
+		rec := doGet(t, router, "/v1/episode-counts?"+fromTo+"&episode_type=invalid_coordinate&group_by="+name+"&include="+name, nil)
+		if rec.Code != http.StatusOK {
+			t.Errorf("include=%s: status = %d, want 200; body %s", name, rec.Code, rec.Body)
+		}
+	}
 }

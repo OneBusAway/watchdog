@@ -153,6 +153,17 @@ func (gs *GtfsService) SetStaticRefreshClock(now func() time.Time) {
 	c.now = now
 }
 
+// BackendHashConfirmationWindow is the time to allow for a normal run of
+// backend checks before giving up on a pending confirmation. The extra tick
+// lets collection observe the result when metadata and metric checks run in
+// parallel, including when a bundle is replaced just after a metadata check.
+func (gs *GtfsService) BackendHashConfirmationWindow() time.Duration {
+	c := gs.refreshCoordinator
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return max(backendHashStableFor, (backendHashStableTicks+1)*c.checkInterval)
+}
+
 // staticConfigFingerprintForKey returns the fingerprint expected for server
 // under key, falling back to server-scoped configuration for agency entries.
 func staticConfigFingerprintForKey(server models.ObaServer, key string) string {
@@ -191,4 +202,25 @@ func (gs *GtfsService) BackendBundleRelation(server models.ObaServer) BackendBun
 func (gs *GtfsService) BackendBundleDebouncing(server models.ObaServer) bool {
 	_, debouncing := gs.BackendBundleSyncState(server)
 	return debouncing
+}
+
+// ClearBackendDebounce clears pending debounce state and returns the current
+// relation and whether it cleared a pending comparison.
+func (gs *GtfsService) ClearBackendDebounce(server models.ObaServer) (BackendBundleRelation, bool) {
+	c := gs.refreshCoordinator
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cleared := false
+	for _, key := range lookupKeys(server) {
+		state, ok := c.relations[key]
+		if !ok || state.fingerprint != staticConfigFingerprintForKey(server, key) {
+			continue
+		}
+		if !state.debouncing {
+			return state.relation, cleared
+		}
+		delete(c.relations, key)
+		cleared = true
+	}
+	return BackendBundleUnknown, cleared
 }

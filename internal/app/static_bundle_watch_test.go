@@ -132,9 +132,9 @@ func TestBundleExpiryReporterDeploymentExpired(t *testing.T) {
 	r := NewBundleExpiryReporter()
 	now := time.Now().UTC()
 	present := func(string) bool { return true }
-	r.update(models.ServerKey("https://a.example", "x"), withholdExpired, now)
-	r.update(models.ServerKey("https://b.example", "y"), withholdNone, now)
-	r.update(models.ServerKey("https://c.example", "z"), withholdBackendBehind, now)
+	r.update(models.ServerKey("https://a.example", "x"), withholdExpired, time.Time{}, now)
+	r.update(models.ServerKey("https://b.example", "y"), withholdNone, time.Time{}, now)
+	r.update(models.ServerKey("https://c.example", "z"), withholdBackendBehind, time.Time{}, now)
 	if !r.deploymentExpired("https://a.example", present) {
 		t.Fatal("deployment with an expired agency not reported expired")
 	}
@@ -148,7 +148,7 @@ func TestBundleExpiryReporterDeploymentExpired(t *testing.T) {
 func TestBundleExpiryReporterForgetsRemovedAgency(t *testing.T) {
 	r := NewBundleExpiryReporter()
 	gone := models.ServerKey("https://a.example", "gone")
-	r.update(gone, withholdExpired, time.Now().UTC())
+	r.update(gone, withholdExpired, time.Time{}, time.Now().UTC())
 	if r.deploymentExpired("https://a.example", func(key string) bool { return key != gone }) {
 		t.Fatal("an agency without a snapshot kept the deployment expired")
 	}

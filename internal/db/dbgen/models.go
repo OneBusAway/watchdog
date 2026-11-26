@@ -42,6 +42,7 @@ type GtfsStaticVersion struct {
 	PublishedAt           time.Time
 	CombinedContentSha256 *string
 	ParserVersion         *string
+	ServerScoped          bool
 }
 
 type GtfsStaticVersionAgency struct {

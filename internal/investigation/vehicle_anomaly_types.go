@@ -3,7 +3,10 @@ package investigation
 import (
 	"context"
 	"net/http"
+	"strconv"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/julienschmidt/httprouter"
 	"watchdog.onebusaway.org/internal/db/dbgen"
 )
@@ -107,4 +110,121 @@ func loadVehicleAnomalyTypes(ctx context.Context, q *dbgen.Queries, ids []int64)
 		out[int64(row.AnomalyTypeID)] = vehicleAnomalyTypeRepresentation(row.AnomalyCode, row.Description)
 	}
 	return out, nil
+}
+
+// vehicleAnomalyRuleVersionsPath is the collection prefix of E33.
+const vehicleAnomalyRuleVersionsPath = "/v1/vehicle-anomaly-rule-versions/"
+
+// vehicleAnomalyRuleVersionIncludable is the include names E33 accepts.
+var vehicleAnomalyRuleVersionIncludable = map[string]resourceKind{
+	"anomaly_type": kindVehicleAnomalyType,
+}
+
+// vehicleAnomalyRuleVersion is one rule version of a vehicle anomaly type (E33):
+// the detection logic and thresholds Watchdog applied from effective_at on.
+type vehicleAnomalyRuleVersion struct {
+	RuleVersionID             int64    `json:"rule_version_id"`
+	AnomalyType               string   `json:"anomaly_type"`
+	RuleLogicVersion          int32    `json:"rule_logic_version"`
+	VersionName               string   `json:"version_name"`
+	WatchdogBuildVersion      *string  `json:"watchdog_build_version"`
+	EffectiveAt               apiTime  `json:"effective_at"`
+	StaleAgeThresholdSeconds  *int32   `json:"stale_age_threshold_seconds"`
+	ReportedSpeedThresholdMps *float64 `json:"reported_speed_threshold_mps"`
+	Links                     links    `json:"links"`
+}
+
+// vehicleAnomalyRuleVersionLinks builds a rule version's links. Both always
+// exist. The anomaly_type link's ID is anomaly_type_id, the key its loader
+// uses; its URL uses the code.
+func vehicleAnomalyRuleVersionLinks(row dbgen.GetVehicleAnomalyRuleVersionRow) itemLinks {
+	return itemLinks{
+		"self": {URL: vehicleAnomalyRuleVersionsPath + strconv.FormatInt(row.RuleVersionID, 10)},
+		"anomaly_type": {
+			Kind: kindVehicleAnomalyType,
+			ID:   int64(row.AnomalyTypeID),
+			URL:  "/v1/vehicle-anomaly-types/" + row.AnomalyCode,
+		},
+	}
+}
+
+// vehicleAnomalyRuleVersionRepresentation maps one rule version row to E33.
+func vehicleAnomalyRuleVersionRepresentation(row dbgen.GetVehicleAnomalyRuleVersionRow, l itemLinks) vehicleAnomalyRuleVersion {
+	return vehicleAnomalyRuleVersion{
+		RuleVersionID:             row.RuleVersionID,
+		AnomalyType:               row.AnomalyCode,
+		RuleLogicVersion:          row.RuleLogicVersion,
+		VersionName:               row.VersionName,
+		WatchdogBuildVersion:      row.WatchdogBuildVersion,
+		EffectiveAt:               newAPITime(row.EffectiveAt),
+		StaleAgeThresholdSeconds:  row.StaleAgeThresholdSeconds,
+		ReportedSpeedThresholdMps: row.ReportedSpeedThresholdMps,
+		Links:                     l.links(),
+	}
+}
+
+// loadVehicleAnomalyRuleVersions is the include loader for
+// kindVehicleAnomalyRuleVersion. It returns each rule version's E33
+// representation, keyed by rule_version_id, in one query.
+func loadVehicleAnomalyRuleVersions(ctx context.Context, q *dbgen.Queries, ids []int64) (map[int64]any, error) {
+	rows, err := q.GetVehicleAnomalyRuleVersion(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int64]any, len(rows))
+	for _, row := range rows {
+		out[row.RuleVersionID] = vehicleAnomalyRuleVersionRepresentation(row, vehicleAnomalyRuleVersionLinks(row))
+	}
+	return out, nil
+}
+
+// vehicleAnomalyRuleVersionBody is the E33 response: the rule version and,
+// when include asks for it, the included object.
+type vehicleAnomalyRuleVersionBody struct {
+	vehicleAnomalyRuleVersion
+	Included included `json:"included,omitzero"`
+}
+
+// getVehicleAnomalyRuleVersion serves GET
+// /v1/vehicle-anomaly-rule-versions/:rule_version_id (E33). It takes only
+// include. A malformed or unknown ID is a 404 from the no-rows path.
+func (s *InvestigationService) getVehicleAnomalyRuleVersion(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	id, ok := pathID(ps, "rule_version_id")
+	if !ok {
+		s.fail(w, r, pgx.ErrNoRows)
+		return
+	}
+	var bad invalidParams
+	values := parseQuery(r, &bad, "include")
+	inc := s.parseInclude(values, vehicleAnomalyRuleVersionIncludable, &bad)
+	if len(bad) > 0 {
+		writeInvalidParams(w, bad)
+		return
+	}
+
+	var body vehicleAnomalyRuleVersionBody
+	err := s.read(r.Context(), func(ctx context.Context, q *dbgen.Queries) error {
+		rows, err := q.GetVehicleAnomalyRuleVersion(ctx, []int64{id})
+		if err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			return pgx.ErrNoRows
+		}
+		l := vehicleAnomalyRuleVersionLinks(rows[0])
+		body.vehicleAnomalyRuleVersion = vehicleAnomalyRuleVersionRepresentation(rows[0], l)
+		body.Included, err = s.loadIncluded(ctx, q, []itemLinks{l}, inc)
+		return err
+	})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	// A rule version never changes once recorded; it has no Last-Modified.
+	// Included bodies may change, so any include drops to the short cache.
+	cache := cacheImmutable(time.Time{})
+	if inc.requested() {
+		cache = cacheShort()
+	}
+	s.writeJSON(w, r, body, cache)
 }

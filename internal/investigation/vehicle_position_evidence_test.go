@@ -260,16 +260,33 @@ func TestGetVehiclePositionEvidence_TripStartDateFormat(t *testing.T) {
 	}
 }
 
-// TestGetVehiclePositionEvidence_IncludeWithoutLoaderReturns400 checks that a
-// link whose target loader does not exist yet cannot be included.
-func TestGetVehiclePositionEvidence_IncludeWithoutLoaderReturns400(t *testing.T) {
+// TestGetVehiclePositionEvidence_IncludeBoundingBoxVersion exercises the
+// bounding_box_version include loader end-to-end.
+func TestGetVehiclePositionEvidence_IncludeBoundingBoxVersion(t *testing.T) {
 	pool := dbtest.NewMigratedPool(t)
 	f := newEvidenceFixture(t, pool)
 	id := insertFullEvidence(t, pool, f)
 	router := newVehiclePositionEvidenceRouter(t, pool)
-	for _, name := range []string{"response", "bounding_box_version"} {
-		rec := doGet(t, router, fmt.Sprintf("%s/%d?include=%s", vehiclePositionEvidencePath, id, name), nil)
-		wantInvalidParam(t, rec, "include")
+
+	rec := doGet(t, router, fmt.Sprintf("%s/%d?include=bounding_box_version", vehiclePositionEvidencePath, id), nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Included map[string]struct {
+			BoundingBoxVersionID int64 `json:"bounding_box_version_id"`
+		} `json:"included"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	wantURL := fmt.Sprintf("/v1/bounding-box-versions/%d", f.boxID)
+	box, ok := body.Included[wantURL]
+	if !ok {
+		t.Fatalf("included missing %q, got: %s", wantURL, rec.Body.String())
+	}
+	if box.BoundingBoxVersionID != f.boxID {
+		t.Errorf("bounding_box_version_id = %d, want %d", box.BoundingBoxVersionID, f.boxID)
 	}
 }
 
@@ -342,5 +359,30 @@ func assertJSONEqual(t *testing.T, want string, got []byte) {
 	}
 	if !reflect.DeepEqual(w, g) {
 		t.Errorf("body =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestGetVehiclePositionEvidence_IncludeResponse checks that response can be
+// included now that the vehicle response loader (E28) exists. The included
+// object is keyed by the response's URL.
+func TestGetVehiclePositionEvidence_IncludeResponse(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	f := newEvidenceFixture(t, pool)
+	id := insertFullEvidence(t, pool, f)
+	router := newVehiclePositionEvidenceRouter(t, pool)
+
+	rec := doGet(t, router, fmt.Sprintf("%s/%d?include=response", vehiclePositionEvidencePath, id), nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		Included map[string]json.RawMessage `json:"included"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	responseURL := fmt.Sprintf("/v1/vehicle-position-responses/%d", f.responseID)
+	if _, ok := body.Included[responseURL]; !ok {
+		t.Errorf("included has no %s; keys = %v", responseURL, body.Included)
 	}
 }

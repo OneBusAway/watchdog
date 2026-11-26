@@ -7,6 +7,7 @@ package dbgen
 
 import (
 	"context"
+	"time"
 )
 
 const getGTFSStaticVersion = `-- name: GetGTFSStaticVersion :many
@@ -16,19 +17,27 @@ WHERE gtfs_static_version_id = ANY($1::bigint[])
 ORDER BY gtfs_static_version_id
 `
 
+type GetGTFSStaticVersionRow struct {
+	GtfsStaticVersionID   int64
+	ServerID              int64
+	PublishedAt           time.Time
+	CombinedContentSha256 *string
+	ParserVersion         *string
+}
+
 // The static versions with the given IDs; IDs with no row are left out. This
 // and the two queries below are E35's reads. Each takes a batch of IDs, so E35
 // (one ID) and its include loader (every ID a response links to) run the same
 // three queries, however many IDs there are.
-func (q *Queries) GetGTFSStaticVersion(ctx context.Context, gtfsStaticVersionIds []int64) ([]GtfsStaticVersion, error) {
+func (q *Queries) GetGTFSStaticVersion(ctx context.Context, gtfsStaticVersionIds []int64) ([]GetGTFSStaticVersionRow, error) {
 	rows, err := q.db.Query(ctx, getGTFSStaticVersion, gtfsStaticVersionIds)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []GtfsStaticVersion
+	var items []GetGTFSStaticVersionRow
 	for rows.Next() {
-		var i GtfsStaticVersion
+		var i GetGTFSStaticVersionRow
 		if err := rows.Scan(
 			&i.GtfsStaticVersionID,
 			&i.ServerID,
@@ -113,6 +122,65 @@ func (q *Queries) ListGTFSStaticVersionSources(ctx context.Context, gtfsStaticVe
 			&i.SourceID,
 			&i.NormalizedSourceUrl,
 			&i.SourceContentSha256,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGTFSStaticVersions = `-- name: ListGTFSStaticVersions :many
+SELECT gtfs_static_version_id, server_id, published_at, combined_content_sha256, parser_version
+FROM gtfs_static_version
+WHERE ($1::bigint IS NULL OR server_id = $1::bigint)
+  AND ($2::timestamptz IS NULL OR published_at >= $2::timestamptz)
+  AND ($3::timestamptz IS NULL OR published_at < $3::timestamptz)
+  AND ($4::bigint IS NULL OR gtfs_static_version_id < $4::bigint)
+ORDER BY gtfs_static_version_id DESC
+LIMIT $5::integer
+`
+
+type ListGTFSStaticVersionsParams struct {
+	ServerID      *int64
+	PublishedFrom *time.Time
+	PublishedTo   *time.Time
+	AfterID       *int64
+	PageLimit     *int32
+}
+
+type ListGTFSStaticVersionsRow struct {
+	GtfsStaticVersionID   int64
+	ServerID              int64
+	PublishedAt           time.Time
+	CombinedContentSha256 *string
+	ParserVersion         *string
+}
+
+func (q *Queries) ListGTFSStaticVersions(ctx context.Context, arg ListGTFSStaticVersionsParams) ([]ListGTFSStaticVersionsRow, error) {
+	rows, err := q.db.Query(ctx, listGTFSStaticVersions,
+		arg.ServerID,
+		arg.PublishedFrom,
+		arg.PublishedTo,
+		arg.AfterID,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListGTFSStaticVersionsRow
+	for rows.Next() {
+		var i ListGTFSStaticVersionsRow
+		if err := rows.Scan(
+			&i.GtfsStaticVersionID,
+			&i.ServerID,
+			&i.PublishedAt,
+			&i.CombinedContentSha256,
+			&i.ParserVersion,
 		); err != nil {
 			return nil, err
 		}

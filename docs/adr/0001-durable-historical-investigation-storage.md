@@ -252,16 +252,17 @@ Vehicle-feed absence history and PostgreSQL-outage history are deferred question
 ## Remaining work
 
 - [x] Finalize PostgreSQL DDL, indexes, endpoint URL uniqueness, and episode constraints; choose the PostgreSQL driver and migration tool. Implemented in `internal/db/migrations/00001_create_investigation_schema.sql`.
+- [x] Record each published static GTFS version with its server, source hashes, agencies and bounding boxes, in `internal/history`. The helpers that create feed URL, vehicle and reported stop and trip identities are there too; episode recording will call them.
 - [ ] Implement retention cleanup.
 - [ ] Implement snapshot records and unmatched stop/trip episodes with versioned stop metadata and compact trip-schedule context.
 - [ ] Implement vehicle stale-source, invalid-coordinate, and stopped-out-of-bounds episodes with opening/resolution evidence.
-- [ ] Extend the in-memory schedule index to retain compact per-trip time windows at startup and successful static GTFS refresh; add a code comment about a future versioned PostgreSQL schedule projection if historical recalculation is required.
+- [x] Extend the in-memory schedule index to retain compact per-trip time windows at startup and successful static GTFS refresh; add a code comment about a future versioned PostgreSQL schedule projection if historical recalculation is required.
 - [ ] Define low-cardinality aggregate metric names and update OBACloud and bundled Grafana queries before dropping raw per-vehicle Prometheus series.
 - [ ] Inspect historical GTFS-Realtime reported-speed data and determine the maximum ever reported speed before choosing a plausibility threshold. Expose a Watchdog CLI/config option if individual speed outliers should be saved in PostgreSQL.
 - [ ] Revisit whether vehicle-feed absence history is needed. If selected, persist only complete-snapshot presence-to-absence transitions and consider the bounded aggregate metric described above; absence must not be presented as a vehicle failure.
 - [ ] Keep PostgreSQL availability metrics, outage records, and alerts deferred until a later scope decision; decide whether any future alert should notify PagerDuty.
 - [x] Compare PostgreSQL driver and migration options (selected: `pgx` v5, `goose` v3, `sqlc`; see the decision log). Maglev uses `database/sql` with SQLite drivers and `sqlc` for query-code generation; it embeds `schema.sql` and executes statements split on `-- migrate` at startup. This is a custom SQLite schema runner, not a versioned migration framework. Maglev has no PostgreSQL runtime driver; `pgx` appears only as an indirect dependency in its module graph.
-- [ ] Implement the authenticated, filtered, paginated investigation API. Its contract (resources, filters, pagination, query limits, shared bearer-token authentication with OBACloud enforcing per-user server/agency access) is defined in [investigation-api.md](../investigation-api.md).
+- [ ] Implement the authenticated, filtered, paginated investigation API. Its contract (resources, filters, pagination, query limits, shared bearer-token authentication with OBACloud enforcing per-user server/agency access) is defined in [investigation-api.md](../investigation-api.md). Authentication, the shared request pipeline and 39 of the 41 endpoints are implemented in `internal/investigation`.
 - [ ] Add tests for episode open/close semantics, complete vs differential feed handling, metadata versions, speed rules, and retention. Add PostgreSQL outage tests only if that deferred feature is approved.
 - [ ] If multi-instance Watchdog is planned, write the migration/lease design and update `CLAUDE.md` with a warning before enabling multiple pollers. Include earliest PostgreSQL outage-start reconciliation across replicas.
 - [ ] Revisit retention/partitioning after measuring actual production event volume.

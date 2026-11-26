@@ -83,8 +83,9 @@ const (
 )
 
 type withheldEntry struct {
-	kind  withholdKind
-	since time.Time
+	kind          withholdKind
+	since         time.Time
+	debounceSince time.Time
 	// reported records that the fatal event was sent, with its cause and reason.
 	reported      bool
 	cause, reason string
@@ -95,14 +96,15 @@ type withheldEntry struct {
 type BundleExpiryReporter struct {
 	mu      sync.Mutex
 	entries map[string]withheldEntry
+	now     func() time.Time
 }
 
 func NewBundleExpiryReporter() *BundleExpiryReporter {
-	return &BundleExpiryReporter{entries: make(map[string]withheldEntry)}
+	return &BundleExpiryReporter{entries: make(map[string]withheldEntry), now: time.Now}
 }
 
-// update records the entry's kind and returns its state before and after.
-func (r *BundleExpiryReporter) update(serverKey string, kind withholdKind, now time.Time) (before withheldEntry, after withheldEntry) {
+// update records the entry's withholding decision and returns its state before and after.
+func (r *BundleExpiryReporter) update(serverKey string, kind withholdKind, debounceSince, now time.Time) (before withheldEntry, after withheldEntry) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	before = r.entries[serverKey]
@@ -114,6 +116,7 @@ func (r *BundleExpiryReporter) update(serverKey string, kind withholdKind, now t
 	if before.kind != kind {
 		after = withheldEntry{kind: kind, since: now}
 	}
+	after.debounceSince = debounceSince
 	r.entries[serverKey] = after
 	return before, after
 }
@@ -170,57 +173,65 @@ func (r *BundleExpiryReporter) Prune(keep func(serverKey string) bool) {
 	}
 }
 
-// staticWithholdKind decides whether the entry's static-derived metrics are
-// withheld now, and why.
-func (app *Application) staticWithholdKind(server models.ObaServer, now time.Time) withholdKind {
+// debounceWithholdMin is the minimum time allowed for a pending backend
+// confirmation. The fetch interval can extend this deadline.
+const debounceWithholdMin = 10 * time.Minute
+
+// observeStaticBundle updates and reports the entry's withholding state.
+// All static-derived metrics for this entry use its decision for this tick.
+func (app *Application) observeStaticBundle(server models.ObaServer, now time.Time) bool {
+	key := server.ServerKey()
+	kind := withholdNone
+	var debounceSince time.Time
 	if app.MetricsService.StaticBundleExpired(server, now) {
-		return withholdExpired
-	}
-	relation, debouncing := app.GtfsService.BackendBundleSyncState(server)
-	if relation == gtfs.BackendBundleBehind {
-		return withholdBackendBehind
-	}
-	if debouncing && app.BundleExpiry != nil {
-		if prior := app.BundleExpiry.entry(server.ServerKey()).kind; prior != withholdNone {
-			return prior
+		kind = withholdExpired
+	} else {
+		relation, debouncing := app.GtfsService.BackendBundleSyncState(server)
+		prior := app.BundleExpiry.entry(key)
+		switch {
+		case relation == gtfs.BackendBundleBehind:
+			kind = withholdBackendBehind
+		case debouncing && prior.kind != withholdNone:
+			debounceSince = prior.debounceSince
+			if debounceSince.IsZero() {
+				debounceSince = now
+			}
+			limit := max(debounceWithholdMin, app.GtfsService.BackendHashConfirmationWindow())
+			deadline := debounceSince.Add(limit)
+			if now.Before(deadline) {
+				kind = prior.kind
+			} else {
+				debounceSince = time.Time{}
+				// The concurrent metadata check may have confirmed Behind
+				// since we read the pending state.
+				relation, cleared := app.GtfsService.ClearBackendDebounce(server)
+				if relation == gtfs.BackendBundleBehind {
+					kind = withholdBackendBehind
+				} else if cleared {
+					app.Logger.Warn("Timed out waiting for static GTFS backend hash confirmation",
+						"agency_id", server.AgencyID, "server_name", server.ServerName,
+						"server_url", utils.SanitizeServerURL(server.ObaBaseURL), "deadline", deadline)
+				}
+			}
 		}
 	}
-	return withholdNone
+	before, after := app.BundleExpiry.update(key, kind, debounceSince, now)
+	app.reportStaticBundleTransition(server, before, after, now)
+	return kind != withholdNone
 }
 
-// staticMetricsWithheld reports whether the entry's static-derived metrics
-// are withheld now.
-func (app *Application) staticMetricsWithheld(server models.ObaServer, now time.Time) bool {
-	return app.staticWithholdKind(server, now) != withholdNone
-}
-
-// staticMetricsWithheldForAll reports whether every given agency entry
-// withholds its static-derived metrics. It is false for an empty list.
-func (app *Application) staticMetricsWithheldForAll(entries []models.ObaServer, now time.Time) bool {
-	for _, entry := range entries {
-		if !app.staticMetricsWithheld(entry, now) {
-			return false
-		}
-	}
-	return len(entries) > 0
-}
-
-// observeStaticBundle reports a change in whether the agency entry withholds
-// its static-derived metrics. Call it once per agency entry per tick.
-func (app *Application) observeStaticBundle(server models.ObaServer, now time.Time) {
-	kind := app.staticWithholdKind(server, now)
-	before, after := app.BundleExpiry.update(server.ServerKey(), kind, now)
+func (app *Application) reportStaticBundleTransition(server models.ObaServer, before, after withheldEntry, now time.Time) {
 	tags := map[string]string{
 		"agency_id":   server.AgencyID,
 		"agency_name": server.AgencyName,
 		"server_name": server.ServerName,
 	}
 	serverURL := utils.SanitizeServerURL(server.ObaBaseURL)
-	if kind == withholdNone {
+	if after.kind == withholdNone {
 		if before.kind == withholdNone {
 			return
 		}
-		app.Logger.Info("Static GTFS bundle is current and matches the backend; resuming schedule and vehicle metrics",
+		app.Logger.Info("Resuming static GTFS schedule and vehicle metrics",
 			"agency_id", server.AgencyID, "server_name", server.ServerName, "server_url", serverURL)
 		if before.reported {
 			report.ReportErrorWithSentryOptions(fmt.Errorf("static GTFS bundle for %s agency %s is usable again", serverURL, server.AgencyID),
@@ -233,7 +244,7 @@ func (app *Application) observeStaticBundle(server models.ObaServer, now time.Ti
 	}
 	cause, reason, decided := app.withholdCause(server, after, now)
 	if !decided {
-		if before.kind != kind {
+		if before.kind != after.kind {
 			app.Logger.Warn("Static GTFS bundle has expired; withholding schedule and vehicle metrics while the feed URL is checked",
 				"agency_id", server.AgencyID, "server_name", server.ServerName, "server_url", serverURL)
 		}
@@ -247,7 +258,7 @@ func (app *Application) observeStaticBundle(server models.ObaServer, now time.Ti
 		logArgs = append(logArgs, "reason", reason)
 	}
 	summary := "has expired"
-	if kind == withholdBackendBehind {
+	if after.kind == withholdBackendBehind {
 		summary = "is newer than the backend's"
 	}
 	app.Logger.Error("Static GTFS bundle "+summary+"; withholding schedule and vehicle metrics", logArgs...)

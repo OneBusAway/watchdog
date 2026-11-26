@@ -720,3 +720,27 @@ func TestBackendMetadataStalledBody(t *testing.T) {
 		t.Fatalf("missing diagnostic: %s", logs.String())
 	}
 }
+
+// TestBackendMetadataTruncatedBody covers a backend whose connection closes
+// partway through the body. That is a failed read that may clear up on its
+// own, not a malformed document, even though the JSON it left is incomplete.
+func TestBackendMetadataTruncatedBody(t *testing.T) {
+	h := newUnchangedFeedHarness(t)
+	var logs bytes.Buffer
+	h.service.Logger = slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Promise more bytes than are sent; the server then closes the
+		// connection, so the client sees io.ErrUnexpectedEOF.
+		w.Header().Set("Content-Length", "200")
+		fmt.Fprint(w, `{"staticGtfsHash":"`)
+	}))
+	defer ts.Close()
+	h.server.ObaBaseURL = ts.URL
+	if _, status := h.service.fetchBackendHash(context.Background(), h.server); status != BackendHashTransient {
+		t.Fatalf("status = %s, want transient", status)
+	}
+	got := logs.String()
+	if !strings.Contains(got, "body_read_failed") || strings.Contains(got, "malformed_json") {
+		t.Fatalf("truncated body logged as: %s", got)
+	}
+}

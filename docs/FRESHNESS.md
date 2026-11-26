@@ -42,8 +42,8 @@ once per backend, how the bundle is kept current:
    below).
 2. A failed read backs off on its own, separately from the API ping backoff, so
    a broken metadata endpoint never stops the rest of collection. A transient
-   failure (network error, timeout, a response body that stops arriving, 408,
-   429 or 5xx) backs off exponentially
+   failure (network error, timeout, a response body that stops arriving or is
+   cut off partway, 408, 429 or 5xx) backs off exponentially
    from the fetch interval up to 10 minutes. A backend with no usable hash
    (404, another 4xx, malformed JSON, a missing or invalid hash) is not asked
    again for an hour.
@@ -104,8 +104,8 @@ for example after step 4 found one the backend has not loaded. Downloading the
 feed again would only fetch the same newer bundle, so no campaign starts at
 once. The hourly retry still runs, because the newer bundle may have been a
 mistake the agency has since reverted on the feed URL. Watchdog logs this once
-at warn level, and withholds static-derived metrics until the backend catches
-up (see [Expired or mismatched bundles](#expired-or-mismatched-bundles)). Once
+at warn level and withholds static-derived metrics as described in
+[Expired or mismatched bundles](#expired-or-mismatched-bundles). Once
 the backend has served Watchdog's current bundle, a later return to the older
 hash is a rollback and is followed like any other change. The shared metadata request is skipped
 while every entry for a backend is in collection backoff, and while the
@@ -163,11 +163,30 @@ Watchdog withholds the metrics it derives from the static bundle in two cases:
   still serves the one it replaced. Vehicles from the backend must not be
   checked against a different bundle. One read is not enough, because a
   single lagging node behind a load balancer can answer it: the stale hash must
-  hold for at least three reads spanning 90 seconds.
+  hold for at least three reads spanning 90 seconds. Once confirmed, the hold
+  survives transient metadata failures and skipped reads. Watchdog drops the
+  confirmed state when a usable hash shows a different relation, metadata
+  becomes unsupported, or the deployment becomes ineligible for comparison.
+  An expired local bundle still withholds metrics independently.
+
+When a replacement bundle is usable and backend confirmation is pending,
+Watchdog carries over an existing hold while it waits for the hash reads.
+The wait starts on the first tick that observes both conditions. Its deadline
+is the greater of 10 minutes and four fetch intervals, leaving time for a
+normal confirmation run at long intervals. A check that resolves the comparison,
+finds metadata unsupported, or finds the deployment ineligible ends the wait
+early. If confirmation is still pending when a tick reaches the deadline,
+Watchdog clears the pending hold and resumes static-derived metrics. Later
+metadata reads can still confirm that the backend is behind.
 
 While withheld, Watchdog reports the schedule as unknown (`gtfs_schedule_available` 0), skips the unmatched-stop location lookup and deletes `oba_unmatched_stop_unresolved` (existing `oba_unmatched_stop_info` and cluster series age out on their 24-hour TTL), skips the vehicle pass, which attributes vehicles and checks bounds with the bundle, and deletes the gauges that pass writes: `realtime_vehicle_positions_count_gtfs_rt`, `gtfs_rt_tracked_vehicles_count`, `gtfs_rt_invalid_vehicle_coordinates`, `gtfs_rt_stopped_out_of_bounds_vehicles`, `gtfs_rt_vehicle_computed_speed`, `gtfs_rt_vehicle_speed_discrepancy_ratio`, `gtfs_rt_vehicle_source_timestamp_seconds`, `gtfs_rt_vehicle_speed_last_computed_timestamp_seconds` and `gtfs_rt_vehicle_state_last_changed_timestamp_seconds`. Counters are kept and simply stop increasing. In server mode the pass is shared by the merged bundle, so it is skipped only once every reported agency is withheld. API ping, OBA API metrics, GTFS-RT fetch status and the expiration gauges (`gtfs_bundle_days_until_earliest_expiration` and `gtfs_bundle_days_until_latest_expiration`) keep reporting.
 
-Sentry receives one `fatal` event when metrics are withheld and one `info` event when they resume. The event's `cause` tag says which side has the problem. For an expired bundle the cause is decided only after a feed URL download that started after the expiry has finished (step 4 starts one at once), so it never rests on an old download:
+Sentry receives a `fatal` event when Watchdog determines the cause of a hold
+and an `info` event when metrics resume after a reported hold. The fatal
+event's `cause` tag says which side has the problem. For an expired bundle
+Watchdog waits for a feed URL download that started after expiry (step 4
+starts one at once), or reports `feed_not_checked` if the wait reaches an
+hour:
 
 | `cause` | Situation | Who should act |
 |---|---|---|
@@ -177,7 +196,9 @@ Sentry receives one `fatal` event when metrics are withheld and one `info` event
 | `backend_stale` | Watchdog downloaded a newer bundle and the backend still serves the one it replaced. | The backend's operator |
 | `feed_not_checked` | No feed URL download finished within an hour of the expiry. | Watchdog's operator |
 
-An expiry followed by Watchdog finding a newer bundle first reports `backend_stale` if the backend has not loaded it. If the backend already serves it, nothing is reported, because metrics resume as soon as both sides match.
+If Watchdog replaces an expired bundle before reporting its cause, a confirmed
+lagging backend is reported as `backend_stale`. If metrics resume before any
+cause is determined, Sentry receives neither event.
 
 ## Computed Vehicle Speed
 

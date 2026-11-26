@@ -3,6 +3,8 @@ package gtfs
 import (
 	"testing"
 	"time"
+
+	"watchdog.onebusaway.org/internal/models"
 )
 
 // newBackendBehindHarness leaves Watchdog on bundle B after replacing bundle A,
@@ -75,4 +77,56 @@ func TestBackendBehindSurvivesMetadataGap(t *testing.T) {
 	// reports the stale hash, so it must not look recovered.
 	h.tick(t, 10*time.Minute)
 	h.wantRelation(t, BackendBundleBehind, "after a metadata gap")
+}
+
+func TestBackendBehindDebounceClearedWhenUnsupported(t *testing.T) {
+	h, _, _ := newBackendBehindHarness(t)
+	h.tick(t, 30*time.Second)
+	if !h.service.BackendBundleDebouncing(h.server) {
+		t.Fatal("expected debouncing to be true while stale hash run is pending")
+	}
+
+	h.hash.Store("")
+	h.tick(t, 30*time.Second)
+	if h.service.BackendBundleDebouncing(h.server) {
+		t.Fatal("expected debouncing to be cleared when backend reports unsupported hash")
+	}
+	h.wantRelation(t, BackendBundleUnknown, "after backend stops reporting hash")
+}
+
+func TestBackendBehindDebounceClearedWhenIneligible(t *testing.T) {
+	h, _, _ := newBackendBehindHarness(t)
+	h.tick(t, 30*time.Second)
+	if !h.service.BackendBundleDebouncing(h.server) {
+		t.Fatal("expected debouncing to be true while stale hash run is pending")
+	}
+
+	ineligibleServer := h.server
+	ineligibleServer.GtfsStaticFeeds = nil
+	h.service.CheckBackendBundles(h.ctx, h.ctx, []models.ObaServer{ineligibleServer})
+	if h.service.BackendBundleDebouncing(h.server) {
+		t.Fatal("expected debouncing to be cleared when deployment is ineligible")
+	}
+	h.wantRelation(t, BackendBundleUnknown, "after deployment becomes ineligible")
+}
+
+func TestBackendBehindConfirmedDroppedWhenUnsupported(t *testing.T) {
+	h, _, _ := newBackendBehindHarness(t)
+	h.ticks(t, 4, 30*time.Second)
+	h.wantRelation(t, BackendBundleBehind, "confirmed")
+
+	h.hash.Store("")
+	h.tick(t, 30*time.Second)
+	h.wantRelation(t, BackendBundleUnknown, "after backend stops reporting hash")
+}
+
+func TestBackendBehindConfirmedDroppedWhenIneligible(t *testing.T) {
+	h, _, _ := newBackendBehindHarness(t)
+	h.ticks(t, 4, 30*time.Second)
+	h.wantRelation(t, BackendBundleBehind, "confirmed")
+
+	ineligibleServer := h.server
+	ineligibleServer.GtfsStaticFeeds = nil
+	h.service.CheckBackendBundles(h.ctx, h.ctx, []models.ObaServer{ineligibleServer})
+	h.wantRelation(t, BackendBundleUnknown, "after deployment becomes ineligible")
 }

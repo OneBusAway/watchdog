@@ -11,8 +11,8 @@ import (
 	"watchdog.onebusaway.org/internal/db/dbgen"
 )
 
-// vehicleIncludable uses the kind the vehicle-position-endpoint detail endpoint
-// registers. Until it does, parseInclude rejects the name.
+// vehicleIncludable uses the kind whose loader the vehicle-position-endpoint
+// detail endpoint (E07) registers.
 var vehicleIncludable = map[string]resourceKind{
 	"endpoint": kindEndpoint,
 }
