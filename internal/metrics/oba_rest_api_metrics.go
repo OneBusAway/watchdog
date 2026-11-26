@@ -86,7 +86,12 @@ type OBAMetrics struct {
 //     A nil client is treated as a programming error.
 //   - prefetchedMetrics: an already-decoded metrics response to use instead of fetching.
 //     Pass nil to have the function fetch the endpoint itself.
+//   - prefetchedAt: when Watchdog received prefetchedMetrics. Ignored when
+//     prefetchedMetrics is nil.
 // Returns:
+//   - the response used (fetched or prefetched) and the time Watchdog
+//     received it, so the caller can record it in history. Both are zero
+//     when error is non-nil.
 //   - error: any error encountered during request or decoding. Nil when
 //     prefetchedMetrics is supplied and the per-agency metrics are recorded.
 
@@ -100,12 +105,13 @@ func reportUnlessCanceled(ctx context.Context, err error, opts report.SentryRepo
 	report.ReportErrorWithSentryOptions(err, opts)
 }
 
-func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, serverBaseUrl, apiKey string, client *http.Client, staticStore *gtfs.StaticStore, logger *slog.Logger, unmatchedStopTracker *UnmatchedStopTracker, prefetchedMetrics *OBAMetrics, staticWithheld bool) error {
+func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, serverBaseUrl, apiKey string, client *http.Client, staticStore *gtfs.StaticStore, logger *slog.Logger, unmatchedStopTracker *UnmatchedStopTracker, prefetchedMetrics *OBAMetrics, prefetchedAt time.Time, staticWithheld bool) (*OBAMetrics, time.Time, error) {
 	serverKey := models.ServerKey(serverBaseUrl, agencyID)
 	serverURL := utils.SanitizeServerURL(serverBaseUrl)
 
 	url := fmt.Sprintf("%s/api/where/metrics.json?key=%s", serverBaseUrl, apiKey)
 	sanitizedURL := utils.SanitizeServerURL(url)
+	receivedAt := prefetchedAt
 	// If prefetchedMetrics is nil, fetch the metrics from the OBA server. Otherwise, use the provided prefetchedMetrics data.
 	if prefetchedMetrics == nil {
 		if client == nil {
@@ -116,14 +122,14 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 					"server_name": serverName,
 				},
 			})
-			return err
+			return nil, time.Time{}, err
 		}
 
 		logger.Info("Fetching metrics from OBA server", "agency_id", agencyID, "server_name", serverName, "url", sanitizedURL)
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
-			return fmt.Errorf("failed to create metrics request: %w", err)
+			return nil, time.Time{}, fmt.Errorf("failed to create metrics request: %w", err)
 		}
 		resp, err := client.Do(req)
 		if err != nil {
@@ -134,7 +140,7 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 					"url": sanitizedURL,
 				},
 			})
-			return err
+			return nil, time.Time{}, err
 		}
 		defer resp.Body.Close()
 
@@ -152,7 +158,7 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 					"status_code": resp.StatusCode,
 				},
 			})
-			return wrappedErr
+			return nil, time.Time{}, wrappedErr
 		}
 
 		var metrics OBAMetrics
@@ -164,10 +170,11 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 					"url": sanitizedURL,
 				},
 			})
-			return err
+			return nil, time.Time{}, err
 		}
 
 		prefetchedMetrics = &metrics
+		receivedAt = time.Now().UTC()
 	}
 
 	if fetchTime, ok := staticStore.GetFetchTime(serverKey); ok {
@@ -198,7 +205,7 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 				"reported_agency_ids": entry.AgencyIDs,
 			},
 		})
-		return nil
+		return prefetchedMetrics, receivedAt, nil
 	}
 
 	ObaMetricsLastSuccessfulFetch.WithLabelValues(agencyID, agencyName, serverName, serverURL).
@@ -277,13 +284,13 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 	// unknown. Info and cluster series already recorded age out on their 24h TTL.
 	if staticWithheld {
 		ObaUnmatchedStopUnresolved.DeleteLabelValues(agencyID, agencyName, serverName, serverURL)
-		return nil
+		return prefetchedMetrics, receivedAt, nil
 	}
 
 	unmatchedStopIDs := entry.StopIDsUnmatched[agencyID]
 	if len(unmatchedStopIDs) == 0 {
 		ObaUnmatchedStopUnresolved.WithLabelValues(agencyID, agencyName, serverName, serverURL).Set(0)
-		return nil
+		return prefetchedMetrics, receivedAt, nil
 	}
 
 	uniqueUnmatchedStopIDs := make([]string, 0, len(unmatchedStopIDs))
@@ -302,7 +309,7 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 			Tags:         map[string]string{"agency_id": agencyID, "server_name": serverName},
 			ExtraContext: map[string]interface{}{"reason": "failed to match stop IDs to GTFS"},
 		})
-		return nil
+		return prefetchedMetrics, receivedAt, nil
 	}
 
 	resolved := 0
@@ -335,7 +342,7 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 			"agency_id", agencyID, "server_name", serverName, "requested", len(uniqueUnmatchedStopIDs), "resolved", resolved)
 	}
 	reportUnmatchedStopClusters(serverKey, agencyID, agencyName, serverName, serverURL, stopInfoMap, unmatchedStopTracker)
-	return nil
+	return prefetchedMetrics, receivedAt, nil
 }
 
 func validRealtimeAge(seconds int) bool {

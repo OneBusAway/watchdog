@@ -343,7 +343,7 @@ func (app *Application) collectForServerScope(ctx, campaignCtx context.Context, 
 	app.ConfigService.BackoffStore.ResetBackoff(server.ServerKey())
 
 	// Probe /metrics.json for OBA's loaded static agency set.
-	reportedAgencies, prefetchedMetrics, err := app.probeReportedAgencies(ctx, server)
+	reportedAgencies, prefetchedMetrics, prefetchedAt, err := app.probeReportedAgencies(ctx, server)
 	if err != nil {
 		if ctx.Err() != nil {
 			// Canceled by the cycle deadline or shutdown: incomplete
@@ -469,6 +469,10 @@ func (app *Application) collectForServerScope(ctx, campaignCtx context.Context, 
 	}
 	agencySem := make(chan struct{}, agencyLimit)
 	var agencyWg sync.WaitGroup
+	// checkedAgencies collects the agencies whose metrics check ran on the
+	// shared response; history records the response once, for all of them.
+	var checkedMu sync.Mutex
+	var checkedAgencies []models.ObaServer
 	agencyStart := app.agencyOffsetFor(server, len(reportedAgencyEntries))
 agencyLaunch:
 	for i := range reportedAgencyEntries {
@@ -488,10 +492,15 @@ agencyLaunch:
 		go func(s models.ObaServer) {
 			defer agencyWg.Done()
 			defer func() { <-agencySem }()
-			app.collectAgencyChecks(ctx, s, prefetchedMetrics, withheldByAgency[s.AgencyID])
+			if response, _ := app.collectAgencyChecks(ctx, s, prefetchedMetrics, prefetchedAt, withheldByAgency[s.AgencyID]); response != nil {
+				checkedMu.Lock()
+				checkedAgencies = append(checkedAgencies, s)
+				checkedMu.Unlock()
+			}
 		}(agencyServer)
 	}
 	agencyWg.Wait()
+	app.recordOBAMetricsHistory(ctx, server, checkedAgencies, prefetchedMetrics, prefetchedAt)
 
 	// One GTFS-RT vehicle pass for the whole server. Running it inside the
 	// loop above would re-walk the same merged feed once per agency, which
@@ -531,7 +540,9 @@ func (app *Application) CollectMetricsForServer(ctx context.Context, server mode
 		return
 	}
 	// nil: agency-mode fetches its own response.
-	app.collectAgencyChecks(ctx, server, nil, withheld)
+	if response, receivedAt := app.collectAgencyChecks(ctx, server, nil, time.Time{}, withheld); response != nil {
+		app.recordOBAMetricsHistory(ctx, server, []models.ObaServer{server}, response, receivedAt)
+	}
 
 	if err := app.GtfsService.FetchAndStoreGTFSRTFeed(ctx, server); err != nil {
 		if ctx.Err() != nil {
@@ -653,7 +664,11 @@ func (app *Application) agencyEntryAvailable(ctx context.Context, server models.
 // once per OBA-reported agency; agency-mode calls it once for the configured
 // entry. The GTFS-RT vehicle pass is deliberately NOT part of it — that pass
 // runs once per server, in the caller.
-func (app *Application) collectAgencyChecks(ctx context.Context, server models.ObaServer, prefetchedMetrics *metrics.OBAMetrics, withheld bool) {
+//
+// It returns the metrics.json response the OBA API check used and the time
+// Watchdog received it, or nil when that check failed, so the caller can
+// record the response in history.
+func (app *Application) collectAgencyChecks(ctx context.Context, server models.ObaServer, prefetchedMetrics *metrics.OBAMetrics, prefetchedAt time.Time, withheld bool) (*metrics.OBAMetrics, time.Time) {
 	_, _, err := app.MetricsService.CheckBundleExpiration(time.Now().UTC(), server)
 	if err != nil {
 		app.Logger.Error("Failed to check GTFS bundle expiration", "error", err)
@@ -667,7 +682,7 @@ func (app *Application) collectAgencyChecks(ctx context.Context, server models.O
 		})
 	}
 
-	err = app.MetricsService.FetchObaAPIMetrics(ctx, server.AgencyID, server.AgencyName, server.ServerName, server.ObaBaseURL, server.ObaApiKey, prefetchedMetrics, withheld)
+	response, receivedAt, err := app.MetricsService.FetchObaAPIMetrics(ctx, server.AgencyID, server.AgencyName, server.ServerName, server.ObaBaseURL, server.ObaApiKey, prefetchedMetrics, prefetchedAt, withheld)
 	if err != nil {
 		if ctx.Err() != nil {
 			// Canceled by the cycle deadline or shutdown: incomplete
@@ -708,6 +723,7 @@ func (app *Application) collectAgencyChecks(ctx context.Context, server models.O
 			})
 		}
 	}
+	return response, receivedAt
 }
 
 // collectVehicleMetrics runs the three metric functions that read from the
@@ -787,11 +803,11 @@ func boolToFloat(b bool) float64 {
 // than refetching the same body once per agency. Returns an empty map (not an
 // error) if the response is missing or malformed — the caller treats empty as
 // "no agencies reported this tick" so static-only metrics keep emitting.
-func (app *Application) probeReportedAgencies(ctx context.Context, server models.ObaServer) (map[string]bool, *metrics.OBAMetrics, error) {
+func (app *Application) probeReportedAgencies(ctx context.Context, server models.ObaServer) (map[string]bool, *metrics.OBAMetrics, time.Time, error) {
 	endpoint := fmt.Sprintf("%s/api/where/metrics.json?key=%s", server.ObaBaseURL, url.QueryEscape(server.ObaApiKey))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("build /metrics.json request: %w", err)
+		return nil, nil, time.Time{}, fmt.Errorf("build /metrics.json request: %w", err)
 	}
 
 	client := app.MetricsService.Client
@@ -800,23 +816,24 @@ func (app *Application) probeReportedAgencies(ctx context.Context, server models
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, nil, fmt.Errorf("fetch /metrics.json: %w", err)
+		return nil, nil, time.Time{}, fmt.Errorf("fetch /metrics.json: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, nil, fmt.Errorf("/metrics.json returned %d", resp.StatusCode)
+		return nil, nil, time.Time{}, fmt.Errorf("/metrics.json returned %d", resp.StatusCode)
 	}
 	// Reuse the metrics package's response type so the two decoders of this
 	// endpoint can never drift apart. Only entry.AgencyIDs is read here; the
 	// rest of the body is returned for fetchObaAPIMetrics to read per agency.
 	var decoded metrics.OBAMetrics
 	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
-		return nil, nil, fmt.Errorf("decode /metrics.json: %w", err)
+		return nil, nil, time.Time{}, fmt.Errorf("decode /metrics.json: %w", err)
 	}
+	receivedAt := time.Now().UTC()
 
 	out := make(map[string]bool, len(decoded.Data.Entry.AgencyIDs))
 	for _, id := range decoded.Data.Entry.AgencyIDs {
 		out[id] = true
 	}
-	return out, &decoded, nil
+	return out, &decoded, receivedAt, nil
 }

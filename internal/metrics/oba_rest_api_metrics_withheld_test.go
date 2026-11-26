@@ -35,8 +35,8 @@ func TestFetchObaAPIMetricsWithheldSkipsStopLookup(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	fetch := func(withheld bool) {
 		t.Helper()
-		if err := fetchObaAPIMetrics(context.Background(), agency, name, serverName, server.URL, "key",
-			&http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil, withheld); err != nil {
+		if _, _, err := fetchObaAPIMetrics(context.Background(), agency, name, serverName, server.URL, "key",
+			&http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil, time.Time{}, withheld); err != nil {
 			t.Fatalf("fetch: %v", err)
 		}
 	}

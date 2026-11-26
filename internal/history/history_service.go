@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"watchdog.onebusaway.org/internal/db/dbgen"
+	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/models"
 )
 
@@ -31,6 +32,12 @@ type HistoryService struct {
 	version  string
 	resolver *ServerNameResolver
 	static   *currentStatic
+	// stops holds each server's open unmatched-stop episodes, so a poll
+	// that opens or closes nothing does not touch the database.
+	stops *openStopEpisodes
+	// staticStore is Watchdog's static GTFS, read for stop metadata. It is
+	// nil until SetStaticStore is called; stops then resolve as not found.
+	staticStore *gtfs.StaticStore
 }
 
 // NewHistoryService builds the service from the investigation pool (which may
@@ -44,7 +51,14 @@ func NewHistoryService(pool *pgxpool.Pool, logger *slog.Logger, version string, 
 		version:  version,
 		resolver: NewServerNameResolver(servers),
 		static:   newCurrentStatic(),
+		stops:    newOpenStopEpisodes(),
 	}
+}
+
+// SetStaticStore sets the static GTFS store that stop metadata is read from.
+// app.New calls it once, before collection starts.
+func (h *HistoryService) SetStaticStore(store *gtfs.StaticStore) {
+	h.staticStore = store
 }
 
 // SetServers updates the configured servers for canonical name resolution.

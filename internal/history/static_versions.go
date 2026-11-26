@@ -26,9 +26,9 @@ const staticVersionStep = "static_version"
 // vehicle evidence point at these IDs.
 type currentStatic struct {
 	mu sync.RWMutex
-	// versions maps a server key (models.ObaServer.ServerKey) to the ID of
-	// its current gtfs_static_version row.
-	versions map[string]int64
+	// versions maps a server key (models.ObaServer.ServerKey) to its current
+	// gtfs_static_version row and the snapshots it was recorded from.
+	versions map[string]staticVersion
 	// boxes maps a bounding box key (the geo.BoundingBoxStore key) to the
 	// ID of its current bounding_box_version row.
 	boxes map[string]int64
@@ -42,18 +42,25 @@ type currentStatic struct {
 
 func newCurrentStatic() *currentStatic {
 	return &currentStatic{
-		versions:    make(map[string]int64),
+		versions:    make(map[string]staticVersion),
 		boxes:       make(map[string]int64),
 		boxKeys:     make(map[string][]string),
 		publishedAt: make(map[string]time.Time),
 	}
 }
 
-func (c *currentStatic) version(serverKey string) (int64, bool) {
+// staticVersion is a recorded version and the snapshots it was recorded from,
+// keyed like gtfs.StaticStore.
+type staticVersion struct {
+	id        int64
+	snapshots map[string]*models.StaticData
+}
+
+func (c *currentStatic) currentVersion(serverKey string) (staticVersion, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	id, ok := c.versions[serverKey]
-	return id, ok
+	version, ok := c.versions[serverKey]
+	return version, ok
 }
 
 func (c *currentStatic) box(boxKey string) (int64, bool) {
@@ -66,14 +73,14 @@ func (c *currentStatic) box(boxKey string) (int64, bool) {
 // set makes versionID and boxes current for serverKey, dropping the boxes
 // its previous version set. It reports false and changes nothing when a newer
 // publication was already applied.
-func (c *currentStatic) set(serverKey string, publishedAt time.Time, versionID int64, boxes map[string]int64) bool {
+func (c *currentStatic) set(serverKey string, publishedAt time.Time, version staticVersion, boxes map[string]int64) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.applyLocked(serverKey, publishedAt) {
 		return false
 	}
 	c.dropLocked(serverKey)
-	c.versions[serverKey] = versionID
+	c.versions[serverKey] = version
 	keys := make([]string, 0, len(boxes))
 	for key, id := range boxes {
 		c.boxes[key] = id
@@ -125,7 +132,8 @@ func (h *HistoryService) CurrentStaticVersion(serverKey string) (int64, bool) {
 	if h == nil || h.static == nil {
 		return 0, false
 	}
-	return h.static.version(serverKey)
+	version, ok := h.static.currentVersion(serverKey)
+	return version.id, ok
 }
 
 // CurrentBoundingBox returns the ID of the current bounding box for a bounding
@@ -138,10 +146,14 @@ func (h *HistoryService) CurrentBoundingBox(boxKey string) (int64, bool) {
 	return h.static.box(boxKey)
 }
 
-// onStaticVersion is called after a new static version is recorded and
-// committed. It does nothing yet; the stop metadata (B3) and unmatched trip
-// (#157) recording hook in here.
-func (h *HistoryService) onStaticVersion(_ context.Context, _ models.ObaServer, _ int64) {}
+// onStaticVersion is called after a publication is recorded and committed and
+// its version made current, whether the version is new or reused. It writes
+// stop metadata for the server's open unmatched-stop episodes whose static
+// facts changed (trigger 2). Unmatched trip recording
+// (#157) hooks in here too.
+func (h *HistoryService) onStaticVersion(ctx context.Context, server models.ObaServer, versionID int64) {
+	h.recordStopMetadataForVersion(ctx, server, versionID)
+}
 
 // recordStaticVersion records one publication in a single transaction and,
 // once it commits, makes the version and its boxes current.
@@ -155,6 +167,8 @@ func (h *HistoryService) recordStaticVersion(ctx context.Context, publication gt
 	defer cancel()
 
 	serverKey := publication.Server.ServerKey()
+	// Read before the write: this is the snapshot the publication installed.
+	snapshots := h.publishedSnapshots(publication)
 	var recorded staticVersionRecord
 	committed := h.write(ctx, staticVersionStep, publicationTags(publication.Server), func(q *dbgen.Queries) error {
 		var err error
@@ -168,9 +182,30 @@ func (h *HistoryService) recordStaticVersion(ctx context.Context, publication gt
 		h.static.forget(serverKey, publication.PublishedAt)
 		return
 	}
-	if h.static.set(serverKey, publication.PublishedAt, recorded.versionID, recorded.boxes) && recorded.created {
-		h.onStaticVersion(ctx, publication.Server, recorded.versionID)
+	version := staticVersion{id: recorded.versionID, snapshots: snapshots}
+	if h.static.set(serverKey, publication.PublishedAt, version, recorded.boxes) {
+		// Also for a reused version: an episode opened before it was current
+		// has no metadata yet. Unchanged facts write nothing. The trigger
+		// bounds itself, so it does not share the timeout above.
+		h.onStaticVersion(context.WithoutCancel(ctx), publication.Server, recorded.versionID)
 	}
+}
+
+// publishedSnapshots returns the snapshots a publication installed, keyed
+// like gtfs.StaticStore.
+func (h *HistoryService) publishedSnapshots(publication gtfs.StaticVersionPublication) map[string]*models.StaticData {
+	server := publication.Server
+	keys := []string{server.ServerKey()}
+	for _, agency := range publication.Agencies {
+		keys = append(keys, models.ServerKey(server.ObaBaseURL, agency.AgencyID))
+	}
+	snapshots := make(map[string]*models.StaticData, len(keys))
+	for _, key := range keys {
+		if data := staticSnapshot(h.staticStore, key); data != nil {
+			snapshots[key] = data
+		}
+	}
+	return snapshots
 }
 
 // publicationTags tags a publication's write failure with the agency when

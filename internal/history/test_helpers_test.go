@@ -10,6 +10,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"watchdog.onebusaway.org/internal/db"
@@ -33,6 +34,13 @@ func bufferLogger() (*slog.Logger, *bytes.Buffer) {
 // newMigratedPool returns a pool on a fresh schema with the investigation
 // migrations applied. The schema is dropped when the test ends.
 func newMigratedPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	return newMigratedPoolWithTracer(t, nil)
+}
+
+// newMigratedPoolWithTracer is newMigratedPool with a query tracer on every
+// connection, so a test can count the statements a call runs.
+func newMigratedPoolWithTracer(t *testing.T, tracer pgx.QueryTracer) *pgxpool.Pool {
 	t.Helper()
 
 	databaseURL := os.Getenv(testDatabaseURLEnv)
@@ -62,6 +70,9 @@ func newMigratedPool(t *testing.T) *pgxpool.Pool {
 		t.Fatalf("parse %s: %v", testDatabaseURLEnv, err)
 	}
 	config.ConnConfig.RuntimeParams["search_path"] = schema
+	if tracer != nil {
+		config.ConnConfig.Tracer = tracer
+	}
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		t.Fatalf("connect to test schema: %v", err)
