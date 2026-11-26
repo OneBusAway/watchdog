@@ -8,6 +8,8 @@ package dbgen
 import (
 	"context"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const getVehicleAnomalyEpisode = `-- name: GetVehicleAnomalyEpisode :one
@@ -53,6 +55,132 @@ func (q *Queries) GetVehicleAnomalyEpisode(ctx context.Context, vehicleAnomalyEp
 		&i.OpeningEvidenceID,
 	)
 	return i, err
+}
+
+const listVehicleAnomalyEpisodeEvidence = `-- name: ListVehicleAnomalyEpisodeEvidence :many
+SELECT l.vehicle_anomaly_episode_id,
+       l.evidence_role,
+       e.vehicle_position_evidence_id,
+       e.vehicle_position_response_id,
+       r.observed_at,
+       r.incrementality,
+       e.vehicle_entity_id,
+       e.feed_entity_id,
+       e.agency_id,
+       e.attribution_reason,
+       e.vehicle_source_time,
+       e.latitude,
+       e.longitude,
+       e.position_valid,
+       e.position_validation_reason,
+       e.reported_speed_mps,
+       e.computed_speed_mps,
+       e.speed_discrepancy_ratio,
+       e.current_status,
+       e.trip_id,
+       e.route_id,
+       e.trip_start_date,
+       e.trip_start_time_seconds,
+       e.schedule_relationship,
+       e.expected_schedule_state,
+       e.expected_schedule_reason,
+       e.expected_window_start,
+       e.expected_window_end,
+       e.gtfs_static_version_id,
+       e.bounding_box_version_id
+FROM vehicle_anomaly_episode_evidence AS l
+JOIN vehicle_position_evidence AS e ON e.vehicle_position_evidence_id = l.vehicle_position_evidence_id
+JOIN vehicle_position_response AS r ON r.vehicle_position_response_id = e.vehicle_position_response_id
+WHERE l.vehicle_anomaly_episode_id = ANY($1::bigint[])
+ORDER BY l.vehicle_anomaly_episode_id, r.observed_at, e.vehicle_position_evidence_id
+`
+
+type ListVehicleAnomalyEpisodeEvidenceRow struct {
+	VehicleAnomalyEpisodeID   int64
+	EvidenceRole              string
+	VehiclePositionEvidenceID int64
+	VehiclePositionResponseID int64
+	ObservedAt                time.Time
+	Incrementality            string
+	VehicleEntityID           *int64
+	FeedEntityID              *string
+	AgencyID                  *int64
+	AttributionReason         *string
+	VehicleSourceTime         *time.Time
+	Latitude                  *float64
+	Longitude                 *float64
+	PositionValid             bool
+	PositionValidationReason  *string
+	ReportedSpeedMps          *float64
+	ComputedSpeedMps          *float64
+	SpeedDiscrepancyRatio     *float64
+	CurrentStatus             *int16
+	TripID                    *string
+	RouteID                   *string
+	TripStartDate             pgtype.Date
+	TripStartTimeSeconds      *int32
+	ScheduleRelationship      *string
+	ExpectedScheduleState     *string
+	ExpectedScheduleReason    *string
+	ExpectedWindowStart       *time.Time
+	ExpectedWindowEnd         *time.Time
+	GtfsStaticVersionID       *int64
+	BoundingBoxVersionID      *int64
+}
+
+// The evidence rows of the given episodes, each with its role, in observed
+// order (E26). One query serves the endpoint (one episode) and the include
+// loader (many episodes). observed_at and incrementality come from each row's
+// response; the other columns are the E27 fields.
+func (q *Queries) ListVehicleAnomalyEpisodeEvidence(ctx context.Context, vehicleAnomalyEpisodeIds []int64) ([]ListVehicleAnomalyEpisodeEvidenceRow, error) {
+	rows, err := q.db.Query(ctx, listVehicleAnomalyEpisodeEvidence, vehicleAnomalyEpisodeIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListVehicleAnomalyEpisodeEvidenceRow
+	for rows.Next() {
+		var i ListVehicleAnomalyEpisodeEvidenceRow
+		if err := rows.Scan(
+			&i.VehicleAnomalyEpisodeID,
+			&i.EvidenceRole,
+			&i.VehiclePositionEvidenceID,
+			&i.VehiclePositionResponseID,
+			&i.ObservedAt,
+			&i.Incrementality,
+			&i.VehicleEntityID,
+			&i.FeedEntityID,
+			&i.AgencyID,
+			&i.AttributionReason,
+			&i.VehicleSourceTime,
+			&i.Latitude,
+			&i.Longitude,
+			&i.PositionValid,
+			&i.PositionValidationReason,
+			&i.ReportedSpeedMps,
+			&i.ComputedSpeedMps,
+			&i.SpeedDiscrepancyRatio,
+			&i.CurrentStatus,
+			&i.TripID,
+			&i.RouteID,
+			&i.TripStartDate,
+			&i.TripStartTimeSeconds,
+			&i.ScheduleRelationship,
+			&i.ExpectedScheduleState,
+			&i.ExpectedScheduleReason,
+			&i.ExpectedWindowStart,
+			&i.ExpectedWindowEnd,
+			&i.GtfsStaticVersionID,
+			&i.BoundingBoxVersionID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listVehicleAnomalyEpisodes = `-- name: ListVehicleAnomalyEpisodes :many
