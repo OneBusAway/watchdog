@@ -1,7 +1,10 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -44,4 +47,37 @@ func TestReportInitialRemoteConfigNoValidServersSanitizesURL(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestStartupValidationRejectsNonPositiveFetchInterval(t *testing.T) {
+	for _, interval := range []string{"0", "-1"} {
+		cmd := exec.Command(os.Args[0], "-test.run=TestStartupValidationSubprocess", "--", "--fetch-interval="+interval, "--config-file=config.json")
+		cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
+		output, err := cmd.CombinedOutput()
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+			t.Errorf("fetch-interval=%s: expected exit code 1, got error %v, output:\n%s", interval, err, string(output))
+		}
+		if !strings.Contains(string(output), "--fetch-interval must be greater than zero") {
+			t.Errorf("fetch-interval=%s: output missing error message:\n%s", interval, string(output))
+		}
+		if strings.Contains(string(output), "panic:") {
+			t.Errorf("fetch-interval=%s: output contains panic:\n%s", interval, string(output))
+		}
+	}
+}
+
+func TestStartupValidationSubprocess(t *testing.T) {
+	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
+		return
+	}
+	args := os.Args
+	for i, arg := range args {
+		if arg == "--" {
+			args = append([]string{"watchdog"}, args[i+1:]...)
+			break
+		}
+	}
+	os.Args = args
+	main()
 }

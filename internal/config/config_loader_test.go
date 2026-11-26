@@ -305,6 +305,34 @@ func TestValidateConfigFlags(t *testing.T) {
 	}
 }
 
+func TestValidateFetchInterval(t *testing.T) {
+	tests := []struct {
+		name          string
+		fetchInterval int
+		expectError   bool
+	}{
+		{"positive interval", 30, false},
+		{"minimum positive interval", 1, false},
+		{"zero interval", 0, true},
+		{"negative interval", -5, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateFetchInterval(tt.fetchInterval)
+			if (err != nil) != tt.expectError {
+				t.Errorf("ValidateFetchInterval(%d) error = %v, expectError = %v", tt.fetchInterval, err, tt.expectError)
+			}
+			if tt.expectError && err != nil {
+				expected := "--fetch-interval must be greater than zero"
+				if !strings.Contains(err.Error(), expected) {
+					t.Errorf("ValidateFetchInterval(%d) error = %q, expected substring %q", tt.fetchInterval, err.Error(), expected)
+				}
+			}
+		})
+	}
+}
+
 func TestRefreshConfig(t *testing.T) {
 	obaServer := models.NewObaServer(
 		"Test Server",

@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
 	// Embedded zones back time.LoadLocation when the host's tz database lacks
 	// an agency_timezone name, as newer Debian releases do for links like
 	// US/Pacific unless tzdata-legacy is installed.
@@ -83,6 +84,11 @@ func main() {
 	err := config.ValidateConfigFlags(configFile, configURL)
 	if err != nil {
 		logger.Error("Error validating config flags", "err", err)
+		flag.Usage()
+		os.Exit(1)
+	}
+	if err := config.ValidateFetchInterval(cfg.FetchInterval); err != nil {
+		logger.Error("Error validating config flags", "err", err, "fetch_interval", cfg.FetchInterval)
 		flag.Usage()
 		os.Exit(1)
 	}

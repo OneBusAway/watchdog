@@ -32,6 +32,14 @@ func ValidateConfigFlags(configFile, configURL *string) error {
 	return nil
 }
 
+// ValidateFetchInterval ensures that --fetch-interval is a positive duration in seconds.
+func ValidateFetchInterval(fetchInterval int) error {
+	if fetchInterval <= 0 {
+		return fmt.Errorf("--fetch-interval must be greater than zero")
+	}
+	return nil
+}
+
 // refreshConfig periodically fetches configuration from a remote URL and updates
 // the application's list of OBA servers. It blocks until ctx is canceled --
 // callers run it with `go` (see cmd/watchdog/main.go); it spawns nothing itself.
