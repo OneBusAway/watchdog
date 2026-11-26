@@ -293,14 +293,22 @@ func (h *HistoryService) loadOpenEpisodes(ctx context.Context, server models.Oba
 		return false
 	}
 	// Replace memory, not merge into it: after a failed write it may hold an
-	// episode the database has already closed.
+	// episode the database has already closed. But a quiet poll may have
+	// moved an episode's lastReportedAt past the value last saved, so keep
+	// the later time when memory still holds the same episode.
+	previous := entry.open
 	entry.open = make(map[unmatchedStopKey]*openStopEpisode, len(rows))
 	for _, row := range rows {
-		entry.open[unmatchedStopKey{agencyID: row.ExternalAgencyID, stopID: row.ObaStopID}] = &openStopEpisode{
+		key := unmatchedStopKey{agencyID: row.ExternalAgencyID, stopID: row.ObaStopID}
+		lastReportedAt := row.LastReportedAt
+		if old, ok := previous[key]; ok && old.episodeID == row.UnmatchedStopEpisodeID && old.lastReportedAt.After(lastReportedAt) {
+			lastReportedAt = old.lastReportedAt
+		}
+		entry.open[key] = &openStopEpisode{
 			episodeID:      row.UnmatchedStopEpisodeID,
 			reportedStopID: row.ReportedStopID,
 			agencyID:       row.AgencyID,
-			lastReportedAt: row.LastReportedAt,
+			lastReportedAt: lastReportedAt,
 		}
 	}
 	entry.loaded = true

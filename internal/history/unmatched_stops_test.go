@@ -670,3 +670,73 @@ func TestRecordOBAMetrics_ReloadsAfterCloseReportedAsFailed(t *testing.T) {
 		t.Error("memory still holds the closed episode")
 	}
 }
+
+// TestRecordOBAMetrics_ReloadKeepsNewerLastReported covers a failed write
+// after a quiet poll moved lastReportedAt past the saved value: the reload
+// must keep the newer in-memory time, and the close must write it.
+func TestRecordOBAMetrics_ReloadKeepsNewerLastReported(t *testing.T) {
+	h, pool, _ := newCountedHistory(t)
+	agencies := stopAgencies("a")
+	h.RecordOBAMetrics(ctx, stopServer, agencies, stopsResponse([]string{"a"}, map[string][]string{"a": {"1"}}), stopT0)
+	// A quiet poll: memory moves, the database keeps stopT0.
+	h.RecordOBAMetrics(ctx, stopServer, agencies, stopsResponse([]string{"a"}, map[string][]string{"a": {"1"}}), stopT0.Add(time.Minute))
+
+	// Stop "2" makes the poll write; the write fails after stop "1" was
+	// marked reported in memory.
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	lastSeen := stopT0.Add(2 * time.Minute)
+	h.RecordOBAMetrics(canceled, stopServer, agencies, stopsResponse([]string{"a"}, map[string][]string{"a": {"1", "2"}}), lastSeen)
+	if got := onlyEpisode(t, pool).lastReportedAt; !got.Equal(stopT0) {
+		t.Fatalf("stored last_reported_at = %v before the reload, want %v", got, stopT0)
+	}
+
+	// The next poll reloads, then closes the episode.
+	h.RecordOBAMetrics(ctx, stopServer, agencies, stopsResponse([]string{"a"}, map[string][]string{}), stopT0.Add(3*time.Minute))
+
+	episode := onlyEpisode(t, pool)
+	if episode.closeReason == nil {
+		t.Fatal("episode is open, want closed")
+	}
+	if !episode.lastReportedAt.Equal(lastSeen) {
+		t.Errorf("closed episode last_reported_at = %v, want %v", episode.lastReportedAt, lastSeen)
+	}
+}
+
+// TestRecordOBAMetrics_ReloadIgnoresOtherEpisodeTime: when memory holds a
+// closed episode under the same key as a different open episode in the
+// database, the reload takes the open episode's time, not the closed one's.
+func TestRecordOBAMetrics_ReloadIgnoresOtherEpisodeTime(t *testing.T) {
+	h, _, _ := newCountedHistory(t)
+	agencies := stopAgencies("a")
+	reported := stopsResponse([]string{"a"}, map[string][]string{"a": {"1"}})
+	quiet := stopsResponse([]string{"a"}, map[string][]string{})
+	h.RecordOBAMetrics(ctx, stopServer, agencies, reported, stopT0)
+	h.RecordOBAMetrics(ctx, stopServer, agencies, quiet, stopT0.Add(time.Minute))
+	reopenedAt := stopT0.Add(2 * time.Minute)
+	h.RecordOBAMetrics(ctx, stopServer, agencies, reported, reopenedAt)
+	reopened := memoryEpisode(t, h, "a", "1")
+
+	// Memory holds a stale copy of a different episode with a later time.
+	entry := h.stops.forServer(utils.SanitizeServerURL(stopServer.ObaBaseURL), stopServer)
+	entry.mu.Lock()
+	entry.open[unmatchedStopKey{agencyID: "a", stopID: "1"}] = &openStopEpisode{
+		episodeID:      reopened.episodeID - 1,
+		reportedStopID: reopened.reportedStopID,
+		agencyID:       reopened.agencyID,
+		lastReportedAt: stopT0.Add(time.Hour),
+	}
+	entry.loaded = false
+	entry.mu.Unlock()
+
+	// A poll that does not report the agency reloads without changing anything.
+	h.RecordOBAMetrics(ctx, stopServer, agencies, stopsResponse(nil, nil), stopT0.Add(3*time.Minute))
+
+	got := memoryEpisode(t, h, "a", "1")
+	if got == nil || got.episodeID != reopened.episodeID {
+		t.Fatalf("memory episode = %+v, want episode %d", got, reopened.episodeID)
+	}
+	if !got.lastReportedAt.Equal(reopenedAt) {
+		t.Errorf("lastReportedAt = %v, want the database value %v", got.lastReportedAt, reopenedAt)
+	}
+}
