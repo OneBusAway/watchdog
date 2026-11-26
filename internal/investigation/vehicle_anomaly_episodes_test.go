@@ -2,13 +2,19 @@ package investigation
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/julienschmidt/httprouter"
 	"watchdog.onebusaway.org/internal/db/dbgen"
@@ -867,4 +873,441 @@ func TestListVehicleAnomalyEpisodes_Filter_agency_none(t *testing.T) {
 
 	wantVehicleEpisodeIDs(t, router, vehicleAnomalyEpisodesPath+"?agency_id=none", unattributed)
 	wantVehicleEpisodeIDs(t, router, fmt.Sprintf("%s?agency_id=%d", vehicleAnomalyEpisodesPath, agencyID), attributed)
+}
+
+// episodeEvidenceRoute is the E26 route template.
+const episodeEvidenceRoute = "/v1/vehicle-anomaly-episodes/:episode_id/evidence"
+
+func episodeEvidencePath(id int64) string {
+	return fmt.Sprintf("/v1/vehicle-anomaly-episodes/%d/evidence", id)
+}
+
+// newEpisodeEvidenceRouter mounts E26 for GET and HEAD. Each kind in kinds gets a
+// fake loader that counts its calls; the others keep the real loaders.
+func newEpisodeEvidenceRouter(t *testing.T, pool *pgxpool.Pool, kinds ...resourceKind) (http.Handler, fakeLoaders) {
+	t.Helper()
+	s, _ := newTestService(t)
+	s.Pool = pool
+	calls := fakeLoaders{}
+	for _, kind := range kinds {
+		s.loaders[kind] = func(_ context.Context, _ *dbgen.Queries, ids []int64) (map[int64]any, error) {
+			calls[kind]++
+			out := make(map[int64]any, len(ids))
+			for _, id := range ids {
+				out[id] = map[string]any{"kind": string(kind), "id": id}
+			}
+			return out, nil
+		}
+	}
+	router := httprouter.New()
+	router.GET(episodeEvidenceRoute, s.listVehicleAnomalyEpisodeEvidence)
+	router.HEAD(episodeEvidenceRoute, s.listVehicleAnomalyEpisodeEvidence)
+	return router, calls
+}
+
+// newEpisodeEvidenceVehicle returns a vehicle on the evidence fixture's endpoint,
+// so evidence linked to its episodes uses the same server and endpoint.
+func newEpisodeEvidenceVehicle(t *testing.T, pool *pgxpool.Pool) (vehicleContext, evidenceFixture) {
+	t.Helper()
+	f := newEvidenceFixture(t, pool)
+	return vehicleContext{pool: pool, serverID: f.serverID, endpointID: f.endpointID, vehicleEntity: f.vehicleEntityID}, f
+}
+
+// addEpisodeEvidence records one evidence row on its own response, observed at
+// observed, and links it to episodeID with role. boxID may be nil.
+func addEpisodeEvidence(t *testing.T, vc vehicleContext, episodeID int64, role string, observed time.Time, boxID *int64) int64 {
+	t.Helper()
+	respID := dbtest.ID(t, vc.pool,
+		`INSERT INTO vehicle_position_response (endpoint_id, observed_at, incrementality)
+		 VALUES ($1, $2, 'DIFFERENTIAL') RETURNING vehicle_position_response_id`,
+		vc.endpointID, observed)
+	evidenceID := dbtest.ID(t, vc.pool,
+		`INSERT INTO vehicle_position_evidence
+		 (vehicle_position_response_id, vehicle_entity_id, position_valid, bounding_box_version_id)
+		 VALUES ($1, $2, true, $3) RETURNING vehicle_position_evidence_id`,
+		respID, vc.vehicleEntity, boxID)
+	if err := dbtest.Exec(vc.pool,
+		`INSERT INTO vehicle_anomaly_episode_evidence (vehicle_anomaly_episode_id, vehicle_position_evidence_id, evidence_role)
+		 VALUES ($1, $2, $3)`,
+		episodeID, evidenceID, role); err != nil {
+		t.Fatalf("link episode evidence: %v", err)
+	}
+	return evidenceID
+}
+
+// episodeEvidenceItems returns each item of an E26 body as "role:id", in body order.
+func episodeEvidenceItems(t *testing.T, rec *httptest.ResponseRecorder) []string {
+	t.Helper()
+	body := decodeEpisodeBody(t, rec)
+	items, ok := body["items"].([]any)
+	if !ok {
+		t.Fatalf("items = %v, want an array", body["items"])
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		m := item.(map[string]any)
+		out = append(out, fmt.Sprintf("%s:%d", m["evidence_role"], int64(m["vehicle_position_evidence_id"].(float64))))
+	}
+	return out
+}
+
+func TestListVehicleAnomalyEpisodeEvidence_RejectsUnknownParameter(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc, _ := newEpisodeEvidenceVehicle(t, pool)
+	ep := vc.episode(t, "stale_source_timestamp", episodesNow.Add(-time.Hour), time.Time{}, nil, nil)
+	router, _ := newEpisodeEvidenceRouter(t, pool)
+
+	wantInvalidParam(t, doGet(t, router, episodeEvidencePath(ep)+"?foo=1", nil), "foo")
+}
+
+// TestListVehicleAnomalyEpisodeEvidence_Head uses a real server: httptest's
+// recorder keeps a HEAD body, but net/http drops it on the wire.
+func TestListVehicleAnomalyEpisodeEvidence_Head(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc, f := newEpisodeEvidenceVehicle(t, pool)
+	ep := vc.episode(t, "stale_source_timestamp", episodesNow.Add(-time.Hour), time.Time{}, nil, nil)
+	addEpisodeEvidence(t, vc, ep, "opening", episodesNow.Add(-time.Hour), &f.boxID)
+	router, _ := newEpisodeEvidenceRouter(t, pool)
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+	path := episodeEvidencePath(ep)
+
+	get, err := http.Get(srv.URL + path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	get.Body.Close()
+	head, err := http.Head(srv.URL + path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer head.Body.Close()
+	if get.StatusCode != http.StatusOK || head.StatusCode != http.StatusOK {
+		t.Fatalf("GET status = %d, HEAD status = %d, want both %d", get.StatusCode, head.StatusCode, http.StatusOK)
+	}
+	for _, h := range []string{"Content-Type", "Cache-Control", "ETag"} {
+		if head.Header.Get(h) != get.Header.Get(h) {
+			t.Errorf("HEAD %s = %q, GET %s = %q", h, head.Header.Get(h), h, get.Header.Get(h))
+		}
+	}
+	body, err := io.ReadAll(head.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body) != 0 {
+		t.Errorf("HEAD body has %d bytes, want 0", len(body))
+	}
+}
+
+// TestListVehicleAnomalyEpisodeEvidence_Order inserts rows out of order. The
+// result is sorted by observed_at, then by evidence ID, so the two changes at
+// the same time come back in ID order.
+func TestListVehicleAnomalyEpisodeEvidence_Order(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc, _ := newEpisodeEvidenceVehicle(t, pool)
+	base := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	ep := vc.episode(t, "stale_source_timestamp", base, time.Time{}, nil, nil)
+
+	resolution := addEpisodeEvidence(t, vc, ep, "resolution", base.Add(2*time.Hour), nil)
+	changeA := addEpisodeEvidence(t, vc, ep, "meaningful_change", base.Add(time.Hour), nil)
+	changeB := addEpisodeEvidence(t, vc, ep, "meaningful_change", base.Add(time.Hour), nil)
+	opening := addEpisodeEvidence(t, vc, ep, "opening", base, nil)
+	router, _ := newEpisodeEvidenceRouter(t, pool)
+
+	rec := doGet(t, router, episodeEvidencePath(ep), nil)
+	wantStatus(t, rec, http.StatusOK)
+	want := []string{
+		fmt.Sprintf("opening:%d", opening),
+		fmt.Sprintf("meaningful_change:%d", changeA),
+		fmt.Sprintf("meaningful_change:%d", changeB),
+		fmt.Sprintf("resolution:%d", resolution),
+	}
+	if got := episodeEvidenceItems(t, rec); !reflect.DeepEqual(got, want) {
+		t.Errorf("items = %v, want %v", got, want)
+	}
+}
+
+// TestListVehicleAnomalyEpisodeEvidence_ReturnsRepresentation compares the whole
+// body for one opening record with every field set.
+func TestListVehicleAnomalyEpisodeEvidence_ReturnsRepresentation(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc, f := newEpisodeEvidenceVehicle(t, pool)
+	ep := vc.episode(t, "stale_source_timestamp", f.observed, time.Time{}, nil, nil)
+	evidenceID := insertFullEvidence(t, pool, f)
+	if err := dbtest.Exec(pool,
+		`INSERT INTO vehicle_anomaly_episode_evidence (vehicle_anomaly_episode_id, vehicle_position_evidence_id, evidence_role)
+		 VALUES ($1, $2, 'opening')`, ep, evidenceID); err != nil {
+		t.Fatalf("link episode evidence: %v", err)
+	}
+	router, _ := newEpisodeEvidenceRouter(t, pool)
+
+	rec := doGet(t, router, episodeEvidencePath(ep), nil)
+	wantStatus(t, rec, http.StatusOK)
+	want := fmt.Sprintf(`{
+	  "items": [{
+	    "vehicle_position_evidence_id": %[1]d,
+	    "evidence_role": "opening",
+	    "observed_at": "2026-11-01T10:00:00Z",
+	    "incrementality": "DIFFERENTIAL",
+	    "feed_entity_id": "entity-7",
+	    "agency_id": %[2]d,
+	    "attribution_reason": "ambiguous_identifier",
+	    "vehicle_source_time": "2026-11-01T09:59:30Z",
+	    "latitude": 47.6,
+	    "longitude": -122.3,
+	    "position_valid": true,
+	    "position_validation_reason": null,
+	    "reported_speed_mps": 12.5,
+	    "computed_speed_mps": 12,
+	    "speed_discrepancy_ratio": 1.04,
+	    "current_status": 2,
+	    "trip_id": "trip-9",
+	    "route_id": "route-44",
+	    "trip_start_date": "2026-11-01",
+	    "trip_start_time_seconds": 36000,
+	    "schedule_relationship": "SCHEDULED",
+	    "expected_schedule_state": "expected_active",
+	    "expected_schedule_reason": "within_scheduled_window",
+	    "expected_window_start": "2026-11-01T09:50:00Z",
+	    "expected_window_end": "2026-11-01T10:30:00Z",
+	    "links": {
+	      "self": "/v1/vehicle-position-evidence/%[1]d",
+	      "response": "/v1/vehicle-position-responses/%[3]d",
+	      "vehicle": "/v1/vehicles/%[4]d",
+	      "gtfs_static_version": "/v1/gtfs-static-versions/%[5]d",
+	      "bounding_box_version": "/v1/bounding-box-versions/%[6]d"
+	    }
+	  }],
+	  "links": {
+	    "self": "/v1/vehicle-anomaly-episodes/%[7]d/evidence",
+	    "episode": "/v1/vehicle-anomaly-episodes/%[7]d"
+	  }
+	}`, evidenceID, f.agencyID, f.responseID, f.vehicleEntityID, f.staticVersionID, f.boxID, ep)
+	assertJSONEqual(t, want, rec.Body.Bytes())
+}
+
+func TestListVehicleAnomalyEpisodeEvidence_EmptyItemsIsArray(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc, _ := newEpisodeEvidenceVehicle(t, pool)
+	ep := vc.episode(t, "stale_source_timestamp", episodesNow.Add(-time.Hour), time.Time{}, nil, nil)
+	router, _ := newEpisodeEvidenceRouter(t, pool)
+
+	rec := doGet(t, router, episodeEvidencePath(ep), nil)
+	wantStatus(t, rec, http.StatusOK)
+	// Read the raw body first: decoding it consumes the recorder's buffer.
+	raw := rec.Body.String()
+	if got := episodeEvidenceItems(t, rec); len(got) != 0 {
+		t.Errorf("items = %v, want none", got)
+	}
+	if !strings.Contains(raw, `"items":[]`) {
+		t.Errorf("body = %s, want items encoded as []", raw)
+	}
+}
+
+func TestListVehicleAnomalyEpisodeEvidence_UnknownEpisode(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	router, _ := newEpisodeEvidenceRouter(t, pool)
+
+	wantNotFound(t, doGet(t, router, episodeEvidencePath(999999), nil))
+	wantNotFound(t, doGet(t, router, "/v1/vehicle-anomaly-episodes/abc/evidence", nil))
+}
+
+func TestListVehicleAnomalyEpisodeEvidence_CachePolicy(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc, _ := newEpisodeEvidenceVehicle(t, pool)
+	base := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	closedAt := base.Add(2 * time.Hour)
+	reason := "fresh_source_timestamp"
+	closed := vc.episode(t, "stale_source_timestamp", base, closedAt, &reason, nil)
+	open := vc.episode(t, "invalid_coordinate", base, time.Time{}, nil, nil)
+	router, _ := newEpisodeEvidenceRouter(t, pool)
+
+	for _, tc := range []struct {
+		path, cacheControl, lastModified string
+	}{
+		{episodeEvidencePath(closed), "private, max-age=86400", closedAt.Format(http.TimeFormat)},
+		// Included resources can change, so an include gets the short policy even when closed.
+		{episodeEvidencePath(closed) + "?include=bounding_box_version", "private, max-age=30", ""},
+		{episodeEvidencePath(open), "private, max-age=30", ""},
+	} {
+		rec := doGet(t, router, tc.path, nil)
+		wantStatus(t, rec, http.StatusOK)
+		if got := rec.Header().Get("Cache-Control"); got != tc.cacheControl {
+			t.Errorf("%s: Cache-Control = %q, want %q", tc.path, got, tc.cacheControl)
+		}
+		if got := rec.Header().Get("Last-Modified"); got != tc.lastModified {
+			t.Errorf("%s: Last-Modified = %q, want %q", tc.path, got, tc.lastModified)
+		}
+		if rec.Header().Get("ETag") == "" {
+			t.Errorf("%s: no ETag", tc.path)
+		}
+	}
+}
+
+// TestListVehicleAnomalyEpisodeEvidence_IncludeBoundingBox adds one entry per
+// distinct box URL. Items without a box add none.
+func TestListVehicleAnomalyEpisodeEvidence_IncludeBoundingBox(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc, f := newEpisodeEvidenceVehicle(t, pool)
+	ep := vc.episode(t, "stale_source_timestamp", episodesNow.Add(-3*time.Hour), time.Time{}, nil, nil)
+	addEpisodeEvidence(t, vc, ep, "opening", episodesNow.Add(-3*time.Hour), &f.boxID)
+	addEpisodeEvidence(t, vc, ep, "meaningful_change", episodesNow.Add(-2*time.Hour), &f.boxID)
+	addEpisodeEvidence(t, vc, ep, "meaningful_change", episodesNow.Add(-time.Hour), nil)
+	router, calls := newEpisodeEvidenceRouter(t, pool, kindBoundingBoxVersion)
+
+	body := decodeEpisodeBody(t, doGet(t, router, episodeEvidencePath(ep)+"?include=bounding_box_version", nil))
+	wantURL := fmt.Sprintf("/v1/bounding-box-versions/%d", f.boxID)
+	got, ok := body["included"].(map[string]any)
+	if !ok {
+		t.Fatalf("included = %v, want one entry", body["included"])
+	}
+	if len(got) != 1 {
+		t.Errorf("included has %d entries, want 1: %v", len(got), got)
+	}
+	if _, ok := got[wantURL]; !ok {
+		t.Errorf("included has no entry for %s: %v", wantURL, got)
+	}
+	if calls[kindBoundingBoxVersion] != 1 {
+		t.Errorf("bounding_box_version loader called %d times, want 1", calls[kindBoundingBoxVersion])
+	}
+}
+
+// TestListVehicleAnomalyEpisodeEvidence_IncludeResponse uses the real E28 loader:
+// the response is included once, keyed by its URL, with its own representation.
+func TestListVehicleAnomalyEpisodeEvidence_IncludeResponse(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc, f := newEpisodeEvidenceVehicle(t, pool)
+	ep := vc.episode(t, "stale_source_timestamp", f.observed, time.Time{}, nil, nil)
+	evidenceID := insertFullEvidence(t, pool, f)
+	if err := dbtest.Exec(pool,
+		`INSERT INTO vehicle_anomaly_episode_evidence (vehicle_anomaly_episode_id, vehicle_position_evidence_id, evidence_role)
+		 VALUES ($1, $2, 'opening')`, ep, evidenceID); err != nil {
+		t.Fatalf("link episode evidence: %v", err)
+	}
+	router, _ := newEpisodeEvidenceRouter(t, pool)
+
+	body := decodeEpisodeBody(t, doGet(t, router, episodeEvidencePath(ep)+"?include=response", nil))
+	wantURL := fmt.Sprintf("/v1/vehicle-position-responses/%d", f.responseID)
+	got, ok := body["included"].(map[string]any)
+	if !ok || len(got) != 1 {
+		t.Fatalf("included = %v, want one entry", body["included"])
+	}
+	entry, ok := got[wantURL].(map[string]any)
+	if !ok {
+		t.Fatalf("included has no entry for %s: %v", wantURL, got)
+	}
+	if id, _ := entry["vehicle_position_response_id"].(float64); int64(id) != f.responseID {
+		t.Errorf("included response ID = %v, want %d", entry["vehicle_position_response_id"], f.responseID)
+	}
+}
+
+// episodeEvidenceStatementRecorder records the SQL of every query a pool runs.
+type episodeEvidenceStatementRecorder struct {
+	mu  sync.Mutex
+	sql []string
+}
+
+func (q *episodeEvidenceStatementRecorder) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.sql = append(q.sql, data.SQL)
+	return ctx
+}
+
+func (q *episodeEvidenceStatementRecorder) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {
+}
+
+// countWith returns how many recorded statements contain sub.
+func (q *episodeEvidenceStatementRecorder) countWith(sub string) int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	n := 0
+	for _, stmt := range q.sql {
+		if strings.Contains(stmt, sub) {
+			n++
+		}
+	}
+	return n
+}
+
+// TestEpisodeEvidenceLoader loads three episodes in one call, with 0, 1 and 2
+// evidence rows. Each value must equal this endpoint's body for that ID, and
+// the call runs one query.
+func TestEpisodeEvidenceLoader(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc, _ := newEpisodeEvidenceVehicle(t, pool)
+	reason := "fresh_source_timestamp"
+	var ids []int64
+	for n := range 3 {
+		opened := episodesNow.Add(-time.Duration(10-n) * time.Hour)
+		// Episodes are closed so the same vehicle can have several of them.
+		ep := vc.episode(t, "stale_source_timestamp", opened, opened.Add(30*time.Minute), &reason, nil)
+		for i := range n {
+			addEpisodeEvidence(t, vc, ep, "meaningful_change", opened.Add(time.Duration(i+1)*time.Minute), nil)
+		}
+		ids = append(ids, ep)
+	}
+	router, _ := newEpisodeEvidenceRouter(t, pool)
+
+	rec := &episodeEvidenceStatementRecorder{}
+	cfg := pool.Config().Copy()
+	cfg.ConnConfig.Tracer = rec
+	traced, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("traced pool: %v", err)
+	}
+	t.Cleanup(traced.Close)
+
+	reps, err := loadVehicleAnomalyEpisodeEvidence(context.Background(), dbgen.New(traced), ids)
+	if err != nil {
+		t.Fatalf("loader: %v", err)
+	}
+	if len(reps) != len(ids) {
+		t.Fatalf("loader returned %d values, want %d", len(reps), len(ids))
+	}
+	if n := rec.countWith("vehicle_anomaly_episode_id = ANY"); n != 1 {
+		t.Errorf("loader ran %d queries for %d IDs, want 1", n, len(ids))
+	}
+	for _, id := range ids {
+		got := doGet(t, router, episodeEvidencePath(id), nil)
+		raw, err := json.Marshal(reps[id])
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertJSONEqual(t, got.Body.String(), raw)
+	}
+}
+
+// TestListVehicleAnomalyEpisodeEvidence_NonFiniteCoordinatesAreNull stores NaN and
+// Infinity, which DOUBLE PRECISION accepts. They must encode as null, not fail the
+// response, and the validation reason must still be returned.
+func TestListVehicleAnomalyEpisodeEvidence_NonFiniteCoordinatesAreNull(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	vc, _ := newEpisodeEvidenceVehicle(t, pool)
+	ep := vc.episode(t, "invalid_coordinate", episodesNow.Add(-time.Hour), time.Time{}, nil, nil)
+	respID := dbtest.ID(t, pool,
+		`INSERT INTO vehicle_position_response (endpoint_id, observed_at, incrementality)
+		 VALUES ($1, $2, 'DIFFERENTIAL') RETURNING vehicle_position_response_id`,
+		vc.endpointID, episodesNow.Add(-time.Hour))
+	evidenceID := dbtest.ID(t, pool,
+		`INSERT INTO vehicle_position_evidence
+		 (vehicle_position_response_id, vehicle_entity_id, position_valid, position_validation_reason, latitude, longitude)
+		 VALUES ($1, $2, false, 'non_finite_coordinate', 'NaN'::float8, 'Infinity'::float8) RETURNING vehicle_position_evidence_id`,
+		respID, vc.vehicleEntity)
+	if err := dbtest.Exec(pool,
+		`INSERT INTO vehicle_anomaly_episode_evidence (vehicle_anomaly_episode_id, vehicle_position_evidence_id, evidence_role)
+		 VALUES ($1, $2, 'opening')`, ep, evidenceID); err != nil {
+		t.Fatalf("link episode evidence: %v", err)
+	}
+	router, _ := newEpisodeEvidenceRouter(t, pool)
+
+	rec := doGet(t, router, episodeEvidencePath(ep), nil)
+	wantStatus(t, rec, http.StatusOK)
+	item := decodeEpisodeBody(t, rec)["items"].([]any)[0].(map[string]any)
+	if item["latitude"] != nil || item["longitude"] != nil {
+		t.Errorf("latitude = %v, longitude = %v, want both null", item["latitude"], item["longitude"])
+	}
+	if item["position_validation_reason"] != "non_finite_coordinate" {
+		t.Errorf("position_validation_reason = %v, want non_finite_coordinate", item["position_validation_reason"])
+	}
 }

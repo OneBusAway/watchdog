@@ -47,6 +47,8 @@ func (s *InvestigationService) registerRoutes(router *httprouter.Router) {
 	s.registerLoader(kindBoundingBoxVersion, loadBoundingBoxVersions)
 	s.get(router, "/v1/vehicle-anomaly-episodes", s.listVehicleAnomalyEpisodes)
 	s.get(router, "/v1/vehicle-anomaly-episodes/:episode_id", s.getVehicleAnomalyEpisode)
+	s.get(router, "/v1/vehicle-anomaly-episodes/:episode_id/evidence", s.listVehicleAnomalyEpisodeEvidence)
+	s.registerLoader(kindVehicleAnomalyEpisodeEvidence, loadVehicleAnomalyEpisodeEvidence)
 	s.get(router, "/v1/investigation", s.getInvestigationRoot)
 	s.registerLoader(kindServer, s.loadServers)
 	s.get(router, "/v1/servers/:server_id/agencies", s.listServerAgencies)

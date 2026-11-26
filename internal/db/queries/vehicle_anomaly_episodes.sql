@@ -57,3 +57,44 @@ WHERE (sqlc.narg('server_id')::bigint IS NULL OR v.server_id = sqlc.narg('server
   AND (sqlc.narg('after_id')::bigint IS NULL OR v.vehicle_anomaly_episode_id < sqlc.narg('after_id')::bigint)
 ORDER BY v.vehicle_anomaly_episode_id DESC
 LIMIT sqlc.arg('page_limit');
+
+-- name: ListVehicleAnomalyEpisodeEvidence :many
+-- The evidence rows of the given episodes, each with its role, in observed
+-- order (E26). One query serves the endpoint (one episode) and the include
+-- loader (many episodes). observed_at and incrementality come from each row's
+-- response; the other columns are the E27 fields.
+SELECT l.vehicle_anomaly_episode_id,
+       l.evidence_role,
+       e.vehicle_position_evidence_id,
+       e.vehicle_position_response_id,
+       r.observed_at,
+       r.incrementality,
+       e.vehicle_entity_id,
+       e.feed_entity_id,
+       e.agency_id,
+       e.attribution_reason,
+       e.vehicle_source_time,
+       e.latitude,
+       e.longitude,
+       e.position_valid,
+       e.position_validation_reason,
+       e.reported_speed_mps,
+       e.computed_speed_mps,
+       e.speed_discrepancy_ratio,
+       e.current_status,
+       e.trip_id,
+       e.route_id,
+       e.trip_start_date,
+       e.trip_start_time_seconds,
+       e.schedule_relationship,
+       e.expected_schedule_state,
+       e.expected_schedule_reason,
+       e.expected_window_start,
+       e.expected_window_end,
+       e.gtfs_static_version_id,
+       e.bounding_box_version_id
+FROM vehicle_anomaly_episode_evidence AS l
+JOIN vehicle_position_evidence AS e ON e.vehicle_position_evidence_id = l.vehicle_position_evidence_id
+JOIN vehicle_position_response AS r ON r.vehicle_position_response_id = e.vehicle_position_response_id
+WHERE l.vehicle_anomaly_episode_id = ANY(sqlc.arg('vehicle_anomaly_episode_ids')::bigint[])
+ORDER BY l.vehicle_anomaly_episode_id, r.observed_at, e.vehicle_position_evidence_id;
