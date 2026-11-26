@@ -31,31 +31,51 @@ func (app *Application) recordOBAMetricsHistory(ctx context.Context, server mode
 }
 
 // flushRemovedServerHistory saves the last-reported times of open
-// unmatched-stop episodes for servers no longer configured, and drops those
-// servers from history's memory.
+// unmatched-stop episodes that no configured entry records any more, and
+// drops them from history's memory: a whole server when its base URL is gone,
+// and the removed agencies of a base URL that only agency-mode entries still
+// configure. A server-scoped entry records every agency OBA reports, so its
+// base URL keeps all of them.
 func (app *Application) flushRemovedServerHistory(servers []models.ObaServer) {
 	if app.HistoryService == nil {
 		return
 	}
 	configuredURLs := make(map[string]bool, len(servers))
+	serverScopedURLs := make(map[string]bool)
+	configuredAgencies := make(map[string]map[string]bool)
 	for _, server := range servers {
-		configuredURLs[utils.SanitizeServerURL(server.ObaBaseURL)] = true
+		baseURL := utils.SanitizeServerURL(server.ObaBaseURL)
+		configuredURLs[baseURL] = true
+		if server.IsServerScoped() {
+			serverScopedURLs[baseURL] = true
+			continue
+		}
+		if configuredAgencies[baseURL] == nil {
+			configuredAgencies[baseURL] = make(map[string]bool)
+		}
+		configuredAgencies[baseURL][server.AgencyID] = true
 	}
 	for _, baseURL := range app.HistoryService.TrackedServerURLs() {
-		if configuredURLs[baseURL] {
+		if serverScopedURLs[baseURL] {
 			continue
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), historyFlushTimeout)
-		app.HistoryService.FlushServer(ctx, baseURL)
+		if configuredURLs[baseURL] {
+			app.HistoryService.FlushAgencies(ctx, baseURL, configuredAgencies[baseURL])
+		} else {
+			app.HistoryService.FlushServer(ctx, baseURL)
+		}
 		cancel()
 	}
 }
 
 // FlushHistory waits for an in-flight collection cycle to finish, then saves
 // the last-reported times of every open unmatched-stop episode. main calls it
-// on clean shutdown, after the collection context is canceled.
+// on clean shutdown, after the collection context is canceled. With
+// investigation storage disabled there is nothing to save, so it returns
+// without waiting for the cycle.
 func (app *Application) FlushHistory() {
-	if app.HistoryService == nil {
+	if app.HistoryService == nil || app.InvestigationDB == nil {
 		return
 	}
 	app.collectMu.Lock()

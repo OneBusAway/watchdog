@@ -740,3 +740,101 @@ func TestRecordOBAMetrics_ReloadIgnoresOtherEpisodeTime(t *testing.T) {
 		t.Errorf("lastReportedAt = %v, want the database value %v", got.lastReportedAt, reopenedAt)
 	}
 }
+
+// failWriteAfterStillReported opens stop 1, reports it again so memory moves
+// past the stored time, then fails a write. It returns the in-memory time.
+func failWriteAfterStillReported(t *testing.T, h *HistoryService) time.Time {
+	t.Helper()
+	agencies := stopAgencies("a")
+	h.RecordOBAMetrics(ctx, stopServer, agencies, stopsResponse([]string{"a"}, map[string][]string{"a": {"1"}}), stopT0)
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	// Stop 2 makes the poll write; the write fails after stop 1 was marked
+	// reported in memory.
+	lastSeen := stopT0.Add(time.Minute)
+	h.RecordOBAMetrics(canceled, stopServer, agencies, stopsResponse([]string{"a"}, map[string][]string{"a": {"1", "2"}}), lastSeen)
+	return lastSeen
+}
+
+func TestLastReported_FlushAfterFailedWrite(t *testing.T) {
+	h, pool, _ := newCountedHistory(t)
+	lastSeen := failWriteAfterStillReported(t, h)
+
+	h.Flush(ctx)
+
+	if got := onlyEpisode(t, pool).lastReportedAt; !got.Equal(lastSeen) {
+		t.Errorf("stored last_reported_at = %v, want %v", got, lastSeen)
+	}
+}
+
+func TestLastReported_FlushServerAfterFailedWrite(t *testing.T) {
+	h, pool, _ := newCountedHistory(t)
+	lastSeen := failWriteAfterStillReported(t, h)
+
+	h.FlushServer(ctx, stopServer.ObaBaseURL)
+
+	if got := onlyEpisode(t, pool).lastReportedAt; !got.Equal(lastSeen) {
+		t.Errorf("stored last_reported_at = %v, want %v", got, lastSeen)
+	}
+}
+
+func TestLastReported_FlushAfterFailedWriteLeavesClosedEpisode(t *testing.T) {
+	h, pool, _ := newCountedHistory(t)
+	agencies := stopAgencies("a")
+	h.RecordOBAMetrics(ctx, stopServer, agencies, stopsResponse([]string{"a"}, map[string][]string{"a": {"1"}}), stopT0)
+	stale := memoryEpisode(t, h, "a", "1")
+	closedAt := stopT0.Add(time.Minute)
+	h.RecordOBAMetrics(ctx, stopServer, agencies, stopsResponse([]string{"a"}, map[string][]string{}), closedAt)
+
+	// A close that committed but was reported as failed: memory still holds
+	// the episode, with a later time than the database.
+	entry := h.stops.forServer(utils.SanitizeServerURL(stopServer.ObaBaseURL), stopServer)
+	entry.mu.Lock()
+	entry.open[unmatchedStopKey{agencyID: "a", stopID: "1"}] = &openStopEpisode{
+		episodeID:      stale.episodeID,
+		reportedStopID: stale.reportedStopID,
+		agencyID:       stale.agencyID,
+		lastReportedAt: stopT0.Add(time.Hour),
+	}
+	entry.loaded = false
+	entry.mu.Unlock()
+
+	h.Flush(ctx)
+
+	episode := onlyEpisode(t, pool)
+	if episode.closeReason == nil || !episode.lastReportedAt.Equal(stopT0) {
+		t.Errorf("closed episode = %+v, want it unchanged (closed, last_reported_at %v)", episode, stopT0)
+	}
+}
+
+func TestFlushAgencies_DropsOnlyRemovedAgency(t *testing.T) {
+	h, pool, _ := newCountedHistory(t)
+	// Two agency-mode entries share one base URL.
+	agencyA, agencyB := stopAgency("a"), stopAgency("b")
+	reportedA := stopsResponse([]string{"a"}, map[string][]string{"a": {"1"}})
+	h.RecordOBAMetrics(ctx, agencyA, []models.ObaServer{agencyA}, reportedA, stopT0)
+	h.RecordOBAMetrics(ctx, agencyB, []models.ObaServer{agencyB}, stopsResponse([]string{"b"}, map[string][]string{"b": {"2"}}), stopT0)
+	lastSeen := stopT0.Add(time.Minute)
+	h.RecordOBAMetrics(ctx, agencyA, []models.ObaServer{agencyA}, reportedA, lastSeen)
+
+	// Entry "a" is removed; entry "b" stays.
+	h.FlushAgencies(ctx, stopServer.ObaBaseURL, map[string]bool{"b": true})
+
+	if memoryEpisode(t, h, "a", "1") != nil {
+		t.Error("removed agency's episode is still in memory")
+	}
+	if memoryEpisode(t, h, "b", "2") == nil {
+		t.Error("kept agency's episode was dropped")
+	}
+	var stored time.Time
+	if err := pool.QueryRow(ctx, `
+		SELECT e.last_reported_at
+		FROM unmatched_stop_episode e
+		JOIN reported_stop s ON s.reported_stop_id = e.reported_stop_id
+		WHERE s.oba_stop_id = '1'`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if !stored.Equal(lastSeen) {
+		t.Errorf("removed agency's last_reported_at = %v, want %v saved", stored, lastSeen)
+	}
+}

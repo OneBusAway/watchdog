@@ -92,6 +92,14 @@ func (o *openStopEpisodes) forServer(baseURL string, server models.ObaServer) *s
 	return entry
 }
 
+// lookup returns the server's entry without creating one.
+func (o *openStopEpisodes) lookup(baseURL string) (*serverStopEpisodes, bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	entry, ok := o.servers[baseURL]
+	return entry, ok
+}
+
 // remove drops the server's entry and returns it, if there was one.
 func (o *openStopEpisodes) remove(baseURL string) (*serverStopEpisodes, bool) {
 	o.mu.Lock()
@@ -459,6 +467,43 @@ func (h *HistoryService) FlushServer(ctx context.Context, baseURL string) {
 	h.flushEntry(ctx, entry)
 }
 
+// FlushAgencies saves the last_reported_at of a server's open episodes whose
+// agency is not in keep, then drops them from memory. app.OnConfigUpdated
+// calls it for a base URL that stays configured while some of its
+// agency-mode entries are removed: no poll records those agencies any more,
+// so their episodes would otherwise stay in memory for good. They are dropped
+// even if the save fails, since nothing would retry it.
+func (h *HistoryService) FlushAgencies(ctx context.Context, baseURL string, keep map[string]bool) {
+	if h == nil || h.pool == nil || h.stops == nil {
+		return
+	}
+	entry, ok := h.stops.lookup(utils.SanitizeServerURL(baseURL))
+	if !ok {
+		return
+	}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	var removed []unmatchedStopKey
+	var episodes []*openStopEpisode
+	for key, episode := range entry.open {
+		if !keep[key.agencyID] {
+			removed = append(removed, key)
+			episodes = append(episodes, episode)
+		}
+	}
+	if len(removed) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, writeTimeout)
+	defer cancel()
+	h.write(ctx, unmatchedStopFlushStep, publicationTags(entry.server), func(q *dbgen.Queries) error {
+		return saveLastReported(ctx, q, episodes)
+	})
+	for _, key := range removed {
+		delete(entry.open, key)
+	}
+}
+
 // Flush saves the last_reported_at of every open episode. main calls it on
 // clean shutdown, after collection has stopped.
 func (h *HistoryService) Flush(ctx context.Context) {
@@ -470,10 +515,15 @@ func (h *HistoryService) Flush(ctx context.Context) {
 	}
 }
 
+// flushEntry saves the in-memory last_reported_at of entry's open episodes.
+// It also runs for an entry left unloaded by a failed write: memory may then
+// hold an episode the database already closed, but the save only updates
+// open episodes and only moves a time forward, so that is harmless, while
+// skipping it would lose up to the save interval of last_reported_at.
 func (h *HistoryService) flushEntry(ctx context.Context, entry *serverStopEpisodes) {
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
-	if !entry.loaded || len(entry.open) == 0 {
+	if len(entry.open) == 0 {
 		return
 	}
 	episodes := make([]*openStopEpisode, 0, len(entry.open))
