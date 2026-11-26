@@ -5,7 +5,6 @@ package geo
 
 import (
 	"fmt"
-	"math"
 	"sync"
 
 	remoteGtfs "github.com/OneBusAway/go-gtfs"
@@ -160,16 +159,7 @@ func (s *BoundingBoxStore) IsInBoundingBox(serverKey string, lat, lon float64) b
 // is a valid location in the Gulf of Guinea. This assumption is made to help
 // detect uninitialized or placeholder coordinates commonly represented as (0,0).
 func isValidLatLon(lat, lon float64) bool {
-	if math.IsNaN(lat) || math.IsNaN(lon) || math.IsInf(lat, 0) || math.IsInf(lon, 0) {
-		return false
-	}
-	if lat == 0 && lon == 0 {
-		return false
-	}
-	if lat < -90 || lat > 90 || lon < -180 || lon > 180 {
-		return false
-	}
-	return true
+	return LatLonValidationReason(lat, lon) == ""
 }
 
 // earthRadiusInMeters represents the mean radius of the Earth in meters.
