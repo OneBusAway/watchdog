@@ -49,10 +49,15 @@ type RealtimeVehicle struct {
 
 // RealtimeFeed describes the accepted upstream realtime
 // data. FullDataset controls safe retirement of absent vehicle series.
+// SourceTimestamp is the FeedHeader timestamp, nil when the header has none.
+// PayloadHash is the canonical entity hash, which excludes the FeedHeader.
+// The fetch time is RealtimeData.ObservationAt.
 type RealtimeFeed struct {
-	FeedID      string
-	FeedURL     string
-	FullDataset bool
+	FeedID          string
+	FeedURL         string
+	FullDataset     bool
+	SourceTimestamp *time.Time
+	PayloadHash     string
 }
 
 // RealtimeData represents the realtime GTFS data structure.

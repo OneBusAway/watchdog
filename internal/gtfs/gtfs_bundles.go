@@ -1126,7 +1126,9 @@ func parseGTFSRTFeed(ctx context.Context, server models.ObaServer, client *http.
 	}
 	snapshot.Feeds = append(snapshot.Feeds, models.RealtimeFeed{
 		FeedID: feedID, FeedURL: sanitizedURL,
-		FullDataset: raw.Header == nil || raw.Header.GetIncrementality() == gtfsrt.FeedHeader_FULL_DATASET,
+		FullDataset:     raw.Header == nil || raw.Header.GetIncrementality() == gtfsrt.FeedHeader_FULL_DATASET,
+		SourceTimestamp: sourceTimestamp,
+		PayloadHash:     payloadHash,
 	})
 	positionIDs := make(map[string]struct{})
 	for _, vehicle := range parsed.Vehicles {
