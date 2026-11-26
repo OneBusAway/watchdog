@@ -228,3 +228,92 @@ func (s *InvestigationService) getVehicleAnomalyRuleVersion(w http.ResponseWrite
 	}
 	s.writeJSON(w, r, body, cache)
 }
+
+// vehicleAnomalyRuleVersionListIncludable is the include names E32 accepts. Its
+// anomaly_type loader is registered for E31.
+var vehicleAnomalyRuleVersionListIncludable = map[string]resourceKind{
+	"anomaly_type": kindVehicleAnomalyType,
+}
+
+// vehicleAnomalyRuleVersionList is the E32 body without included, which the
+// list is built from.
+type vehicleAnomalyRuleVersionList struct {
+	Items []vehicleAnomalyRuleVersion `json:"items"`
+	Links links                       `json:"links"`
+}
+
+// vehicleAnomalyRuleVersionListBody is the E32 response.
+type vehicleAnomalyRuleVersionListBody struct {
+	vehicleAnomalyRuleVersionList
+	Included included `json:"included,omitzero"`
+}
+
+// vehicleAnomalyRuleVersionListFor maps one anomaly type's rule versions, in
+// the order the query returned them (newest effective_at first), to the E32
+// list and to each item's links. Items are never nil, so an empty history
+// encodes as [].
+func vehicleAnomalyRuleVersionListFor(code string, rows []dbgen.ListVehicleAnomalyRuleVersionsRow) (vehicleAnomalyRuleVersionList, []itemLinks) {
+	base := "/v1/vehicle-anomaly-types/" + code
+	list := vehicleAnomalyRuleVersionList{
+		Items: make([]vehicleAnomalyRuleVersion, 0, len(rows)),
+		Links: links{"self": base + "/rule-versions", "anomaly_type": base},
+	}
+	items := make([]itemLinks, 0, len(rows))
+	for _, row := range rows {
+		l := itemLinks{
+			"self": {URL: vehicleAnomalyRuleVersionsPath + strconv.FormatInt(row.RuleVersionID, 10)},
+			"anomaly_type": {
+				Kind: kindVehicleAnomalyType,
+				ID:   int64(row.AnomalyTypeID),
+				URL:  "/v1/vehicle-anomaly-types/" + row.AnomalyCode,
+			},
+		}
+		list.Items = append(list.Items, vehicleAnomalyRuleVersion{
+			RuleVersionID:             row.RuleVersionID,
+			AnomalyType:               row.AnomalyCode,
+			RuleLogicVersion:          row.RuleLogicVersion,
+			VersionName:               row.VersionName,
+			WatchdogBuildVersion:      row.WatchdogBuildVersion,
+			EffectiveAt:               newAPITime(row.EffectiveAt),
+			StaleAgeThresholdSeconds:  row.StaleAgeThresholdSeconds,
+			ReportedSpeedThresholdMps: row.ReportedSpeedThresholdMps,
+			Links:                     l.links(),
+		})
+		items = append(items, l)
+	}
+	return list, items
+}
+
+// listVehicleAnomalyRuleVersions serves GET
+// /v1/vehicle-anomaly-types/:anomaly_code/rule-versions (E32). An unknown code
+// is a 404 from the no-rows path.
+func (s *InvestigationService) listVehicleAnomalyRuleVersions(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	code := ps.ByName("anomaly_code")
+	var bad invalidParams
+	values := parseQuery(r, &bad, "include")
+	inc := s.parseInclude(values, vehicleAnomalyRuleVersionListIncludable, &bad)
+	if len(bad) > 0 {
+		writeInvalidParams(w, bad)
+		return
+	}
+
+	var body vehicleAnomalyRuleVersionListBody
+	err := s.read(r.Context(), func(ctx context.Context, q *dbgen.Queries) error {
+		if _, err := q.GetVehicleAnomalyType(ctx, code); err != nil {
+			return err
+		}
+		rows, err := q.ListVehicleAnomalyRuleVersions(ctx, code)
+		if err != nil {
+			return err
+		}
+		var items []itemLinks
+		body.vehicleAnomalyRuleVersionList, items = vehicleAnomalyRuleVersionListFor(code, rows)
+		body.Included, err = s.loadIncluded(ctx, q, items, inc)
+		return err
+	})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.writeJSON(w, r, body, cacheShort())
+}

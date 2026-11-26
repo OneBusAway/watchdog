@@ -83,6 +83,60 @@ func (q *Queries) GetVehicleAnomalyType(ctx context.Context, anomalyCode string)
 	return i, err
 }
 
+const listVehicleAnomalyRuleVersions = `-- name: ListVehicleAnomalyRuleVersions :many
+SELECT r.rule_version_id, r.anomaly_type_id, t.anomaly_code,
+       r.rule_logic_version, r.version_name, r.watchdog_build_version,
+       r.effective_at, r.stale_age_threshold_seconds, r.reported_speed_threshold_mps
+FROM vehicle_anomaly_rule_version r
+JOIN vehicle_anomaly_type t ON t.anomaly_type_id = r.anomaly_type_id
+WHERE t.anomaly_code = $1
+ORDER BY r.effective_at DESC
+`
+
+type ListVehicleAnomalyRuleVersionsRow struct {
+	RuleVersionID             int64
+	AnomalyTypeID             int16
+	AnomalyCode               string
+	RuleLogicVersion          int32
+	VersionName               string
+	WatchdogBuildVersion      *string
+	EffectiveAt               time.Time
+	StaleAgeThresholdSeconds  *int32
+	ReportedSpeedThresholdMps *float64
+}
+
+// The rule versions of one anomaly type, newest effective_at first, for E32.
+// effective_at is unique per type, so the order has no ties.
+func (q *Queries) ListVehicleAnomalyRuleVersions(ctx context.Context, anomalyCode string) ([]ListVehicleAnomalyRuleVersionsRow, error) {
+	rows, err := q.db.Query(ctx, listVehicleAnomalyRuleVersions, anomalyCode)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListVehicleAnomalyRuleVersionsRow
+	for rows.Next() {
+		var i ListVehicleAnomalyRuleVersionsRow
+		if err := rows.Scan(
+			&i.RuleVersionID,
+			&i.AnomalyTypeID,
+			&i.AnomalyCode,
+			&i.RuleLogicVersion,
+			&i.VersionName,
+			&i.WatchdogBuildVersion,
+			&i.EffectiveAt,
+			&i.StaleAgeThresholdSeconds,
+			&i.ReportedSpeedThresholdMps,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listVehicleAnomalyTypes = `-- name: ListVehicleAnomalyTypes :many
 SELECT anomaly_code, description
 FROM vehicle_anomaly_type

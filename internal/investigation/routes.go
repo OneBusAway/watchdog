@@ -38,6 +38,7 @@ func (s *InvestigationService) registerRoutes(router *httprouter.Router) {
 	s.registerLoader("vehicle", s.loadVehicles)
 	s.get(router, "/v1/vehicle-anomaly-types", s.listVehicleAnomalyTypes)
 	s.get(router, "/v1/vehicle-anomaly-types/:anomaly_code", s.getVehicleAnomalyType)
+	s.get(router, "/v1/vehicle-anomaly-types/:anomaly_code/rule-versions", s.listVehicleAnomalyRuleVersions)
 	s.get(router, "/v1/vehicle-anomaly-rule-versions/:rule_version_id", s.getVehicleAnomalyRuleVersion)
 	s.registerLoader(kindVehicleAnomalyType, loadVehicleAnomalyTypes)
 	s.registerLoader(kindVehicleAnomalyRuleVersion, loadVehicleAnomalyRuleVersions)
