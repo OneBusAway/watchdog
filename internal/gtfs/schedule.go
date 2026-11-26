@@ -71,6 +71,7 @@ type ScheduleSnapshot struct {
 	feedURLs           []string
 	maxOvernightOffset time.Duration
 	complete           bool
+	tripIndexRetained  bool
 }
 
 type scheduleState struct {
@@ -83,8 +84,9 @@ type scheduleState struct {
 // stale or incomplete data cannot confidently classify an agency as outside
 // service.
 type ScheduleStore struct {
-	mu   sync.RWMutex
-	data map[string]scheduleState
+	mu                sync.RWMutex
+	data              map[string]scheduleState
+	tripIndexDisabled bool
 	// preserve reports keys a server-scoped entry must not retire or mark
 	// unavailable because a separately configured agency-scoped entry on the
 	// same oba_base_url owns them. Nil preserves nothing.
@@ -93,6 +95,21 @@ type ScheduleStore struct {
 
 func NewScheduleStore() *ScheduleStore {
 	return &ScheduleStore{data: make(map[string]scheduleState)}
+}
+
+// SetTripIndexEnabled controls whether callers should compile and retain
+// per-trip records in new ScheduleSnapshots. Defaults to true when unset.
+func (s *ScheduleStore) SetTripIndexEnabled(enabled bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tripIndexDisabled = !enabled
+}
+
+// TripIndexEnabled reports whether compiled snapshots retain the per-trip index.
+func (s *ScheduleStore) TripIndexEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return !s.tripIndexDisabled
 }
 
 // Replace atomically publishes every schedule produced for one configured
@@ -216,10 +233,18 @@ func (s *ScheduleStore) ServiceDateRange(serverKey string) (earliest, latest tim
 }
 
 func dateFromNumber(value int, location *time.Location) time.Time {
+	return dateAtHour(value, 0, location)
+}
+
+func serviceDayNoon(value int, location *time.Location) time.Time {
+	return dateAtHour(value, 12, location)
+}
+
+func dateAtHour(value, hour int, location *time.Location) time.Time {
 	year := value / 10000
 	month := time.Month((value / 100) % 100)
 	day := value % 100
-	return time.Date(year, month, day, 0, 0, 0, 0, location)
+	return time.Date(year, month, day, hour, 0, 0, 0, location)
 }
 
 func (s *ScheduleStore) Prune(keep func(string) bool) []string {
@@ -354,15 +379,19 @@ type rawEndpoint struct {
 }
 
 func compileSchedules(server models.ObaServer, feed downloadedStaticFeed) (map[string]*ScheduleSnapshot, error) {
+	return compileSchedulesWithTripIndex(server, feed, true)
+}
+
+func compileSchedulesWithTripIndex(server models.ObaServer, feed downloadedStaticFeed, retainTripIndex bool) (map[string]*ScheduleSnapshot, error) {
 	raw, err := parseRawScheduleFeed(feed.url, feed.data, server)
 	if err != nil {
 		return nil, fmt.Errorf("compile static feed (%s): %w", utils.SanitizeServerURL(feed.url), err)
 	}
-	return compileRawSchedule(server, raw)
+	return compileRawSchedule(server, raw, retainTripIndex)
 }
 
 // compileRawSchedule compiles one artifact using its final service IDs.
-func compileRawSchedule(server models.ObaServer, feed rawScheduleFeed) (map[string]*ScheduleSnapshot, error) {
+func compileRawSchedule(server models.ObaServer, feed rawScheduleFeed, retainTripIndex bool) (map[string]*ScheduleSnapshot, error) {
 	type pendingTrip struct {
 		trip       scheduleTrip
 		serviceKey string
@@ -419,6 +448,9 @@ func compileRawSchedule(server models.ObaServer, feed rawScheduleFeed) (map[stri
 		if b == nil {
 			return nil, fmt.Errorf("trip %q has unresolved agency %q", tripID, trip.agencyID)
 		}
+		if !server.IsServerScoped() && trip.agencyID != server.AgencyID {
+			continue
+		}
 		serviceKey := trip.serviceID
 		compact := b.services[serviceKey]
 		if compact == nil {
@@ -432,16 +464,18 @@ func compileRawSchedule(server models.ObaServer, feed rawScheduleFeed) (map[stri
 				b.maxOffset = window.end
 			}
 		}
-		// parseRawScheduleFeed rejects a repeated trip_id, so each trip is
-		// recorded exactly once.
-		b.trips = append(b.trips, pendingTrip{serviceKey: serviceKey, trip: scheduleTrip{
-			id:             ids.intern(tripID),
-			routeID:        ids.intern(trip.routeID),
-			blockID:        ids.intern(trip.blockID),
-			firstDeparture: int32(trip.first.departure / time.Second),
-			lastArrival:    int32(trip.last.arrival / time.Second),
-			frequencyBased: len(trip.frequency) > 0,
-		}})
+		if retainTripIndex {
+			// parseRawScheduleFeed rejects duplicate trip_id values, so each trip ID
+			// is unique and cloned directly instead of polluting the interner.
+			b.trips = append(b.trips, pendingTrip{serviceKey: serviceKey, trip: scheduleTrip{
+				id:             strings.Clone(tripID),
+				routeID:        ids.intern(trip.routeID),
+				blockID:        ids.intern(trip.blockID),
+				firstDeparture: int32(trip.first.departure / time.Second),
+				lastArrival:    int32(trip.last.arrival / time.Second),
+				frequencyBased: len(trip.frequency) > 0,
+			}})
+		}
 	}
 
 	if !server.IsServerScoped() {
@@ -470,15 +504,19 @@ func compileRawSchedule(server models.ObaServer, feed rawScheduleFeed) (map[stri
 			serviceIndex[key] = int32(len(services))
 			services = append(services, service)
 		}
-		trips := make([]scheduleTrip, 0, len(b.trips))
-		for _, pending := range b.trips {
-			pending.trip.service = serviceIndex[pending.serviceKey]
-			trips = append(trips, pending.trip)
+		var trips []scheduleTrip
+		if retainTripIndex {
+			trips = make([]scheduleTrip, 0, len(b.trips))
+			for _, pending := range b.trips {
+				pending.trip.service = serviceIndex[pending.serviceKey]
+				trips = append(trips, pending.trip)
+			}
+			sort.Slice(trips, func(i, j int) bool { return trips[i].id < trips[j].id })
 		}
-		sort.Slice(trips, func(i, j int) bool { return trips[i].id < trips[j].id })
 		snapshots[models.ServerKey(server.ObaBaseURL, agencyID)] = &ScheduleSnapshot{
 			timezone: b.timezone, timezoneName: b.timezone.String(), services: services, trips: trips,
 			feedURLs: []string{utils.SanitizeServerURL(feed.url)}, maxOvernightOffset: b.maxOffset, complete: true,
+			tripIndexRetained: retainTripIndex,
 		}
 	}
 	if len(snapshots) == 0 {
@@ -575,15 +613,11 @@ func parseRawScheduleFeed(feedURL string, data []byte, server models.ObaServer) 
 	if err != nil {
 		return result, err
 	}
-	blockColumn, hasBlock := tripRows.index["block_id"]
-	if !hasBlock {
-		blockColumn = -1
-	}
 	for _, row := range tripRows.rows {
 		tripID := cell(row, tripRows.index["trip_id"])
 		routeID := cell(row, tripRows.index["route_id"])
 		serviceID := cell(row, tripRows.index["service_id"])
-		blockID := cell(row, blockColumn)
+		blockID := cell(row, tripRows.index["block_id"])
 		agencyID := result.routes[routeID]
 		if tripID == "" || agencyID == "" || result.services[serviceID] == nil {
 			return result, fmt.Errorf("trip %q has invalid route or service reference", tripID)
@@ -740,7 +774,7 @@ func requiredTable(files map[string]csvTable, name string, required ...string) (
 			return csvTable{}, fmt.Errorf("%s is missing %s", name, column)
 		}
 	}
-	for _, optional := range []string{"agency_id", "arrival_time", "departure_time"} {
+	for _, optional := range []string{"agency_id", "arrival_time", "departure_time", "block_id"} {
 		if _, ok := table.index[optional]; !ok {
 			table.index[optional] = -1
 		}

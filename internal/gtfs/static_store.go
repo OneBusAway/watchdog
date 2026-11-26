@@ -19,12 +19,13 @@ type StaticRefreshState struct {
 // indexed by server key (oba_base_url + agency_id). It allows concurrent access
 // to GTFS data using read-write locks using a sync.RWMutex.
 type StaticStore struct {
-	mu               sync.RWMutex
-	refreshMu        sync.Mutex
-	data             map[string]*models.StaticData
-	schedules        *ScheduleStore
-	configured       map[string]models.ObaServer
-	configurationSet bool
+	mu                sync.RWMutex
+	refreshMu         sync.Mutex
+	data              map[string]*models.StaticData
+	schedules         *ScheduleStore
+	tripIndexDisabled bool
+	configured        map[string]models.ObaServer
+	configurationSet  bool
 
 	// lastFetched records when Watchdog last downloaded the GTFS static bundle
 	// for each server key. It backs the `gtfs_bundle_last_fetched_timestamp_seconds`
@@ -59,7 +60,28 @@ func NewStaticStore() *StaticStore {
 func (s *StaticStore) newScheduleStore() *ScheduleStore {
 	schedules := NewScheduleStore()
 	schedules.preserve = s.isConfiguredAgencyEntry
+	s.mu.RLock()
+	tripIndexDisabled := s.tripIndexDisabled
+	s.mu.RUnlock()
+	schedules.SetTripIndexEnabled(!tripIndexDisabled)
 	return schedules
+}
+
+// SetTripIndexEnabled controls whether ScheduleSnapshots retain per-trip
+// lookup/classification data.
+func (s *StaticStore) SetTripIndexEnabled(enabled bool) {
+	s.mu.Lock()
+	s.tripIndexDisabled = !enabled
+	schedules := s.schedules
+	s.mu.Unlock()
+	if schedules != nil {
+		schedules.SetTripIndexEnabled(enabled)
+	}
+}
+
+// TripIndexEnabled reports whether ScheduleSnapshots should retain the per-trip index.
+func (s *StaticStore) TripIndexEnabled() bool {
+	return s.ScheduleStore().TripIndexEnabled()
 }
 
 func (s *StaticStore) ScheduleStore() *ScheduleStore {

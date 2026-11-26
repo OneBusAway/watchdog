@@ -534,6 +534,66 @@ func TestClassifyTrip_DSTDay(t *testing.T) {
 	assertClassification(t, got, ExpectedScheduleActive, ExpectedReasonWithinScheduledWindow, utc(2026, 3, 8, 5, 30), utc(2026, 3, 8, 7, 30))
 }
 
+func TestClassifyTrip_MidnightDSTTransition(t *testing.T) {
+	// America/Havana transitions 00:00 -> 01:00 on 2026-03-08 (Sunday); local
+	// midnight does not exist and shifts back to 23:00 on 2026-03-07 if used.
+	havana := mustLoadLocation(t, "America/Havana")
+	at := time.Date(2026, 3, 8, 8, 30, 0, 0, havana).UTC()
+	wantStart := time.Date(2026, 3, 8, 12, 0, 0, 0, havana).Add(-4 * time.Hour).UTC() // 08:00 service offset
+	wantEnd := time.Date(2026, 3, 8, 12, 0, 0, 0, havana).Add(-3 * time.Hour).UTC()   // 09:00 service offset
+
+	dailyStore, dailyKey := classifyStore(t, basicScheduleFiles("America/Havana", "08:00:00", "09:00:00"))
+	assertClassification(t, dailyStore.ClassifyTrip(dailyKey, TripDescriptor{TripID: "T"}, at),
+		ExpectedScheduleActive, ExpectedReasonWithinScheduledWindow, wantStart, wantEnd)
+	assertClassification(t, dailyStore.ClassifyTrip(dailyKey, TripDescriptor{TripID: "T", StartDate: "20260308"}, at),
+		ExpectedScheduleActive, ExpectedReasonWithinScheduledWindow, wantStart, wantEnd)
+
+	sundayFiles := basicScheduleFiles("America/Havana", "08:00:00", "09:00:00")
+	sundayFiles["calendar.txt"] = "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nWK,0,0,0,0,0,0,1,20260308,20260308\n"
+	sundayStore, sundayKey := classifyStore(t, sundayFiles)
+	assertClassification(t, sundayStore.ClassifyTrip(sundayKey, TripDescriptor{TripID: "T"}, at),
+		ExpectedScheduleActive, ExpectedReasonWithinScheduledWindow, wantStart, wantEnd)
+}
+
+func TestClassifyTrip_SpringForwardPreviousEveningServiceDay(t *testing.T) {
+	// On 2026-03-08 (America/New_York spring-forward), noon is 16:00 UTC so the
+	// Sunday service day starts at 04:00 UTC (2026-03-07 23:00 EST). An early
+	// 00:15-00:45 Sunday trip runs 04:15-04:45 UTC on Saturday evening local time.
+	at := utc(2026, 3, 8, 4, 30)
+	wantStart, wantEnd := utc(2026, 3, 8, 4, 15), utc(2026, 3, 8, 4, 45)
+
+	sundayFiles := basicScheduleFiles("America/New_York", "00:15:00", "00:45:00")
+	sundayFiles["calendar.txt"] = "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nWK,0,0,0,0,0,0,1,20260308,20260308\n"
+	sundayStore, sundayKey := classifyStore(t, sundayFiles)
+	assertClassification(t, sundayStore.ClassifyTrip(sundayKey, TripDescriptor{TripID: "T"}, at),
+		ExpectedScheduleActive, ExpectedReasonWithinScheduledWindow, wantStart, wantEnd)
+
+	dailyStore, dailyKey := classifyStore(t, basicScheduleFiles("America/New_York", "00:15:00", "00:45:00"))
+	assertClassification(t, dailyStore.ClassifyTrip(dailyKey, TripDescriptor{TripID: "T"}, at),
+		ExpectedScheduleActive, ExpectedReasonWithinScheduledWindow, wantStart, wantEnd)
+
+	// Exact boundary: reference instant equals observation time (04:00 UTC).
+	boundaryStore, boundaryKey := classifyStore(t, func() map[string]string {
+		f := basicScheduleFiles("America/New_York", "00:00:00", "00:30:00")
+		f["calendar.txt"] = sundayFiles["calendar.txt"]
+		return f
+	}())
+	assertClassification(t, boundaryStore.ClassifyTrip(boundaryKey, TripDescriptor{TripID: "T"}, utc(2026, 3, 8, 4, 0)),
+		ExpectedScheduleActive, ExpectedReasonWithinScheduledWindow, utc(2026, 3, 8, 4, 0), utc(2026, 3, 8, 4, 30))
+}
+
+func TestClassifyTrip_NegativeDurationClampedToZero(t *testing.T) {
+	// Multi-stop trip whose last arrival (08:03) precedes first departure
+	// (08:05) while overall span (08:00..08:10) remains valid.
+	files := basicScheduleFiles("UTC", "08:00:00", "08:10:00")
+	files["stop_times.txt"] = "trip_id,arrival_time,departure_time,stop_id,stop_sequence\nT,08:00:00,08:05:00,S1,1\nT,08:03:00,08:10:00,S2,2\n"
+	store, key := classifyStore(t, files)
+	assertClassification(t, store.ClassifyTrip(key, TripDescriptor{TripID: "T"}, utc(2026, 9, 9, 8, 5)),
+		ExpectedScheduleActive, ExpectedReasonWithinScheduledWindow, utc(2026, 9, 9, 8, 5), utc(2026, 9, 9, 8, 5))
+	assertClassification(t, store.ClassifyTrip(key, TripDescriptor{TripID: "T"}, utc(2026, 9, 9, 8, 6)),
+		ExpectedScheduleInactive, ExpectedReasonAfterScheduledWindow, utc(2026, 9, 9, 8, 5), utc(2026, 9, 9, 8, 5))
+}
+
 func TestClassifyTrip_FrequencyWithStartTime(t *testing.T) {
 	files := basicScheduleFiles("UTC", "00:00:00", "00:10:00")
 	files["frequencies.txt"] = "trip_id,start_time,end_time,headway_secs,exact_times\nT,06:00:00,07:00:00,1800,1\n"
@@ -548,29 +608,64 @@ func TestLookupTrip(t *testing.T) {
 	files["stop_times.txt"] += "T2,10:00:00,10:00:00,S1,1\nT2,11:00:00,11:00:00,S2,2\n"
 	store, key := classifyStore(t, files)
 
-	if got, ok := store.LookupTrip(key, "T"); !ok || got != (TripInfo{RouteID: "R", ServiceID: "WK", BlockID: "B1"}) {
-		t.Fatalf("LookupTrip(T) = %+v, %t", got, ok)
+	wantT := TripLookup{ScheduleAvailable: true, Found: true, Trip: TripInfo{RouteID: "R", ServiceID: "WK", BlockID: "B1"}}
+	if got := store.LookupTrip(key, "T"); got != wantT {
+		t.Fatalf("LookupTrip(T) = %+v, want %+v", got, wantT)
 	}
-	if got, ok := store.LookupTrip(key, "T2"); !ok || got.BlockID != "" {
-		t.Fatalf("empty block_id value = %+v, %t; want found with empty block", got, ok)
+	wantT2 := TripLookup{ScheduleAvailable: true, Found: true, Trip: TripInfo{RouteID: "R", ServiceID: "WK"}}
+	if got := store.LookupTrip(key, "T2"); got != wantT2 {
+		t.Fatalf("empty block_id value = %+v, want %+v", got, wantT2)
 	}
-	if _, ok := store.LookupTrip(key, "NOPE"); ok {
-		t.Fatal("unknown trip must not be found")
+	wantMiss := TripLookup{ScheduleAvailable: true}
+	if got := store.LookupTrip(key, "NOPE"); got != wantMiss {
+		t.Fatalf("unknown trip = %+v, want %+v", got, wantMiss)
 	}
-	if _, ok := NewScheduleStore().LookupTrip(key, "T"); ok {
-		t.Fatal("missing schedule must not find trips")
+	if got := NewScheduleStore().LookupTrip(key, "T"); got != (TripLookup{}) {
+		t.Fatalf("missing schedule = %+v, want empty TripLookup", got)
 	}
 
 	// A trip's route, service and block don't go stale, so a failed refresh
-	// leaves lookups answering from the kept snapshot.
+	// leaves lookups answering from the retained snapshot while flagging Stale.
 	store.MarkUnavailable(scheduleServer("A", "https://classify.zip"))
-	if _, ok := store.LookupTrip(key, "T"); !ok {
-		t.Fatal("lookup must keep answering from the retained snapshot")
+	wantStaleT := wantT
+	wantStaleT.Stale = true
+	if got := store.LookupTrip(key, "T"); got != wantStaleT {
+		t.Fatalf("retained snapshot lookup = %+v, want %+v", got, wantStaleT)
+	}
+	wantStaleMiss := TripLookup{ScheduleAvailable: true, Stale: true}
+	if got := store.LookupTrip(key, "NOPE"); got != wantStaleMiss {
+		t.Fatalf("retained snapshot miss = %+v, want %+v", got, wantStaleMiss)
 	}
 
 	noColumn, noColumnKey := classifyStore(t, basicScheduleFiles("UTC", "08:00:00", "09:00:00"))
-	if got, ok := noColumn.LookupTrip(noColumnKey, "T"); !ok || got != (TripInfo{RouteID: "R", ServiceID: "WK"}) {
-		t.Fatalf("missing block_id column = %+v, %t; want found with empty block", got, ok)
+	wantNoCol := TripLookup{ScheduleAvailable: true, Found: true, Trip: TripInfo{RouteID: "R", ServiceID: "WK"}}
+	if got := noColumn.LookupTrip(noColumnKey, "T"); got != wantNoCol {
+		t.Fatalf("missing block_id column = %+v, want %+v", got, wantNoCol)
+	}
+}
+
+func TestCompileSchedulesSkipsTripIndexWhenDisabled(t *testing.T) {
+	files := basicScheduleFiles("UTC", "08:00:00", "09:00:00")
+	server := scheduleServer("A", "https://no-trip-index.zip")
+	snapshots, err := compileSchedulesWithTripIndex(server, downloadedStaticFeed{url: server.GtfsStaticFeeds[0], data: makeScheduleZip(t, files)}, false)
+	if err != nil {
+		t.Fatalf("compile without trip index: %v", err)
+	}
+	snapshot := snapshots[server.ServerKey()]
+	if snapshot == nil || !snapshot.complete || snapshot.tripIndexRetained || len(snapshot.trips) != 0 {
+		t.Fatalf("expected complete snapshot without retained trips, got %+v", snapshot)
+	}
+
+	store := NewScheduleStore()
+	store.Replace(server, snapshots)
+	if available, active := store.Evaluate(server.ServerKey(), utc(2026, 9, 9, 8, 30)); !available || !active {
+		t.Fatalf("Evaluate = available=%t active=%t, want true/true", available, active)
+	}
+	if got := store.LookupTrip(server.ServerKey(), "T"); got != (TripLookup{}) {
+		t.Fatalf("LookupTrip without trip index = %+v, want empty TripLookup", got)
+	}
+	if got := store.ClassifyTrip(server.ServerKey(), TripDescriptor{TripID: "T"}, utc(2026, 9, 9, 8, 30)); got != (TripClassification{}) {
+		t.Fatalf("ClassifyTrip without trip index = %+v, want empty TripClassification", got)
 	}
 }
 
@@ -605,8 +700,9 @@ func TestCompileSchedulesSplitsTripsByAgencyInMergedFeed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("agency-mode compile: %v", err)
 	}
-	if len(snapshots) != 1 || snapshots[models.ServerKey(server.ObaBaseURL, "A")] == nil {
-		t.Fatalf("agency-mode snapshots = %v; want only agency A", snapshots)
+	snapshotA := snapshots[models.ServerKey(server.ObaBaseURL, "A")]
+	if len(snapshots) != 1 || snapshotA == nil || len(snapshotA.trips) != 1 || len(snapshotA.services) != 1 {
+		t.Fatalf("agency-mode snapshots = %+v; want only agency A with 1 trip and 1 service", snapshots)
 	}
 }
 

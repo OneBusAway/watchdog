@@ -538,7 +538,7 @@ A service date `D` and a GTFS time offset `x` map to the instant `noon(D) − 12
 3. If `trip_id` is not in the compiled schedule: `unknown`, `trip_not_in_static_gtfs`, no window.
 4. If the trip has frequency windows and `start_time` is absent: `unknown`, `trip_instance_ambiguous`, no window.
 5. Let `duration` = last arrival − first departure, and `s` = `start_time` if given, otherwise the first departure. The window on date `D` is `[ref(D) + s, ref(D) + s + duration]`.
-6. Candidate dates: `start_date` if given; otherwise the local date of `T` and each of the `ceil((s + duration) / 24h)` preceding dates.
+6. Candidate dates: `start_date` if given; otherwise the local date of `T`, each of the `ceil((s + duration) / 24h)` preceding dates, and the next local date when its reference instant (`noon(D) − 12h`) is at or before `T` (so spring-forward DST days whose service day starts on the previous evening are included).
 7. Keep the candidates on which the trip's service is active (calendar and calendar-date exceptions). If none remain: `expected_inactive`, `service_not_active_on_date`, no window.
 8. If a remaining candidate's window contains `T`: `expected_active`, `within_scheduled_window`, with that window (the latest-starting one if several contain `T`).
 9. Otherwise, if some remaining window starts after `T`: `expected_inactive`, `before_scheduled_window`, with the earliest such window. Otherwise: `expected_inactive`, `after_scheduled_window`, with the latest window that ended before `T`.

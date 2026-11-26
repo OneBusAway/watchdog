@@ -676,7 +676,7 @@ func (gs *GtfsService) publishStaticCampaign(ctx context.Context, server models.
 		artifact, _ := cache.Get(feedURL)
 		return nil, &StaticFeedError{FeedURL: feedURL, Stage: StaticFailureSchedule, Reason: StaticReasonInvalidSchedule, ContentHash: artifact.hash, Err: fmt.Errorf("validate schedule in %s: %w", utils.SanitizeServerURL(feedURL), err)}
 	}
-	schedules, err := compileRawSchedule(server, raw)
+	schedules, err := compileRawSchedule(server, raw, gs.StaticStore.TripIndexEnabled())
 	if err != nil {
 		return nil, &StaticFeedError{Stage: StaticFailureCompleteValidate, Reason: StaticReasonInvalidSchedule, Err: err}
 	}

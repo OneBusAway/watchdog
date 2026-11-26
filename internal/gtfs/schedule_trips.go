@@ -57,22 +57,38 @@ type TripClassification struct {
 	WindowEnd         time.Time
 }
 
+// TripLookup is the result of LookupTrip. ScheduleAvailable is true whenever
+// a complete compiled schedule with a retained trip index exists for the
+// agency (even after a failed refresh has marked it non-current, in which case
+// Stale is true). When ScheduleAvailable is false, no trip index could be
+// consulted and every other field is zero.
+type TripLookup struct {
+	ScheduleAvailable bool
+	Stale             bool
+	Found             bool
+	Trip              TripInfo
+}
+
 // LookupTrip returns the route, service and block of a static trip. It reads
 // the retained complete snapshot even after a failed refresh has marked it
-// unavailable: a trip's identity does not go stale the way "is it running
-// now" does, and reporting a known trip as missing would be a false claim.
-func (s *ScheduleStore) LookupTrip(serverKey, tripID string) (TripInfo, bool) {
+// non-current (reporting Stale: true): a trip's identity does not go stale the
+// way "is it running now" does, and reporting a known trip as missing would be
+// a false claim.
+func (s *ScheduleStore) LookupTrip(serverKey, tripID string) TripLookup {
 	s.mu.RLock()
 	state, ok := s.data[serverKey]
 	s.mu.RUnlock()
-	if !ok || state.snapshot == nil || !state.snapshot.complete {
-		return TripInfo{}, false
+	if !ok || state.snapshot == nil || !state.snapshot.complete || !state.snapshot.tripIndexRetained {
+		return TripLookup{}
 	}
+	result := TripLookup{ScheduleAvailable: true, Stale: !state.available}
 	trip, found := state.snapshot.trip(tripID)
 	if !found {
-		return TripInfo{}, false
+		return result
 	}
-	return TripInfo{RouteID: trip.routeID, ServiceID: state.snapshot.services[trip.service].id, BlockID: trip.blockID}, true
+	result.Found = true
+	result.Trip = TripInfo{RouteID: trip.routeID, ServiceID: state.snapshot.services[trip.service].id, BlockID: trip.blockID}
+	return result
 }
 
 // trip finds a trip by binary search. A sorted slice costs a fraction of a
@@ -94,7 +110,7 @@ func (s *ScheduleStore) ClassifyTrip(serverKey string, descriptor TripDescriptor
 	s.mu.RLock()
 	state, ok := s.data[serverKey]
 	s.mu.RUnlock()
-	if !ok || !state.available || state.snapshot == nil || !state.snapshot.complete {
+	if !ok || !state.available || state.snapshot == nil || !state.snapshot.complete || !state.snapshot.tripIndexRetained {
 		return TripClassification{}
 	}
 	return state.snapshot.classifyTrip(descriptor, at)
@@ -137,7 +153,10 @@ func (s *ScheduleSnapshot) classifyTrip(descriptor TripDescriptor, at time.Time)
 
 	duration := time.Duration(trip.lastArrival-trip.firstDeparture) * time.Second
 	if duration < 0 {
-		// A one-stop trip whose arrival precedes its departure.
+		// Clamp any negative duration (e.g., a one-stop trip whose arrival
+		// precedes its departure, or an endpoint pair where the last stop
+		// arrives before the first stop departs) to zero so the window does
+		// not invert.
 		duration = 0
 	}
 	offset := time.Duration(trip.firstDeparture) * time.Second
@@ -147,12 +166,20 @@ func (s *ScheduleSnapshot) classifyTrip(descriptor TripDescriptor, at time.Time)
 
 	var days []time.Time
 	if hasStartDate {
-		days = []time.Time{dateFromNumber(startDate, s.timezone)}
+		days = []time.Time{serviceDayNoon(startDate, s.timezone)}
 	} else {
+		// Construct candidates at local noon because midnight can be skipped or
+		// shifted to 23:00 the previous day on spring-forward DST boundaries
+		// (e.g., America/Havana). Include tomorrow when its service day's
+		// reference instant (noon - 12h) is already at or before at.
 		local := at.In(s.timezone)
 		back := int((offset + duration + 24*time.Hour - 1) / (24 * time.Hour))
+		nextDay := time.Date(local.Year(), local.Month(), local.Day()+1, 12, 0, 0, 0, s.timezone)
+		if !serviceTime(nextDay, s.timezone, 0).After(at) {
+			days = append(days, nextDay)
+		}
 		for i := 0; i <= back; i++ {
-			days = append(days, time.Date(local.Year(), local.Month(), local.Day()-i, 0, 0, 0, 0, s.timezone))
+			days = append(days, time.Date(local.Year(), local.Month(), local.Day()-i, 12, 0, 0, 0, s.timezone))
 		}
 	}
 

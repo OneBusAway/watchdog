@@ -147,7 +147,7 @@ func downloadGTFSBundles(ctx context.Context, client *http.Client, servers []mod
 			}
 			downloaded := downloadedStaticFeed{url: gtfsURL, data: rawData, bundle: bundle}
 
-			schedules, scheduleErr := compileSchedules(s, downloaded)
+			schedules, scheduleErr := compileSchedulesWithTripIndex(s, downloaded, staticStore.TripIndexEnabled())
 			if scheduleErr != nil {
 				markScheduleUnavailable()
 				logger.Error("GTFS schedule compilation unavailable", "server_name", s.ServerName, "agency_id", s.AgencyID, "error", scheduleErr)
