@@ -221,5 +221,10 @@ func (s *InvestigationService) getVehicleAnomalyRuleVersion(w http.ResponseWrite
 		return
 	}
 	// A rule version never changes once recorded; it has no Last-Modified.
-	s.writeJSON(w, r, body, cacheImmutable(time.Time{}))
+	// Included bodies may change, so any include drops to the short cache.
+	cache := cacheImmutable(time.Time{})
+	if inc.requested() {
+		cache = cacheShort()
+	}
+	s.writeJSON(w, r, body, cache)
 }

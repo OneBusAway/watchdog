@@ -442,6 +442,32 @@ func TestGetVehicleAnomalyRuleVersion_ETag(t *testing.T) {
 	}
 }
 
+func TestGetVehicleAnomalyRuleVersion_CachePolicy(t *testing.T) {
+	pool := dbtest.NewMigratedPool(t)
+	id := insertRuleVersion(t, pool, "invalid_coordinate", 1, "logic 1", nil, time.Now(), nil, nil)
+	router := newVehicleAnomalyRuleVersionsRouter(t, pool)
+
+	for _, tc := range []struct {
+		name, query, wantCache string
+	}{
+		{name: "without include", wantCache: "private, max-age=86400"},
+		{name: "with anomaly_type include", query: "?include=anomaly_type", wantCache: "private, max-age=30"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := doGet(t, router, ruleVersionPath(id)+tc.query, nil)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body)
+			}
+			if got := rec.Header().Get("Cache-Control"); got != tc.wantCache {
+				t.Errorf("Cache-Control = %q, want %q", got, tc.wantCache)
+			}
+			if got := rec.Header().Get("Last-Modified"); got != "" {
+				t.Errorf("Last-Modified = %q, want none", got)
+			}
+		})
+	}
+}
+
 func TestGetVehicleAnomalyRuleVersion_Head(t *testing.T) {
 	pool := dbtest.NewMigratedPool(t)
 	id := insertRuleVersion(t, pool, "invalid_coordinate", 1, "logic 1", nil, time.Now(), nil, nil)
