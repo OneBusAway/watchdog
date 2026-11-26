@@ -101,3 +101,16 @@ func TestRoutes_WithoutInvestigationService(t *testing.T) {
 		t.Errorf("GET %s status = %d, want %d", investigationProbePath, code, http.StatusNotFound)
 	}
 }
+
+// TestRoutes_InvestigationServiceFetchInterval checks that app.New sets the
+// fetch interval on InvestigationService.
+func TestRoutes_InvestigationServiceFetchInterval(t *testing.T) {
+	cfg := config.NewConfig(4000, "testing", nil)
+	cfg.FetchInterval = 12
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	app := New(cfg, quiet, &http.Client{Timeout: 5 * time.Second}, "test", config.NewDroppedServersStore(), nil, []string{"test-token"})
+
+	if got := app.InvestigationService.FetchInterval(); got != 12*time.Second {
+		t.Errorf("FetchInterval = %v, want 12s", got)
+	}
+}

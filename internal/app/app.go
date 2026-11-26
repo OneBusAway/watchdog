@@ -122,6 +122,7 @@ func New(cfg *config.Config, logger *slog.Logger, client *http.Client, version s
 	gtfsService.SetStaticFeedRefreshObserver(metricsService.StaticFeedRefreshObserver())
 
 	investigationService := investigation.NewInvestigationService(investigationDB, cfg.GetServers, investigationTokens, logger)
+	investigationService.SetFetchInterval(time.Duration(cfg.FetchInterval) * time.Second)
 
 	// History records each static publication with the bounding boxes the
 	// collector computed for it. The observer returns at once when

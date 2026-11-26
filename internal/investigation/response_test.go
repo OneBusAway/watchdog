@@ -205,3 +205,89 @@ func TestWriteProblem_Shape(t *testing.T) {
 		t.Error("invalid_params present with no invalid parameters")
 	}
 }
+
+func TestWriteJSON_FetchInterval(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		interval time.Duration
+		want     string
+	}{
+		{"custom_15s", 15 * time.Second, "private, max-age=15"},
+		{"custom_60s", 60 * time.Second, "private, max-age=60"},
+		{"zero_fallback", 0, "private, max-age=30"},
+		{"negative_fallback", -5 * time.Second, "private, max-age=30"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newTestService(t)
+			s.SetFetchInterval(tc.interval)
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/v1/test", nil)
+			s.writeJSON(rec, req, map[string]int{"id": 7}, cacheShort())
+
+			if got := rec.Header().Get("Cache-Control"); got != tc.want {
+				t.Errorf("Cache-Control = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFetchInterval_InvestigationRoot(t *testing.T) {
+	s, _ := newTestService(t)
+	s.SetFetchInterval(20 * time.Second)
+
+	router := httprouter.New()
+	router.GET("/v1/investigation", s.getInvestigationRoot)
+
+	rec := doGet(t, router, "/v1/investigation", nil)
+	if got := rec.Header().Get("Cache-Control"); got != "private, max-age=20" {
+		t.Errorf("Cache-Control = %q, want private, max-age=20", got)
+	}
+}
+
+func TestFetchInterval_ResponseWithInclude(t *testing.T) {
+	s, router := newTestService(t)
+	s.SetFetchInterval(45 * time.Second)
+
+	router.GET("/v1/test-include", func(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+		cache := cacheImmutable(time.Time{})
+		if r.URL.Query().Get("include") != "" {
+			cache = cacheShort()
+		}
+		s.writeJSON(w, r, map[string]string{"status": "ok"}, cache)
+	})
+
+	// Without include: uses unchangingMaxAge (86400)
+	rec := doGet(t, router, "/v1/test-include", nil)
+	if got := rec.Header().Get("Cache-Control"); got != "private, max-age=86400" {
+		t.Errorf("without include: Cache-Control = %q, want private, max-age=86400", got)
+	}
+
+	// With include: uses configured fetch interval (45)
+	rec = doGet(t, router, "/v1/test-include?include=server", nil)
+	if got := rec.Header().Get("Cache-Control"); got != "private, max-age=45" {
+		t.Errorf("with include: Cache-Control = %q, want private, max-age=45", got)
+	}
+}
+
+func TestFetchInterval_Accessor(t *testing.T) {
+	s, _ := newTestService(t)
+	if got := s.FetchInterval(); got != changingMaxAge {
+		t.Errorf("default FetchInterval = %v, want %v", got, changingMaxAge)
+	}
+
+	s.SetFetchInterval(10 * time.Second)
+	if got := s.FetchInterval(); got != 10*time.Second {
+		t.Errorf("FetchInterval = %v, want 10s", got)
+	}
+
+	s.fetchInterval.Store(0)
+	if got := s.shortCacheDuration(); got != changingMaxAge {
+		t.Errorf("zero store shortCacheDuration = %v, want %v", got, changingMaxAge)
+	}
+
+	s.SetFetchInterval(-1 * time.Second)
+	if got := s.FetchInterval(); got != changingMaxAge {
+		t.Errorf("negative FetchInterval = %v, want %v", got, changingMaxAge)
+	}
+}
