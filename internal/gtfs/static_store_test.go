@@ -1,11 +1,75 @@
 package gtfs
 
 import (
+	"sync"
 	"testing"
 	"time"
 
 	"watchdog.onebusaway.org/internal/models"
 )
+
+// returnsWithin runs fn and fails the test if it has not returned within d.
+// A deadlocked call never returns, so without the timeout a regression would
+// hang the whole package until go test's own timeout fires.
+func returnsWithin(t *testing.T, d time.Duration, fn func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fn()
+	}()
+	select {
+	case <-done:
+	case <-time.After(d):
+		t.Fatalf("call did not return within %v: StaticStore lazy init deadlocked", d)
+	}
+}
+
+func TestZeroValueStaticStoreScheduleStoreReturns(t *testing.T) {
+	store := &StaticStore{}
+	var schedules *ScheduleStore
+	returnsWithin(t, 5*time.Second, func() { schedules = store.ScheduleStore() })
+	if schedules == nil {
+		t.Fatal("ScheduleStore() returned nil for a zero-value StaticStore")
+	}
+}
+
+func TestZeroValueStaticStoreTripIndexEnabledReturns(t *testing.T) {
+	store := &StaticStore{}
+	var enabled bool
+	returnsWithin(t, 5*time.Second, func() { enabled = store.TripIndexEnabled() })
+	if !enabled {
+		t.Fatal("TripIndexEnabled() = false for a zero-value StaticStore, want the default true")
+	}
+}
+
+func TestLazyScheduleStoreKeepsEarlierTripIndexSetting(t *testing.T) {
+	store := &StaticStore{}
+	store.SetTripIndexEnabled(false) // schedules is still nil, so only the flag is recorded
+	var enabled bool
+	returnsWithin(t, 5*time.Second, func() { enabled = store.ScheduleStore().TripIndexEnabled() })
+	if enabled {
+		t.Fatal("lazily built ScheduleStore ignored SetTripIndexEnabled(false) made before it existed")
+	}
+}
+
+func TestZeroValueStaticStoreConcurrentLazyInitSharesOneStore(t *testing.T) {
+	store := &StaticStore{}
+	const callers = 8
+	got := make([]*ScheduleStore, callers)
+	returnsWithin(t, 5*time.Second, func() {
+		var wg sync.WaitGroup
+		for i := range callers {
+			wg.Go(func() { got[i] = store.ScheduleStore() })
+		}
+		wg.Wait()
+	})
+	for i, schedules := range got {
+		if schedules == nil || schedules != got[0] {
+			t.Fatalf("caller %d got ScheduleStore %p, want the single shared store %p", i, schedules, got[0])
+		}
+	}
+}
 
 func TestIsConfiguredIgnoresNonStaticFields(t *testing.T) {
 	server := models.ObaServer{ServerName: "s", AgencyID: "a", ObaBaseURL: "https://oba.example", ObaApiKey: "old", GtfsStaticFeeds: []string{"https://feed.example/a.zip"}}
