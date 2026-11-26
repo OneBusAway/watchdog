@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"watchdog.onebusaway.org/internal/config"
+	"watchdog.onebusaway.org/internal/history"
 	"watchdog.onebusaway.org/internal/metrics"
 	"watchdog.onebusaway.org/internal/models"
 )
@@ -160,5 +161,26 @@ func TestCollector_ServerModeRecordsOncePerTick(t *testing.T) {
 	defer mu.Unlock()
 	if metricsCalls != 1 {
 		t.Errorf("metrics.json fetched %d times, want 1", metricsCalls)
+	}
+}
+
+func TestFlushHistory_NoStorageReturnsImmediately(t *testing.T) {
+	app := newTestApplication(t)
+	app.HistoryService = history.NewHistoryService(nil, app.Logger, "test", nil)
+	app.InvestigationDB = nil
+
+	// An in-flight collection cycle holds collectMu.
+	app.collectMu.Lock()
+	defer app.collectMu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		app.FlushHistory()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("FlushHistory waited on collectMu with storage disabled")
 	}
 }
