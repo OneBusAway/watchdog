@@ -147,9 +147,16 @@ type stopEpisodePlan struct {
 	// complete holds the agencies whose IDs appear in agencyIDs. Only they
 	// open or close episodes.
 	complete map[string]bool
-	opens    []unmatchedStopKey
-	closes   []unmatchedStopKey
-	still    []unmatchedStopKey
+	// unlisted holds the recorded agencies missing from agencyIDs. OBA no
+	// longer tracks them, so their open episodes close: no later response of
+	// theirs is complete, and they would never close otherwise.
+	unlisted map[string]bool
+	// unlistedCloses are the open episodes closed because their agency left
+	// agencyIDs, sorted like closes.
+	unlistedCloses []unmatchedStopKey
+	opens          []unmatchedStopKey
+	closes         []unmatchedStopKey
+	still          []unmatchedStopKey
 }
 
 // planStopEpisodes compares a response with the open episodes in memory.
@@ -160,7 +167,7 @@ func planStopEpisodes(open map[unmatchedStopKey]*openStopEpisode, agencies []mod
 		reportedAgencies[id] = true
 	}
 
-	plan := stopEpisodePlan{complete: make(map[string]bool)}
+	plan := stopEpisodePlan{complete: make(map[string]bool), unlisted: make(map[string]bool)}
 	seenAgencies := make(map[string]bool, len(agencies))
 	reported := make(map[unmatchedStopKey]bool)
 	for _, agency := range agencies {
@@ -170,6 +177,7 @@ func planStopEpisodes(open map[unmatchedStopKey]*openStopEpisode, agencies []mod
 		seenAgencies[agency.AgencyID] = true
 		plan.agencies = append(plan.agencies, agency)
 		if !reportedAgencies[agency.AgencyID] {
+			plan.unlisted[agency.AgencyID] = true
 			continue
 		}
 		plan.complete[agency.AgencyID] = true
@@ -192,6 +200,22 @@ func planStopEpisodes(open map[unmatchedStopKey]*openStopEpisode, agencies []mod
 			plan.closes = append(plan.closes, key)
 		}
 	}
+	// Episodes of unlisted agencies close separately from closes: no complete
+	// response of theirs exists to close them against.
+	var unlistedCloses []unmatchedStopKey
+	for key := range open {
+		if plan.unlisted[key.agencyID] {
+			unlistedCloses = append(unlistedCloses, key)
+		}
+	}
+	sort.Slice(unlistedCloses, func(i, j int) bool {
+		a, b := unlistedCloses[i], unlistedCloses[j]
+		if a.agencyID != b.agencyID {
+			return a.agencyID < b.agencyID
+		}
+		return a.stopID < b.stopID
+	})
+	plan.unlistedCloses = unlistedCloses
 	sort.Slice(plan.closes, func(i, j int) bool {
 		a, b := plan.closes[i], plan.closes[j]
 		if a.agencyID != b.agencyID {
