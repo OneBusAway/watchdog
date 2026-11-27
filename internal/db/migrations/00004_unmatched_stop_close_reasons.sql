@@ -16,6 +16,13 @@ ALTER TABLE unmatched_stop_episode
         CHECK (close_reason IN ('not_reported', 'agency_unlisted', 'agency_removed'));
 
 -- +goose Down
+-- Rows closed with a disappearance reason violate the restored constraint,
+-- so map them back to 'not_reported' first. The closing response stays; only
+-- the reason label has no old equivalent.
+UPDATE unmatched_stop_episode
+SET close_reason = 'not_reported'
+WHERE close_reason IN ('agency_unlisted', 'agency_removed');
+
 ALTER TABLE unmatched_stop_episode
     DROP CONSTRAINT unmatched_stop_episode_close_reason_check,
     ADD CONSTRAINT unmatched_stop_episode_close_reason_check

@@ -69,6 +69,38 @@ func (app *Application) flushRemovedServerHistory(servers []models.ObaServer) {
 	}
 }
 
+// ReconcileHistoryAtStartup closes persisted unmatched-stop episodes whose
+// agency left the configuration while Watchdog was down. A remote-config
+// deployment gets the same reconciliation from the first refresh's
+// OnConfigUpdated; a --config-file deployment has no refresh loop, so without
+// this the episodes would stay open — and be reported open by the
+// investigation API — until the agency returns (#438). Server-scoped entries
+// record every agency OBA reports, so only agency-mode entries constrain
+// which agencies are kept.
+func (app *Application) ReconcileHistoryAtStartup(ctx context.Context, servers []models.ObaServer) {
+	if app.HistoryService == nil {
+		return
+	}
+	configuredAgencies := make(map[string]map[string]bool)
+	serverByURL := make(map[string]models.ObaServer)
+	for _, server := range servers {
+		baseURL := utils.SanitizeServerURL(server.ObaBaseURL)
+		if baseURL == "" || server.IsServerScoped() {
+			continue
+		}
+		if configuredAgencies[baseURL] == nil {
+			configuredAgencies[baseURL] = make(map[string]bool)
+		}
+		configuredAgencies[baseURL][server.AgencyID] = true
+		serverByURL[baseURL] = server
+	}
+	for baseURL, keep := range configuredAgencies {
+		ctx, cancel := context.WithTimeout(ctx, historyFlushTimeout)
+		app.HistoryService.ReconcileConfiguredAgencies(ctx, serverByURL[baseURL], keep)
+		cancel()
+	}
+}
+
 // FlushHistory waits for an in-flight collection cycle to finish, then saves
 // the last-reported times of every open unmatched-stop episode. main calls it
 // on clean shutdown, after the collection context is canceled. With

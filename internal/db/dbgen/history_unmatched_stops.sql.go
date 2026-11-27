@@ -64,8 +64,8 @@ func (q *Queries) EnsureClusterScheme(ctx context.Context, arg EnsureClusterSche
 	return err
 }
 
-const getLastCompleteResponseAgencyID = `-- name: GetLastCompleteResponseAgencyID :one
-SELECT ra.response_agency_id
+const getLastCompleteResponseAgency = `-- name: GetLastCompleteResponseAgency :one
+SELECT ra.response_agency_id, r.observed_at
 FROM onebusaway_metrics_response_agency ra
 JOIN onebusaway_metrics_response r ON r.response_id = ra.response_id
 WHERE ra.agency_id = $1
@@ -74,14 +74,19 @@ ORDER BY r.observed_at DESC, ra.response_agency_id DESC
 LIMIT 1
 `
 
-// The newest complete response recorded for an agency. Episodes that close
-// because the agency disappeared close against it, since no later response
-// of that agency is complete.
-func (q *Queries) GetLastCompleteResponseAgencyID(ctx context.Context, agencyID int64) (int64, error) {
-	row := q.db.QueryRow(ctx, getLastCompleteResponseAgencyID, agencyID)
-	var response_agency_id int64
-	err := row.Scan(&response_agency_id)
-	return response_agency_id, err
+type GetLastCompleteResponseAgencyRow struct {
+	ResponseAgencyID int64
+	ObservedAt       time.Time
+}
+
+// The newest complete response recorded for an agency, with its observation
+// time. Episodes that close because the agency disappeared close against it,
+// since no later response of that agency is complete.
+func (q *Queries) GetLastCompleteResponseAgency(ctx context.Context, agencyID int64) (GetLastCompleteResponseAgencyRow, error) {
+	row := q.db.QueryRow(ctx, getLastCompleteResponseAgency, agencyID)
+	var i GetLastCompleteResponseAgencyRow
+	err := row.Scan(&i.ResponseAgencyID, &i.ObservedAt)
+	return i, err
 }
 
 const getNewestLinkedStopMetadata = `-- name: GetNewestLinkedStopMetadata :one

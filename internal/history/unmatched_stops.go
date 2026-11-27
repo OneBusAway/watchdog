@@ -459,12 +459,15 @@ func (h *HistoryService) recordEpisodeChanges(ctx context.Context, q *dbgen.Quer
 			return nil, fmt.Errorf("server %q: close unmatched stop %q: %w", server.ServerName, key.stopID, err)
 		}
 	}
-	// An unlisted agency has no complete response in this poll to close
-	// against, so its episodes close against its last complete one.
-	for _, key := range plan.unlistedCloses {
-		episode := open[key]
-		if err := closeDisappearedAgencyEpisodes(ctx, q, []*openStopEpisode{episode}, closeReasonAgencyUnlisted); err != nil {
-			return nil, fmt.Errorf("server %q: close unmatched stop %q of unlisted agency %q: %w", server.ServerName, key.stopID, key.agencyID, err)
+	// Unlisted agencies have no complete response in this poll to close
+	// against, so their episodes close against their last complete one.
+	if len(plan.unlistedCloses) > 0 {
+		episodes := make([]*openStopEpisode, 0, len(plan.unlistedCloses))
+		for _, key := range plan.unlistedCloses {
+			episodes = append(episodes, open[key])
+		}
+		if err := closeDisappearedAgencyEpisodes(ctx, q, serverID, episodes, closeReasonAgencyUnlisted); err != nil {
+			return nil, fmt.Errorf("server %q: close unmatched stops of unlisted agencies: %w", server.ServerName, err)
 		}
 	}
 	return opened, nil
@@ -522,8 +525,10 @@ func (h *HistoryService) FlushServer(ctx context.Context, baseURL string) {
 // entries are removed: no poll records those agencies any more, so their
 // episodes would otherwise stay in memory for good. Closing the rows, not
 // just saving last_reported_at, keeps a later reload from loading them back
-// (#438). They are dropped from memory even if the close fails, since
-// nothing would retry it.
+// (#438). An episode leaves memory only once its close is on disk: when the
+// write fails the row is still open in the database, so the episode stays
+// here for the next config update to retry, and a restart reloads it either
+// way.
 func (h *HistoryService) FlushAgencies(ctx context.Context, baseURL string, keep map[string]bool) {
 	if h == nil || h.pool == nil || h.stops == nil {
 		return
@@ -534,6 +539,37 @@ func (h *HistoryService) FlushAgencies(ctx context.Context, baseURL string, keep
 	}
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
+	h.closeRemovedAgenciesLocked(ctx, entry, keep)
+}
+
+// ReconcileConfiguredAgencies is FlushAgencies for a server that may not have
+// been polled yet: it loads the server's open episodes from the database
+// first. main calls it at startup, because an agency removed while Watchdog
+// was down leaves its episodes open in the database, and a --config-file
+// deployment has no refresh loop to close them later (#438).
+func (h *HistoryService) ReconcileConfiguredAgencies(ctx context.Context, server models.ObaServer, keep map[string]bool) {
+	if h == nil || h.pool == nil || h.stops == nil {
+		return
+	}
+	baseURL := utils.SanitizeServerURL(server.ObaBaseURL)
+	if baseURL == "" {
+		return
+	}
+	entry := h.stops.forServer(baseURL, server)
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	entry.server = server
+	if !entry.loaded && !h.loadOpenEpisodes(ctx, server, baseURL, entry, time.Now().UTC()) {
+		return
+	}
+	h.closeRemovedAgenciesLocked(ctx, entry, keep)
+}
+
+// closeRemovedAgenciesLocked closes entry's open episodes whose agency is not
+// in keep, each against its agency's last complete observation. Entry must be
+// locked and loaded. Episodes whose close write fails stay in memory so the
+// next call retries them.
+func (h *HistoryService) closeRemovedAgenciesLocked(ctx context.Context, entry *serverStopEpisodes, keep map[string]bool) {
 	var removed []unmatchedStopKey
 	var episodes []*openStopEpisode
 	for key, episode := range entry.open {
@@ -547,11 +583,17 @@ func (h *HistoryService) FlushAgencies(ctx context.Context, baseURL string, keep
 	}
 	ctx, cancel := context.WithTimeout(ctx, writeTimeout)
 	defer cancel()
-	h.write(ctx, unmatchedStopFlushStep, publicationTags(entry.server), func(q *dbgen.Queries) error {
-		return closeDisappearedAgencyEpisodes(ctx, q, episodes, closeReasonAgencyRemoved)
+	committed := h.write(ctx, unmatchedStopFlushStep, publicationTags(entry.server), func(q *dbgen.Queries) error {
+		serverID, err := ensureServer(ctx, q, entry.server, h.resolver)
+		if err != nil {
+			return err
+		}
+		return closeDisappearedAgencyEpisodes(ctx, q, serverID, episodes, closeReasonAgencyRemoved)
 	})
-	for _, key := range removed {
-		delete(entry.open, key)
+	if committed {
+		for _, key := range removed {
+			delete(entry.open, key)
+		}
 	}
 }
 
@@ -559,23 +601,74 @@ func (h *HistoryService) FlushAgencies(ctx context.Context, baseURL string, keep
 func ptr[T any](v T) *T { return &v }
 
 // closeDisappearedAgencyEpisodes closes episodes whose agency no longer has
-// complete responses, each against the agency's last complete response.
-func closeDisappearedAgencyEpisodes(ctx context.Context, q *dbgen.Queries, episodes []*openStopEpisode, reason string) error {
+// complete responses, grouping them by agency so each agency's episodes close
+// against one shared closing response.
+func closeDisappearedAgencyEpisodes(ctx context.Context, q *dbgen.Queries, serverID int64, episodes []*openStopEpisode, reason string) error {
+	byAgency := make(map[int64][]*openStopEpisode)
+	var order []int64
 	for _, episode := range episodes {
-		lastComplete, err := q.GetLastCompleteResponseAgencyID(ctx, episode.agencyID)
-		if err != nil {
-			return fmt.Errorf("last complete response of agency %d: %w", episode.agencyID, err)
+		if _, ok := byAgency[episode.agencyID]; !ok {
+			order = append(order, episode.agencyID)
 		}
-		if err := q.CloseUnmatchedStopEpisode(ctx, dbgen.CloseUnmatchedStopEpisodeParams{
-			ClosingResponseAgencyID: lastComplete,
-			CloseReason:             ptr(reason),
-			LastReportedAt:          episode.lastReportedAt,
-			UnmatchedStopEpisodeID:  episode.episodeID,
-		}); err != nil {
-			return fmt.Errorf("close episode %d (%s): %w", episode.episodeID, reason, err)
+		byAgency[episode.agencyID] = append(byAgency[episode.agencyID], episode)
+	}
+	for _, agencyID := range order {
+		group := byAgency[agencyID]
+		closingID, err := disappearanceClosingResponse(ctx, q, serverID, agencyID, group)
+		if err != nil {
+			return err
+		}
+		for _, episode := range group {
+			if err := q.CloseUnmatchedStopEpisode(ctx, dbgen.CloseUnmatchedStopEpisodeParams{
+				ClosingResponseAgencyID: closingID,
+				CloseReason:             ptr(reason),
+				LastReportedAt:          episode.lastReportedAt,
+				UnmatchedStopEpisodeID:  episode.episodeID,
+			}); err != nil {
+				return fmt.Errorf("close episode %d (%s): %w", episode.episodeID, reason, err)
+			}
 		}
 	}
 	return nil
+}
+
+// disappearanceClosingResponse picks the response an agency's episodes close
+// against: the newest complete response stored for it, unless a later poll
+// still reported one of the closing stops. Such a poll was a complete
+// observation — last_reported_at advances only when the agency's response is
+// complete and reports the stop — that quiet polls never store, so it is
+// recorded now and the episodes close against it. Without that, closed_at
+// (the closing response's time) could precede an episode's last_reported_at.
+func disappearanceClosingResponse(ctx context.Context, q *dbgen.Queries, serverID, agencyID int64, episodes []*openStopEpisode) (int64, error) {
+	last, err := q.GetLastCompleteResponseAgency(ctx, agencyID)
+	if err != nil {
+		return 0, fmt.Errorf("last complete response of agency %d: %w", agencyID, err)
+	}
+	lastSeen := last.ObservedAt
+	for _, episode := range episodes {
+		if episode.lastReportedAt.After(lastSeen) {
+			lastSeen = episode.lastReportedAt
+		}
+	}
+	if !lastSeen.After(last.ObservedAt) {
+		return last.ResponseAgencyID, nil
+	}
+	responseID, err := q.InsertOBAMetricsResponse(ctx, dbgen.InsertOBAMetricsResponseParams{
+		ServerID:   serverID,
+		ObservedAt: lastSeen,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("record the last complete observation of agency %d: %w", agencyID, err)
+	}
+	closingID, err := q.InsertOBAMetricsResponseAgency(ctx, dbgen.InsertOBAMetricsResponseAgencyParams{
+		ResponseID:       responseID,
+		AgencyID:         agencyID,
+		ResponseComplete: true,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("record the last complete observation of agency %d: %w", agencyID, err)
+	}
+	return closingID, nil
 }
 
 // Flush saves the last_reported_at of every open episode. main calls it on

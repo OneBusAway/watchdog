@@ -217,6 +217,36 @@ func TestMigrationsRollBackAndReapply(t *testing.T) {
 	expectNames(t, "API indexes after re-applying", listAPIIndexes(t, pool), expectedAPIIndexes)
 }
 
+// Migration 00004's down step restores the old close-reason constraint, so it
+// first maps the disappearance reasons back to 'not_reported'; without the
+// mapping the rollback would fail on any episode closed with one.
+func TestMigrateDownMapsDisappearanceCloseReasons(t *testing.T) {
+	u := newUnmatchedFixture(t)
+	ctx := context.Background()
+	closed := u.response(u.agency, true)
+	expectOK(t, u.exec(insertStopEpisode, u.stop, u.agency, closed, closed, "agency_removed"))
+
+	provider, err := db.NewProvider(u.pool)
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+	defer provider.Close()
+
+	if _, err := provider.DownTo(ctx, 3); err != nil {
+		t.Fatalf("migrate down over a disappearance-closed episode: %v", err)
+	}
+	var reason string
+	if err := u.pool.QueryRow(ctx, "SELECT close_reason FROM unmatched_stop_episode").Scan(&reason); err != nil {
+		t.Fatal(err)
+	}
+	if reason != "not_reported" {
+		t.Errorf("close_reason after downgrade = %q, want not_reported", reason)
+	}
+	if _, err := provider.Up(ctx); err != nil {
+		t.Fatalf("migrate up again: %v", err)
+	}
+}
+
 // expectedAPIIndexes are the list-endpoint indexes migration 00002 adds.
 var expectedAPIIndexes = []string{
 	"unmatched_stop_episode_agency_id_desc",

@@ -58,11 +58,11 @@ SET closing_response_agency_id = @closing_response_agency_id::bigint,
 WHERE unmatched_stop_episode_id = @unmatched_stop_episode_id
   AND closing_response_agency_id IS NULL;
 
--- name: GetLastCompleteResponseAgencyID :one
--- The newest complete response recorded for an agency. Episodes that close
--- because the agency disappeared close against it, since no later response
--- of that agency is complete.
-SELECT ra.response_agency_id
+-- name: GetLastCompleteResponseAgency :one
+-- The newest complete response recorded for an agency, with its observation
+-- time. Episodes that close because the agency disappeared close against it,
+-- since no later response of that agency is complete.
+SELECT ra.response_agency_id, r.observed_at
 FROM onebusaway_metrics_response_agency ra
 JOIN onebusaway_metrics_response r ON r.response_id = ra.response_id
 WHERE ra.agency_id = @agency_id

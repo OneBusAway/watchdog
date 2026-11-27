@@ -190,6 +190,12 @@ func main() {
 	// under, if it is missing. A no-op without the investigation store.
 	app.HistoryService.EnsureClusterScheme(ctx)
 
+	// Close unmatched-stop episodes whose agency left the configuration while
+	// Watchdog was down. A remote-config deployment gets the same
+	// reconciliation from the first refresh; a --config-file deployment has no
+	// later pass that would close them (#438).
+	app.ReconcileHistoryAtStartup(ctx, servers)
+
 	// Report the agencies Watchdog is tracking (those that passed config
 	// validation). This runs once at startup; it is re-triggered only when the
 	// remote config adds or removes an agency, never on the collection tick.

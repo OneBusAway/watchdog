@@ -232,12 +232,20 @@ func TestGetEpisodeCounts_AllTypesPresent(t *testing.T) {
 		}
 
 		if i == 0 {
-			if len(item.Closed) != 3 || item.Closed["not_reported"] != 0 ||
-				item.Closed["agency_unlisted"] != 0 || item.Closed["agency_removed"] != 0 {
+			if len(item.Closed) != 3 {
 				t.Errorf("item[%d].Closed = %+v, want not_reported, agency_unlisted and agency_removed at 0", i, item.Closed)
 			}
+			for _, r := range []string{"not_reported", "agency_unlisted", "agency_removed"} {
+				val, ok := item.Closed[r]
+				if !ok {
+					t.Errorf("item[%d].Closed missing expected key %q", i, r)
+				} else if val != 0 {
+					t.Errorf("item[%d].Closed[%q] = %d, want 0", i, r, val)
+				}
+			}
 		} else if i == 1 {
-			if len(item.Closed) != 1 || item.Closed["not_reported"] != 0 {
+			val, ok := item.Closed["not_reported"]
+			if len(item.Closed) != 1 || !ok || val != 0 {
 				t.Errorf("item[%d].Closed = %+v, want not_reported: 0", i, item.Closed)
 			}
 		} else {
