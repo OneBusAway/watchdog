@@ -274,9 +274,9 @@ func (s *InvestigationService) listUnmatchedStopEpisodes(w http.ResponseWriter, 
 	s.writeJSON(w, r, body, cacheShort())
 }
 
-// stopStaticContextIncludable accepts gtfs_static_version once its loader is registered.
+// stopStaticContextIncludable is what a stop static context accepts in include.
 var stopStaticContextIncludable = map[string]resourceKind{
-	"gtfs_static_version": "gtfs_static_version",
+	"gtfs_static_version": kindGTFSStaticVersion,
 }
 
 // stopStaticContext is one item of E16: what Watchdog's static GTFS said about the stop for part of the episode.
@@ -316,7 +316,7 @@ func stopStaticContextList(episodeID int64, rows []dbgen.ListUnmatchedStopEpisod
 	related := make([]itemLinks, 0, len(rows))
 	for i, row := range rows {
 		l := itemLinks{"gtfs_static_version": {
-			Kind: "gtfs_static_version",
+			Kind: kindGTFSStaticVersion,
 			ID:   row.GtfsStaticVersionID,
 			URL:  "/v1/gtfs-static-versions/" + strconv.FormatInt(row.GtfsStaticVersionID, 10),
 		}}
