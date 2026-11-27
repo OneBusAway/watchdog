@@ -105,7 +105,7 @@ func countVehiclePositions(server models.ObaServer, agencies []models.ObaServer,
 	if realtimeStore == nil {
 		err := fmt.Errorf("realtimeStore is nil for agency %s", server.AgencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
+			Tags: map[string]string{"agency_id": server.AgencyID, "agency_name": server.AgencyName, "server_name": server.ServerName},
 		})
 		return 0, err
 	}
@@ -116,7 +116,7 @@ func countVehiclePositions(server models.ObaServer, agencies []models.ObaServer,
 		emitAgencyPositions(server, agencies, nil, utils.SanitizeServerURL(server.ObaBaseURL))
 		err := fmt.Errorf("no GTFS-RT data available for agency %s", server.AgencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
+			Tags: map[string]string{"agency_id": server.AgencyID, "agency_name": server.AgencyName, "server_name": server.ServerName},
 		})
 		return 0, err
 	}
@@ -168,6 +168,7 @@ func countActiveVehiclesForAgency(ctx context.Context, client *onebusaway.Client
 		reportUnlessCanceled(ctx, err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"agency_id":   server.AgencyID,
+				"agency_name": server.AgencyName,
 				"server_name": server.ServerName,
 			},
 		})
@@ -187,6 +188,7 @@ func countActiveVehiclesForAgency(ctx context.Context, client *onebusaway.Client
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"agency_id":   server.AgencyID,
+				"agency_name": server.AgencyName,
 				"server_name": server.ServerName,
 			},
 		})
@@ -249,7 +251,7 @@ func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer,
 		emitTickSummary(server, agencies, vehicleLastSeen, routeAgencyIndex, tickSummary{feedEmpty: true}, serverURL)
 		err := fmt.Errorf("no GTFS-RT data available for agency %s", server.AgencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": serverName},
+			Tags: map[string]string{"agency_id": server.AgencyID, "agency_name": server.AgencyName, "server_name": serverName},
 		})
 		return err
 	}
@@ -537,7 +539,7 @@ func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, agencies
 	if realtimeData == nil {
 		err := fmt.Errorf("no GTFS-RT data available for agency %s", server.AgencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
+			Tags: map[string]string{"agency_id": server.AgencyID, "agency_name": server.AgencyName, "server_name": server.ServerName},
 		})
 		return err
 	}
@@ -546,7 +548,7 @@ func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, agencies
 	if !ok {
 		err := fmt.Errorf("no bounding box found for server key %s", server.ServerKey())
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
+			Tags: map[string]string{"agency_id": server.AgencyID, "agency_name": server.AgencyName, "server_name": server.ServerName},
 		})
 		return err
 	}

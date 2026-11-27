@@ -33,6 +33,23 @@ func sentryEventsMatching(rec *report.RecordingTransport, substr string) []*sent
 	return out
 }
 
+// assertAgencyTags fails the test unless every event carries the agency-scoped
+// tags for server.
+func assertAgencyTags(t *testing.T, server models.ObaServer, events []*sentry.Event) {
+	t.Helper()
+	for _, event := range events {
+		for tag, want := range map[string]string{
+			"agency_id":   server.AgencyID,
+			"agency_name": server.AgencyName,
+			"server_name": server.ServerName,
+		} {
+			if got := event.Tags[tag]; got != want {
+				t.Errorf("event %q %s tag = %q, want %q", event.Message, tag, got, want)
+			}
+		}
+	}
+}
+
 func reportOnceServer(baseURL string) models.ObaServer {
 	return models.ObaServer{
 		ServerName: "report-once",
@@ -64,19 +81,13 @@ func TestCollectAgencyChecksReportsEachFailureOnce(t *testing.T) {
 	if bundle.Level != sentry.LevelWarning {
 		t.Errorf("bundle event level = %q, want %q", bundle.Level, sentry.LevelWarning)
 	}
-	for tag, want := range map[string]string{
-		"agency_id":   server.AgencyID,
-		"agency_name": server.AgencyName,
-		"server_name": server.ServerName,
-	} {
-		if got := bundle.Tags[tag]; got != want {
-			t.Errorf("bundle event %s tag = %q, want %q", tag, got, want)
-		}
-	}
+	assertAgencyTags(t, server, bundleEvents)
 
-	if got := len(sentryEventsMatching(rec, "vehicles-for-agency")); got != 1 {
-		t.Fatalf("vehicles-for-agency failure produced %d Sentry events, want 1", got)
+	vehicleEvents := sentryEventsMatching(rec, "vehicles-for-agency")
+	if len(vehicleEvents) != 1 {
+		t.Fatalf("vehicles-for-agency failure produced %d Sentry events, want 1", len(vehicleEvents))
 	}
+	assertAgencyTags(t, server, vehicleEvents)
 }
 
 // A JSON null from VehiclesForAgency was only reported by the collector, so
@@ -95,11 +106,14 @@ func TestCollectAgencyChecksReportsNullVehiclesResponseOnce(t *testing.T) {
 	defer stub.Close()
 
 	app := newTestApplication(t)
-	app.collectAgencyChecks(context.Background(), reportOnceServer(stub.URL), nil, time.Time{}, false)
+	server := reportOnceServer(stub.URL)
+	app.collectAgencyChecks(context.Background(), server, nil, time.Time{}, false)
 
-	if got := len(sentryEventsMatching(rec, "null response")); got != 1 {
-		t.Fatalf("null VehiclesForAgency response produced %d Sentry events, want 1", got)
+	events := sentryEventsMatching(rec, "null response")
+	if len(events) != 1 {
+		t.Fatalf("null VehiclesForAgency response produced %d Sentry events, want 1", len(events))
 	}
+	assertAgencyTags(t, server, events)
 }
 
 // With no GTFS-RT data stored, each of the three vehicle passes fails once,
@@ -107,12 +121,15 @@ func TestCollectAgencyChecksReportsNullVehiclesResponseOnce(t *testing.T) {
 func TestCollectVehicleMetricsReportsMissingFeedOncePerPass(t *testing.T) {
 	rec := report.CaptureSentry(t)
 	app := newTestApplication(t)
+	server := reportOnceServer("http://oba.example.com")
 
-	app.collectVehicleMetrics(reportOnceServer("http://oba.example.com"), nil)
+	app.collectVehicleMetrics(server, nil)
 
-	if got := len(sentryEventsMatching(rec, "no GTFS-RT data available")); got != 3 {
-		t.Fatalf("missing GTFS-RT feed produced %d Sentry events, want 3 (one per pass)", got)
+	events := sentryEventsMatching(rec, "no GTFS-RT data available")
+	if len(events) != 3 {
+		t.Fatalf("missing GTFS-RT feed produced %d Sentry events, want 3 (one per pass)", len(events))
 	}
+	assertAgencyTags(t, server, events)
 }
 
 // A missing bounding box was only reported by the collector, so the
@@ -125,9 +142,11 @@ func TestCollectVehicleMetricsReportsMissingBoundingBoxOnce(t *testing.T) {
 
 	app.collectVehicleMetrics(server, nil)
 
-	if got := len(sentryEventsMatching(rec, "no bounding box found")); got != 1 {
-		t.Fatalf("missing bounding box produced %d Sentry events, want 1", got)
+	events := sentryEventsMatching(rec, "no bounding box found")
+	if len(events) != 1 {
+		t.Fatalf("missing bounding box produced %d Sentry events, want 1", len(events))
 	}
+	assertAgencyTags(t, server, events)
 }
 
 func pingStub(t *testing.T, handler http.HandlerFunc) *httptest.Server {
