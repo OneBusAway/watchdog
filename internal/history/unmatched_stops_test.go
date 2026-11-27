@@ -433,20 +433,28 @@ func TestLastReported_SavedOnShutdown(t *testing.T) {
 	}
 }
 
-func TestRecordOBAMetrics_IncompleteAgencyNoChange(t *testing.T) {
-	h, pool, counter := newCountedHistory(t)
+func TestRecordOBAMetrics_UnlistedAgencyClosesEpisodes(t *testing.T) {
+	h, pool, _ := newCountedHistory(t)
 	h.RecordOBAMetrics(ctx, stopServer, stopAgencies("a"), stopsResponse([]string{"a"}, map[string][]string{"a": {"1"}}), stopT0)
-	counter.reset()
 
-	// "a" is missing from agencyIDs: neither the omission of 1 nor the
-	// report of 2 counts.
+	// "a" leaves agencyIDs: its responses are never complete again, so its
+	// open episode closes against its last complete response, while the
+	// incomplete response still opens nothing (#438).
 	h.RecordOBAMetrics(ctx, stopServer, stopAgencies("a"), stopsResponse(nil, map[string][]string{"a": {"2"}}), stopT0.Add(time.Minute))
 
-	if n := counter.count(""); n != 0 {
-		t.Fatalf("incomplete response ran %d statements, want 0", n)
+	episode := onlyEpisode(t, pool)
+	if episode.stopID != "1" {
+		t.Fatalf("episode stop = %q, want 1: an incomplete response must not open episodes", episode.stopID)
 	}
-	if episode := onlyEpisode(t, pool); episode.stopID != "1" || episode.closeReason != nil {
-		t.Errorf("episode = %+v, want stop 1 still open", episode)
+	if episode.closeReason == nil || *episode.closeReason != "agency_unlisted" {
+		t.Fatalf("close_reason = %v, want agency_unlisted", episode.closeReason)
+	}
+	// The last complete response is the one that opened the episode.
+	if episode.closedAt == nil || !episode.closedAt.Equal(stopT0) {
+		t.Errorf("closed_at = %v, want the last complete response at %v", episode.closedAt, stopT0)
+	}
+	if memoryEpisode(t, h, "a", "1") != nil {
+		t.Error("closed episode is still in memory")
 	}
 }
 
@@ -729,15 +737,16 @@ func TestRecordOBAMetrics_ReloadIgnoresOtherEpisodeTime(t *testing.T) {
 	entry.loaded = false
 	entry.mu.Unlock()
 
-	// A poll that does not report the agency reloads without changing anything.
-	h.RecordOBAMetrics(ctx, stopServer, agencies, stopsResponse(nil, nil), stopT0.Add(3*time.Minute))
+	// A poll that still reports the stop reloads without closing anything.
+	pollAt := stopT0.Add(3 * time.Minute)
+	h.RecordOBAMetrics(ctx, stopServer, agencies, reported, pollAt)
 
 	got := memoryEpisode(t, h, "a", "1")
 	if got == nil || got.episodeID != reopened.episodeID {
 		t.Fatalf("memory episode = %+v, want episode %d", got, reopened.episodeID)
 	}
-	if !got.lastReportedAt.Equal(reopenedAt) {
-		t.Errorf("lastReportedAt = %v, want the database value %v", got.lastReportedAt, reopenedAt)
+	if !got.lastReportedAt.Equal(pollAt) {
+		t.Errorf("lastReportedAt = %v, want the still-reported poll time %v", got.lastReportedAt, pollAt)
 	}
 }
 
@@ -827,14 +836,40 @@ func TestFlushAgencies_DropsOnlyRemovedAgency(t *testing.T) {
 		t.Error("kept agency's episode was dropped")
 	}
 	var stored time.Time
+	var closeReason *string
 	if err := pool.QueryRow(ctx, `
-		SELECT e.last_reported_at
+		SELECT e.last_reported_at, e.close_reason
 		FROM unmatched_stop_episode e
 		JOIN reported_stop s ON s.reported_stop_id = e.reported_stop_id
-		WHERE s.oba_stop_id = '1'`).Scan(&stored); err != nil {
+		WHERE s.oba_stop_id = '1'`).Scan(&stored, &closeReason); err != nil {
 		t.Fatal(err)
 	}
 	if !stored.Equal(lastSeen) {
 		t.Errorf("removed agency's last_reported_at = %v, want %v saved", stored, lastSeen)
+	}
+	if closeReason == nil || *closeReason != "agency_removed" {
+		t.Errorf("removed agency's close_reason = %v, want agency_removed", closeReason)
+	}
+	var keptReason *string
+	if err := pool.QueryRow(ctx, `
+		SELECT e.close_reason
+		FROM unmatched_stop_episode e
+		JOIN reported_stop s ON s.reported_stop_id = e.reported_stop_id
+		WHERE s.oba_stop_id = '2'`).Scan(&keptReason); err != nil {
+		t.Fatal(err)
+	}
+	if keptReason != nil {
+		t.Errorf("kept agency's close_reason = %v, want still open", *keptReason)
+	}
+
+	// After a restart, the removed agency's episode stays out of memory: a
+	// fresh service over the same database loads only open rows (#438).
+	h2 := NewHistoryService(pool, discardLogger(), "test-build", nil)
+	h2.RecordOBAMetrics(ctx, agencyB, []models.ObaServer{agencyB}, stopsResponse([]string{"b"}, map[string][]string{"b": {"2"}}), stopT0.Add(2*time.Minute))
+	if memoryEpisode(t, h2, "a", "1") != nil {
+		t.Error("removed agency's closed episode was reloaded after restart")
+	}
+	if memoryEpisode(t, h2, "b", "2") == nil {
+		t.Error("kept agency's episode was not reloaded after restart")
 	}
 }

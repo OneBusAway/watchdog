@@ -165,7 +165,7 @@ This section defines the use cases the API must support. Each use case states wh
   3. Follow `links.static_contexts` for the stop name and location.
   4. Follow `links.opening_response` and `links.closing_response` for the agency's unmatched and matched counts in the responses that opened and closed the episode.
 - **Value to the observer:** Preserves the evidence of a transient condition that is no longer visible upstream, so the alert can be reviewed rather than dismissed.
-- **Limitations:** `close_reason: "not_reported"` means OBA stopped listing the stop. It does not confirm that the stop became matched.
+- **Limitations:** `close_reason: "not_reported"` means OBA stopped listing the stop. It does not confirm that the stop became matched. `close_reason: "agency_unlisted"` or `"agency_removed"` means Watchdog closed the episode because the agency disappeared (from OBA's `agencyIDs` or from the configuration); `closed_at` is then the agency's last complete response, not when Watchdog recorded the closure.
 
 #### UC-03: Assess the recurrence of an unmatched stop or trip
 
@@ -648,7 +648,7 @@ Response shape:
 
 These carry over from the ADR and the schema document:
 - Every episode has `status`: `open` or `closed`.
-- Unmatched episodes expose `close_reason: "not_reported"`. No representation has `resolved`, `fixed`, or `matched` fields.
+- Unmatched episodes expose `close_reason`: `"not_reported"` when a complete response stopped listing the ID, `"agency_unlisted"` or `"agency_removed"` (stop episodes only) when the agency disappeared. No representation has `resolved`, `fixed`, or `matched` fields.
 - Static context is labelled `"source": "watchdog_static_gtfs"`. It is what Watchdog's static GTFS said, not proof of what OBA used.
 - `opened_at` and `closed_at` are Watchdog observation times, not the moment a condition actually began or ended.
 - Vehicle close reasons describe the observed closing condition, such as `not_present_in_full_dataset`, never a cause.
