@@ -342,3 +342,203 @@ func TestCountActiveVehiclesForAgencyRedactsAPIKeyFromErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateVehicleTimestamp(t *testing.T) {
+	now := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+
+	cases := []struct {
+		name       string
+		ts         *time.Time
+		now        time.Time
+		wantValid  bool
+		wantReason string
+	}{
+		{
+			name:       "nil timestamp is treated as missing, not malformed",
+			ts:         nil,
+			now:        now,
+			wantValid:  true,
+			wantReason: "",
+		},
+		{
+			name:       "current timestamp is valid",
+			ts:         &now,
+			now:        now,
+			wantValid:  true,
+			wantReason: "",
+		},
+		{
+			name: "recent past timestamp is valid",
+			ts: func() *time.Time {
+				t := now.Add(-5 * time.Minute)
+				return &t
+			}(),
+			now:        now,
+			wantValid:  true,
+			wantReason: "",
+		},
+		{
+			name: "slight future timestamp within skew tolerance is valid",
+			ts: func() *time.Time {
+				t := now.Add(2 * time.Minute)
+				return &t
+			}(),
+			now:        now,
+			wantValid:  true,
+			wantReason: "",
+		},
+		{
+			name:       "zero time value is invalid epoch_zero",
+			ts:         &time.Time{},
+			now:        now,
+			wantValid:  false,
+			wantReason: "epoch_zero",
+		},
+		{
+			name: "unix epoch zero is invalid epoch_zero",
+			ts: func() *time.Time {
+				t := time.Unix(0, 0).UTC()
+				return &t
+			}(),
+			now:        now,
+			wantValid:  false,
+			wantReason: "epoch_zero",
+		},
+		{
+			name: "negative unix timestamp is invalid epoch_zero",
+			ts: func() *time.Time {
+				t := time.Unix(-100, 0).UTC()
+				return &t
+			}(),
+			now:        now,
+			wantValid:  false,
+			wantReason: "epoch_zero",
+		},
+		{
+			name: "millisecond timestamp is invalid milliseconds",
+			ts: func() *time.Time {
+				t := time.Unix(1794592160000, 0).UTC()
+				return &t
+			}(),
+			now:        now,
+			wantValid:  false,
+			wantReason: "milliseconds",
+		},
+		{
+			name: "extreme future clock skew is invalid future",
+			ts: func() *time.Time {
+				t := now.Add(15 * time.Minute)
+				return &t
+			}(),
+			now:        now,
+			wantValid:  false,
+			wantReason: "future",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			valid, reason := validateVehicleTimestamp(tc.ts, tc.now)
+			if valid != tc.wantValid || reason != tc.wantReason {
+				t.Errorf("validateVehicleTimestamp() = (%v, %q), want (%v, %q)", valid, reason, tc.wantValid, tc.wantReason)
+			}
+		})
+	}
+}
+
+func TestTrackInvalidVehicleTimestampsAgencyMode(t *testing.T) {
+	server := models.ObaServer{AgencyID: "agency-a", ObaBaseURL: "https://a.example.com", AgencyName: "Agency A", ServerName: "server-a"}
+	now := time.Now().UTC()
+
+	store := gtfs.NewRealtimeStore()
+	lat := float32(47.6)
+	lon := float32(-122.3)
+
+	validTs := now.Add(-1 * time.Minute)
+	msTs := time.Unix(1794592160000, 0).UTC()
+	futureTs := now.Add(2 * time.Hour)
+	zeroTs := time.Unix(0, 0).UTC()
+
+	vehicles := []models.RealtimeVehicle{
+		{Vehicle: remoteGtfs.Vehicle{ID: &remoteGtfs.VehicleID{ID: "v-valid"}, Position: &remoteGtfs.Position{Latitude: &lat, Longitude: &lon}, Timestamp: &validTs}},
+		{Vehicle: remoteGtfs.Vehicle{ID: &remoteGtfs.VehicleID{ID: "v-ms"}, Position: &remoteGtfs.Position{Latitude: &lat, Longitude: &lon}, Timestamp: &msTs}},
+		{Vehicle: remoteGtfs.Vehicle{ID: &remoteGtfs.VehicleID{ID: "v-future"}, Position: &remoteGtfs.Position{Latitude: &lat, Longitude: &lon}, Timestamp: &futureTs}},
+		{Vehicle: remoteGtfs.Vehicle{ID: &remoteGtfs.VehicleID{ID: "v-zero"}, Position: &remoteGtfs.Position{Latitude: &lat, Longitude: &lon}, Timestamp: &zeroTs}},
+		{Vehicle: remoteGtfs.Vehicle{ID: &remoteGtfs.VehicleID{ID: "v-nil"}, Position: &remoteGtfs.Position{Latitude: &lat, Longitude: &lon}, Timestamp: nil}},
+	}
+	store.Set(server.ServerKey(), &models.RealtimeData{
+		Vehicles:      vehicles,
+		ObservationAt: now,
+	})
+
+	bounds := geo.NewBoundingBoxStore()
+	bounds.Set(server.ServerKey(), geo.BoundingBox{MinLat: -90, MaxLat: 90, MinLon: -180, MaxLon: 180})
+
+	if err := trackInvalidVehiclesAndStoppedOutOfBounds(server, nil, bounds, store, nil); err != nil {
+		t.Fatalf("track: %v", err)
+	}
+
+	got, err := getMetricValue(InvalidVehicleTimestampsGauge, map[string]string{
+		"agency_id":   server.AgencyID,
+		"agency_name": server.AgencyName,
+		"server_name": server.ServerName,
+		"server_url":  server.ObaBaseURL,
+	})
+	if err != nil {
+		t.Fatalf("get metric: %v", err)
+	}
+	// Out of 5 vehicles: 1 valid, 1 nil (missing, not malformed), 3 invalid (ms, future, zero)
+	if got != 3 {
+		t.Fatalf("expected 3 invalid timestamps, got %v", got)
+	}
+}
+
+func TestTrackVehicleTelemetryRejectsMalformedTimestamp(t *testing.T) {
+	server := models.ObaServer{AgencyID: "agency-a", ObaBaseURL: "https://a.example.com", AgencyName: "Agency A", ServerName: "server-a"}
+	now := time.Now().UTC()
+	msTs := time.Unix(1794592160000, 0).UTC()
+	lat := float32(47.6)
+	lon := float32(-122.3)
+
+	store := gtfs.NewRealtimeStore()
+	store.Set(server.ServerKey(), &models.RealtimeData{
+		Vehicles: []models.RealtimeVehicle{
+			{FeedID: "0", StateHash: "h1", Vehicle: remoteGtfs.Vehicle{
+				ID:        &remoteGtfs.VehicleID{ID: "v-ms"},
+				Position:  &remoteGtfs.Position{Latitude: &lat, Longitude: &lon},
+				Timestamp: &msTs,
+			}},
+		},
+		ObservationAt: now,
+	})
+
+	lastSeen := NewVehicleLastSeen()
+	if err := trackVehicleTelemetry(server, nil, lastSeen, store, gtfs.NewRouteAgencyIndex()); err != nil {
+		t.Fatalf("track: %v", err)
+	}
+
+	// Source timestamp should NOT be emitted for malformed timestamp (year 58838)
+	labels := map[string]string{
+		"vehicle_id":  "v-ms",
+		"agency_id":   server.AgencyID,
+		"agency_name": server.AgencyName,
+		"server_name": server.ServerName,
+		"server_url":  server.ObaBaseURL,
+		"feed":        "0",
+	}
+	if series := seriesMatching(GtfsRtVehicleSourceTimestamp, labels); len(series) != 0 {
+		t.Fatalf("expected no source timestamp emitted for millisecond timestamp, got %d series", len(series))
+	}
+	if series := seriesMatching(VehicleSpeedGauge, labels); len(series) != 0 {
+		t.Fatalf("expected no speed emitted for millisecond timestamp, got %d series", len(series))
+	}
+
+	// LastSeen time should NOT be polluted with ms timestamp
+	seen, ok := lastSeen.Get(server.ServerKey(), "0", "v-ms")
+	if !ok {
+		t.Fatal("expected vehicle to be tracked in LastSeen")
+	}
+	if !seen.Time.IsZero() {
+		t.Fatalf("expected LastSeen.Time to be zero for invalid timestamp, got %v", seen.Time)
+	}
+}

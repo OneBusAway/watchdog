@@ -215,6 +215,58 @@ func TestTrackInvalidVehiclesBucketsByAgencyInServerMode(t *testing.T) {
 	}
 }
 
+// TestTrackInvalidVehicleTimestampsBucketsByAgencyInServerMode checks that
+// invalid timestamp gauges are attributed per agency, with unattributed vehicles
+// falling to the server-scoped catch-all.
+func TestTrackInvalidVehicleTimestampsBucketsByAgencyInServerMode(t *testing.T) {
+	const baseURL = "https://timestamps.example.com"
+	server, agencies, store, index := serverModeFixture(t, baseURL)
+
+	now := time.Now().UTC()
+	msTs := time.Unix(1794592160000, 0).UTC()
+	validTs := now.Add(-1 * time.Minute)
+
+	// Agency A's vehicle gets a millisecond timestamp; agency B's stays valid.
+	data := store.Get(server.ServerKey())
+	data.Vehicles[0].Vehicle.Timestamp = &msTs
+	data.Vehicles[1].Vehicle.Timestamp = &validTs
+	data.ObservationAt = now
+	store.Set(server.ServerKey(), data)
+
+	bounds := geo.NewBoundingBoxStore()
+	bounds.Set(server.ServerKey(), geo.BoundingBox{MinLat: -90, MaxLat: 90, MinLon: -180, MaxLon: 180})
+
+	if err := trackInvalidVehiclesAndStoppedOutOfBounds(server, agencies, bounds, store, index); err != nil {
+		t.Fatalf("track: %v", err)
+	}
+
+	if got := len(gaugeSeriesForServer(t, InvalidVehicleTimestampsGauge, baseURL)); got != 3 {
+		t.Fatalf("expected 2 agency series plus the server-scoped catch-all, got %d", got)
+	}
+
+	for _, tc := range []struct {
+		agencyID, agencyName string
+		want                 float64
+	}{
+		{"agency-a", "Agency A", 1},
+		{"agency-b", "Agency B", 0},
+		{"", "", 0},
+	} {
+		got, err := getMetricValue(InvalidVehicleTimestampsGauge, map[string]string{
+			"agency_id":   tc.agencyID,
+			"agency_name": tc.agencyName,
+			"server_name": "multi",
+			"server_url":  baseURL,
+		})
+		if err != nil {
+			t.Fatalf("read gauge for %q: %v", tc.agencyID, err)
+		}
+		if got != tc.want {
+			t.Fatalf("expected %q to report %v invalid timestamps, got %v", tc.agencyID, tc.want, got)
+		}
+	}
+}
+
 // TestTrackVehicleTelemetryAgencyModeUsesFilteredSnapshot verifies that the
 // agency metric pass consumes the already-filtered realtime snapshot without
 // trying to attribute vehicles a second time.
