@@ -2,6 +2,8 @@ package history
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,14 +58,33 @@ func onTrip(v remoteGtfs.Vehicle, tripID string) remoteGtfs.Vehicle {
 
 // vehicleSnapshot is a full-dataset snapshot of vehicleServer's feed.
 func vehicleSnapshot(at time.Time, vehicles ...remoteGtfs.Vehicle) *models.RealtimeData {
-	snapshot := &models.RealtimeData{
-		ObservationAt: at,
-		Feeds:         []models.RealtimeFeed{{FeedID: "0", FeedURL: vehicleFeedURL, FullDataset: true}},
+	return filteredSnapshot(at, nil, vehicles...)
+}
+
+// filteredSnapshot is a full-dataset snapshot whose response also held the
+// vehicles in alsoReported, which agency-mode filtering left out of this
+// entry's view.
+func filteredSnapshot(at time.Time, alsoReported []string, vehicles ...remoteGtfs.Vehicle) *models.RealtimeData {
+	reported := make(map[string]struct{}, len(vehicles)+len(alsoReported))
+	for _, id := range alsoReported {
+		reported[id] = struct{}{}
 	}
+	snapshot := &models.RealtimeData{ObservationAt: at}
 	for _, v := range vehicles {
+		reported[v.GetID().ID] = struct{}{}
 		snapshot.Vehicles = append(snapshot.Vehicles, models.RealtimeVehicle{Vehicle: v, FeedID: "0"})
 	}
+	snapshot.Feeds = []models.RealtimeFeed{{FeedID: "0", FeedURL: vehicleFeedURL, FullDataset: true, ReportedVehicleIDs: reported}}
 	return snapshot
+}
+
+// noWriteFailures fails the test when the service logged a failed history
+// write.
+func noWriteFailures(t *testing.T, logs fmt.Stringer) {
+	t.Helper()
+	if strings.Contains(logs.String(), "Failed to write investigation history") {
+		t.Fatalf("a history write failed:\n%s", logs)
+	}
 }
 
 func testBoxes(server models.ObaServer) *geo.BoundingBoxStore {
@@ -206,6 +227,9 @@ func TestVehicle_QuietTickNoDatabase(t *testing.T) {
 	h, _, counter := newCountedHistory(t)
 	invalid := zeroCoordinates(testVehicle("bus-1", vehicleT0))
 	recordVehicles(h, ctx, vehicleServer, vehicleSnapshot(vehicleT0, invalid))
+	if episode := onlyVehicleEpisode(t, h.pool); episode.anomaly != string(anomalyInvalidCoordinate) {
+		t.Fatalf("first tick opened %+v, want invalid_coordinate", episode)
+	}
 	counter.reset()
 
 	later := vehicleT0.Add(30 * time.Second)
@@ -309,23 +333,82 @@ func TestRuleVersion_CreatedOnceAndOnChange(t *testing.T) {
 	}
 }
 
-// Agency-mode entries on one base URL can share a feed URL with snapshots
-// filtered to their own agency. One agency's full dataset must not close the
-// other agency's episodes, before or after a restart.
-func TestRecordVehiclePositions_AgencyEntriesSharingAFeedAreSeparate(t *testing.T) {
+// Agency-mode entries on one base URL can share a feed URL, each with a
+// snapshot filtered to its own agency. A vehicle that moves from agency a's
+// trips to agency b's keeps its one open episode: b continues it even when b
+// runs first, a's filtered view does not close it, and b closes it when the
+// vehicle recovers. The same holds after a restart.
+func TestRecordVehiclePositions_HandoffBetweenAgenciesSharingAFeed(t *testing.T) {
+	logger, logs := bufferLogger()
 	h, pool, _ := newCountedHistory(t)
+	h.logger = logger
 	agencyB := vehicleServer
 	agencyB.AgencyID, agencyB.AgencyName = "b", "Agency B"
 
-	recordVehicles(h, ctx, vehicleServer, vehicleSnapshot(vehicleT0, zeroCoordinates(testVehicle("bus-a", vehicleT0))))
-	recordVehicles(h, ctx, agencyB, vehicleSnapshot(vehicleT0, testVehicle("bus-b", vehicleT0)))
+	// b has already loaded its memory when a opens the episode.
+	recordVehicles(h, ctx, agencyB, filteredSnapshot(vehicleT0.Add(-30*time.Second), nil))
+	recordVehicles(h, ctx, vehicleServer, vehicleSnapshot(vehicleT0, zeroCoordinates(testVehicle("bus-1", vehicleT0))))
+
+	t1 := vehicleT0.Add(30 * time.Second)
+	recordVehicles(h, ctx, agencyB, filteredSnapshot(t1, nil, zeroCoordinates(testVehicle("bus-1", t1))))
+	recordVehicles(h, ctx, vehicleServer, filteredSnapshot(t1, []string{"bus-1"}))
+	if episode := onlyVehicleEpisode(t, pool); episode.closeReason != nil {
+		t.Fatalf("the handoff closed the episode: %+v", episode)
+	}
+
+	restarted := NewHistoryService(pool, logger, "test-build", nil)
+	t2 := vehicleT0.Add(time.Minute)
+	recordVehicles(restarted, ctx, vehicleServer, filteredSnapshot(t2, []string{"bus-1"}))
+	recordVehicles(restarted, ctx, agencyB, filteredSnapshot(t2, nil, testVehicle("bus-1", t2)))
+
+	episode := onlyVehicleEpisode(t, pool)
+	if episode.closeReason == nil || *episode.closeReason != string(closeCoordinatesValidAgain) {
+		t.Fatalf("close_reason = %v, want coordinates_valid_again from agency b", episode.closeReason)
+	}
+	noWriteFailures(t, logs)
+}
+
+// A server-scoped entry and an agency-mode entry on one base URL see the
+// same vehicle. The first to record a change records it once; the second
+// finds nothing left to do.
+func TestRecordVehiclePositions_ServerAndAgencyEntriesShareEpisodes(t *testing.T) {
+	logger, logs := bufferLogger()
+	h, pool, _ := newCountedHistory(t)
+	h.logger = logger
+	serverScoped := vehicleServer
+	serverScoped.AgencyID, serverScoped.AgencyName = "", ""
+
+	recordVehicles(h, ctx, serverScoped, vehicleSnapshot(vehicleT0, zeroCoordinates(testVehicle("bus-1", vehicleT0))))
+	recordVehicles(h, ctx, vehicleServer, vehicleSnapshot(vehicleT0, zeroCoordinates(testVehicle("bus-1", vehicleT0))))
+	t1 := vehicleT0.Add(30 * time.Second)
+	recordVehicles(h, ctx, vehicleServer, vehicleSnapshot(t1, testVehicle("bus-1", t1)))
+	recordVehicles(h, ctx, serverScoped, vehicleSnapshot(t1, testVehicle("bus-1", t1)))
+
+	episode := onlyVehicleEpisode(t, pool)
+	if episode.closeReason == nil || episode.links[evidenceResolution] != 1 {
+		t.Fatalf("episode = %+v, want one close with one resolution", episode)
+	}
+	noWriteFailures(t, logs)
+}
+
+// The rule versions are recorded at the first recording after startup, even
+// when that run only closes episodes.
+func TestRuleVersion_RecordedWhenARunOnlyCloses(t *testing.T) {
+	h, pool, _ := newCountedHistory(t)
+	h.SetFetchInterval(30 * time.Second)
+	recordVehicles(h, ctx, vehicleServer, vehicleSnapshot(vehicleT0, zeroCoordinates(testVehicle("bus-1", vehicleT0))))
 
 	restarted := NewHistoryService(pool, discardLogger(), "test-build", nil)
-	later := vehicleT0.Add(time.Minute)
-	recordVehicles(restarted, ctx, agencyB, vehicleSnapshot(later, testVehicle("bus-b", later)))
+	restarted.startedAt = vehicleT0.Add(time.Hour)
+	restarted.SetFetchInterval(10 * time.Second)
+	t1 := vehicleT0.Add(30 * time.Second)
+	recordVehicles(restarted, ctx, vehicleServer, vehicleSnapshot(t1, testVehicle("bus-1", t1)))
 
-	if episode := onlyVehicleEpisode(t, pool); episode.closeReason != nil {
-		t.Fatalf("agency b's snapshot closed agency a's episode: %+v", episode)
+	if onlyVehicleEpisode(t, pool).closeReason == nil {
+		t.Fatal("the run did not close the episode")
+	}
+	if n := count(t, pool, "vehicle_anomaly_rule_version"); n != len(vehicleAnomalyTypes)+1 {
+		t.Fatalf("got %d rule versions, want the changed stale rule recorded", n)
 	}
 }
 

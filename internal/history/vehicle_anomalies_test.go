@@ -256,10 +256,11 @@ func TestVehicle_PlanIsSorted(t *testing.T) {
 		observations = append(observations, obs)
 	}
 	plan := planVehicleAnomalies(nil, fullFeed(), observations, planThreshold)
-	got := openedKeys(plan)
-	for i := 1; i < len(got); i++ {
-		if !got[i-1].less(got[i]) {
-			t.Fatalf("opens not sorted: %v", got)
-		}
+	var want []vehicleEpisodeKey
+	for _, id := range []string{"a", "b", "c"} {
+		want = append(want, keyFor(id, anomalyInvalidCoordinate), keyFor(id, anomalyStaleSourceTimestamp))
+	}
+	if got := openedKeys(plan); !reflect.DeepEqual(got, want) {
+		t.Fatalf("opened %v, want %v", got, want)
 	}
 }

@@ -27,10 +27,8 @@ RETURNING rule_version_id;
 -- name: ListOpenVehicleAnomalyEpisodesForServer :many
 -- The one read outside a write: the first recording for a server after
 -- startup loads its open episodes into memory, each with the trip of its most
--- recent evidence so a later trip change can be detected. An agency-mode
--- entry passes its agency: entries that share a base URL can share a feed
--- URL, each with a snapshot filtered to its own agency, so an entry loads
--- only the episodes its own agency opened.
+-- recent evidence so a later trip change can be detected. Every entry on the
+-- base URL shares these episodes, whatever agency opened them.
 SELECT
     e.vehicle_anomaly_episode_id,
     t.anomaly_code,
@@ -53,17 +51,7 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) latest ON TRUE
 WHERE srv.normalized_base_url = @normalized_base_url
-  AND e.closing_response_id IS NULL
-  AND (sqlc.narg('external_agency_id')::text IS NULL OR EXISTS (
-      SELECT 1
-      FROM vehicle_anomaly_episode_evidence opening
-      JOIN vehicle_position_evidence oe
-        ON oe.vehicle_position_evidence_id = opening.vehicle_position_evidence_id
-      JOIN agency a ON a.agency_id = oe.agency_id
-      WHERE opening.vehicle_anomaly_episode_id = e.vehicle_anomaly_episode_id
-        AND opening.evidence_role = 'opening'
-        AND a.external_agency_id = sqlc.narg('external_agency_id')::text
-  ));
+  AND e.closing_response_id IS NULL;
 
 -- name: InsertVehiclePositionResponse :one
 INSERT INTO vehicle_position_response (

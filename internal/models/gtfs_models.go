@@ -52,12 +52,18 @@ type RealtimeVehicle struct {
 // SourceTimestamp is the FeedHeader timestamp, nil when the header has none.
 // PayloadHash is the canonical entity hash, which excludes the FeedHeader.
 // The fetch time is RealtimeData.ObservationAt.
+//
+// ReportedVehicleIDs holds the ID of every vehicle position entity in the
+// response, duplicates included. Agency-mode filtering removes vehicles from
+// RealtimeData.Vehicles but never from this set, so it says whether a vehicle
+// was in the response at all.
 type RealtimeFeed struct {
-	FeedID          string
-	FeedURL         string
-	FullDataset     bool
-	SourceTimestamp *time.Time
-	PayloadHash     string
+	FeedID             string
+	FeedURL            string
+	FullDataset        bool
+	SourceTimestamp    *time.Time
+	PayloadHash        string
+	ReportedVehicleIDs map[string]struct{}
 }
 
 // RealtimeData represents the realtime GTFS data structure.

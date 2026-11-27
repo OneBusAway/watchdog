@@ -1136,6 +1136,7 @@ func parseGTFSRTFeed(ctx context.Context, server models.ObaServer, client *http.
 	stateHashes := vehicleStateHashes(entities)
 	vehicleEntities := 0
 	missingTimestamps := 0
+	reportedVehicleIDs := make(map[string]struct{})
 	for _, entity := range raw.Entity {
 		if entity.GetVehicle() == nil {
 			continue
@@ -1143,6 +1144,9 @@ func parseGTFSRTFeed(ctx context.Context, server models.ObaServer, client *http.
 		vehicleEntities++
 		if entity.GetVehicle().Timestamp == nil {
 			missingTimestamps++
+		}
+		if id := entity.GetVehicle().GetVehicle().GetId(); id != "" {
+			reportedVehicleIDs[id] = struct{}{}
 		}
 	}
 	var sourceTimestamp *time.Time
@@ -1158,9 +1162,10 @@ func parseGTFSRTFeed(ctx context.Context, server models.ObaServer, client *http.
 	}
 	snapshot.Feeds = append(snapshot.Feeds, models.RealtimeFeed{
 		FeedID: feedID, FeedURL: sanitizedURL,
-		FullDataset:     raw.Header == nil || raw.Header.GetIncrementality() == gtfsrt.FeedHeader_FULL_DATASET,
-		SourceTimestamp: sourceTimestamp,
-		PayloadHash:     payloadHash,
+		FullDataset:        raw.Header == nil || raw.Header.GetIncrementality() == gtfsrt.FeedHeader_FULL_DATASET,
+		SourceTimestamp:    sourceTimestamp,
+		PayloadHash:        payloadHash,
+		ReportedVehicleIDs: reportedVehicleIDs,
 	})
 	positionIDs := make(map[string]struct{})
 	for _, vehicle := range parsed.Vehicles {

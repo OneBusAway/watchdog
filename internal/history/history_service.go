@@ -40,7 +40,7 @@ type HistoryService struct {
 	// schedules. It is nil until SetStaticStore is called; stops then
 	// resolve as not found and trips are not classified.
 	staticStore *gtfs.StaticStore
-	// vehicles holds each entry's open vehicle anomaly episodes, so a
+	// vehicles holds each server's open vehicle anomaly episodes, so a
 	// snapshot that changes nothing does not touch the database.
 	vehicles *openVehicleEpisodes
 	// rules holds the vehicle anomaly rule versions in effect.

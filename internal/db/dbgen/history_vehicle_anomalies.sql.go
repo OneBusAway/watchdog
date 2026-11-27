@@ -297,22 +297,7 @@ LEFT JOIN LATERAL (
 ) latest ON TRUE
 WHERE srv.normalized_base_url = $1
   AND e.closing_response_id IS NULL
-  AND ($2::text IS NULL OR EXISTS (
-      SELECT 1
-      FROM vehicle_anomaly_episode_evidence opening
-      JOIN vehicle_position_evidence oe
-        ON oe.vehicle_position_evidence_id = opening.vehicle_position_evidence_id
-      JOIN agency a ON a.agency_id = oe.agency_id
-      WHERE opening.vehicle_anomaly_episode_id = e.vehicle_anomaly_episode_id
-        AND opening.evidence_role = 'opening'
-        AND a.external_agency_id = $2::text
-  ))
 `
-
-type ListOpenVehicleAnomalyEpisodesForServerParams struct {
-	NormalizedBaseUrl string
-	ExternalAgencyID  *string
-}
 
 type ListOpenVehicleAnomalyEpisodesForServerRow struct {
 	VehicleAnomalyEpisodeID      int64
@@ -325,12 +310,10 @@ type ListOpenVehicleAnomalyEpisodesForServerRow struct {
 
 // The one read outside a write: the first recording for a server after
 // startup loads its open episodes into memory, each with the trip of its most
-// recent evidence so a later trip change can be detected. An agency-mode
-// entry passes its agency: entries that share a base URL can share a feed
-// URL, each with a snapshot filtered to its own agency, so an entry loads
-// only the episodes its own agency opened.
-func (q *Queries) ListOpenVehicleAnomalyEpisodesForServer(ctx context.Context, arg ListOpenVehicleAnomalyEpisodesForServerParams) ([]ListOpenVehicleAnomalyEpisodesForServerRow, error) {
-	rows, err := q.db.Query(ctx, listOpenVehicleAnomalyEpisodesForServer, arg.NormalizedBaseUrl, arg.ExternalAgencyID)
+// recent evidence so a later trip change can be detected. Every entry on the
+// base URL shares these episodes, whatever agency opened them.
+func (q *Queries) ListOpenVehicleAnomalyEpisodesForServer(ctx context.Context, normalizedBaseUrl string) ([]ListOpenVehicleAnomalyEpisodesForServerRow, error) {
+	rows, err := q.db.Query(ctx, listOpenVehicleAnomalyEpisodesForServer, normalizedBaseUrl)
 	if err != nil {
 		return nil, err
 	}

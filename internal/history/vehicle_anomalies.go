@@ -55,6 +55,19 @@ type vehicleFeed struct {
 	fullDataset     bool
 	sourceTimestamp *time.Time
 	payloadHash     string
+	// reportedVehicleIDs holds every vehicle ID in the response, including
+	// vehicles that agency-mode filtering left out of this entry's
+	// observations. Nil means the observations are the whole response.
+	reportedVehicleIDs map[string]struct{}
+}
+
+// reported says whether the response contained the vehicle at all.
+func (f vehicleFeed) reported(vehicleID string, observed bool) bool {
+	if f.reportedVehicleIDs == nil {
+		return observed
+	}
+	_, ok := f.reportedVehicleIDs[vehicleID]
+	return ok
 }
 
 // vehicleObservation is what the rules need to know about one vehicle in one
@@ -169,8 +182,10 @@ func evaluateRule(anomaly vehicleAnomalyType, obs vehicleObservation, observedAt
 
 // planVehicleAnomalies compares one tick's vehicles with the open episodes in
 // memory. Vehicles without an ID are skipped. A vehicle missing from a
-// full-dataset feed closes its open episodes; a differential feed's absence
-// changes nothing.
+// full-dataset response closes its open episodes; a differential feed's
+// absence changes nothing. A vehicle that is in the response but not among
+// the observations (another agency's vehicle on a shared feed) is left to
+// the entry that observes it.
 func planVehicleAnomalies(open map[vehicleEpisodeKey]*openVehicleEpisode, feeds []vehicleFeed, observations []vehicleObservation, threshold time.Duration) vehicleEpisodePlan {
 	feedByURL := make(map[string]vehicleFeed, len(feeds))
 	for _, feed := range feeds {
@@ -195,7 +210,7 @@ func planVehicleAnomalies(open map[vehicleEpisodeKey]*openVehicleEpisode, feeds 
 
 	for key := range open {
 		feed, ok := feedByURL[key.feedURL]
-		if ok && feed.fullDataset && !present[presentKey{key.feedURL, key.vehicleID}] {
+		if ok && feed.fullDataset && !feed.reported(key.vehicleID, present[presentKey{key.feedURL, key.vehicleID}]) {
 			plan.closes = append(plan.closes, vehicleEpisodeClose{key: key, reason: closeNotPresentInFull})
 		}
 	}
