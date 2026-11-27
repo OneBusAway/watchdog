@@ -106,7 +106,7 @@ func TestCollectVehicleMetricsIsStandalone(t *testing.T) {
 	testServer := app.ConfigService.Config.Servers[0]
 
 	// No panic, no error path requiring GTFS-RT data we haven't fetched.
-	app.collectVehicleMetrics(testServer, nil)
+	app.collectVehicleMetrics(context.Background(), testServer, nil)
 }
 
 // Agency-scoped entries must fetch their own GTFS-RT feed as part of the

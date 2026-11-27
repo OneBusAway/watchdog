@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"watchdog.onebusaway.org/internal/geo"
+	"watchdog.onebusaway.org/internal/gtfs"
 	"watchdog.onebusaway.org/internal/metrics"
 	"watchdog.onebusaway.org/internal/models"
 	"watchdog.onebusaway.org/internal/utils"
@@ -34,6 +36,29 @@ func (app *Application) recordOBAMetricsHistory(ctx context.Context, server mode
 		return
 	}
 	app.obaMetricsHistory.RecordOBAMetrics(ctx, server, agencies, response, observedAt)
+}
+
+// vehiclePositionRecorder records the vehicle anomalies of one realtime
+// snapshot in investigation history. *history.HistoryService implements it;
+// tests substitute a fake.
+type vehiclePositionRecorder interface {
+	RecordVehiclePositions(ctx context.Context, server models.ObaServer, snapshot *models.RealtimeData, attributor metrics.VehicleAttributor, boxes *geo.BoundingBoxStore)
+}
+
+// recordVehicleHistory records the vehicle anomalies of the snapshot the
+// vehicle passes just read, attributing vehicles with the same resolver. It is
+// a no-op when investigation storage is disabled, and its failures never stop
+// collection: HistoryService logs and reports them.
+func (app *Application) recordVehicleHistory(ctx context.Context, server models.ObaServer, agencies []models.ObaServer, resolver gtfs.VehicleAttributionResolver) {
+	if app.vehicleHistory == nil {
+		return
+	}
+	snapshot := app.MetricsService.RealtimeStore.Get(server.ServerKey())
+	if snapshot == nil {
+		return
+	}
+	attributor := metrics.NewVehicleAttributor(server, agencies, resolver)
+	app.vehicleHistory.RecordVehiclePositions(ctx, server, snapshot, attributor, app.MetricsService.BoundingBoxStore)
 }
 
 // flushRemovedServerHistory saves the last-reported times of open
