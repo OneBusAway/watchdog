@@ -78,23 +78,23 @@ func includableForGroupBy(groupBy *string, episodeType *string) map[string]resou
 		if episodeType != nil && (*episodeType == episodeTypeUnmatchedStop || *episodeType == episodeTypeUnmatchedTrip) {
 			return map[string]resourceKind{"opening_response": kindOBAMetricsResponse}
 		}
-		return map[string]resourceKind{"opening_response": "vehicle_response"}
+		return map[string]resourceKind{"opening_response": kindVehicleResponse}
 	case "closing_response":
 		if episodeType != nil && (*episodeType == episodeTypeUnmatchedStop || *episodeType == episodeTypeUnmatchedTrip) {
 			return map[string]resourceKind{"closing_response": kindOBAMetricsResponse}
 		}
-		return map[string]resourceKind{"closing_response": "vehicle_response"}
+		return map[string]resourceKind{"closing_response": kindVehicleResponse}
 	case "gtfs_static_version":
-		return map[string]resourceKind{"gtfs_static_version": "gtfs_static_version"}
+		return map[string]resourceKind{"gtfs_static_version": kindGTFSStaticVersion}
 	case "rule_version":
 		return map[string]resourceKind{"rule_version": kindVehicleAnomalyRuleVersion}
 	case "bounding_box_version":
-		return map[string]resourceKind{"bounding_box_version": "bounding_box_version"}
+		return map[string]resourceKind{"bounding_box_version": kindBoundingBoxVersion}
 	case "entity":
 		return map[string]resourceKind{
 			"reported_stop": kindReportedStop,
 			"reported_trip": kindReportedTrip,
-			"vehicle":       "vehicle",
+			"vehicle":       kindVehicleEntityVehicle,
 		}
 	default:
 		return map[string]resourceKind{}
@@ -637,7 +637,7 @@ func buildResourceLink(dimension string, epType string, parsed parsedGroupKey) (
 		id := parsed.value.(int64)
 		if isVehicleType(epType) {
 			return "opening_response", &related{
-				Kind: "vehicle_response",
+				Kind: kindVehicleResponse,
 				ID:   id,
 				URL:  "/v1/vehicle-position-responses/" + strconv.FormatInt(id, 10),
 			}
@@ -651,7 +651,7 @@ func buildResourceLink(dimension string, epType string, parsed parsedGroupKey) (
 		id := parsed.value.(int64)
 		if isVehicleType(epType) {
 			return "closing_response", &related{
-				Kind: "vehicle_response",
+				Kind: kindVehicleResponse,
 				ID:   id,
 				URL:  "/v1/vehicle-position-responses/" + strconv.FormatInt(id, 10),
 			}
@@ -664,7 +664,7 @@ func buildResourceLink(dimension string, epType string, parsed parsedGroupKey) (
 	case "gtfs_static_version":
 		id := parsed.value.(int64)
 		return "gtfs_static_version", &related{
-			Kind: "gtfs_static_version",
+			Kind: kindGTFSStaticVersion,
 			ID:   id,
 			URL:  "/v1/gtfs-static-versions/" + strconv.FormatInt(id, 10),
 		}
@@ -678,7 +678,7 @@ func buildResourceLink(dimension string, epType string, parsed parsedGroupKey) (
 	case "bounding_box_version":
 		id := parsed.value.(int64)
 		return "bounding_box_version", &related{
-			Kind: "bounding_box_version",
+			Kind: kindBoundingBoxVersion,
 			ID:   id,
 			URL:  "/v1/bounding-box-versions/" + strconv.FormatInt(id, 10),
 		}
@@ -702,7 +702,7 @@ func buildResourceLink(dimension string, epType string, parsed parsedGroupKey) (
 		if parsed.vehicleEntityID != nil {
 			id := *parsed.vehicleEntityID
 			return "vehicle", &related{
-				Kind: "vehicle",
+				Kind: kindVehicleEntityVehicle,
 				ID:   id,
 				URL:  "/v1/vehicles/" + strconv.FormatInt(id, 10),
 			}

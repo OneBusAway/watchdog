@@ -20,13 +20,13 @@ const (
 // vehicleAnomalyCodes are the seeded vehicle_anomaly_type codes, the values anomaly_type accepts.
 var vehicleAnomalyCodes = []string{episodeTypeStaleSource, episodeTypeInvalidCoordinate, episodeTypeStoppedOutOfBounds}
 
-// vehicleAnomalyEpisodeIncludable uses "vehicle_response" for both responses, the kind the vehicle-position-response endpoint registers.
+// vehicleAnomalyEpisodeIncludable uses kindVehicleResponse for both responses, the kind the vehicle-position-response endpoint registers.
 var vehicleAnomalyEpisodeIncludable = map[string]resourceKind{
-	"vehicle":          "vehicle",
+	"vehicle":          kindVehicleEntityVehicle,
 	"endpoint":         kindEndpoint,
 	"rule_version":     kindVehicleAnomalyRuleVersion,
-	"opening_response": "vehicle_response",
-	"closing_response": "vehicle_response",
+	"opening_response": kindVehicleResponse,
+	"closing_response": kindVehicleResponse,
 	"opening_evidence": kindVehiclePositionEvidence,
 	"evidence":         kindVehicleAnomalyEpisodeEvidence,
 }
@@ -65,7 +65,7 @@ func vehicleAnomalyEpisodeLinks(row dbgen.VehicleAnomalyEpisodeView, openingEvid
 	l := itemLinks{
 		"self": {URL: self},
 		"vehicle": {
-			Kind: "vehicle",
+			Kind: kindVehicleEntityVehicle,
 			ID:   row.VehicleEntityID,
 			URL:  "/v1/vehicles/" + strconv.FormatInt(row.VehicleEntityID, 10),
 		},
@@ -80,7 +80,7 @@ func vehicleAnomalyEpisodeLinks(row dbgen.VehicleAnomalyEpisodeView, openingEvid
 			URL:  "/v1/vehicle-anomaly-rule-versions/" + strconv.FormatInt(row.RuleVersionID, 10),
 		},
 		"opening_response": {
-			Kind: "vehicle_response",
+			Kind: kindVehicleResponse,
 			ID:   row.OpeningResponseID,
 			URL:  "/v1/vehicle-position-responses/" + strconv.FormatInt(row.OpeningResponseID, 10),
 		},
@@ -92,7 +92,7 @@ func vehicleAnomalyEpisodeLinks(row dbgen.VehicleAnomalyEpisodeView, openingEvid
 	}
 	if row.ClosingResponseID != nil {
 		l["closing_response"] = related{
-			Kind: "vehicle_response",
+			Kind: kindVehicleResponse,
 			ID:   *row.ClosingResponseID,
 			URL:  "/v1/vehicle-position-responses/" + strconv.FormatInt(*row.ClosingResponseID, 10),
 		}

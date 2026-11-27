@@ -161,9 +161,9 @@ func (s *InvestigationService) getUnmatchedTripEpisode(w http.ResponseWriter, r 
 	s.writeJSON(w, r, body, cache)
 }
 
-// tripStaticContextIncludable accepts gtfs_static_version once its loader is registered.
+// tripStaticContextIncludable is what a trip static context accepts in include.
 var tripStaticContextIncludable = map[string]resourceKind{
-	"gtfs_static_version": "gtfs_static_version",
+	"gtfs_static_version": kindGTFSStaticVersion,
 }
 
 // tripStaticContext is one item of E19: what Watchdog's static GTFS said about the trip for part of the episode.
@@ -201,7 +201,7 @@ func tripStaticContextList(episodeID int64, rows []dbgen.ListUnmatchedTripEpisod
 	related := make([]itemLinks, 0, len(rows))
 	for i, row := range rows {
 		l := itemLinks{"gtfs_static_version": {
-			Kind: "gtfs_static_version",
+			Kind: kindGTFSStaticVersion,
 			ID:   row.GtfsStaticVersionID,
 			URL:  "/v1/gtfs-static-versions/" + strconv.FormatInt(row.GtfsStaticVersionID, 10),
 		}}
