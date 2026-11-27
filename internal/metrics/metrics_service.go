@@ -177,6 +177,7 @@ func (ms *MetricsService) RetireInactiveVehicleAgency(server models.ObaServer) {
 	TrackedVehiclesGauge.WithLabelValues(labels...).Set(0)
 	InvalidVehicleCoordinatesGauge.WithLabelValues(labels...).Set(0)
 	StoppedOutOfBoundsVehiclesGauge.WithLabelValues(labels...).Set(0)
+	InvalidVehicleTimestampsGauge.WithLabelValues(labels...).Set(0)
 	AgencyActiveVehiclesGauge.DeleteLabelValues(labels...)
 	ObaVehiclesLastSuccessfulFetch.DeleteLabelValues(labels...)
 }
@@ -197,6 +198,7 @@ func (ms *MetricsService) RetireStaticDerivedVehicleSeries(server models.ObaServ
 	for _, vec := range []*prometheus.GaugeVec{
 		RealtimeVehiclePositions, TrackedVehiclesGauge,
 		InvalidVehicleCoordinatesGauge, StoppedOutOfBoundsVehiclesGauge,
+		InvalidVehicleTimestampsGauge,
 		VehicleSpeedGauge, VehicleSpeedDiscrepancyRatioGauge,
 		GtfsRtVehicleSourceTimestamp, GtfsRtVehicleSpeedLastComputedTimestamp,
 		GtfsRtVehicleStateLastChangedTimestamp,

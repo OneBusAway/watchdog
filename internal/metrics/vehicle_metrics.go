@@ -318,7 +318,9 @@ func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer,
 		}
 		GtfsRtVehicleStateLastChangedTimestamp.WithLabelValues(labels...).Set(float64(stateLastChanged.Unix()))
 
-		if vehicle.Timestamp != nil {
+		tsValid, _ := validateVehicleTimestamp(vehicle.Timestamp, observedAt)
+
+		if vehicle.Timestamp != nil && tsValid {
 			GtfsRtVehicleSourceTimestamp.WithLabelValues(labels...).Set(float64(vehicle.Timestamp.Unix()))
 			if ok && !prev.SourceTimestamp.IsZero() && vehicle.Timestamp.After(prev.SourceTimestamp) {
 				GtfsRtVehicleSourceTimestampAdvances.WithLabelValues(agency.AgencyID, agency.AgencyName, serverName, serverURL, feedID).Inc()
@@ -348,7 +350,7 @@ func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer,
 
 		// Retain a computed speed only while the source repeats the exact same
 		// valid state and remains inside its cadence-derived grace window.
-		if !positionValid || vehicle.Timestamp == nil {
+		if !positionValid || vehicle.Timestamp == nil || !tsValid {
 			deleteVehicleSpeedSeries(labels)
 			next.Time = time.Time{}
 			next.SourceTimestamp = time.Time{}
@@ -510,16 +512,18 @@ func emitTickSummary(server models.ObaServer, agencies []models.ObaServer, vehic
 const VehicleStatusStoppedAtStop = 1
 
 // trackInvalidVehiclesAndStoppedOutOfBounds collects and reports metrics related
-// to vehicle position validity:
+// to vehicle position and timestamp validity:
 //  1. Invalid coordinate check: vehicles with missing or out-of-range lat/lon.
 //  2. Bounding box check: vehicles that are *stopped at a stop* but located
 //     outside the bounding box derived from the static GTFS stops.
+//  3. Invalid timestamp check: vehicles with malformed timestamps (milliseconds,
+//     future clock skew, or non-positive).
 //
-// Both counts are attributed per agency (see the scope-dispatch comment at the
+// All counts are attributed per agency (see the scope-dispatch comment at the
 // top of this file), and agencies with nothing to report are set to 0.
 //
-// Coordinate validity is judged BEFORE attribution, and vehicles that cannot
-// be attributed are counted under the server-scoped entry (empty agency_id /
+// Coordinate and timestamp validity are judged BEFORE attribution, and vehicles
+// that cannot be attributed are counted under the server-scoped entry (empty agency_id /
 // agency_name in server-mode) rather than dropped. Attributing first would
 // hide the malformed entities these gauges exist to surface — an entity with
 // no TripDescriptor and no position has no route_id to attribute with — and
@@ -552,16 +556,23 @@ func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, agencies
 
 	invalid := make(map[string]int, len(agencies)+1)
 	outOfBounds := make(map[string]int, len(agencies)+1)
+	invalidTimestamps := make(map[string]int, len(agencies)+1)
+
+	observationAt := realtimeData.ObservationAt
+	if observationAt.IsZero() {
+		observationAt = time.Now().UTC()
+	}
 
 	for _, realtimeVehicle := range realtimeData.Vehicles {
 		v := realtimeVehicle.Vehicle
 
-		// Judge the coordinates BEFORE attribution. The most malformed
+		// Judge the coordinates and timestamp BEFORE attribution. The most malformed
 		// entities — no TripDescriptor, so no route_id to resolve, and no
-		// position — are exactly the ones attribution cannot place, and
-		// exactly the ones this gauge exists to catch. Attributing first and
+		// position or bad timestamps — are exactly the ones attribution cannot place, and
+		// exactly the ones these gauges exist to catch. Attributing first and
 		// skipping the failures would make the worst feed data invisible.
 		lat, lon, coordsValid := vehicleLatLon(v)
+		tsValid, _ := validateVehicleTimestamp(v.Timestamp, observationAt)
 
 		// Vehicles that cannot be placed with an agency fall to the
 		// server-scoped entry, whose agency labels are empty in server-mode.
@@ -574,6 +585,10 @@ func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, agencies
 			if agencyBox, ok := agencyBoxes[attribution.agency.AgencyID]; ok {
 				boundingBox = agencyBox
 			}
+		}
+
+		if v.Timestamp != nil && !tsValid {
+			invalidTimestamps[bucket]++
 		}
 
 		if !coordsValid {
@@ -592,6 +607,7 @@ func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, agencies
 	emit := func(entry models.ObaServer) {
 		InvalidVehicleCoordinatesGauge.WithLabelValues(entry.AgencyID, entry.AgencyName, entry.ServerName, serverURL).Set(float64(invalid[entry.AgencyID]))
 		StoppedOutOfBoundsVehiclesGauge.WithLabelValues(entry.AgencyID, entry.AgencyName, entry.ServerName, serverURL).Set(float64(outOfBounds[entry.AgencyID]))
+		InvalidVehicleTimestampsGauge.WithLabelValues(entry.AgencyID, entry.AgencyName, entry.ServerName, serverURL).Set(float64(invalidTimestamps[entry.AgencyID]))
 	}
 
 	if agencyByID == nil {
@@ -615,4 +631,34 @@ func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, agencies
 func vehicleLatLon(v remoteGtfs.Vehicle) (lat, lon float64, valid bool) {
 	lat, lon, reason := geo.VehiclePosition(v)
 	return lat, lon, reason == ""
+}
+
+// MaxFutureVehicleTimestampSkew defines the maximum duration a vehicle's
+// source timestamp can be ahead of the observation time before it is flagged
+// as malformed future clock skew.
+const MaxFutureVehicleTimestampSkew = 10 * time.Minute
+
+// MillisecondTimestampThreshold is a Unix timestamp in seconds (approx. year 5138)
+// above which a timestamp is considered to be formatted in milliseconds instead of seconds.
+// For reference, modern Unix timestamps in milliseconds (e.g., year 2026) are ~1.79e12,
+// which is well above 1e11 (100 billion seconds).
+const MillisecondTimestampThreshold = 100_000_000_000
+
+// validateVehicleTimestamp checks whether a vehicle's timestamp is valid according
+// to the GTFS-RT specification (POSIX seconds) and reasonable observation bounds.
+// If ts is nil, it is considered missing rather than malformed, so valid is true with no reason.
+func validateVehicleTimestamp(ts *time.Time, now time.Time) (valid bool, reason string) {
+	if ts == nil {
+		return true, ""
+	}
+	if ts.IsZero() || ts.Unix() <= 0 {
+		return false, "epoch_zero"
+	}
+	if ts.Unix() >= MillisecondTimestampThreshold {
+		return false, "milliseconds"
+	}
+	if !now.IsZero() && ts.After(now.Add(MaxFutureVehicleTimestampSkew)) {
+		return false, "future"
+	}
+	return true, ""
 }

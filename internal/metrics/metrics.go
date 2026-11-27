@@ -201,6 +201,14 @@ var (
 		[]string{"agency_id", "agency_name", "server_name", "server_url"},
 	))
 
+	InvalidVehicleTimestampsGauge = tracked(promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "gtfs_rt_invalid_vehicle_timestamps",
+			Help: "Current number of GTFS-RT vehicle positions with invalid timestamps (milliseconds, future clock skew, or non-positive)",
+		},
+		[]string{"agency_id", "agency_name", "server_name", "server_url"},
+	))
+
 	StoppedOutOfBoundsVehiclesGauge = tracked(promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "gtfs_rt_stopped_out_of_bounds_vehicles",
