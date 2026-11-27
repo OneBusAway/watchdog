@@ -226,10 +226,13 @@ func TestTrackInvalidVehicleTimestampsBucketsByAgencyInServerMode(t *testing.T) 
 	msTs := time.Unix(1794592160000, 0).UTC()
 	validTs := now.Add(-1 * time.Minute)
 
-	// Agency A's vehicle gets a millisecond timestamp; agency B's stays valid.
+	// Agency A's vehicle gets a millisecond timestamp; agency B's stays valid;
+	// unattributed vehicle vx gets a future timestamp landing in the catch-all.
+	futureTs := now.Add(20 * time.Minute)
 	data := store.Get(server.ServerKey())
 	data.Vehicles[0].Vehicle.Timestamp = &msTs
 	data.Vehicles[1].Vehicle.Timestamp = &validTs
+	data.Vehicles[2].Vehicle.Timestamp = &futureTs
 	data.ObservationAt = now
 	store.Set(server.ServerKey(), data)
 
@@ -250,7 +253,7 @@ func TestTrackInvalidVehicleTimestampsBucketsByAgencyInServerMode(t *testing.T) 
 	}{
 		{"agency-a", "Agency A", 1},
 		{"agency-b", "Agency B", 0},
-		{"", "", 0},
+		{"", "", 1},
 	} {
 		got, err := getMetricValue(InvalidVehicleTimestampsGauge, map[string]string{
 			"agency_id":   tc.agencyID,
@@ -405,6 +408,38 @@ func TestTrackInvalidVehiclesCountsUnattributableVehiclesInServerMode(t *testing
 	}
 	if got != 1 {
 		t.Fatalf("expected the unattributable malformed vehicle to be counted under the server-scoped series, got %v", got)
+	}
+}
+
+// TestTrackInvalidVehicleTimestampsCountsUnattributableVehiclesInServerMode
+// pins the invariant that an unattributable vehicle with an invalid timestamp
+// lands in the empty-agency_id server-scoped catch-all series.
+func TestTrackInvalidVehicleTimestampsCountsUnattributableVehiclesInServerMode(t *testing.T) {
+	const baseURL = "https://bad-timestamp-ghost.example.com"
+	server, agencies, store, index := serverModeFixture(t, baseURL)
+
+	futureTs := time.Now().UTC().Add(20 * time.Minute)
+	ghost := ghostVehicle("vghost-ts")
+	ghost.Vehicle.Timestamp = &futureTs
+	data := store.Get(server.ServerKey())
+	data.Vehicles = append(data.Vehicles, ghost)
+	store.Set(server.ServerKey(), data)
+
+	if err := trackInvalidVehiclesAndStoppedOutOfBounds(server, agencies, wideOpenBounds(server), store, index); err != nil {
+		t.Fatalf("track: %v", err)
+	}
+
+	got, err := getMetricValue(InvalidVehicleTimestampsGauge, map[string]string{
+		"agency_id":   "",
+		"agency_name": "",
+		"server_name": "multi",
+		"server_url":  baseURL,
+	})
+	if err != nil {
+		t.Fatalf("read server-scoped gauge: %v", err)
+	}
+	if got != 1 {
+		t.Fatalf("expected the unattributable malformed-timestamp vehicle to be counted under the server-scoped series, got %v", got)
 	}
 }
 
