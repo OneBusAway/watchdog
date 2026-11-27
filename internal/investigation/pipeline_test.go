@@ -41,6 +41,18 @@ func serve(t *testing.T, h httprouter.Handle, headers map[string]string) *httpte
 	return doGet(t, router, "/v1/test", headers)
 }
 
+// invokeAndRecover calls h directly and returns any panic value. Calling the
+// middleware directly lets the test verify that it records metrics while
+// preserving the panic for the outer HTTP middleware/server to handle.
+func invokeAndRecover(h httprouter.Handle) (recovered any, rec *httptest.ResponseRecorder) {
+	rec = httptest.NewRecorder()
+	defer func() {
+		recovered = recover()
+	}()
+	h(rec, httptest.NewRequest(http.MethodGet, "/v1/test", nil), nil)
+	return nil, rec
+}
+
 // decodeProblem decodes a problem+json body and checks its content type.
 func decodeProblem(t *testing.T, rec *httptest.ResponseRecorder) problem {
 	t.Helper()
@@ -144,6 +156,71 @@ func TestWithMetrics_DefaultsToOK(t *testing.T) {
 
 	if got := counterValue(t, requests) - before; got != 1 {
 		t.Errorf("requests counted with status 200 = %v, want 1", got)
+	}
+}
+
+func TestWithMetrics_RecordsMetricsOnPanic(t *testing.T) {
+	const route = "/v1/metrics-panic-test/:case"
+	cases := []struct {
+		name        string
+		writeStatus int
+		wantStatus  string
+	}{
+		{
+			name:       "before response status",
+			wantStatus: "500",
+		},
+		{
+			name:        "after response status",
+			writeStatus: http.StatusAccepted,
+			wantStatus:  "202",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			requests := metrics.InvestigationAPIRequests.WithLabelValues(route, tc.wantStatus)
+			requestsBefore := counterValue(t, requests)
+			durations := metrics.InvestigationAPIRequestDuration.WithLabelValues(route)
+			durationsBefore := histogramCount(t, durations)
+
+			var unexpectedOK prometheus.Counter
+			if tc.writeStatus == 0 {
+				unexpectedOK = metrics.InvestigationAPIRequests.WithLabelValues(route, "200")
+			}
+			unexpectedOKBefore := 0.0
+			if unexpectedOK != nil {
+				unexpectedOKBefore = counterValue(t, unexpectedOK)
+			}
+
+			const panicValue = "handler panic"
+			handler := func(w http.ResponseWriter, _ *http.Request, _ httprouter.Params) {
+				if tc.writeStatus != 0 {
+					w.WriteHeader(tc.writeStatus)
+				}
+				panic(panicValue)
+			}
+
+			recovered, response := invokeAndRecover(withMetrics(route, handler))
+			if recovered != panicValue {
+				t.Fatalf("recovered panic = %v, want %q", recovered, panicValue)
+			}
+			if tc.writeStatus != 0 && response.Code != tc.writeStatus {
+				t.Errorf("response status = %d, want %d", response.Code, tc.writeStatus)
+			}
+
+			if got := counterValue(t, requests) - requestsBefore; got != 1 {
+				t.Errorf("request counter increment = %v, want 1", got)
+			}
+			if got := histogramCount(t, durations) - durationsBefore; got != 1 {
+				t.Errorf("duration observations = %d, want 1", got)
+			}
+			if unexpectedOK != nil {
+				if got := counterValue(t, unexpectedOK) - unexpectedOKBefore; got != 0 {
+					t.Errorf("panic before writing a status was counted as HTTP 200: increment = %v", got)
+				}
+			}
+		})
 	}
 }
 

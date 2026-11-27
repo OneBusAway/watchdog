@@ -55,21 +55,34 @@ func routeFromContext(ctx context.Context) (string, bool) {
 
 // withMetrics counts and times every request under route, the route template
 // (for example /v1/servers/:server_id), never the request path, so the number
-// of series stays bounded. Rejected requests are counted too.
+// of series stays bounded. Rejected requests and requests whose handlers panic
+// are counted too. Panics are not recovered here; they continue to the outer
+// HTTP middleware and server recovery path.
 func withMetrics(route string, next httprouter.Handle) httprouter.Handle {
 	return func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w}
+		returned := false
+
+		defer func() {
+			status := rec.status
+			if status == 0 {
+				if returned {
+					// The handler returned without writing; net/http sends 200.
+					status = http.StatusOK
+				} else {
+					// Classify a panic before response headers as 500. The outer
+					// HTTP server may close the connection rather than send a 500.
+					status = http.StatusInternalServerError
+				}
+			}
+			metrics.InvestigationAPIRequests.WithLabelValues(route, strconv.Itoa(status)).Inc()
+			metrics.InvestigationAPIRequestDuration.WithLabelValues(route).Observe(time.Since(start).Seconds())
+		}()
+
 		r = r.WithContext(withRoute(r.Context(), route))
 		next(rec, r, ps)
-
-		status := rec.status
-		if status == 0 {
-			// The handler wrote nothing; net/http sends 200.
-			status = http.StatusOK
-		}
-		metrics.InvestigationAPIRequests.WithLabelValues(route, strconv.Itoa(status)).Inc()
-		metrics.InvestigationAPIRequestDuration.WithLabelValues(route).Observe(time.Since(start).Seconds())
+		returned = true
 	}
 }
 
