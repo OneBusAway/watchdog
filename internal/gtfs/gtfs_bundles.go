@@ -979,6 +979,24 @@ func sameOrigin(a, b *url.URL) bool {
 	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Host, b.Host)
 }
 
+// maxGTFSRTFeedSize bounds the amount of data read from a realtime feed before
+// protobuf decoding. Realtime feeds are polled frequently and should remain
+// substantially smaller than static GTFS archives.
+const maxGTFSRTFeedSize int64 = 64 << 20 // 64 MiB
+
+// readGTFSRTFeedBody reads at most maxSize+1 bytes so it can distinguish a
+// response exactly at the limit from one that exceeds it.
+func readGTFSRTFeedBody(body io.Reader, maxSize int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(body, maxSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxSize {
+		return nil, fmt.Errorf("response body exceeds maximum size of %d bytes", maxSize)
+	}
+	return data, nil
+}
+
 // parseGTFSRTFeed fetches one upstream-merged source and preserves its IDs.
 // The returned observation is meaningful only when err is nil.
 func parseGTFSRTFeed(ctx context.Context, server models.ObaServer, client *http.Client, observedAt time.Time) (*models.RealtimeData, FeedObservation, error) {
@@ -1038,8 +1056,35 @@ func parseGTFSRTFeed(ctx context.Context, server models.ObaServer, client *http.
 		})
 		return nil, observation, err
 	}
-	data, readErr := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		err = sanitizeFeedError(
+			fmt.Errorf("GTFS-RT feed %s returned HTTP status %d", feed.VehiclePositionURL, resp.StatusCode),
+		)
+		reportFetchErr(err, report.SentryReportOptions{
+			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
+			ExtraContext: map[string]interface{}{
+				"vehicle_position_url": sanitizedURL,
+				"status":               resp.StatusCode,
+			},
+		})
+		return nil, observation, err
+	}
+	if resp.ContentLength > maxGTFSRTFeedSize {
+		err = sanitizeFeedError(fmt.Errorf(
+			"GTFS-RT feed %s response exceeds maximum size of %d bytes (Content-Length: %d)",
+			feed.VehiclePositionURL, maxGTFSRTFeedSize, resp.ContentLength,
+		))
+		reportFetchErr(err, report.SentryReportOptions{
+			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
+			ExtraContext: map[string]interface{}{
+				"vehicle_position_url": sanitizedURL,
+				"content_length":       resp.ContentLength,
+			},
+		})
+		return nil, observation, err
+	}
+	data, readErr := readGTFSRTFeedBody(resp.Body, maxGTFSRTFeedSize)
 	if readErr != nil {
 		err = sanitizeFeedError(
 			fmt.Errorf("read GTFS-RT feed %s: %w", feed.VehiclePositionURL, readErr),
@@ -1048,19 +1093,6 @@ func parseGTFSRTFeed(ctx context.Context, server models.ObaServer, client *http.
 			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
 			ExtraContext: map[string]interface{}{
 				"vehicle_position_url": sanitizedURL,
-			},
-		})
-		return nil, observation, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		err = sanitizeFeedError(
-			fmt.Errorf("GTFS-RT feed %s returned %s", feed.VehiclePositionURL, resp.Status),
-		)
-		reportFetchErr(err, report.SentryReportOptions{
-			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
-			ExtraContext: map[string]interface{}{
-				"vehicle_position_url": sanitizedURL,
-				"status":               resp.StatusCode,
 			},
 		})
 		return nil, observation, err

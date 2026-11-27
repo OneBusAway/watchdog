@@ -1196,6 +1196,71 @@ func (b failingGTFSBody) Close() error {
 	return nil
 }
 
+type countingGTFSRTBody struct {
+	reader    io.Reader
+	readCalls int
+	bytesRead int
+	closed    bool
+}
+
+func (b *countingGTFSRTBody) Read(p []byte) (int, error) {
+	b.readCalls++
+	n, err := b.reader.Read(p)
+	b.bytesRead += n
+	return n, err
+}
+
+func (b *countingGTFSRTBody) Close() error {
+	b.closed = true
+	return nil
+}
+
+// endlessGTFSRTReader simulates a response body that keeps producing bytes.
+// It avoids allocating a large fixture just to exercise the unknown-length
+// response path.
+type endlessGTFSRTReader struct{}
+
+func (endlessGTFSRTReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 'x'
+	}
+	return len(p), nil
+}
+
+func TestReadGTFSRTFeedBodyEnforcesLimit(t *testing.T) {
+	const maxSize = 8
+
+	tests := []struct {
+		name      string
+		payload   string
+		wantErr   bool
+		wantBytes int
+	}{
+		{name: "below limit", payload: "1234567", wantBytes: 7},
+		{name: "exactly at limit", payload: "12345678", wantBytes: 8},
+		{name: "one byte above limit", payload: "123456789", wantErr: true, wantBytes: maxSize + 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := &countingGTFSRTBody{reader: strings.NewReader(tt.payload)}
+			data, err := readGTFSRTFeedBody(body, maxSize)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("readGTFSRTFeedBody() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if body.bytesRead != tt.wantBytes {
+				t.Errorf("read %d bytes, want %d", body.bytesRead, tt.wantBytes)
+			}
+			if !tt.wantErr && string(data) != tt.payload {
+				t.Errorf("data = %q, want %q", data, tt.payload)
+			}
+			if body.bytesRead > maxSize+1 {
+				t.Errorf("read %d bytes, exceeded maximum read of %d", body.bytesRead, maxSize+1)
+			}
+		})
+	}
+}
+
 func assertGTFSRedaction(t *testing.T, rec *report.RecordingTransport, err error, safeURL string, secrets ...string) {
 	t.Helper()
 
@@ -1404,6 +1469,130 @@ func TestParseGTFSRTFeedRedactsCredentialsFromReadError(t *testing.T) {
 		queryKey,
 		headerKey,
 	)
+}
+
+func TestParseGTFSRTFeedDoesNotReadNonSuccessResponseBody(t *testing.T) {
+	rec := report.CaptureSentry(t)
+	body := &countingGTFSRTBody{reader: strings.NewReader("this body must not be read")}
+	client := &http.Client{
+		Transport: gtfsRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode:    http.StatusServiceUnavailable,
+				Status:        "503 Service Unavailable",
+				Header:        make(http.Header),
+				Body:          body,
+				ContentLength: int64(len("this body must not be read")),
+				Request:       req,
+			}, nil
+		}),
+	}
+	server := models.ObaServer{
+		ServerName: "status-before-body-test",
+		AgencyID:   "agency-status-before-body",
+		GtfsRTFeeds: []models.GtfsRTFeed{{
+			VehiclePositionURL: "https://feed.example.com/vehicles.pb",
+		}},
+	}
+
+	_, _, err := parseGTFSRTFeed(context.Background(), server, client, time.Now())
+	if err == nil || !strings.Contains(err.Error(), "503") {
+		t.Fatalf("expected HTTP 503 error, got %v", err)
+	}
+	if body.readCalls != 0 || body.bytesRead != 0 {
+		t.Errorf("non-success response body was read: calls=%d bytes=%d", body.readCalls, body.bytesRead)
+	}
+	if !body.closed {
+		t.Error("non-success response body was not closed")
+	}
+	if events := rec.Events(); len(events) != 1 {
+		t.Errorf("expected one Sentry event, got %d", len(events))
+	}
+}
+
+func TestFetchAndStoreGTFSRTFeedRejectsOversizedResponseAndPreservesLastGoodSnapshot(t *testing.T) {
+	const serverURL = "https://feed.example.com/vehicles.pb"
+	server := models.ObaServer{
+		ServerName: "oversized-feed-test",
+		AgencyID:   "agency-oversized-feed",
+		ObaBaseURL: "https://oba.example.com",
+		GtfsRTFeeds: []models.GtfsRTFeed{{
+			VehiclePositionURL: serverURL,
+		}},
+	}
+
+	lastGood := &models.RealtimeData{ObservationAt: time.Now().Add(-time.Minute)}
+	store := NewRealtimeStore()
+	store.Set(server.ServerKey(), lastGood)
+	body := &countingGTFSRTBody{reader: strings.NewReader("body should not be read")}
+	client := &http.Client{
+		Transport: gtfsRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode:    http.StatusOK,
+				Header:        make(http.Header),
+				Body:          body,
+				ContentLength: maxGTFSRTFeedSize + 1,
+				Request:       req,
+			}, nil
+		}),
+	}
+
+	err := fetchAndStoreGTFSRTFeed(context.Background(), server, store, client, nil)
+	if err == nil || !strings.Contains(err.Error(), "maximum size") {
+		t.Fatalf("expected oversized response error, got %v", err)
+	}
+	if got := store.Get(server.ServerKey()); got != lastGood {
+		t.Errorf("last good snapshot was replaced: got %p, want %p", got, lastGood)
+	}
+	if body.readCalls != 0 || body.bytesRead != 0 {
+		t.Errorf("declared oversized body was read: calls=%d bytes=%d", body.readCalls, body.bytesRead)
+	}
+	if !body.closed {
+		t.Error("oversized response body was not closed")
+	}
+}
+
+func TestParseGTFSRTFeedRejectsUnknownLengthOversizedResponse(t *testing.T) {
+	rec := report.CaptureSentry(t)
+	body := &countingGTFSRTBody{reader: endlessGTFSRTReader{}}
+
+	client := &http.Client{
+		Transport: gtfsRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode:    http.StatusOK,
+				Status:        "200 OK",
+				Header:        make(http.Header),
+				Body:          body,
+				ContentLength: -1,
+				Request:       req,
+			}, nil
+		}),
+	}
+
+	server := models.ObaServer{
+		ServerName: "unknown-length-oversized-feed-test",
+		AgencyID:   "agency-unknown-length-oversized",
+		GtfsRTFeeds: []models.GtfsRTFeed{{
+			VehiclePositionURL: "https://feed.example.com/vehicles.pb",
+		}},
+	}
+
+	_, _, err := parseGTFSRTFeed(context.Background(), server, client, time.Now())
+
+	if err == nil || !strings.Contains(err.Error(), "exceeds maximum size") {
+		t.Fatalf("expected unknown-length oversized response error, got %v", err)
+	}
+
+	if want := int(maxGTFSRTFeedSize + 1); body.bytesRead != want {
+		t.Errorf("read %d response bytes, want exactly %d", body.bytesRead, want)
+	}
+
+	if !body.closed {
+		t.Error("response body was not closed")
+	}
+
+	if events := rec.Events(); len(events) != 1 {
+		t.Errorf("expected one Sentry event for oversized response, got %d", len(events))
+	}
 }
 
 func TestFetchGTFSBundleDataRedactsCredentials(t *testing.T) {
