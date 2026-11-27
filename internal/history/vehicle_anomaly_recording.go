@@ -67,6 +67,9 @@ type serverVehicleEpisodes struct {
 	mu     sync.Mutex
 	loaded bool
 	open   map[vehicleEpisodeKey]*openVehicleEpisode
+	// sightings outlives a reload: it is memory-only information the
+	// database cannot restore.
+	sightings map[vehicleSightingKey]vehicleSighting
 }
 
 // openVehicleEpisodes holds every server's open episodes, keyed by the
@@ -90,7 +93,10 @@ func (o *openVehicleEpisodes) forServer(baseURL string) *serverVehicleEpisodes {
 	defer o.mu.Unlock()
 	entry, ok := o.entries[baseURL]
 	if !ok {
-		entry = &serverVehicleEpisodes{open: make(map[vehicleEpisodeKey]*openVehicleEpisode)}
+		entry = &serverVehicleEpisodes{
+			open:      make(map[vehicleEpisodeKey]*openVehicleEpisode),
+			sightings: make(map[vehicleSightingKey]vehicleSighting),
+		}
 		o.entries[baseURL] = entry
 	}
 	return entry
@@ -179,9 +185,9 @@ func (h *HistoryService) RecordVehiclePositions(ctx context.Context, server mode
 		staticVersionID = &version.id
 	}
 	feeds, observations := vehicleObservations(server, snapshot, vehicleJudges{attributor: attributor, boxes: boxes, boxVersion: h.static.box, lastSeen: lastSeen})
-	plan := planVehicleAnomalies(entry.open, feeds, observations, threshold)
+	plan := planVehicleAnomalies(entry.open, entry.sightings, feeds, observations, threshold)
 	if plan.empty() {
-		noteSightings(entry.open, feeds, observations)
+		noteSightings(entry, feeds, observations)
 		return
 	}
 
@@ -209,30 +215,57 @@ func (h *HistoryService) RecordVehiclePositions(ctx context.Context, server mode
 	for _, closed := range plan.closes {
 		delete(entry.open, closed.key)
 	}
-	noteSightings(entry.open, feeds, observations)
+	noteSightings(entry, feeds, observations)
 }
 
+// sightingRetention is how long a sighting is kept for a vehicle with no
+// open episode. Out-of-order responses come from one collection tick, so a
+// sighting only needs to outlive that; it is dropped after this so memory
+// does not grow with every vehicle ever seen.
+const sightingRetention = 10 * time.Minute
+
 // noteSightings records, in memory only, the source and observation time of
-// the response that reported each vehicle with an open episode, so a later
-// absence or an out-of-order response is judged against them. A response
-// older than what an episode has seen is not a sighting.
-func noteSightings(open map[vehicleEpisodeKey]*openVehicleEpisode, feeds []vehicleFeed, observations []vehicleObservation) {
-	feedByURL := make(map[string]vehicleFeed, len(feeds))
-	for _, feed := range feeds {
-		feedByURL[feed.feedURL] = feed
-	}
+// the newest response that reported each vehicle: every vehicle in the raw
+// response, including those agency filtering left out of the observations.
+// A response older than a vehicle's sighting leaves it alone.
+func noteSightings(entry *serverVehicleEpisodes, feeds []vehicleFeed, observations []vehicleObservation) {
+	observed := make(map[string][]string, len(feeds))
 	for _, obs := range observations {
-		feed, ok := feedByURL[obs.feedURL]
-		if !ok {
-			continue
+		observed[obs.feedURL] = append(observed[obs.feedURL], obs.vehicleID)
+	}
+	var newest time.Time
+	for _, feed := range feeds {
+		if feed.observedAt.After(newest) {
+			newest = feed.observedAt
 		}
-		for _, anomaly := range vehicleAnomalyTypes {
-			episode := open[vehicleEpisodeKey{feedURL: obs.feedURL, vehicleID: obs.vehicleID, anomaly: anomaly}]
-			if episode == nil || episode.staleFor(feed.observedAt) {
+		ids := observed[feed.feedURL]
+		if feed.reportedVehicleIDs != nil {
+			ids = make([]string, 0, len(feed.reportedVehicleIDs))
+			for id := range feed.reportedVehicleIDs {
+				ids = append(ids, id)
+			}
+		}
+		for _, id := range ids {
+			key := vehicleSightingKey{feedURL: feed.feedURL, vehicleID: id}
+			if current, ok := entry.sightings[key]; ok && current.newerThan(feed.observedAt) {
 				continue
 			}
-			episode.sourceKey = feed.sourceKey
-			episode.observedAt = feed.observedAt
+			entry.sightings[key] = vehicleSighting{sourceKey: feed.sourceKey, observedAt: feed.observedAt}
+		}
+	}
+	pruneSightings(entry, newest)
+}
+
+// pruneSightings drops sightings older than sightingRetention whose vehicle
+// has no open episode.
+func pruneSightings(entry *serverVehicleEpisodes, now time.Time) {
+	withEpisode := make(map[vehicleSightingKey]bool, len(entry.open))
+	for key := range entry.open {
+		withEpisode[vehicleSightingKey{feedURL: key.feedURL, vehicleID: key.vehicleID}] = true
+	}
+	for key, sighting := range entry.sightings {
+		if !withEpisode[key] && now.Sub(sighting.observedAt) > sightingRetention {
+			delete(entry.sightings, key)
 		}
 	}
 }
@@ -286,6 +319,21 @@ func (x *feedSourceIndex) only(baseURL, feedURL string) (string, bool) {
 	return "", false
 }
 
+// seedSighting gives a loaded episode's vehicle a sighting from its newest
+// evidence, unless memory already holds a newer one. The source is known only
+// when one configured feed maps to the feed URL.
+func seedSighting(entry *serverVehicleEpisodes, key vehicleEpisodeKey, observedAt time.Time, sources *feedSourceIndex, baseURL string) {
+	sightingKey := vehicleSightingKey{feedURL: key.feedURL, vehicleID: key.vehicleID}
+	if current, ok := entry.sightings[sightingKey]; ok && !current.observedAt.Before(observedAt) {
+		return
+	}
+	sighting := vehicleSighting{observedAt: observedAt}
+	if source, ok := sources.only(baseURL, key.feedURL); ok {
+		sighting.sourceKey = source
+	}
+	entry.sightings[sightingKey] = sighting
+}
+
 // loadOpenVehicleEpisodes replaces entry's open episodes with the ones in the
 // database. It reports whether it succeeded; on failure entry is unchanged
 // and stays unloaded, and the next snapshot tries again.
@@ -302,10 +350,8 @@ func (h *HistoryService) loadOpenVehicleEpisodes(ctx context.Context, server mod
 			vehicleID: row.ExternalVehicleID,
 			anomaly:   vehicleAnomalyType(row.AnomalyCode),
 		}
-		episode := &openVehicleEpisode{episodeID: row.VehicleAnomalyEpisodeID, observedAt: row.ObservedAt}
-		if source, ok := h.feedSources.only(baseURL, row.NormalizedVehiclePositionUrl); ok {
-			episode.sourceKey = source
-		}
+		episode := &openVehicleEpisode{episodeID: row.VehicleAnomalyEpisodeID}
+		seedSighting(entry, key, row.ObservedAt, h.feedSources, baseURL)
 		if row.TripID != nil {
 			episode.tripID = *row.TripID
 		}
@@ -602,13 +648,10 @@ func (w *vehicleTickWriter) open(ctx context.Context, o vehicleEpisodeOpen) (*op
 	if err := w.link(ctx, episodeID, o.key, o.observation, evidenceOpening); err != nil {
 		return nil, err
 	}
-	feed := w.feeds[o.key.feedURL]
 	return &openVehicleEpisode{
 		episodeID:     episodeID,
 		tripID:        o.observation.tripID,
 		tripStartDate: o.observation.tripStartDate,
-		sourceKey:     feed.sourceKey,
-		observedAt:    feed.observedAt,
 	}, nil
 }
 

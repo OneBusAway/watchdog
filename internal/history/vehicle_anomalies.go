@@ -106,21 +106,32 @@ type openVehicleEpisode struct {
 	episodeID     int64
 	tripID        string
 	tripStartDate string
-	// sourceKey is the feed source last seen reporting the vehicle, empty
-	// while unknown after a restart. Only a response from that source can
-	// close the episode on absence: feeds that differ only by query string
-	// share feedURL but each reports only its own vehicles.
+}
+
+// vehicleSightingKey identifies a vehicle on a feed URL.
+type vehicleSightingKey struct {
+	feedURL   string
+	vehicleID string
+}
+
+// vehicleSighting is the newest response that reported a vehicle, kept in
+// memory only and whether or not the vehicle has an open episode.
+type vehicleSighting struct {
+	// sourceKey is the feed source of that response, empty while unknown
+	// after a restart. Feeds that differ only by query string share feedURL
+	// but each reports only its own vehicles, so only a response from this
+	// source can close the vehicle's episodes on absence.
 	sourceKey string
-	// observedAt is the observation time of the newest response that
-	// reported the vehicle. Entries fetch concurrently, so an older response
-	// can be recorded after a newer one; it must not change the episode.
+	// observedAt is that response's observation time. Entries fetch
+	// concurrently, so an older response can be recorded after a newer one;
+	// it must neither open, change nor close anything.
 	observedAt time.Time
 }
 
-// staleFor reports whether a response observed at observedAt is older than
-// the newest one already applied to the episode.
-func (e *openVehicleEpisode) staleFor(observedAt time.Time) bool {
-	return observedAt.Before(e.observedAt)
+// newerThan reports whether the sighting is newer than a response observed
+// at observedAt.
+func (s vehicleSighting) newerThan(observedAt time.Time) bool {
+	return observedAt.Before(s.observedAt)
 }
 
 // vehicleEpisodeOpen opens an episode with the vehicle's evidence.
@@ -204,7 +215,7 @@ func evaluateRule(anomaly vehicleAnomalyType, obs vehicleObservation, observedAt
 // absence changes nothing. A vehicle that is in the response but not among
 // the observations (another agency's vehicle on a shared feed) is left to
 // the entry that observes it.
-func planVehicleAnomalies(open map[vehicleEpisodeKey]*openVehicleEpisode, feeds []vehicleFeed, observations []vehicleObservation, threshold time.Duration) vehicleEpisodePlan {
+func planVehicleAnomalies(open map[vehicleEpisodeKey]*openVehicleEpisode, sightings map[vehicleSightingKey]vehicleSighting, feeds []vehicleFeed, observations []vehicleObservation, threshold time.Duration) vehicleEpisodePlan {
 	feedByURL := make(map[string]vehicleFeed, len(feeds))
 	for _, feed := range feeds {
 		feedByURL[feed.feedURL] = feed
@@ -220,19 +231,19 @@ func planVehicleAnomalies(open map[vehicleEpisodeKey]*openVehicleEpisode, feeds 
 			continue
 		}
 		present[pk] = true
+		if sighting, ok := sightings[vehicleSightingKey(pk)]; ok && sighting.newerThan(feed.observedAt) {
+			continue
+		}
 		for _, anomaly := range vehicleAnomalyTypes {
 			key := vehicleEpisodeKey{feedURL: obs.feedURL, vehicleID: obs.vehicleID, anomaly: anomaly}
-			episode := open[key]
-			if episode != nil && episode.staleFor(feed.observedAt) {
-				continue
-			}
-			planPresentVehicle(&plan, key, episode, obs, evaluateRule(anomaly, obs, feed.observedAt, threshold))
+			planPresentVehicle(&plan, key, open[key], obs, evaluateRule(anomaly, obs, feed.observedAt, threshold))
 		}
 	}
 
-	for key, episode := range open {
+	for key := range open {
 		feed, ok := feedByURL[key.feedURL]
-		if ok && closesOnAbsence(feed, episode, key.vehicleID, present[presentKey{key.feedURL, key.vehicleID}]) {
+		pk := presentKey{key.feedURL, key.vehicleID}
+		if ok && closesOnAbsence(feed, sightings[vehicleSightingKey(pk)], key.vehicleID, present[pk]) {
 			plan.closes = append(plan.closes, vehicleEpisodeClose{key: key, reason: closeNotPresentInFull})
 		}
 	}
@@ -241,13 +252,13 @@ func planVehicleAnomalies(open map[vehicleEpisodeKey]*openVehicleEpisode, feeds 
 }
 
 // closesOnAbsence reports whether a full-dataset response that lacks the
-// vehicle closes its episode. The response must come from the source that
-// reports the vehicle, and must not be older than what the episode has seen.
-func closesOnAbsence(feed vehicleFeed, episode *openVehicleEpisode, vehicleID string, observed bool) bool {
-	fromItsSource := episode.sourceKey != "" && episode.sourceKey == feed.sourceKey
+// vehicle closes its episodes. The response must come from the source last
+// seen reporting the vehicle, and must not be older than that sighting.
+func closesOnAbsence(feed vehicleFeed, sighting vehicleSighting, vehicleID string, observed bool) bool {
+	fromItsSource := sighting.sourceKey != "" && sighting.sourceKey == feed.sourceKey
 	return feed.fullDataset &&
 		fromItsSource &&
-		!episode.staleFor(feed.observedAt) &&
+		!sighting.newerThan(feed.observedAt) &&
 		!feed.reported(vehicleID, observed)
 }
 

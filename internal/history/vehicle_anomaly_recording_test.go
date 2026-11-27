@@ -111,6 +111,7 @@ func recordVehicles(h *HistoryService, c context.Context, server models.ObaServe
 }
 
 type storedVehicleEpisode struct {
+	vehicleID   string
 	anomaly     string
 	closeReason *string
 	links       map[string]int
@@ -119,9 +120,10 @@ type storedVehicleEpisode struct {
 func storedVehicleEpisodes(t *testing.T, pool *pgxpool.Pool) []storedVehicleEpisode {
 	t.Helper()
 	rows, err := pool.Query(ctx, `
-		SELECT e.vehicle_anomaly_episode_id, t.anomaly_code, e.close_reason
+		SELECT e.vehicle_anomaly_episode_id, v.external_vehicle_id, t.anomaly_code, e.close_reason
 		FROM vehicle_anomaly_episode e
 		JOIN vehicle_anomaly_type t ON t.anomaly_type_id = e.anomaly_type_id
+		JOIN vehicle_entity v ON v.vehicle_entity_id = e.vehicle_entity_id
 		ORDER BY e.vehicle_anomaly_episode_id`)
 	if err != nil {
 		t.Fatalf("query episodes: %v", err)
@@ -132,7 +134,7 @@ func storedVehicleEpisodes(t *testing.T, pool *pgxpool.Pool) []storedVehicleEpis
 	for rows.Next() {
 		var id int64
 		var e storedVehicleEpisode
-		if err := rows.Scan(&id, &e.anomaly, &e.closeReason); err != nil {
+		if err := rows.Scan(&id, &e.vehicleID, &e.anomaly, &e.closeReason); err != nil {
 			t.Fatalf("scan episode: %v", err)
 		}
 		ids = append(ids, id)
@@ -512,14 +514,17 @@ func TestRecordVehiclePositions_FeedsDifferingOnlyByQueryKeepTheirEpisodes(t *te
 	// Each entry still closes its own episode when its vehicle leaves.
 	gone := vehicleT0.Add(2 * time.Minute)
 	recordVehicles(h, ctx, sf, sourceSnapshot(sfURL, gone, nil))
-	closed := 0
 	for _, episode := range storedVehicleEpisodes(t, pool) {
-		if episode.closeReason != nil && *episode.closeReason == string(closeNotPresentInFull) {
-			closed++
+		switch episode.vehicleID {
+		case "sf-1":
+			if episode.closeReason == nil || *episode.closeReason != string(closeNotPresentInFull) {
+				t.Errorf("sf-1 close_reason = %v, want not_present_in_full_dataset", episode.closeReason)
+			}
+		case "ac-1":
+			if episode.closeReason != nil {
+				t.Errorf("sf's tick closed ac-1's episode with %q", *episode.closeReason)
+			}
 		}
-	}
-	if closed != 1 {
-		t.Fatalf("closed %d episodes, want only sf's", closed)
 	}
 	noWriteFailures(t, logs)
 }
@@ -553,4 +558,56 @@ func TestRecordVehiclePositions_OlderResponseDoesNotClose(t *testing.T) {
 		t.Fatal("an older response closed the episode")
 	}
 	noWriteFailures(t, logs)
+}
+
+// A newer healthy response closes the episode; a delayed older anomalous
+// response must not open a new one for the old condition.
+func TestRecordVehiclePositions_OlderAnomalyAfterCloseDoesNotReopen(t *testing.T) {
+	h, pool, _ := newCountedHistory(t)
+	recordVehicles(h, ctx, vehicleServer, vehicleSnapshot(vehicleT0, zeroCoordinates(testVehicle("bus-1", vehicleT0))))
+	t2 := vehicleT0.Add(time.Minute)
+	recordVehicles(h, ctx, vehicleServer, vehicleSnapshot(t2, testVehicle("bus-1", t2)))
+
+	t1 := vehicleT0.Add(30 * time.Second)
+	recordVehicles(h, ctx, vehicleServer, vehicleSnapshot(t1, zeroCoordinates(testVehicle("bus-1", t1))))
+
+	if episode := onlyVehicleEpisode(t, pool); episode.closeReason == nil {
+		t.Fatalf("a delayed older response reopened the condition: %+v", storedVehicleEpisodes(t, pool))
+	}
+}
+
+// A newer response that reports the vehicle counts as a sighting even when
+// agency filtering removed it from this entry's view, so a delayed older
+// response from the same source cannot close the episode on absence.
+func TestRecordVehiclePositions_FilteredSightingBlocksOlderAbsence(t *testing.T) {
+	h, pool, _ := newCountedHistory(t)
+	recordVehicles(h, ctx, vehicleServer, vehicleSnapshot(vehicleT0, zeroCoordinates(testVehicle("bus-1", vehicleT0))))
+	t2 := vehicleT0.Add(time.Minute)
+	recordVehicles(h, ctx, vehicleServer, filteredSnapshot(t2, []string{"bus-1"}))
+
+	t1 := vehicleT0.Add(30 * time.Second)
+	recordVehicles(h, ctx, vehicleServer, filteredSnapshot(t1, nil))
+
+	if reason := onlyVehicleEpisode(t, pool).closeReason; reason != nil {
+		t.Fatalf("a delayed older response closed the episode with %q", *reason)
+	}
+}
+
+// Sightings of vehicles with no open episode are dropped after
+// sightingRetention, so memory does not keep every vehicle ever seen.
+func TestRecordVehiclePositions_PrunesOldSightings(t *testing.T) {
+	h, _, _ := newCountedHistory(t)
+	recordVehicles(h, ctx, vehicleServer, vehicleSnapshot(vehicleT0, testVehicle("bus-1", vehicleT0)))
+	later := vehicleT0.Add(sightingRetention + time.Minute)
+	recordVehicles(h, ctx, vehicleServer, vehicleSnapshot(later, testVehicle("bus-2", later)))
+
+	entry := h.vehicles.forServer(utils.SanitizeServerURL(vehicleServer.ObaBaseURL))
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if _, ok := entry.sightings[vehicleSightingKey{feedURL: vehicleFeedURL, vehicleID: "bus-1"}]; ok {
+		t.Fatal("kept a sighting older than sightingRetention with no open episode")
+	}
+	if _, ok := entry.sightings[vehicleSightingKey{feedURL: vehicleFeedURL, vehicleID: "bus-2"}]; !ok {
+		t.Fatal("dropped a current sighting")
+	}
 }

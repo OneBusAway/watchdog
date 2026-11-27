@@ -49,9 +49,19 @@ func keyFor(id string, anomaly vehicleAnomalyType) vehicleEpisodeKey {
 func openFor(keys ...vehicleEpisodeKey) map[vehicleEpisodeKey]*openVehicleEpisode {
 	open := make(map[vehicleEpisodeKey]*openVehicleEpisode, len(keys))
 	for i, key := range keys {
-		open[key] = &openVehicleEpisode{episodeID: int64(i + 1), tripID: "trip-1", tripStartDate: "20261127", sourceKey: planSourceKey, observedAt: planObservedAt.Add(-time.Minute)}
+		open[key] = &openVehicleEpisode{episodeID: int64(i + 1), tripID: "trip-1", tripStartDate: "20261127"}
 	}
 	return open
+}
+
+// sightingsFor gives every vehicle with an open episode a sighting from
+// planSourceKey, a minute before planObservedAt.
+func sightingsFor(open map[vehicleEpisodeKey]*openVehicleEpisode) map[vehicleSightingKey]vehicleSighting {
+	sightings := make(map[vehicleSightingKey]vehicleSighting, len(open))
+	for key := range open {
+		sightings[vehicleSightingKey{feedURL: key.feedURL, vehicleID: key.vehicleID}] = vehicleSighting{sourceKey: planSourceKey, observedAt: planObservedAt.Add(-time.Minute)}
+	}
+	return sightings
 }
 
 func openedKeys(plan vehicleEpisodePlan) []vehicleEpisodeKey {
@@ -79,7 +89,7 @@ func TestStaleThreshold(t *testing.T) {
 }
 
 func TestVehicle_HealthyVehicleOpensNothing(t *testing.T) {
-	plan := planVehicleAnomalies(nil, fullFeed(), []vehicleObservation{healthyVehicle("bus-1")}, planThreshold)
+	plan := planVehicleAnomalies(nil, nil, fullFeed(), []vehicleObservation{healthyVehicle("bus-1")}, planThreshold)
 	if !plan.empty() {
 		t.Fatalf("plan = %+v, want empty", plan)
 	}
@@ -106,7 +116,7 @@ func TestVehicle_OpensEachType(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan := planVehicleAnomalies(nil, fullFeed(), []vehicleObservation{tt.obs}, planThreshold)
+			plan := planVehicleAnomalies(nil, nil, fullFeed(), []vehicleObservation{tt.obs}, planThreshold)
 			want := []vehicleEpisodeKey{keyFor("bus-1", tt.want)}
 			if got := openedKeys(plan); !reflect.DeepEqual(got, want) {
 				t.Fatalf("opened %v, want %v", got, want)
@@ -121,7 +131,7 @@ func TestVehicle_OpensEachType(t *testing.T) {
 func TestVehicle_StaleAtThresholdIsFresh(t *testing.T) {
 	obs := healthyVehicle("bus-1")
 	obs.sourceTime = timePtr(planObservedAt.Add(-planThreshold))
-	if plan := planVehicleAnomalies(nil, fullFeed(), []vehicleObservation{obs}, planThreshold); !plan.empty() {
+	if plan := planVehicleAnomalies(nil, nil, fullFeed(), []vehicleObservation{obs}, planThreshold); !plan.empty() {
 		t.Fatalf("an age equal to the threshold opened %+v", plan)
 	}
 }
@@ -144,7 +154,8 @@ func TestVehicle_ClosesEachReason(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			key := keyFor("bus-1", tt.anomaly)
-			plan := planVehicleAnomalies(openFor(key), fullFeed(), []vehicleObservation{tt.obs}, planThreshold)
+			open := openFor(key)
+			plan := planVehicleAnomalies(open, sightingsFor(open), fullFeed(), []vehicleObservation{tt.obs}, planThreshold)
 			if len(plan.closes) != 1 || plan.closes[0].key != key || plan.closes[0].reason != tt.want {
 				t.Fatalf("closes = %+v, want %s for %v", plan.closes, tt.want, key)
 			}
@@ -157,7 +168,8 @@ func TestVehicle_ClosesEachReason(t *testing.T) {
 
 func TestVehicle_NotPresentInFullDatasetCloses(t *testing.T) {
 	keys := []vehicleEpisodeKey{keyFor("gone", anomalyInvalidCoordinate), keyFor("gone", anomalyStaleSourceTimestamp)}
-	plan := planVehicleAnomalies(openFor(keys...), fullFeed(), []vehicleObservation{healthyVehicle("other")}, planThreshold)
+	open := openFor(keys...)
+	plan := planVehicleAnomalies(open, sightingsFor(open), fullFeed(), []vehicleObservation{healthyVehicle("other")}, planThreshold)
 
 	if len(plan.closes) != 2 {
 		t.Fatalf("closes = %+v, want both episodes of the absent vehicle", plan.closes)
@@ -171,7 +183,7 @@ func TestVehicle_NotPresentInFullDatasetCloses(t *testing.T) {
 
 func TestVehicle_DifferentialAbsenceIgnored(t *testing.T) {
 	open := openFor(keyFor("gone", anomalyInvalidCoordinate))
-	if plan := planVehicleAnomalies(open, differentialFeed(), nil, planThreshold); !plan.empty() {
+	if plan := planVehicleAnomalies(open, sightingsFor(open), differentialFeed(), nil, planThreshold); !plan.empty() {
 		t.Fatalf("absence from a differential feed changed %+v", plan)
 	}
 }
@@ -181,7 +193,8 @@ func TestVehicle_MeaningfulChangeOnlyOnTripChange(t *testing.T) {
 	invalid := healthyVehicle("bus-1")
 	invalid.positionReason = geo.PositionMissing
 
-	if plan := planVehicleAnomalies(openFor(key), fullFeed(), []vehicleObservation{invalid}, planThreshold); !plan.empty() {
+	open := openFor(key)
+	if plan := planVehicleAnomalies(open, sightingsFor(open), fullFeed(), []vehicleObservation{invalid}, planThreshold); !plan.empty() {
 		t.Fatalf("same trip added %+v", plan)
 	}
 
@@ -191,7 +204,8 @@ func TestVehicle_MeaningfulChangeOnlyOnTripChange(t *testing.T) {
 	} {
 		obs := invalid
 		change(&obs)
-		plan := planVehicleAnomalies(openFor(key), fullFeed(), []vehicleObservation{obs}, planThreshold)
+		open := openFor(key)
+		plan := planVehicleAnomalies(open, sightingsFor(open), fullFeed(), []vehicleObservation{obs}, planThreshold)
 		if len(plan.changes) != 1 || plan.changes[0].key != key || len(plan.opens) != 0 || len(plan.closes) != 0 {
 			t.Fatalf("plan = %+v, want one meaningful change for %v", plan, key)
 		}
@@ -220,7 +234,8 @@ func TestVehicle_UnjudgedVehicleKeepsEpisodeOpen(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan := planVehicleAnomalies(openFor(keyFor("bus-1", tt.anomaly)), fullFeed(), []vehicleObservation{tt.obs}, planThreshold)
+			open := openFor(keyFor("bus-1", tt.anomaly))
+			plan := planVehicleAnomalies(open, sightingsFor(open), fullFeed(), []vehicleObservation{tt.obs}, planThreshold)
 			for _, c := range plan.closes {
 				if c.key.anomaly == tt.anomaly {
 					t.Fatalf("closed %+v", c)
@@ -233,7 +248,7 @@ func TestVehicle_UnjudgedVehicleKeepsEpisodeOpen(t *testing.T) {
 func TestVehicle_NoIDSkipped(t *testing.T) {
 	obs := healthyVehicle("")
 	obs.positionReason = geo.PositionMissing
-	if plan := planVehicleAnomalies(nil, fullFeed(), []vehicleObservation{obs}, planThreshold); !plan.empty() {
+	if plan := planVehicleAnomalies(nil, nil, fullFeed(), []vehicleObservation{obs}, planThreshold); !plan.empty() {
 		t.Fatalf("a vehicle without an ID produced %+v", plan)
 	}
 }
@@ -241,7 +256,7 @@ func TestVehicle_NoIDSkipped(t *testing.T) {
 func TestVehicle_DuplicateIDUsesFirstObservation(t *testing.T) {
 	invalid := healthyVehicle("bus-1")
 	invalid.positionReason = geo.PositionMissing
-	plan := planVehicleAnomalies(nil, fullFeed(), []vehicleObservation{invalid, healthyVehicle("bus-1")}, planThreshold)
+	plan := planVehicleAnomalies(nil, nil, fullFeed(), []vehicleObservation{invalid, healthyVehicle("bus-1")}, planThreshold)
 	want := []vehicleEpisodeKey{keyFor("bus-1", anomalyInvalidCoordinate)}
 	if got := openedKeys(plan); !reflect.DeepEqual(got, want) {
 		t.Fatalf("opened %v, want %v", got, want)
@@ -256,7 +271,7 @@ func TestVehicle_PlanIsSorted(t *testing.T) {
 		obs.sourceTime = timePtr(planObservedAt.Add(-time.Hour))
 		observations = append(observations, obs)
 	}
-	plan := planVehicleAnomalies(nil, fullFeed(), observations, planThreshold)
+	plan := planVehicleAnomalies(nil, nil, fullFeed(), observations, planThreshold)
 	var want []vehicleEpisodeKey
 	for _, id := range []string{"a", "b", "c"} {
 		want = append(want, keyFor(id, anomalyInvalidCoordinate), keyFor(id, anomalyStaleSourceTimestamp))
@@ -272,33 +287,46 @@ func TestVehicle_AbsenceFromAnotherSourceIgnored(t *testing.T) {
 	open := openFor(keyFor("other-agency-bus", anomalyInvalidCoordinate))
 	feeds := fullFeed()
 	feeds[0].sourceKey = "source-b"
-	if plan := planVehicleAnomalies(open, feeds, nil, planThreshold); !plan.empty() {
+	if plan := planVehicleAnomalies(open, sightingsFor(open), feeds, nil, planThreshold); !plan.empty() {
 		t.Fatalf("another source's full dataset changed %+v", plan)
 	}
 }
 
-// After a restart an episode's source can be unknown; absence then cannot
+// After a restart a vehicle's source can be unknown; absence then cannot
 // tell whether the vehicle left, so it changes nothing.
 func TestVehicle_AbsenceWithUnknownSourceIgnored(t *testing.T) {
 	open := openFor(keyFor("bus-1", anomalyInvalidCoordinate))
-	open[keyFor("bus-1", anomalyInvalidCoordinate)].sourceKey = ""
-	if plan := planVehicleAnomalies(open, fullFeed(), nil, planThreshold); !plan.empty() {
+	sightings := sightingsFor(open)
+	for key, sighting := range sightings {
+		sighting.sourceKey = ""
+		sightings[key] = sighting
+	}
+	if plan := planVehicleAnomalies(open, sightings, fullFeed(), nil, planThreshold); !plan.empty() {
 		t.Fatalf("absence closed an episode of unknown source: %+v", plan)
 	}
 }
 
-// A response older than the newest one an episode has seen, recorded late
-// because entries fetch concurrently, neither closes nor changes it.
+// A response older than the vehicle's newest sighting, recorded late because
+// entries fetch concurrently, neither opens, closes nor changes anything.
+// This holds after the episode closed too, so a late anomalous response
+// cannot open a new episode for an old condition.
 func TestVehicle_StaleResponseIgnored(t *testing.T) {
 	key := keyFor("bus-1", anomalyInvalidCoordinate)
 	open := openFor(key)
-	open[key].observedAt = planObservedAt.Add(time.Minute)
+	newer := map[vehicleSightingKey]vehicleSighting{
+		{feedURL: planFeedURL, vehicleID: "bus-1"}: {sourceKey: planSourceKey, observedAt: planObservedAt.Add(time.Minute)},
+	}
 
-	healthy := healthyVehicle("bus-1")
-	if plan := planVehicleAnomalies(open, fullFeed(), []vehicleObservation{healthy}, planThreshold); !plan.empty() {
+	if plan := planVehicleAnomalies(open, newer, fullFeed(), []vehicleObservation{healthyVehicle("bus-1")}, planThreshold); !plan.empty() {
 		t.Fatalf("an older healthy response changed %+v", plan)
 	}
-	if plan := planVehicleAnomalies(open, fullFeed(), nil, planThreshold); !plan.empty() {
+	if plan := planVehicleAnomalies(open, newer, fullFeed(), nil, planThreshold); !plan.empty() {
 		t.Fatalf("an older response without the vehicle changed %+v", plan)
+	}
+
+	invalid := healthyVehicle("bus-1")
+	invalid.positionReason = geo.PositionMissing
+	if plan := planVehicleAnomalies(nil, newer, fullFeed(), []vehicleObservation{invalid}, planThreshold); !plan.empty() {
+		t.Fatalf("an older anomalous response opened %+v after a newer one", plan)
 	}
 }
