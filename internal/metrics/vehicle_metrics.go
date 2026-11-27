@@ -184,6 +184,12 @@ func countActiveVehiclesForAgency(ctx context.Context, client *onebusaway.Client
 	// Handle a successful API response containing JSON null.
 	if response == nil {
 		err := fmt.Errorf("OBA API returned a null response for agency %s", server.AgencyID)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: map[string]string{
+				"agency_id":   server.AgencyID,
+				"server_name": server.ServerName,
+			},
+		})
 
 		AgencyActiveVehiclesGauge.DeleteLabelValues(
 			server.AgencyID,
@@ -538,7 +544,11 @@ func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, agencies
 
 	serverBox, ok := boundingBoxStore.Get(server.ServerKey())
 	if !ok {
-		return fmt.Errorf("no bounding box found for server key %s", server.ServerKey())
+		err := fmt.Errorf("no bounding box found for server key %s", server.ServerKey())
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
+		})
+		return err
 	}
 
 	serverURL := utils.SanitizeServerURL(server.ObaBaseURL)
