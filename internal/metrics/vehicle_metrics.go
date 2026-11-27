@@ -65,6 +65,28 @@ type vehicleAttribution struct {
 
 func (a vehicleAttribution) resolved() bool { return a.reason == "" }
 
+// VehicleAttributor attributes vehicles to agencies exactly as the vehicle
+// passes do, so investigation history files a vehicle under the same agency
+// as its metrics.
+type VehicleAttributor struct {
+	server     models.ObaServer
+	agencyByID map[string]models.ObaServer
+	resolver   gtfs.VehicleAttributionResolver
+}
+
+// NewVehicleAttributor takes the same server, agencies and resolver as the
+// vehicle passes: agencies is nil in agency-mode.
+func NewVehicleAttributor(server models.ObaServer, agencies []models.ObaServer, resolver gtfs.VehicleAttributionResolver) VehicleAttributor {
+	return VehicleAttributor{server: server, agencyByID: agencyIndex(agencies), resolver: resolver}
+}
+
+// Attribute returns the agency entry a vehicle belongs to, or the reason it
+// could not be attributed. The reason is empty exactly when it was.
+func (a VehicleAttributor) Attribute(vehicle remoteGtfs.Vehicle) (models.ObaServer, gtfs.AttributionFailureReason) {
+	attribution := attributeVehicle(a.server, a.agencyByID, a.resolver, vehicle)
+	return attribution.agency, attribution.reason
+}
+
 func attributeVehicle(server models.ObaServer, agencyByID map[string]models.ObaServer, routeAgencyIndex gtfs.VehicleAttributionResolver, vehicle remoteGtfs.Vehicle) vehicleAttribution {
 	if agencyByID == nil {
 		return vehicleAttribution{agency: server}
