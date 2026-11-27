@@ -13,22 +13,31 @@ import (
 const closeUnmatchedStopEpisode = `-- name: CloseUnmatchedStopEpisode :exec
 UPDATE unmatched_stop_episode
 SET closing_response_agency_id = $1::bigint,
-    close_reason = 'not_reported',
-    last_reported_at = $2
-WHERE unmatched_stop_episode_id = $3
+    close_reason = $2,
+    last_reported_at = $3
+WHERE unmatched_stop_episode_id = $4
   AND closing_response_agency_id IS NULL
 `
 
 type CloseUnmatchedStopEpisodeParams struct {
 	ClosingResponseAgencyID int64
+	CloseReason             *string
 	LastReportedAt          time.Time
 	UnmatchedStopEpisodeID  int64
 }
 
 // last_reported_at is the time the stop was last reported, held in memory,
-// so a closed episode is always exact.
+// so a closed episode is always exact. The reason is 'not_reported' when the
+// closing response is the poll that no longer reported the stop, or one of
+// the agency-disappearance reasons when it is the agency's last complete
+// response (migration 00004).
 func (q *Queries) CloseUnmatchedStopEpisode(ctx context.Context, arg CloseUnmatchedStopEpisodeParams) error {
-	_, err := q.db.Exec(ctx, closeUnmatchedStopEpisode, arg.ClosingResponseAgencyID, arg.LastReportedAt, arg.UnmatchedStopEpisodeID)
+	_, err := q.db.Exec(ctx, closeUnmatchedStopEpisode,
+		arg.ClosingResponseAgencyID,
+		arg.CloseReason,
+		arg.LastReportedAt,
+		arg.UnmatchedStopEpisodeID,
+	)
 	return err
 }
 
@@ -53,6 +62,31 @@ func (q *Queries) EnsureClusterScheme(ctx context.Context, arg EnsureClusterSche
 		arg.Description,
 	)
 	return err
+}
+
+const getLastCompleteResponseAgency = `-- name: GetLastCompleteResponseAgency :one
+SELECT ra.response_agency_id, r.observed_at
+FROM onebusaway_metrics_response_agency ra
+JOIN onebusaway_metrics_response r ON r.response_id = ra.response_id
+WHERE ra.agency_id = $1
+  AND ra.response_complete
+ORDER BY r.observed_at DESC, ra.response_agency_id DESC
+LIMIT 1
+`
+
+type GetLastCompleteResponseAgencyRow struct {
+	ResponseAgencyID int64
+	ObservedAt       time.Time
+}
+
+// The newest complete response recorded for an agency, with its observation
+// time. Episodes that close because the agency disappeared close against it,
+// since no later response of that agency is complete.
+func (q *Queries) GetLastCompleteResponseAgency(ctx context.Context, agencyID int64) (GetLastCompleteResponseAgencyRow, error) {
+	row := q.db.QueryRow(ctx, getLastCompleteResponseAgency, agencyID)
+	var i GetLastCompleteResponseAgencyRow
+	err := row.Scan(&i.ResponseAgencyID, &i.ObservedAt)
+	return i, err
 }
 
 const getNewestLinkedStopMetadata = `-- name: GetNewestLinkedStopMetadata :one

@@ -47,13 +47,28 @@ RETURNING unmatched_stop_episode_id;
 
 -- name: CloseUnmatchedStopEpisode :exec
 -- last_reported_at is the time the stop was last reported, held in memory,
--- so a closed episode is always exact.
+-- so a closed episode is always exact. The reason is 'not_reported' when the
+-- closing response is the poll that no longer reported the stop, or one of
+-- the agency-disappearance reasons when it is the agency's last complete
+-- response (migration 00004).
 UPDATE unmatched_stop_episode
 SET closing_response_agency_id = @closing_response_agency_id::bigint,
-    close_reason = 'not_reported',
+    close_reason = @close_reason,
     last_reported_at = @last_reported_at
 WHERE unmatched_stop_episode_id = @unmatched_stop_episode_id
   AND closing_response_agency_id IS NULL;
+
+-- name: GetLastCompleteResponseAgency :one
+-- The newest complete response recorded for an agency, with its observation
+-- time. Episodes that close because the agency disappeared close against it,
+-- since no later response of that agency is complete.
+SELECT ra.response_agency_id, r.observed_at
+FROM onebusaway_metrics_response_agency ra
+JOIN onebusaway_metrics_response r ON r.response_id = ra.response_id
+WHERE ra.agency_id = @agency_id
+  AND ra.response_complete
+ORDER BY r.observed_at DESC, ra.response_agency_id DESC
+LIMIT 1;
 
 -- name: SaveUnmatchedStopLastReported :exec
 -- Saves the last_reported_at of several open episodes in one statement.

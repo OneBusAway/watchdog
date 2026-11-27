@@ -165,7 +165,7 @@ This section defines the use cases the API must support. Each use case states wh
   3. Follow `links.static_contexts` for the stop name and location.
   4. Follow `links.opening_response` and `links.closing_response` for the agency's unmatched and matched counts in the responses that opened and closed the episode.
 - **Value to the observer:** Preserves the evidence of a transient condition that is no longer visible upstream, so the alert can be reviewed rather than dismissed.
-- **Limitations:** `close_reason: "not_reported"` means OBA stopped listing the stop. It does not confirm that the stop became matched.
+- **Limitations:** `close_reason: "not_reported"` means OBA stopped listing the stop. It does not confirm that the stop became matched. `close_reason: "agency_unlisted"` or `"agency_removed"` means Watchdog closed the episode because the agency disappeared (from OBA's `agencyIDs` or from the configuration); `closed_at` is then the agency's last complete observation: the newest complete response on record, or a later poll that still reported the identifier, which Watchdog records when it closes the episode. It is not when Watchdog recorded the closure. A response recorded this way preserves the observation time and marks the agency's row complete, but counts, `upstream_current_time` and `api_version` are NULL because the poll's values were not saved. It is not an additional poll of OBA, but it does appear in response listings and response counts, so consumers must treat its NULL counts as "not recorded", not as zero.
 
 #### UC-03: Assess the recurrence of an unmatched stop or trip
 
@@ -475,6 +475,7 @@ The following cannot be established from the stored data. The API must not prese
 | Anything before the investigation store was deployed | Earlier Prometheus history is not imported. |
 | How many vehicles a feed carried | Only anomaly evidence is stored. Fleet size is in Prometheus. |
 | OBA's counts between stored polls | A metrics response is stored only when it opens or closes an episode. |
+| Whether a stored response was a poll of OBA | An episode closed because its agency disappeared may close against a response recorded at closure that preserves only the observation time and the agency row's completeness (counts, `upstream_current_time` and `api_version` NULL). Such a row is a saved observation, not an additional poll, and it counts in response listings and counts. |
 | Whether Watchdog was recording during a period | Failed history writes are lost (D18). They are counted in Prometheus (D30), not stored. |
 | Whether an identifier was reported before retained history | `previous_episode_count` counts retained episodes only (D28). |
 
@@ -650,7 +651,7 @@ Response shape:
 
 These carry over from the ADR and the schema document:
 - Every episode has `status`: `open` or `closed`.
-- Unmatched episodes expose `close_reason: "not_reported"`. No representation has `resolved`, `fixed`, or `matched` fields.
+- Unmatched episodes expose `close_reason`: `"not_reported"` when a complete response stopped listing the ID, `"agency_unlisted"` or `"agency_removed"` (stop episodes only) when the agency disappeared. No representation has `resolved`, `fixed`, or `matched` fields.
 - Static context is labelled `"source": "watchdog_static_gtfs"`. It is what Watchdog's static GTFS said, not proof of what OBA used.
 - `opened_at` and `closed_at` are Watchdog observation times, not the moment a condition actually began or ended.
 - Vehicle close reasons describe the observed closing condition, such as `not_present_in_full_dataset`, never a cause.
@@ -695,7 +696,7 @@ This section describes every endpoint listed in [Section 1](#1-supported-endpoin
 | E17 | `/v1/unmatched-trip-episodes` | Unmatched-trip episodes. Filters below. | `unmatched_trip_episode_view` (D29) |
 | E18 | `/v1/unmatched-trip-episodes/{episode_id}` | One episode: boundaries, `last_reported_at` (up to 10 minutes behind while the episode is open, D31), `close_reason`, `previous_episode_count`, `previous_closed_at` (D28), links. | as E17 |
 | E19 | `/v1/unmatched-trip-episodes/{episode_id}/static-contexts` | Static context items in time order: `static_trip_found`, `route_id`, `service_id`, `block_id`, `applies_from`, `applies_until`. | `unmatched_trip_episode_metadata`, `trip_metadata_version`, `gtfs_static_version` |
-| E20 | `/v1/oba-metrics-responses/{response_id}` | A stored OBA metrics response: `observed_at`, `upstream_current_time`, `api_version`, and per-agency rows with `response_complete` and the four counts. | `onebusaway_metrics_response(_agency)` |
+| E20 | `/v1/oba-metrics-responses/{response_id}` | A stored OBA metrics response: `observed_at`, `upstream_current_time`, `api_version`, and per-agency rows with `response_complete` and the four counts. A response recorded when an episode closed because its agency disappeared preserves only `observed_at` and the agency row's completeness; counts, upstream current time and API version are NULL (2.5). | `onebusaway_metrics_response(_agency)` |
 
 **Filters for E14 and E17:**
 - `server_id`, `agency_id`, `status=open|closed`, `active_from`, `active_to`, `close_reason`.

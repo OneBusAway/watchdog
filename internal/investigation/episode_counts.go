@@ -57,6 +57,14 @@ var unmatchedCloseReasons = []string{
 	"not_reported",
 }
 
+// unmatchedStopCloseReasons adds the agency-disappearance reasons of
+// migration 00004, which only stop episodes close with so far.
+var unmatchedStopCloseReasons = []string{
+	"not_reported",
+	"agency_unlisted",
+	"agency_removed",
+}
+
 var vehicleCloseReasons = []string{
 	"fresh_source_timestamp",
 	"not_present_in_full_dataset",
@@ -210,7 +218,7 @@ func buildEpisodeCountsItems(
 ) []episodeCountItem {
 	stopItem := episodeCountItem{
 		EpisodeType: episodeTypeUnmatchedStop,
-		Closed:      initialCloseReasons(unmatchedCloseReasons),
+		Closed:      initialCloseReasons(unmatchedStopCloseReasons),
 	}
 	for _, r := range stopRows {
 		stopItem.Opened = r.Opened
@@ -853,9 +861,12 @@ func (s *InvestigationService) getEpisodeCounts(w http.ResponseWriter, r *http.R
 			acc, ok := groupMap[mapKey]
 			if !ok {
 				var closeReasons []string
-				if isVehicleType(epType) {
+				switch {
+				case isVehicleType(epType):
 					closeReasons = vehicleCloseReasons
-				} else {
+				case epType == episodeTypeUnmatchedStop:
+					closeReasons = unmatchedStopCloseReasons
+				default:
 					closeReasons = unmatchedCloseReasons
 				}
 				acc = &groupAccumulator{

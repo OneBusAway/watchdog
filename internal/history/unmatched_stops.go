@@ -139,6 +139,16 @@ func (h *HistoryService) TrackedServerURLs() []string {
 	return h.stops.baseURLs()
 }
 
+// Close reasons for unmatched-stop episodes. 'not_reported' is a complete
+// response that no longer reports the stop; the other two close an episode
+// whose agency disappeared, against the agency's last complete response
+// (migration 00004).
+const (
+	closeReasonNotReported    = "not_reported"
+	closeReasonAgencyUnlisted = "agency_unlisted"
+	closeReasonAgencyRemoved  = "agency_removed"
+)
+
 // stopEpisodePlan is what one response changes for one server.
 type stopEpisodePlan struct {
 	// agencies are the agencies the response is recorded for, without
@@ -147,9 +157,53 @@ type stopEpisodePlan struct {
 	// complete holds the agencies whose IDs appear in agencyIDs. Only they
 	// open or close episodes.
 	complete map[string]bool
-	opens    []unmatchedStopKey
-	closes   []unmatchedStopKey
-	still    []unmatchedStopKey
+	// unlisted holds the recorded agencies missing from agencyIDs. OBA no
+	// longer tracks them, so their open episodes close: no later response of
+	// theirs is complete, and they would never close otherwise.
+	unlisted map[string]bool
+	// unlistedCloses are the open episodes closed because their agency left
+	// agencyIDs, sorted like closes.
+	unlistedCloses []unmatchedStopKey
+	opens          []unmatchedStopKey
+	closes         []unmatchedStopKey
+	still          []unmatchedStopKey
+}
+
+// withUnlistedOpenAgencies appends a synthetic recorded entry for every
+// agency that has an open episode but is missing from both the response's
+// agencyIDs and the recorded agencies. Server-scoped collection records only
+// the agencies OBA still reports, so without these an agency that leaves
+// agencyIDs would never be marked unlisted and its open episodes would never
+// close (#438). An agency OBA still lists is never synthesized: when its
+// checks did not run this tick its episodes stay untouched, exactly as
+// before. The synthetic entries carry no agency name; ensureAgency keeps the
+// existing name when the caller has none.
+func withUnlistedOpenAgencies(agencies []models.ObaServer, response *metrics.OBAMetrics, open map[unmatchedStopKey]*openStopEpisode) []models.ObaServer {
+	reported := make(map[string]bool, len(response.Data.Entry.AgencyIDs))
+	for _, id := range response.Data.Entry.AgencyIDs {
+		reported[id] = true
+	}
+	recorded := make(map[string]bool, len(agencies))
+	for _, agency := range agencies {
+		recorded[agency.AgencyID] = true
+	}
+	var missing []string
+	for key := range open {
+		if !reported[key.agencyID] && !recorded[key.agencyID] {
+			missing = append(missing, key.agencyID)
+			recorded[key.agencyID] = true
+		}
+	}
+	if len(missing) == 0 {
+		return agencies
+	}
+	sort.Strings(missing)
+	out := make([]models.ObaServer, 0, len(agencies)+len(missing))
+	out = append(out, agencies...)
+	for _, id := range missing {
+		out = append(out, models.ObaServer{AgencyID: id})
+	}
+	return out
 }
 
 // planStopEpisodes compares a response with the open episodes in memory.
@@ -160,7 +214,7 @@ func planStopEpisodes(open map[unmatchedStopKey]*openStopEpisode, agencies []mod
 		reportedAgencies[id] = true
 	}
 
-	plan := stopEpisodePlan{complete: make(map[string]bool)}
+	plan := stopEpisodePlan{complete: make(map[string]bool), unlisted: make(map[string]bool)}
 	seenAgencies := make(map[string]bool, len(agencies))
 	reported := make(map[unmatchedStopKey]bool)
 	for _, agency := range agencies {
@@ -170,6 +224,7 @@ func planStopEpisodes(open map[unmatchedStopKey]*openStopEpisode, agencies []mod
 		seenAgencies[agency.AgencyID] = true
 		plan.agencies = append(plan.agencies, agency)
 		if !reportedAgencies[agency.AgencyID] {
+			plan.unlisted[agency.AgencyID] = true
 			continue
 		}
 		plan.complete[agency.AgencyID] = true
@@ -192,6 +247,22 @@ func planStopEpisodes(open map[unmatchedStopKey]*openStopEpisode, agencies []mod
 			plan.closes = append(plan.closes, key)
 		}
 	}
+	// Episodes of unlisted agencies close separately from closes: no complete
+	// response of theirs exists to close them against.
+	var unlistedCloses []unmatchedStopKey
+	for key := range open {
+		if plan.unlisted[key.agencyID] {
+			unlistedCloses = append(unlistedCloses, key)
+		}
+	}
+	sort.Slice(unlistedCloses, func(i, j int) bool {
+		a, b := unlistedCloses[i], unlistedCloses[j]
+		if a.agencyID != b.agencyID {
+			return a.agencyID < b.agencyID
+		}
+		return a.stopID < b.stopID
+	})
+	plan.unlistedCloses = unlistedCloses
 	sort.Slice(plan.closes, func(i, j int) bool {
 		a, b := plan.closes[i], plan.closes[j]
 		if a.agencyID != b.agencyID {
@@ -207,11 +278,20 @@ func planStopEpisodes(open map[unmatchedStopKey]*openStopEpisode, agencies []mod
 // for (the configured agency in agency mode, the agencies whose checks ran in
 // server mode). observedAt is when Watchdog received the response.
 //
+// Server-scoped collection records only agencies OBA still reports, so an
+// agency that leaves agencyIDs never appears in agencies. For a server-scoped
+// entry the open episodes themselves supply those agencies: any episode whose
+// agency is missing from agencyIDs closes as agency_unlisted, including when
+// OBA stops listing every agency and agencies is empty (#438).
+//
 // Call it only after a successful fetch: a failed fetch says nothing about
 // which IDs were reported. A response that opens or closes nothing, when the
 // 10-minute save is not due, does not touch the database.
 func (h *HistoryService) RecordOBAMetrics(ctx context.Context, server models.ObaServer, agencies []models.ObaServer, response *metrics.OBAMetrics, observedAt time.Time) {
-	if h == nil || h.pool == nil || response == nil || len(agencies) == 0 {
+	if h == nil || h.pool == nil || response == nil {
+		return
+	}
+	if len(agencies) == 0 && !server.IsServerScoped() {
 		return
 	}
 	baseURL := utils.SanitizeServerURL(server.ObaBaseURL)
@@ -232,13 +312,20 @@ func (h *HistoryService) RecordOBAMetrics(ctx context.Context, server models.Oba
 		return
 	}
 
+	if server.IsServerScoped() {
+		agencies = withUnlistedOpenAgencies(agencies, response, entry.open)
+	}
+
 	plan := planStopEpisodes(entry.open, agencies, response)
 	for _, key := range plan.still {
 		entry.open[key].lastReportedAt = observedAt
 	}
 
-	closing := make(map[unmatchedStopKey]bool, len(plan.closes))
+	closing := make(map[unmatchedStopKey]bool, len(plan.closes)+len(plan.unlistedCloses))
 	for _, key := range plan.closes {
+		closing[key] = true
+	}
+	for _, key := range plan.unlistedCloses {
 		closing[key] = true
 	}
 	// others are the episodes that stay open and were open before this
@@ -251,14 +338,14 @@ func (h *HistoryService) RecordOBAMetrics(ctx context.Context, server models.Oba
 	}
 	saveDue := len(entry.open) > 0 && observedAt.Sub(entry.savedAt) >= lastReportedSaveInterval
 
-	if len(plan.opens) == 0 && len(plan.closes) == 0 && !saveDue {
+	if len(plan.opens) == 0 && len(plan.closes) == 0 && len(plan.unlistedCloses) == 0 && !saveDue {
 		return
 	}
 
 	var opened map[unmatchedStopKey]*openStopEpisode
 	committed := h.write(ctx, obaMetricsStep, publicationTags(server), func(q *dbgen.Queries) error {
 		opened = nil
-		if len(plan.opens) > 0 || len(plan.closes) > 0 {
+		if len(plan.opens) > 0 || len(plan.closes) > 0 || len(plan.unlistedCloses) > 0 {
 			var err error
 			opened, err = h.recordEpisodeChanges(ctx, q, server, plan, entry.open, response, observedAt)
 			if err != nil {
@@ -282,6 +369,9 @@ func (h *HistoryService) RecordOBAMetrics(ctx context.Context, server models.Oba
 		entry.open[key] = episode
 	}
 	for _, key := range plan.closes {
+		delete(entry.open, key)
+	}
+	for _, key := range plan.unlistedCloses {
 		delete(entry.open, key)
 	}
 	// With no episode open before this poll, everything open now was
@@ -412,10 +502,22 @@ func (h *HistoryService) recordEpisodeChanges(ctx context.Context, q *dbgen.Quer
 		episode := open[key]
 		if err := q.CloseUnmatchedStopEpisode(ctx, dbgen.CloseUnmatchedStopEpisodeParams{
 			ClosingResponseAgencyID: responseAgencyIDs[key.agencyID],
+			CloseReason:             ptr(closeReasonNotReported),
 			LastReportedAt:          episode.lastReportedAt,
 			UnmatchedStopEpisodeID:  episode.episodeID,
 		}); err != nil {
 			return nil, fmt.Errorf("server %q: close unmatched stop %q: %w", server.ServerName, key.stopID, err)
+		}
+	}
+	// Unlisted agencies have no complete response in this poll to close
+	// against, so their episodes close against their last complete one.
+	if len(plan.unlistedCloses) > 0 {
+		episodes := make([]*openStopEpisode, 0, len(plan.unlistedCloses))
+		for _, key := range plan.unlistedCloses {
+			episodes = append(episodes, open[key])
+		}
+		if err := closeDisappearedAgencyEpisodes(ctx, q, serverID, episodes, closeReasonAgencyUnlisted); err != nil {
+			return nil, fmt.Errorf("server %q: close unmatched stops of unlisted agencies: %w", server.ServerName, err)
 		}
 	}
 	return opened, nil
@@ -467,12 +569,16 @@ func (h *HistoryService) FlushServer(ctx context.Context, baseURL string) {
 	h.flushEntry(ctx, entry)
 }
 
-// FlushAgencies saves the last_reported_at of a server's open episodes whose
-// agency is not in keep, then drops them from memory. app.OnConfigUpdated
-// calls it for a base URL that stays configured while some of its
-// agency-mode entries are removed: no poll records those agencies any more,
-// so their episodes would otherwise stay in memory for good. They are dropped
-// even if the save fails, since nothing would retry it.
+// FlushAgencies closes the open episodes of a server's agencies that are no
+// longer configured, then drops them from memory. app.OnConfigUpdated calls
+// it for a base URL that stays configured while some of its agency-mode
+// entries are removed: no poll records those agencies any more, so their
+// episodes would otherwise stay in memory for good. Closing the rows, not
+// just saving last_reported_at, keeps a later reload from loading them back
+// (#438). An episode leaves memory only once its close is on disk: when the
+// write fails the row is still open in the database, so the episode stays
+// here for the next config update to retry, and a restart reloads it either
+// way.
 func (h *HistoryService) FlushAgencies(ctx context.Context, baseURL string, keep map[string]bool) {
 	if h == nil || h.pool == nil || h.stops == nil {
 		return
@@ -483,6 +589,37 @@ func (h *HistoryService) FlushAgencies(ctx context.Context, baseURL string, keep
 	}
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
+	h.closeRemovedAgenciesLocked(ctx, entry, keep)
+}
+
+// ReconcileConfiguredAgencies is FlushAgencies for a server that may not have
+// been polled yet: it loads the server's open episodes from the database
+// first. main calls it at startup, because an agency removed while Watchdog
+// was down leaves its episodes open in the database, and a --config-file
+// deployment has no refresh loop to close them later (#438).
+func (h *HistoryService) ReconcileConfiguredAgencies(ctx context.Context, server models.ObaServer, keep map[string]bool) {
+	if h == nil || h.pool == nil || h.stops == nil {
+		return
+	}
+	baseURL := utils.SanitizeServerURL(server.ObaBaseURL)
+	if baseURL == "" {
+		return
+	}
+	entry := h.stops.forServer(baseURL, server)
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	entry.server = server
+	if !entry.loaded && !h.loadOpenEpisodes(ctx, server, baseURL, entry, time.Now().UTC()) {
+		return
+	}
+	h.closeRemovedAgenciesLocked(ctx, entry, keep)
+}
+
+// closeRemovedAgenciesLocked closes entry's open episodes whose agency is not
+// in keep, each against its agency's last complete observation. Entry must be
+// locked and loaded. Episodes whose close write fails stay in memory so the
+// next call retries them.
+func (h *HistoryService) closeRemovedAgenciesLocked(ctx context.Context, entry *serverStopEpisodes, keep map[string]bool) {
 	var removed []unmatchedStopKey
 	var episodes []*openStopEpisode
 	for key, episode := range entry.open {
@@ -496,12 +633,92 @@ func (h *HistoryService) FlushAgencies(ctx context.Context, baseURL string, keep
 	}
 	ctx, cancel := context.WithTimeout(ctx, writeTimeout)
 	defer cancel()
-	h.write(ctx, unmatchedStopFlushStep, publicationTags(entry.server), func(q *dbgen.Queries) error {
-		return saveLastReported(ctx, q, episodes)
+	committed := h.write(ctx, unmatchedStopFlushStep, publicationTags(entry.server), func(q *dbgen.Queries) error {
+		serverID, err := ensureServer(ctx, q, entry.server, h.resolver)
+		if err != nil {
+			return err
+		}
+		return closeDisappearedAgencyEpisodes(ctx, q, serverID, episodes, closeReasonAgencyRemoved)
 	})
-	for _, key := range removed {
-		delete(entry.open, key)
+	if committed {
+		for _, key := range removed {
+			delete(entry.open, key)
+		}
 	}
+}
+
+// ptr returns a pointer to v, for nullable query parameters.
+func ptr[T any](v T) *T { return &v }
+
+// closeDisappearedAgencyEpisodes closes episodes whose agency no longer has
+// complete responses, grouping them by agency so each agency's episodes close
+// against one shared closing response.
+func closeDisappearedAgencyEpisodes(ctx context.Context, q *dbgen.Queries, serverID int64, episodes []*openStopEpisode, reason string) error {
+	byAgency := make(map[int64][]*openStopEpisode)
+	var order []int64
+	for _, episode := range episodes {
+		if _, ok := byAgency[episode.agencyID]; !ok {
+			order = append(order, episode.agencyID)
+		}
+		byAgency[episode.agencyID] = append(byAgency[episode.agencyID], episode)
+	}
+	for _, agencyID := range order {
+		group := byAgency[agencyID]
+		closingID, err := disappearanceClosingResponse(ctx, q, serverID, agencyID, group)
+		if err != nil {
+			return err
+		}
+		for _, episode := range group {
+			if err := q.CloseUnmatchedStopEpisode(ctx, dbgen.CloseUnmatchedStopEpisodeParams{
+				ClosingResponseAgencyID: closingID,
+				CloseReason:             ptr(reason),
+				LastReportedAt:          episode.lastReportedAt,
+				UnmatchedStopEpisodeID:  episode.episodeID,
+			}); err != nil {
+				return fmt.Errorf("close episode %d (%s): %w", episode.episodeID, reason, err)
+			}
+		}
+	}
+	return nil
+}
+
+// disappearanceClosingResponse picks the response an agency's episodes close
+// against: the newest complete response stored for it, unless a later poll
+// still reported one of the closing stops. Such a poll was a complete
+// observation — last_reported_at advances only when the agency's response is
+// complete and reports the stop — that quiet polls never store, so it is
+// recorded now and the episodes close against it. Without that, closed_at
+// (the closing response's time) could precede an episode's last_reported_at.
+func disappearanceClosingResponse(ctx context.Context, q *dbgen.Queries, serverID, agencyID int64, episodes []*openStopEpisode) (int64, error) {
+	last, err := q.GetLastCompleteResponseAgency(ctx, agencyID)
+	if err != nil {
+		return 0, fmt.Errorf("last complete response of agency %d: %w", agencyID, err)
+	}
+	lastSeen := last.ObservedAt
+	for _, episode := range episodes {
+		if episode.lastReportedAt.After(lastSeen) {
+			lastSeen = episode.lastReportedAt
+		}
+	}
+	if !lastSeen.After(last.ObservedAt) {
+		return last.ResponseAgencyID, nil
+	}
+	responseID, err := q.InsertOBAMetricsResponse(ctx, dbgen.InsertOBAMetricsResponseParams{
+		ServerID:   serverID,
+		ObservedAt: lastSeen,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("record the last complete observation of agency %d: %w", agencyID, err)
+	}
+	closingID, err := q.InsertOBAMetricsResponseAgency(ctx, dbgen.InsertOBAMetricsResponseAgencyParams{
+		ResponseID:       responseID,
+		AgencyID:         agencyID,
+		ResponseComplete: true,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("record the last complete observation of agency %d: %w", agencyID, err)
+	}
+	return closingID, nil
 }
 
 // Flush saves the last_reported_at of every open episode. main calls it on

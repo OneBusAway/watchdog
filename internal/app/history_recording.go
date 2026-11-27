@@ -22,9 +22,15 @@ type obaMetricsRecorder interface {
 // recordOBAMetricsHistory records a successful metrics.json response for the
 // agencies whose checks ran on it. It is a no-op when investigation storage
 // is disabled (app.obaMetricsHistory is nil), and its failures never stop
-// collection: HistoryService logs and reports them.
+// collection: HistoryService logs and reports them. A server-scoped response
+// is recorded even when no agency check ran: OBA listing no agency at all is
+// exactly what closes the open episodes of agencies it stopped listing
+// (#438).
 func (app *Application) recordOBAMetricsHistory(ctx context.Context, server models.ObaServer, agencies []models.ObaServer, response *metrics.OBAMetrics, observedAt time.Time) {
-	if app.obaMetricsHistory == nil || response == nil || len(agencies) == 0 {
+	if app.obaMetricsHistory == nil || response == nil {
+		return
+	}
+	if len(agencies) == 0 && !server.IsServerScoped() {
 		return
 	}
 	app.obaMetricsHistory.RecordOBAMetrics(ctx, server, agencies, response, observedAt)
@@ -65,6 +71,48 @@ func (app *Application) flushRemovedServerHistory(servers []models.ObaServer) {
 		} else {
 			app.HistoryService.FlushServer(ctx, baseURL)
 		}
+		cancel()
+	}
+}
+
+// ReconcileHistoryAtStartup closes persisted unmatched-stop episodes whose
+// agency left the configuration while Watchdog was down. A remote-config
+// deployment gets the same reconciliation from the first refresh's
+// OnConfigUpdated; a --config-file deployment has no refresh loop, so without
+// this the episodes would stay open — and be reported open by the
+// investigation API — until the agency returns (#438). Server-scoped entries
+// record every agency OBA reports, so only agency-mode entries constrain
+// which agencies are kept.
+func (app *Application) ReconcileHistoryAtStartup(ctx context.Context, servers []models.ObaServer) {
+	if app.HistoryService == nil {
+		return
+	}
+	configuredAgencies := make(map[string]map[string]bool)
+	serverByURL := make(map[string]models.ObaServer)
+	serverScopedURLs := make(map[string]bool)
+	for _, server := range servers {
+		if server.IsServerScoped() {
+			serverScopedURLs[utils.SanitizeServerURL(server.ObaBaseURL)] = true
+		}
+	}
+	for _, server := range servers {
+		baseURL := utils.SanitizeServerURL(server.ObaBaseURL)
+		// One base URL can carry both a server-scoped entry and agency-mode
+		// entries; the server-scoped entry records every agency OBA reports,
+		// so its agencies must never be closed as removed. flushRemovedServer-
+		// History guards the same case with its serverScopedURLs set.
+		if baseURL == "" || server.IsServerScoped() || serverScopedURLs[baseURL] {
+			continue
+		}
+		if configuredAgencies[baseURL] == nil {
+			configuredAgencies[baseURL] = make(map[string]bool)
+		}
+		configuredAgencies[baseURL][server.AgencyID] = true
+		serverByURL[baseURL] = server
+	}
+	for baseURL, keep := range configuredAgencies {
+		ctx, cancel := context.WithTimeout(ctx, historyFlushTimeout)
+		app.HistoryService.ReconcileConfiguredAgencies(ctx, serverByURL[baseURL], keep)
 		cancel()
 	}
 }
