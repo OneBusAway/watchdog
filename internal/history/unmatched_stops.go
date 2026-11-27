@@ -139,6 +139,16 @@ func (h *HistoryService) TrackedServerURLs() []string {
 	return h.stops.baseURLs()
 }
 
+// Close reasons for unmatched-stop episodes. 'not_reported' is a complete
+// response that no longer reports the stop; the other two close an episode
+// whose agency disappeared, against the agency's last complete response
+// (migration 00004).
+const (
+	closeReasonNotReported    = "not_reported"
+	closeReasonAgencyUnlisted = "agency_unlisted"
+	closeReasonAgencyRemoved  = "agency_removed"
+)
+
 // stopEpisodePlan is what one response changes for one server.
 type stopEpisodePlan struct {
 	// agencies are the agencies the response is recorded for, without
@@ -261,8 +271,11 @@ func (h *HistoryService) RecordOBAMetrics(ctx context.Context, server models.Oba
 		entry.open[key].lastReportedAt = observedAt
 	}
 
-	closing := make(map[unmatchedStopKey]bool, len(plan.closes))
+	closing := make(map[unmatchedStopKey]bool, len(plan.closes)+len(plan.unlistedCloses))
 	for _, key := range plan.closes {
+		closing[key] = true
+	}
+	for _, key := range plan.unlistedCloses {
 		closing[key] = true
 	}
 	// others are the episodes that stay open and were open before this
@@ -275,14 +288,14 @@ func (h *HistoryService) RecordOBAMetrics(ctx context.Context, server models.Oba
 	}
 	saveDue := len(entry.open) > 0 && observedAt.Sub(entry.savedAt) >= lastReportedSaveInterval
 
-	if len(plan.opens) == 0 && len(plan.closes) == 0 && !saveDue {
+	if len(plan.opens) == 0 && len(plan.closes) == 0 && len(plan.unlistedCloses) == 0 && !saveDue {
 		return
 	}
 
 	var opened map[unmatchedStopKey]*openStopEpisode
 	committed := h.write(ctx, obaMetricsStep, publicationTags(server), func(q *dbgen.Queries) error {
 		opened = nil
-		if len(plan.opens) > 0 || len(plan.closes) > 0 {
+		if len(plan.opens) > 0 || len(plan.closes) > 0 || len(plan.unlistedCloses) > 0 {
 			var err error
 			opened, err = h.recordEpisodeChanges(ctx, q, server, plan, entry.open, response, observedAt)
 			if err != nil {
@@ -306,6 +319,9 @@ func (h *HistoryService) RecordOBAMetrics(ctx context.Context, server models.Oba
 		entry.open[key] = episode
 	}
 	for _, key := range plan.closes {
+		delete(entry.open, key)
+	}
+	for _, key := range plan.unlistedCloses {
 		delete(entry.open, key)
 	}
 	// With no episode open before this poll, everything open now was
@@ -436,10 +452,19 @@ func (h *HistoryService) recordEpisodeChanges(ctx context.Context, q *dbgen.Quer
 		episode := open[key]
 		if err := q.CloseUnmatchedStopEpisode(ctx, dbgen.CloseUnmatchedStopEpisodeParams{
 			ClosingResponseAgencyID: responseAgencyIDs[key.agencyID],
+			CloseReason:             ptr(closeReasonNotReported),
 			LastReportedAt:          episode.lastReportedAt,
 			UnmatchedStopEpisodeID:  episode.episodeID,
 		}); err != nil {
 			return nil, fmt.Errorf("server %q: close unmatched stop %q: %w", server.ServerName, key.stopID, err)
+		}
+	}
+	// An unlisted agency has no complete response in this poll to close
+	// against, so its episodes close against its last complete one.
+	for _, key := range plan.unlistedCloses {
+		episode := open[key]
+		if err := closeDisappearedAgencyEpisodes(ctx, q, []*openStopEpisode{episode}, closeReasonAgencyUnlisted); err != nil {
+			return nil, fmt.Errorf("server %q: close unmatched stop %q of unlisted agency %q: %w", server.ServerName, key.stopID, key.agencyID, err)
 		}
 	}
 	return opened, nil
@@ -491,12 +516,14 @@ func (h *HistoryService) FlushServer(ctx context.Context, baseURL string) {
 	h.flushEntry(ctx, entry)
 }
 
-// FlushAgencies saves the last_reported_at of a server's open episodes whose
-// agency is not in keep, then drops them from memory. app.OnConfigUpdated
-// calls it for a base URL that stays configured while some of its
-// agency-mode entries are removed: no poll records those agencies any more,
-// so their episodes would otherwise stay in memory for good. They are dropped
-// even if the save fails, since nothing would retry it.
+// FlushAgencies closes the open episodes of a server's agencies that are no
+// longer configured, then drops them from memory. app.OnConfigUpdated calls
+// it for a base URL that stays configured while some of its agency-mode
+// entries are removed: no poll records those agencies any more, so their
+// episodes would otherwise stay in memory for good. Closing the rows, not
+// just saving last_reported_at, keeps a later reload from loading them back
+// (#438). They are dropped from memory even if the close fails, since
+// nothing would retry it.
 func (h *HistoryService) FlushAgencies(ctx context.Context, baseURL string, keep map[string]bool) {
 	if h == nil || h.pool == nil || h.stops == nil {
 		return
@@ -521,11 +548,34 @@ func (h *HistoryService) FlushAgencies(ctx context.Context, baseURL string, keep
 	ctx, cancel := context.WithTimeout(ctx, writeTimeout)
 	defer cancel()
 	h.write(ctx, unmatchedStopFlushStep, publicationTags(entry.server), func(q *dbgen.Queries) error {
-		return saveLastReported(ctx, q, episodes)
+		return closeDisappearedAgencyEpisodes(ctx, q, episodes, closeReasonAgencyRemoved)
 	})
 	for _, key := range removed {
 		delete(entry.open, key)
 	}
+}
+
+// ptr returns a pointer to v, for nullable query parameters.
+func ptr[T any](v T) *T { return &v }
+
+// closeDisappearedAgencyEpisodes closes episodes whose agency no longer has
+// complete responses, each against the agency's last complete response.
+func closeDisappearedAgencyEpisodes(ctx context.Context, q *dbgen.Queries, episodes []*openStopEpisode, reason string) error {
+	for _, episode := range episodes {
+		lastComplete, err := q.GetLastCompleteResponseAgencyID(ctx, episode.agencyID)
+		if err != nil {
+			return fmt.Errorf("last complete response of agency %d: %w", episode.agencyID, err)
+		}
+		if err := q.CloseUnmatchedStopEpisode(ctx, dbgen.CloseUnmatchedStopEpisodeParams{
+			ClosingResponseAgencyID: lastComplete,
+			CloseReason:             ptr(reason),
+			LastReportedAt:          episode.lastReportedAt,
+			UnmatchedStopEpisodeID:  episode.episodeID,
+		}); err != nil {
+			return fmt.Errorf("close episode %d (%s): %w", episode.episodeID, reason, err)
+		}
+	}
+	return nil
 }
 
 // Flush saves the last_reported_at of every open episode. main calls it on
