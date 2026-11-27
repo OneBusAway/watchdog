@@ -408,6 +408,10 @@ func (app *Application) collectForServerScope(ctx, campaignCtx context.Context, 
 	// filtered to one configured agency.
 	if len(reportedAgencyEntries) == 0 {
 		app.MetricsService.RetireVehicleAttributionDiagnostics(server)
+		// No agency is reported, but the response is authoritative: record
+		// it so history closes the open episodes of agencies OBA stopped
+		// listing instead of leaving them open for good (#438).
+		app.recordOBAMetricsHistory(ctx, server, nil, prefetchedMetrics, prefetchedAt)
 		return
 	}
 

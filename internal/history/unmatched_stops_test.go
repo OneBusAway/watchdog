@@ -475,6 +475,43 @@ func TestRecordOBAMetrics_ServerModeOneResponse(t *testing.T) {
 	}
 }
 
+func TestRecordOBAMetrics_ServerModeUnlistedAgencyClosesEpisodes(t *testing.T) {
+	h, pool, _ := newCountedHistory(t)
+	h.RecordOBAMetrics(ctx, stopServer, stopAgencies("a", "b"), stopsResponse([]string{"a", "b"}, map[string][]string{"a": {"1"}}), stopT0)
+
+	// OBA stops listing "a". Server-scoped collection records only the
+	// agencies whose checks ran, so "a" never reaches RecordOBAMetrics
+	// through the agencies argument; its open episode must still close
+	// (#438).
+	h.RecordOBAMetrics(ctx, stopServer, stopAgencies("b"), stopsResponse([]string{"b"}, map[string][]string{}), stopT0.Add(time.Minute))
+
+	episode := onlyEpisode(t, pool)
+	if episode.closeReason == nil || *episode.closeReason != "agency_unlisted" {
+		t.Fatalf("close_reason = %v, want agency_unlisted", episode.closeReason)
+	}
+	if memoryEpisode(t, h, "a", "1") != nil {
+		t.Error("unlisted agency's closed episode is still in memory")
+	}
+}
+
+func TestRecordOBAMetrics_ServerModeAllAgenciesUnlistedClose(t *testing.T) {
+	h, pool, _ := newCountedHistory(t)
+	h.RecordOBAMetrics(ctx, stopServer, stopAgencies("a"), stopsResponse([]string{"a"}, map[string][]string{"a": {"1"}}), stopT0)
+
+	// OBA lists no agency at all: server-scoped collection has no agency
+	// whose checks ran, so the call carries none. The open episode must
+	// still close (#438).
+	h.RecordOBAMetrics(ctx, stopServer, nil, stopsResponse(nil, nil), stopT0.Add(time.Minute))
+
+	episode := onlyEpisode(t, pool)
+	if episode.closeReason == nil || *episode.closeReason != "agency_unlisted" {
+		t.Fatalf("close_reason = %v, want agency_unlisted", episode.closeReason)
+	}
+	if memoryEpisode(t, h, "a", "1") != nil {
+		t.Error("closed episode is still in memory")
+	}
+}
+
 func TestRecordOBAMetrics_NullCounts(t *testing.T) {
 	h, pool, _ := newCountedHistory(t)
 	response := stopsResponse([]string{"a", "b"}, map[string][]string{"a": {"1"}})

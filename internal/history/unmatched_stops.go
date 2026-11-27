@@ -169,6 +169,43 @@ type stopEpisodePlan struct {
 	still          []unmatchedStopKey
 }
 
+// withUnlistedOpenAgencies appends a synthetic recorded entry for every
+// agency that has an open episode but is missing from both the response's
+// agencyIDs and the recorded agencies. Server-scoped collection records only
+// the agencies OBA still reports, so without these an agency that leaves
+// agencyIDs would never be marked unlisted and its open episodes would never
+// close (#438). An agency OBA still lists is never synthesized: when its
+// checks did not run this tick its episodes stay untouched, exactly as
+// before. The synthetic entries carry no agency name; ensureAgency keeps the
+// existing name when the caller has none.
+func withUnlistedOpenAgencies(agencies []models.ObaServer, response *metrics.OBAMetrics, open map[unmatchedStopKey]*openStopEpisode) []models.ObaServer {
+	reported := make(map[string]bool, len(response.Data.Entry.AgencyIDs))
+	for _, id := range response.Data.Entry.AgencyIDs {
+		reported[id] = true
+	}
+	recorded := make(map[string]bool, len(agencies))
+	for _, agency := range agencies {
+		recorded[agency.AgencyID] = true
+	}
+	var missing []string
+	for key := range open {
+		if !reported[key.agencyID] && !recorded[key.agencyID] {
+			missing = append(missing, key.agencyID)
+			recorded[key.agencyID] = true
+		}
+	}
+	if len(missing) == 0 {
+		return agencies
+	}
+	sort.Strings(missing)
+	out := make([]models.ObaServer, 0, len(agencies)+len(missing))
+	out = append(out, agencies...)
+	for _, id := range missing {
+		out = append(out, models.ObaServer{AgencyID: id})
+	}
+	return out
+}
+
 // planStopEpisodes compares a response with the open episodes in memory.
 func planStopEpisodes(open map[unmatchedStopKey]*openStopEpisode, agencies []models.ObaServer, response *metrics.OBAMetrics) stopEpisodePlan {
 	entry := response.Data.Entry
@@ -241,11 +278,20 @@ func planStopEpisodes(open map[unmatchedStopKey]*openStopEpisode, agencies []mod
 // for (the configured agency in agency mode, the agencies whose checks ran in
 // server mode). observedAt is when Watchdog received the response.
 //
+// Server-scoped collection records only agencies OBA still reports, so an
+// agency that leaves agencyIDs never appears in agencies. For a server-scoped
+// entry the open episodes themselves supply those agencies: any episode whose
+// agency is missing from agencyIDs closes as agency_unlisted, including when
+// OBA stops listing every agency and agencies is empty (#438).
+//
 // Call it only after a successful fetch: a failed fetch says nothing about
 // which IDs were reported. A response that opens or closes nothing, when the
 // 10-minute save is not due, does not touch the database.
 func (h *HistoryService) RecordOBAMetrics(ctx context.Context, server models.ObaServer, agencies []models.ObaServer, response *metrics.OBAMetrics, observedAt time.Time) {
-	if h == nil || h.pool == nil || response == nil || len(agencies) == 0 {
+	if h == nil || h.pool == nil || response == nil {
+		return
+	}
+	if len(agencies) == 0 && !server.IsServerScoped() {
 		return
 	}
 	baseURL := utils.SanitizeServerURL(server.ObaBaseURL)
@@ -264,6 +310,10 @@ func (h *HistoryService) RecordOBAMetrics(ctx context.Context, server models.Oba
 
 	if !entry.loaded && !h.loadOpenEpisodes(ctx, server, baseURL, entry, observedAt) {
 		return
+	}
+
+	if server.IsServerScoped() {
+		agencies = withUnlistedOpenAgencies(agencies, response, entry.open)
 	}
 
 	plan := planStopEpisodes(entry.open, agencies, response)
