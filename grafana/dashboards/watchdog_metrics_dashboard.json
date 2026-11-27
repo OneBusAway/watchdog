@@ -889,7 +889,7 @@
       "description": "Metrics: gtfs_rt_vehicle_computed_speed\nQuestion answered: \"Are vehicles reporting unrealistic speeds?\"\n\nVisualization: Histogram\nRationale: A histogram buckets computed speeds into ranges, making it trivial to spot an anomalous right-tail (speeds > 30 m/s for a city bus). This is far more effective than a time series for isolating the fraction of vehicles reporting physically impossible speeds.",
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 8,
         "x": 0,
         "y": 45
       },
@@ -923,8 +923,8 @@
       "description": "Metrics: gtfs_rt_invalid_vehicle_coordinates, gtfs_rt_stopped_out_of_bounds_vehicles\nQuestion answered: \"Are vehicle coordinates geographically valid?\"\n\nVisualization: Bar Gauge\nRationale: Grouping by server using a bar gauge instantly surfaces which specific data pipeline is emitting the most malformed coordinates. Color thresholds (green=0, yellow>=1, red>=5) provide immediate visual alerting.",
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
+        "w": 8,
+        "x": 8,
         "y": 45
       },
       "id": 502,
@@ -977,6 +977,60 @@
         "orientation": "horizontal",
         "showUnfilled": true
       }
+    },
+    {
+      "datasource": {
+        "name": "Prometheus"
+      },
+      "description": "Metric: gtfs_rt_invalid_vehicle_timestamps\nQuestion answered: \"Are vehicle timestamps valid (POSIX seconds, not milliseconds, extreme future skew, or non-positive)?\"\n\nVisualization: Bar Gauge\nRationale: Surfaces feeds and pipelines emitting malformed timestamps per agency, including the server-scoped catch-all for unattributed vehicles. Color thresholds (green=0, yellow>=1, red>=5) provide immediate visual alerting.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 45
+      },
+      "id": 504,
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "showUnfilled": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "name": "Prometheus"
+          },
+          "expr": "gtfs_rt_invalid_vehicle_timestamps{agency_id=~\"$agency_id\",server_url=~\"$server_url\"} or gtfs_rt_invalid_vehicle_timestamps{agency_id=\"\",server_url=~\"$server_url\"}",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "5.3 Timestamp Validation",
+      "type": "bargauge"
     },
     {
       "datasource": {
@@ -1041,7 +1095,7 @@
           }
         }
       ],
-      "title": "5.3 Speed Discrepancy & Calculation Age",
+      "title": "5.4 Speed Discrepancy & Calculation Age",
       "type": "timeseries"
     },
     {

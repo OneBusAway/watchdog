@@ -430,17 +430,16 @@ func sentryErrorValues(t *testing.T, rec *report.RecordingTransport) []string {
 	return out
 }
 
-// assertOnlyBundleSentryErrors asserts the recording transport captured at
-// least one error (proving capture is live — the fixture-less bundle check
-// always errors) and that every error-level event is that expected bundle
-// error: a canceled step must stay silent.
+// assertOnlyBundleSentryErrors asserts the recording transport captured the
+// bundle-expiration event (proving capture is live — the fixture-less bundle
+// check always fails, and reports at Warning) and that every error-level event
+// is a bundle error: a canceled step must stay silent.
 func assertOnlyBundleSentryErrors(t *testing.T, rec *report.RecordingTransport) {
 	t.Helper()
-	values := sentryErrorValues(t, rec)
-	if len(values) == 0 {
-		t.Fatal("expected the bundle-expiration error event (capture looks dead)")
+	if len(sentryEventsMatching(rec, "bundle")) == 0 {
+		t.Fatal("expected the bundle-expiration event (capture looks dead)")
 	}
-	for _, value := range values {
+	for _, value := range sentryErrorValues(t, rec) {
 		if !strings.Contains(value, "bundle") {
 			t.Fatalf("unexpected Sentry error event (canceled step reported?): %s", value)
 		}

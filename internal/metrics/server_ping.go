@@ -14,8 +14,8 @@ import (
 // OneBusAway server to verify the API is reachable and returning valid data.
 //
 // The ping is server-wide (the endpoint takes no agency parameter), so the
-// ObaApiStatus gauge is labeled with server identity only. Errors are reported
-// to Sentry with server context.
+// ObaApiStatus gauge is labeled with server identity only. Every failure except
+// cancellation is reported to Sentry here, with server context.
 //
 // Parameters:
 //   - client: the shared OneBusAway SDK client for the server, injected by
@@ -44,13 +44,7 @@ func serverPing(ctx context.Context, client *onebusaway.Client, server models.Ob
 			return false
 		}
 		err := fmt.Errorf("failed to ping OBA server %s: %v", server.ObaBaseURL, err)
-		err = utils.SanitizeErrorURL(err, server.ObaBaseURL, server.ObaApiKey)
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: utils.MakeMap("server_name", server.ServerName),
-			ExtraContext: map[string]interface{}{
-				"oba_base_url": serverURL,
-			},
-		})
+		reportPingFailure(err, server, serverURL)
 		ObaApiStatus.WithLabelValues(server.ServerName, serverURL).Set(0)
 		return false
 	}
@@ -59,6 +53,18 @@ func serverPing(ctx context.Context, client *onebusaway.Client, server models.Ob
 		ObaApiStatus.WithLabelValues(server.ServerName, serverURL).Set(1)
 		return true
 	}
+	reportPingFailure(fmt.Errorf("OBA server %s returned no readable time", server.ObaBaseURL), server, serverURL)
 	ObaApiStatus.WithLabelValues(server.ServerName, serverURL).Set(0)
 	return false
+}
+
+// reportPingFailure sends a failed ping to Sentry with the credentials removed.
+// The collector only logs a failed ping, so this is its only report.
+func reportPingFailure(err error, server models.ObaServer, serverURL string) {
+	report.ReportErrorWithSentryOptions(utils.SanitizeErrorURL(err, server.ObaBaseURL, server.ObaApiKey), report.SentryReportOptions{
+		Tags: utils.MakeMap("server_name", server.ServerName),
+		ExtraContext: map[string]interface{}{
+			"oba_base_url": serverURL,
+		},
+	})
 }

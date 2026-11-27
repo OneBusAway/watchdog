@@ -347,25 +347,22 @@ func TestValidateVehicleTimestamp(t *testing.T) {
 	now := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
 
 	cases := []struct {
-		name       string
-		ts         *time.Time
-		now        time.Time
-		wantValid  bool
-		wantReason string
+		name      string
+		ts        *time.Time
+		now       time.Time
+		wantValid bool
 	}{
 		{
-			name:       "nil timestamp is treated as missing, not malformed",
-			ts:         nil,
-			now:        now,
-			wantValid:  true,
-			wantReason: "",
+			name:      "nil timestamp is treated as missing, not malformed",
+			ts:        nil,
+			now:       now,
+			wantValid: true,
 		},
 		{
-			name:       "current timestamp is valid",
-			ts:         &now,
-			now:        now,
-			wantValid:  true,
-			wantReason: "",
+			name:      "current timestamp is valid",
+			ts:        &now,
+			now:       now,
+			wantValid: true,
 		},
 		{
 			name: "recent past timestamp is valid",
@@ -373,9 +370,8 @@ func TestValidateVehicleTimestamp(t *testing.T) {
 				t := now.Add(-5 * time.Minute)
 				return &t
 			}(),
-			now:        now,
-			wantValid:  true,
-			wantReason: "",
+			now:       now,
+			wantValid: true,
 		},
 		{
 			name: "slight future timestamp within skew tolerance is valid",
@@ -383,16 +379,14 @@ func TestValidateVehicleTimestamp(t *testing.T) {
 				t := now.Add(2 * time.Minute)
 				return &t
 			}(),
-			now:        now,
-			wantValid:  true,
-			wantReason: "",
+			now:       now,
+			wantValid: true,
 		},
 		{
-			name:       "zero time value is invalid epoch_zero",
-			ts:         &time.Time{},
-			now:        now,
-			wantValid:  false,
-			wantReason: "epoch_zero",
+			name:      "zero time value is invalid epoch_zero",
+			ts:        &time.Time{},
+			now:       now,
+			wantValid: false,
 		},
 		{
 			name: "unix epoch zero is invalid epoch_zero",
@@ -400,9 +394,8 @@ func TestValidateVehicleTimestamp(t *testing.T) {
 				t := time.Unix(0, 0).UTC()
 				return &t
 			}(),
-			now:        now,
-			wantValid:  false,
-			wantReason: "epoch_zero",
+			now:       now,
+			wantValid: false,
 		},
 		{
 			name: "negative unix timestamp is invalid epoch_zero",
@@ -410,9 +403,8 @@ func TestValidateVehicleTimestamp(t *testing.T) {
 				t := time.Unix(-100, 0).UTC()
 				return &t
 			}(),
-			now:        now,
-			wantValid:  false,
-			wantReason: "epoch_zero",
+			now:       now,
+			wantValid: false,
 		},
 		{
 			name: "millisecond timestamp is invalid milliseconds",
@@ -420,9 +412,8 @@ func TestValidateVehicleTimestamp(t *testing.T) {
 				t := time.Unix(1794592160000, 0).UTC()
 				return &t
 			}(),
-			now:        now,
-			wantValid:  false,
-			wantReason: "milliseconds",
+			now:       now,
+			wantValid: false,
 		},
 		{
 			name: "extreme future clock skew is invalid future",
@@ -430,17 +421,16 @@ func TestValidateVehicleTimestamp(t *testing.T) {
 				t := now.Add(15 * time.Minute)
 				return &t
 			}(),
-			now:        now,
-			wantValid:  false,
-			wantReason: "future",
+			now:       now,
+			wantValid: false,
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			valid, reason := validateVehicleTimestamp(tc.ts, tc.now)
-			if valid != tc.wantValid || reason != tc.wantReason {
-				t.Errorf("validateVehicleTimestamp() = (%v, %q), want (%v, %q)", valid, reason, tc.wantValid, tc.wantReason)
+			valid := validateVehicleTimestamp(tc.ts, tc.now)
+			if valid != tc.wantValid {
+				t.Errorf("validateVehicleTimestamp() = %v, want %v", valid, tc.wantValid)
 			}
 		})
 	}

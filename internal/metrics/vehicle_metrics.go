@@ -138,7 +138,7 @@ func countVehiclePositions(server models.ObaServer, agencies []models.ObaServer,
 	if realtimeStore == nil {
 		err := fmt.Errorf("realtimeStore is nil for agency %s", server.AgencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
+			Tags: map[string]string{"agency_id": server.AgencyID, "agency_name": server.AgencyName, "server_name": server.ServerName},
 		})
 		return 0, err
 	}
@@ -149,7 +149,7 @@ func countVehiclePositions(server models.ObaServer, agencies []models.ObaServer,
 		emitAgencyPositions(server, agencies, nil, utils.SanitizeServerURL(server.ObaBaseURL))
 		err := fmt.Errorf("no GTFS-RT data available for agency %s", server.AgencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
+			Tags: map[string]string{"agency_id": server.AgencyID, "agency_name": server.AgencyName, "server_name": server.ServerName},
 		})
 		return 0, err
 	}
@@ -201,6 +201,7 @@ func countActiveVehiclesForAgency(ctx context.Context, client *onebusaway.Client
 		reportUnlessCanceled(ctx, err, report.SentryReportOptions{
 			Tags: map[string]string{
 				"agency_id":   server.AgencyID,
+				"agency_name": server.AgencyName,
 				"server_name": server.ServerName,
 			},
 		})
@@ -217,6 +218,13 @@ func countActiveVehiclesForAgency(ctx context.Context, client *onebusaway.Client
 	// Handle a successful API response containing JSON null.
 	if response == nil {
 		err := fmt.Errorf("OBA API returned a null response for agency %s", server.AgencyID)
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: map[string]string{
+				"agency_id":   server.AgencyID,
+				"agency_name": server.AgencyName,
+				"server_name": server.ServerName,
+			},
+		})
 
 		AgencyActiveVehiclesGauge.DeleteLabelValues(
 			server.AgencyID,
@@ -276,7 +284,7 @@ func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer,
 		emitTickSummary(server, agencies, vehicleLastSeen, routeAgencyIndex, tickSummary{feedEmpty: true}, serverURL)
 		err := fmt.Errorf("no GTFS-RT data available for agency %s", server.AgencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": serverName},
+			Tags: map[string]string{"agency_id": server.AgencyID, "agency_name": server.AgencyName, "server_name": serverName},
 		})
 		return err
 	}
@@ -351,7 +359,7 @@ func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer,
 		}
 		GtfsRtVehicleStateLastChangedTimestamp.WithLabelValues(labels...).Set(float64(stateLastChanged.Unix()))
 
-		tsValid, _ := validateVehicleTimestamp(vehicle.Timestamp, observedAt)
+		tsValid := validateVehicleTimestamp(vehicle.Timestamp, observedAt)
 
 		if vehicle.Timestamp != nil && tsValid {
 			GtfsRtVehicleSourceTimestamp.WithLabelValues(labels...).Set(float64(vehicle.Timestamp.Unix()))
@@ -572,14 +580,18 @@ func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, agencies
 	if realtimeData == nil {
 		err := fmt.Errorf("no GTFS-RT data available for agency %s", server.AgencyID)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{"agency_id": server.AgencyID, "server_name": server.ServerName},
+			Tags: map[string]string{"agency_id": server.AgencyID, "agency_name": server.AgencyName, "server_name": server.ServerName},
 		})
 		return err
 	}
 
 	serverBox, ok := boundingBoxStore.Get(server.ServerKey())
 	if !ok {
-		return fmt.Errorf("no bounding box found for server key %s", server.ServerKey())
+		err := fmt.Errorf("no bounding box found for server key %s", server.ServerKey())
+		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
+			Tags: map[string]string{"agency_id": server.AgencyID, "agency_name": server.AgencyName, "server_name": server.ServerName},
+		})
+		return err
 	}
 
 	serverURL := utils.SanitizeServerURL(server.ObaBaseURL)
@@ -603,13 +615,14 @@ func trackInvalidVehiclesAndStoppedOutOfBounds(server models.ObaServer, agencies
 	for _, realtimeVehicle := range realtimeData.Vehicles {
 		v := realtimeVehicle.Vehicle
 
-		// Judge the coordinates and timestamp BEFORE attribution. The most malformed
+		// Judge the coordinates and timestamp BEFORE attribution. Malformed
 		// entities — no TripDescriptor, so no route_id to resolve, and no
-		// position or bad timestamps — are exactly the ones attribution cannot place, and
-		// exactly the ones these gauges exist to catch. Attributing first and
-		// skipping the failures would make the worst feed data invisible.
+		// valid position — are exactly the ones attribution cannot place, and
+		// coordinate gauges exist to catch them; timestamps are evaluated in
+		// the same pass. Attributing first and skipping the failures would make
+		// the worst feed data invisible.
 		lat, lon, coordsValid := vehicleLatLon(v)
-		tsValid, _ := validateVehicleTimestamp(v.Timestamp, observationAt)
+		tsValid := validateVehicleTimestamp(v.Timestamp, observationAt)
 
 		// Vehicles that cannot be placed with an agency fall to the
 		// server-scoped entry, whose agency labels are empty in server-mode.
@@ -683,19 +696,19 @@ const MillisecondTimestampThreshold = 100_000_000_000
 
 // validateVehicleTimestamp checks whether a vehicle's timestamp is valid according
 // to the GTFS-RT specification (POSIX seconds) and reasonable observation bounds.
-// If ts is nil, it is considered missing rather than malformed, so valid is true with no reason.
-func validateVehicleTimestamp(ts *time.Time, now time.Time) (valid bool, reason string) {
+// If ts is nil, it is considered missing rather than malformed, so it is valid.
+func validateVehicleTimestamp(ts *time.Time, now time.Time) bool {
 	if ts == nil {
-		return true, ""
+		return true
 	}
 	if ts.IsZero() || ts.Unix() <= 0 {
-		return false, "epoch_zero"
+		return false
 	}
 	if ts.Unix() >= MillisecondTimestampThreshold {
-		return false, "milliseconds"
+		return false
 	}
 	if !now.IsZero() && ts.After(now.Add(MaxFutureVehicleTimestampSkew)) {
-		return false, "future"
+		return false
 	}
-	return true, ""
+	return true
 }
