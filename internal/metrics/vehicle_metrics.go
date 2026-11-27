@@ -74,6 +74,17 @@ type VehicleAttributor struct {
 	resolver   gtfs.VehicleAttributionResolver
 }
 
+// LastSeenKey returns the VehicleLastSeen server key the telemetry pass files
+// a vehicle under, given the agency Attribute returned for it: the agency's
+// own key, or the configured entry's key for the entry's agency and for
+// unattributed vehicles.
+func (a VehicleAttributor) LastSeenKey(agency models.ObaServer) string {
+	if agency.AgencyID == a.server.AgencyID {
+		return a.server.ServerKey()
+	}
+	return models.ServerKey(a.server.ObaBaseURL, agency.AgencyID)
+}
+
 // NewVehicleAttributor takes the same server, agencies and resolver as the
 // vehicle passes: agencies is nil in agency-mode.
 func NewVehicleAttributor(server models.ObaServer, agencies []models.ObaServer, resolver gtfs.VehicleAttributionResolver) VehicleAttributor {
@@ -378,7 +389,7 @@ func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer,
 			next.SourceTimestamp = time.Time{}
 			next.HasPosition = false
 			next.SourceInterval = 0
-			next.SpeedLastComputed = time.Time{}
+			next.clearComputedSpeed()
 		} else {
 			timeDelta := time.Duration(0)
 			if ok && prev.HasPosition && !prev.Time.IsZero() {
@@ -390,9 +401,13 @@ func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer,
 				computedSpeed := distance / timeDelta.Seconds()
 				VehicleSpeedGauge.WithLabelValues(labels...).Set(computedSpeed)
 				VehicleSpeedDiscrepancyRatioGauge.DeleteLabelValues(labels...)
+				next.ComputedSpeedMps = &computedSpeed
+				next.SpeedDiscrepancyRatio = nil
 				if vehicle.Position.Speed != nil && *vehicle.Position.Speed > 0 {
 					reportedSpeed := float64(*vehicle.Position.Speed)
-					VehicleSpeedDiscrepancyRatioGauge.WithLabelValues(labels...).Set(math.Abs(computedSpeed-reportedSpeed) / reportedSpeed)
+					ratio := math.Abs(computedSpeed-reportedSpeed) / reportedSpeed
+					VehicleSpeedDiscrepancyRatioGauge.WithLabelValues(labels...).Set(ratio)
+					next.SpeedDiscrepancyRatio = &ratio
 				}
 				next.SourceInterval = timeDelta
 				next.SpeedLastComputed = observedAt
@@ -400,12 +415,12 @@ func trackVehicleTelemetry(server models.ObaServer, agencies []models.ObaServer,
 			case timeDelta == 0 && ok && prev.HasPosition && prev.StateHash == stateHash && !prev.SpeedLastComputed.IsZero():
 				if observedAt.Sub(prev.SpeedLastComputed) > vehicleSpeedGrace(vehicleLastSeen.CollectionInterval(), prev.SourceInterval) {
 					deleteVehicleSpeedSeries(labels)
-					next.SpeedLastComputed = time.Time{}
+					next.clearComputedSpeed()
 				}
 			default:
 				deleteVehicleSpeedSeries(labels)
 				next.SourceInterval = 0
-				next.SpeedLastComputed = time.Time{}
+				next.clearComputedSpeed()
 			}
 			next.Time = *vehicle.Timestamp
 			next.Lat = lat

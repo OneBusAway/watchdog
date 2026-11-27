@@ -264,7 +264,7 @@ type fakeVehicleRecorder struct {
 	servers   []models.ObaServer
 }
 
-func (f *fakeVehicleRecorder) RecordVehiclePositions(_ context.Context, server models.ObaServer, snapshot *models.RealtimeData, _ metrics.VehicleAttributor, _ *geo.BoundingBoxStore) {
+func (f *fakeVehicleRecorder) RecordVehiclePositions(_ context.Context, server models.ObaServer, snapshot *models.RealtimeData, _ metrics.VehicleAttributor, _ *geo.BoundingBoxStore, _ *metrics.VehicleLastSeen) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.servers = append(f.servers, server)

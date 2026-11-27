@@ -42,7 +42,7 @@ func (app *Application) recordOBAMetricsHistory(ctx context.Context, server mode
 // snapshot in investigation history. *history.HistoryService implements it;
 // tests substitute a fake.
 type vehiclePositionRecorder interface {
-	RecordVehiclePositions(ctx context.Context, server models.ObaServer, snapshot *models.RealtimeData, attributor metrics.VehicleAttributor, boxes *geo.BoundingBoxStore)
+	RecordVehiclePositions(ctx context.Context, server models.ObaServer, snapshot *models.RealtimeData, attributor metrics.VehicleAttributor, boxes *geo.BoundingBoxStore, lastSeen *metrics.VehicleLastSeen)
 }
 
 // recordVehicleHistory records the vehicle anomalies of the snapshot the
@@ -58,7 +58,7 @@ func (app *Application) recordVehicleHistory(ctx context.Context, server models.
 		return
 	}
 	attributor := metrics.NewVehicleAttributor(server, agencies, resolver)
-	app.vehicleHistory.RecordVehiclePositions(ctx, server, snapshot, attributor, app.MetricsService.BoundingBoxStore)
+	app.vehicleHistory.RecordVehiclePositions(ctx, server, snapshot, attributor, app.MetricsService.BoundingBoxStore, app.MetricsService.VehicleLastSeen)
 }
 
 // flushRemovedServerHistory saves the last-reported times of open

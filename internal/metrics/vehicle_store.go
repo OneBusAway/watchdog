@@ -20,12 +20,25 @@ type LastSeen struct {
 	StateLastChanged  time.Time
 	SourceInterval    time.Duration
 	SpeedLastComputed time.Time
-	VehicleID         string
-	FeedID            string
-	AgencyID          string
-	AgencyName        string
-	ServerName        string
-	ServerURL         string
+	// ComputedSpeedMps and SpeedDiscrepancyRatio are the values last set on
+	// the speed gauges. Both are nil whenever SpeedLastComputed is zero; the
+	// ratio is also nil when the vehicle reported no positive speed.
+	ComputedSpeedMps      *float64
+	SpeedDiscrepancyRatio *float64
+	VehicleID             string
+	FeedID                string
+	AgencyID              string
+	AgencyName            string
+	ServerName            string
+	ServerURL             string
+}
+
+// clearComputedSpeed forgets the speed computed for the vehicle, as the
+// speed gauges are deleted.
+func (l *LastSeen) clearComputedSpeed() {
+	l.SpeedLastComputed = time.Time{}
+	l.ComputedSpeedMps = nil
+	l.SpeedDiscrepancyRatio = nil
 }
 
 // vehicleKey composes the inner store key from the feed identity and vehicle

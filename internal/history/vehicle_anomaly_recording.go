@@ -51,6 +51,10 @@ type vehicleFacts struct {
 	// attributionReason is set.
 	agency            models.ObaServer
 	attributionReason gtfs.AttributionFailureReason
+	// computedSpeedMps and speedDiscrepancyRatio are what the telemetry pass
+	// computed for the vehicle this tick, nil when it computed none.
+	computedSpeedMps      *float64
+	speedDiscrepancyRatio *float64
 	// boxVersionID is the bounding_box_version of the box the vehicle was
 	// checked against, read when it was checked. It is nil when no box
 	// applied or the box's version is not recorded.
@@ -135,11 +139,12 @@ func (h *HistoryService) SetFetchInterval(interval time.Duration) {
 
 // RecordVehiclePositions records the vehicle anomalies of one realtime
 // snapshot for one server. server, agencies and attributor are the ones the
-// vehicle passes used; boxes is the bounding box store they read.
+// vehicle passes used; boxes and lastSeen are the bounding box and
+// last-seen stores they read and wrote.
 //
 // Call it only after a successful realtime fetch. A snapshot that opens,
 // closes and adds evidence to nothing does not touch the database.
-func (h *HistoryService) RecordVehiclePositions(ctx context.Context, server models.ObaServer, snapshot *models.RealtimeData, attributor metrics.VehicleAttributor, boxes *geo.BoundingBoxStore) {
+func (h *HistoryService) RecordVehiclePositions(ctx context.Context, server models.ObaServer, snapshot *models.RealtimeData, attributor metrics.VehicleAttributor, boxes *geo.BoundingBoxStore, lastSeen *metrics.VehicleLastSeen) {
 	if h == nil || h.pool == nil || snapshot == nil {
 		return
 	}
@@ -173,7 +178,7 @@ func (h *HistoryService) RecordVehiclePositions(ctx context.Context, server mode
 	if version, ok := h.static.currentVersion(server.ServerKey()); ok {
 		staticVersionID = &version.id
 	}
-	feeds, observations := vehicleObservations(server, snapshot, attributor, boxes, h.static.box)
+	feeds, observations := vehicleObservations(server, snapshot, vehicleJudges{attributor: attributor, boxes: boxes, boxVersion: h.static.box, lastSeen: lastSeen})
 	plan := planVehicleAnomalies(entry.open, feeds, observations, threshold)
 	if plan.empty() {
 		return
@@ -302,9 +307,7 @@ func (h *HistoryService) ensureRuleVersions(ctx context.Context, server models.O
 // vehicle the snapshot only knows from a trip update, with no position
 // entity, is not a position report and is left out, as is a vehicle with no
 // ID.
-//
-// boxVersion returns the recorded version of a bounding box key.
-func vehicleObservations(server models.ObaServer, snapshot *models.RealtimeData, attributor metrics.VehicleAttributor, boxes *geo.BoundingBoxStore, boxVersion func(string) (int64, bool)) ([]vehicleFeed, []vehicleObservation) {
+func vehicleObservations(server models.ObaServer, snapshot *models.RealtimeData, judges vehicleJudges) ([]vehicleFeed, []vehicleObservation) {
 	feeds := make([]vehicleFeed, 0, len(snapshot.Feeds))
 	feedURLs := make(map[string]string, len(snapshot.Feeds))
 	for _, feed := range snapshot.Feeds {
@@ -327,7 +330,7 @@ func vehicleObservations(server models.ObaServer, snapshot *models.RealtimeData,
 		if !ok || vehicleID == "" || !vehicle.IsEntityInMessage {
 			continue
 		}
-		observations = append(observations, observeVehicle(server, feedURL, vehicle, attributor, boxes, boxVersion))
+		observations = append(observations, observeVehicle(server, feedURL, realtimeVehicle.FeedID, vehicle, judges))
 	}
 	return feeds, observations
 }
@@ -335,9 +338,9 @@ func vehicleObservations(server models.ObaServer, snapshot *models.RealtimeData,
 // observeVehicle judges one vehicle the way trackInvalidVehiclesAndStoppedOutOfBounds
 // does: coordinates first, then the agency box when the vehicle is
 // attributed and its agency has one, otherwise the server box.
-func observeVehicle(server models.ObaServer, feedURL string, vehicle remoteGtfs.Vehicle, attributor metrics.VehicleAttributor, boxes *geo.BoundingBoxStore, boxVersion func(string) (int64, bool)) vehicleObservation {
+func observeVehicle(server models.ObaServer, feedURL, feedID string, vehicle remoteGtfs.Vehicle, judges vehicleJudges) vehicleObservation {
 	lat, lon, positionReason := geo.VehiclePosition(vehicle)
-	agency, attributionReason := attributor.Attribute(vehicle)
+	agency, attributionReason := judges.attributor.Attribute(vehicle)
 
 	obs := vehicleObservation{
 		feedURL:        feedURL,
@@ -362,6 +365,14 @@ func observeVehicle(server models.ObaServer, feedURL string, vehicle remoteGtfs.
 		}
 	}
 
+	if judges.lastSeen != nil {
+		if seen, ok := judges.lastSeen.Get(judges.attributor.LastSeenKey(agency), feedID, obs.vehicleID); ok {
+			obs.facts.computedSpeedMps = seen.ComputedSpeedMps
+			obs.facts.speedDiscrepancyRatio = seen.SpeedDiscrepancyRatio
+		}
+	}
+
+	boxes := judges.boxes
 	if boxes == nil {
 		return obs
 	}
@@ -373,7 +384,7 @@ func observeVehicle(server models.ObaServer, feedURL string, vehicle remoteGtfs.
 		}
 	}
 	if box, ok := boxes.Get(boxKey); ok {
-		if id, ok := boxVersion(boxKey); ok {
+		if id, ok := judges.boxVersion(boxKey); ok {
 			obs.facts.boxVersionID = &id
 		}
 		if positionReason == "" {
@@ -382,6 +393,16 @@ func observeVehicle(server models.ObaServer, feedURL string, vehicle remoteGtfs.
 		}
 	}
 	return obs
+}
+
+// vehicleJudges are what a vehicle is judged with: the vehicle passes'
+// attribution and bounding boxes, the recorded box versions, and the speeds
+// the telemetry pass computed.
+type vehicleJudges struct {
+	attributor metrics.VehicleAttributor
+	boxes      *geo.BoundingBoxStore
+	boxVersion func(boxKey string) (int64, bool)
+	lastSeen   *metrics.VehicleLastSeen
 }
 
 // vehicleEvidenceKey identifies the one evidence row a vehicle gets per feed
@@ -666,15 +687,15 @@ func (h *HistoryService) scheduleStore() *gtfs.ScheduleStore {
 
 // evidenceParams fills the evidence columns that come from the vehicle
 // itself. The caller sets the identity, version and agency columns.
-// computed_speed_mps and speed_discrepancy_ratio stay null: VehicleLastSeen
-// keeps when a speed was computed, not its value.
 func evidenceParams(obs vehicleObservation, observedAt time.Time, schedules *gtfs.ScheduleStore) dbgen.InsertVehiclePositionEvidenceParams {
 	vehicle := obs.facts.vehicle
 	params := dbgen.InsertVehiclePositionEvidenceParams{
-		VehicleSourceTime: vehicle.Timestamp,
-		Latitude:          obs.facts.latitude,
-		Longitude:         obs.facts.longitude,
-		PositionValid:     obs.positionReason == "",
+		VehicleSourceTime:     vehicle.Timestamp,
+		Latitude:              obs.facts.latitude,
+		Longitude:             obs.facts.longitude,
+		PositionValid:         obs.positionReason == "",
+		ComputedSpeedMps:      obs.facts.computedSpeedMps,
+		SpeedDiscrepancyRatio: obs.facts.speedDiscrepancyRatio,
 	}
 	if obs.positionReason != "" {
 		params.PositionValidationReason = nonEmpty(string(obs.positionReason))

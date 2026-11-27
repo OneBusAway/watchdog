@@ -542,3 +542,21 @@ func TestTrackVehicleTelemetryRejectsMalformedTimestamp(t *testing.T) {
 		t.Fatalf("expected LastSeen.Time to be zero for invalid timestamp, got %v", seen.Time)
 	}
 }
+
+// LastSeenKey must match the key trackVehicleTelemetry files a vehicle under.
+func TestVehicleAttributorLastSeenKey(t *testing.T) {
+	agencyMode := models.ObaServer{ObaBaseURL: "https://last-seen.example", AgencyID: "a"}
+	if got := NewVehicleAttributor(agencyMode, nil, nil).LastSeenKey(agencyMode); got != agencyMode.ServerKey() {
+		t.Errorf("agency mode key = %q, want %q", got, agencyMode.ServerKey())
+	}
+
+	serverMode := models.ObaServer{ObaBaseURL: "https://last-seen.example"}
+	agencyB := models.ObaServer{ObaBaseURL: serverMode.ObaBaseURL, AgencyID: "b"}
+	attributor := NewVehicleAttributor(serverMode, []models.ObaServer{agencyB}, nil)
+	if got, want := attributor.LastSeenKey(agencyB), models.ServerKey(serverMode.ObaBaseURL, "b"); got != want {
+		t.Errorf("attributed key = %q, want %q", got, want)
+	}
+	if got := attributor.LastSeenKey(models.ObaServer{}); got != serverMode.ServerKey() {
+		t.Errorf("unattributed key = %q, want %q", got, serverMode.ServerKey())
+	}
+}

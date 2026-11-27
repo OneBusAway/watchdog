@@ -94,7 +94,7 @@ func testBoxes(server models.ObaServer) *geo.BoundingBoxStore {
 }
 
 func recordVehicles(h *HistoryService, c context.Context, server models.ObaServer, snapshot *models.RealtimeData) {
-	h.RecordVehiclePositions(c, server, snapshot, metrics.NewVehicleAttributor(server, nil, nil), testBoxes(server))
+	h.RecordVehiclePositions(c, server, snapshot, metrics.NewVehicleAttributor(server, nil, nil), testBoxes(server), nil)
 }
 
 type storedVehicleEpisode struct {
@@ -424,5 +424,47 @@ func TestRecordVehiclePositions_SkipsTripUpdateOnlyVehicles(t *testing.T) {
 
 	if n := count(t, pool, "vehicle_anomaly_episode"); n != 0 {
 		t.Fatalf("got %d episodes for a trip-update-only vehicle", n)
+	}
+}
+
+// Evidence records the speed the telemetry pass computed for the vehicle
+// this tick, and null when it computed none.
+func TestRecordVehiclePositions_EvidenceCarriesComputedSpeed(t *testing.T) {
+	h, pool, _ := newCountedHistory(t)
+	lastSeen := metrics.NewVehicleLastSeen()
+	speed, ratio := 12.5, 0.25
+	lastSeen.Set(vehicleServer.ServerKey(), "0", "bus-1", metrics.LastSeen{
+		SpeedLastComputed:     vehicleT0,
+		ComputedSpeedMps:      &speed,
+		SpeedDiscrepancyRatio: &ratio,
+	})
+	attributor := metrics.NewVehicleAttributor(vehicleServer, nil, nil)
+	snapshot := vehicleSnapshot(vehicleT0, zeroCoordinates(testVehicle("bus-1", vehicleT0)), zeroCoordinates(testVehicle("bus-2", vehicleT0)))
+
+	h.RecordVehiclePositions(ctx, vehicleServer, snapshot, attributor, testBoxes(vehicleServer), lastSeen)
+
+	rows, err := pool.Query(ctx, `
+		SELECT v.external_vehicle_id, pe.computed_speed_mps, pe.speed_discrepancy_ratio
+		FROM vehicle_position_evidence pe
+		JOIN vehicle_entity v ON v.vehicle_entity_id = pe.vehicle_entity_id
+		ORDER BY v.external_vehicle_id`)
+	if err != nil {
+		t.Fatalf("read evidence: %v", err)
+	}
+	defer rows.Close()
+	got := map[string][2]*float64{}
+	for rows.Next() {
+		var id string
+		var computed, discrepancy *float64
+		if err := rows.Scan(&id, &computed, &discrepancy); err != nil {
+			t.Fatalf("scan evidence: %v", err)
+		}
+		got[id] = [2]*float64{computed, discrepancy}
+	}
+	if s := got["bus-1"]; s[0] == nil || *s[0] != speed || s[1] == nil || *s[1] != ratio {
+		t.Errorf("bus-1 speed, ratio = %v, %v; want %v, %v", s[0], s[1], speed, ratio)
+	}
+	if s := got["bus-2"]; s[0] != nil || s[1] != nil {
+		t.Errorf("bus-2 has no computed speed but got %v, %v", s[0], s[1])
 	}
 }
