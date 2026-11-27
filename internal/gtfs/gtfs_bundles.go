@@ -1165,6 +1165,7 @@ func parseGTFSRTFeed(ctx context.Context, server models.ObaServer, client *http.
 		FullDataset:        raw.Header == nil || raw.Header.GetIncrementality() == gtfsrt.FeedHeader_FULL_DATASET,
 		SourceTimestamp:    sourceTimestamp,
 		PayloadHash:        payloadHash,
+		SourceKey:          models.FeedSourceKey(feed.VehiclePositionURL),
 		ReportedVehicleIDs: reportedVehicleIDs,
 	})
 	positionIDs := make(map[string]struct{})

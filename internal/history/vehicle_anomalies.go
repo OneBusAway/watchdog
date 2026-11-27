@@ -55,6 +55,9 @@ type vehicleFeed struct {
 	fullDataset     bool
 	sourceTimestamp *time.Time
 	payloadHash     string
+	// sourceKey is models.FeedSourceKey of the configured feed URL. Feeds
+	// that differ only by query string share feedURL but not sourceKey.
+	sourceKey string
 	// reportedVehicleIDs holds every vehicle ID in the response, including
 	// vehicles that agency-mode filtering left out of this entry's
 	// observations. Nil means the observations are the whole response.
@@ -103,6 +106,21 @@ type openVehicleEpisode struct {
 	episodeID     int64
 	tripID        string
 	tripStartDate string
+	// sourceKey is the feed source last seen reporting the vehicle, empty
+	// while unknown after a restart. Only a response from that source can
+	// close the episode on absence: feeds that differ only by query string
+	// share feedURL but each reports only its own vehicles.
+	sourceKey string
+	// observedAt is the observation time of the newest response that
+	// reported the vehicle. Entries fetch concurrently, so an older response
+	// can be recorded after a newer one; it must not change the episode.
+	observedAt time.Time
+}
+
+// staleFor reports whether a response observed at observedAt is older than
+// the newest one already applied to the episode.
+func (e *openVehicleEpisode) staleFor(observedAt time.Time) bool {
+	return observedAt.Before(e.observedAt)
 }
 
 // vehicleEpisodeOpen opens an episode with the vehicle's evidence.
@@ -204,18 +222,33 @@ func planVehicleAnomalies(open map[vehicleEpisodeKey]*openVehicleEpisode, feeds 
 		present[pk] = true
 		for _, anomaly := range vehicleAnomalyTypes {
 			key := vehicleEpisodeKey{feedURL: obs.feedURL, vehicleID: obs.vehicleID, anomaly: anomaly}
-			planPresentVehicle(&plan, key, open[key], obs, evaluateRule(anomaly, obs, feed.observedAt, threshold))
+			episode := open[key]
+			if episode != nil && episode.staleFor(feed.observedAt) {
+				continue
+			}
+			planPresentVehicle(&plan, key, episode, obs, evaluateRule(anomaly, obs, feed.observedAt, threshold))
 		}
 	}
 
-	for key := range open {
+	for key, episode := range open {
 		feed, ok := feedByURL[key.feedURL]
-		if ok && feed.fullDataset && !feed.reported(key.vehicleID, present[presentKey{key.feedURL, key.vehicleID}]) {
+		if ok && closesOnAbsence(feed, episode, key.vehicleID, present[presentKey{key.feedURL, key.vehicleID}]) {
 			plan.closes = append(plan.closes, vehicleEpisodeClose{key: key, reason: closeNotPresentInFull})
 		}
 	}
 	plan.sort()
 	return plan
+}
+
+// closesOnAbsence reports whether a full-dataset response that lacks the
+// vehicle closes its episode. The response must come from the source that
+// reports the vehicle, and must not be older than what the episode has seen.
+func closesOnAbsence(feed vehicleFeed, episode *openVehicleEpisode, vehicleID string, observed bool) bool {
+	fromItsSource := episode.sourceKey != "" && episode.sourceKey == feed.sourceKey
+	return feed.fullDataset &&
+		fromItsSource &&
+		!episode.staleFor(feed.observedAt) &&
+		!feed.reported(vehicleID, observed)
 }
 
 // planPresentVehicle adds what one rule's outcome means for one vehicle.

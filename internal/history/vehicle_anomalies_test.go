@@ -13,6 +13,7 @@ var planObservedAt = time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
 const (
 	planThreshold = 2 * time.Minute
 	planFeedURL   = "https://feed.example/vehicle-positions"
+	planSourceKey = "source-a"
 )
 
 func boolPtr(b bool) *bool { return &b }
@@ -34,11 +35,11 @@ func healthyVehicle(id string) vehicleObservation {
 }
 
 func fullFeed() []vehicleFeed {
-	return []vehicleFeed{{feedURL: planFeedURL, observedAt: planObservedAt, fullDataset: true}}
+	return []vehicleFeed{{feedURL: planFeedURL, sourceKey: planSourceKey, observedAt: planObservedAt, fullDataset: true}}
 }
 
 func differentialFeed() []vehicleFeed {
-	return []vehicleFeed{{feedURL: planFeedURL, observedAt: planObservedAt, fullDataset: false}}
+	return []vehicleFeed{{feedURL: planFeedURL, sourceKey: planSourceKey, observedAt: planObservedAt, fullDataset: false}}
 }
 
 func keyFor(id string, anomaly vehicleAnomalyType) vehicleEpisodeKey {
@@ -48,7 +49,7 @@ func keyFor(id string, anomaly vehicleAnomalyType) vehicleEpisodeKey {
 func openFor(keys ...vehicleEpisodeKey) map[vehicleEpisodeKey]*openVehicleEpisode {
 	open := make(map[vehicleEpisodeKey]*openVehicleEpisode, len(keys))
 	for i, key := range keys {
-		open[key] = &openVehicleEpisode{episodeID: int64(i + 1), tripID: "trip-1", tripStartDate: "20261127"}
+		open[key] = &openVehicleEpisode{episodeID: int64(i + 1), tripID: "trip-1", tripStartDate: "20261127", sourceKey: planSourceKey, observedAt: planObservedAt.Add(-time.Minute)}
 	}
 	return open
 }
@@ -262,5 +263,42 @@ func TestVehicle_PlanIsSorted(t *testing.T) {
 	}
 	if got := openedKeys(plan); !reflect.DeepEqual(got, want) {
 		t.Fatalf("opened %v, want %v", got, want)
+	}
+}
+
+// Feeds that differ only by query string share a feed URL. A full dataset
+// from one of them says nothing about the other's vehicles.
+func TestVehicle_AbsenceFromAnotherSourceIgnored(t *testing.T) {
+	open := openFor(keyFor("other-agency-bus", anomalyInvalidCoordinate))
+	feeds := fullFeed()
+	feeds[0].sourceKey = "source-b"
+	if plan := planVehicleAnomalies(open, feeds, nil, planThreshold); !plan.empty() {
+		t.Fatalf("another source's full dataset changed %+v", plan)
+	}
+}
+
+// After a restart an episode's source can be unknown; absence then cannot
+// tell whether the vehicle left, so it changes nothing.
+func TestVehicle_AbsenceWithUnknownSourceIgnored(t *testing.T) {
+	open := openFor(keyFor("bus-1", anomalyInvalidCoordinate))
+	open[keyFor("bus-1", anomalyInvalidCoordinate)].sourceKey = ""
+	if plan := planVehicleAnomalies(open, fullFeed(), nil, planThreshold); !plan.empty() {
+		t.Fatalf("absence closed an episode of unknown source: %+v", plan)
+	}
+}
+
+// A response older than the newest one an episode has seen, recorded late
+// because entries fetch concurrently, neither closes nor changes it.
+func TestVehicle_StaleResponseIgnored(t *testing.T) {
+	key := keyFor("bus-1", anomalyInvalidCoordinate)
+	open := openFor(key)
+	open[key].observedAt = planObservedAt.Add(time.Minute)
+
+	healthy := healthyVehicle("bus-1")
+	if plan := planVehicleAnomalies(open, fullFeed(), []vehicleObservation{healthy}, planThreshold); !plan.empty() {
+		t.Fatalf("an older healthy response changed %+v", plan)
+	}
+	if plan := planVehicleAnomalies(open, fullFeed(), nil, planThreshold); !plan.empty() {
+		t.Fatalf("an older response without the vehicle changed %+v", plan)
 	}
 }

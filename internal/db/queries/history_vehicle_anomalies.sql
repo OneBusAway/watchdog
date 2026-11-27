@@ -26,8 +26,9 @@ RETURNING rule_version_id;
 
 -- name: ListOpenVehicleAnomalyEpisodesForServer :many
 -- The one read outside a write: the first recording for a server after
--- startup loads its open episodes into memory, each with the trip of its most
--- recent evidence so a later trip change can be detected. Every entry on the
+-- startup loads its open episodes into memory, each with the trip and
+-- observation time of its most recent evidence, so a later trip change and an
+-- out-of-order response can be detected. Every entry on the
 -- base URL shares these episodes, whatever agency opened them.
 SELECT
     e.vehicle_anomaly_episode_id,
@@ -35,17 +36,20 @@ SELECT
     ep.normalized_vehicle_position_url,
     v.external_vehicle_id,
     latest.trip_id,
-    latest.trip_start_date
+    latest.trip_start_date,
+    latest.observed_at
 FROM vehicle_anomaly_episode e
 JOIN vehicle_anomaly_type t ON t.anomaly_type_id = e.anomaly_type_id
 JOIN vehicle_entity v ON v.vehicle_entity_id = e.vehicle_entity_id
 JOIN vehicle_position_endpoint ep ON ep.endpoint_id = v.endpoint_id
 JOIN onebusaway_server srv ON srv.server_id = ep.server_id
 LEFT JOIN LATERAL (
-    SELECT pe.trip_id, pe.trip_start_date
+    SELECT pe.trip_id, pe.trip_start_date, r.observed_at
     FROM vehicle_anomaly_episode_evidence link
     JOIN vehicle_position_evidence pe
       ON pe.vehicle_position_evidence_id = link.vehicle_position_evidence_id
+    JOIN vehicle_position_response r
+      ON r.vehicle_position_response_id = pe.vehicle_position_response_id
     WHERE link.vehicle_anomaly_episode_id = e.vehicle_anomaly_episode_id
     ORDER BY pe.vehicle_position_evidence_id DESC
     LIMIT 1

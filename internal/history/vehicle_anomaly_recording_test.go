@@ -14,6 +14,7 @@ import (
 	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/metrics"
 	"watchdog.onebusaway.org/internal/models"
+	"watchdog.onebusaway.org/internal/utils"
 )
 
 var (
@@ -65,6 +66,12 @@ func vehicleSnapshot(at time.Time, vehicles ...remoteGtfs.Vehicle) *models.Realt
 // vehicles in alsoReported, which agency-mode filtering left out of this
 // entry's view.
 func filteredSnapshot(at time.Time, alsoReported []string, vehicles ...remoteGtfs.Vehicle) *models.RealtimeData {
+	return sourceSnapshot(vehicleFeedURL, at, alsoReported, vehicles...)
+}
+
+// sourceSnapshot is filteredSnapshot for the configured feed rawURL, whose
+// sanitized form drops any query string.
+func sourceSnapshot(rawURL string, at time.Time, alsoReported []string, vehicles ...remoteGtfs.Vehicle) *models.RealtimeData {
 	reported := make(map[string]struct{}, len(vehicles)+len(alsoReported))
 	for _, id := range alsoReported {
 		reported[id] = struct{}{}
@@ -74,7 +81,13 @@ func filteredSnapshot(at time.Time, alsoReported []string, vehicles ...remoteGtf
 		reported[v.GetID().ID] = struct{}{}
 		snapshot.Vehicles = append(snapshot.Vehicles, models.RealtimeVehicle{Vehicle: v, FeedID: "0"})
 	}
-	snapshot.Feeds = []models.RealtimeFeed{{FeedID: "0", FeedURL: vehicleFeedURL, FullDataset: true, ReportedVehicleIDs: reported}}
+	snapshot.Feeds = []models.RealtimeFeed{{
+		FeedID:             "0",
+		FeedURL:            utils.SanitizeServerURL(rawURL),
+		FullDataset:        true,
+		SourceKey:          models.FeedSourceKey(rawURL),
+		ReportedVehicleIDs: reported,
+	}}
 	return snapshot
 }
 
@@ -467,4 +480,77 @@ func TestRecordVehiclePositions_EvidenceCarriesComputedSpeed(t *testing.T) {
 	if s := got["bus-2"]; s[0] != nil || s[1] != nil {
 		t.Errorf("bus-2 has no computed speed but got %v, %v", s[0], s[1])
 	}
+}
+
+// Feeds that select the agency by query string share one sanitized feed URL.
+// Each entry's full dataset holds only its own agency's vehicles, so it must
+// leave the other entry's open episode alone, every tick.
+func TestRecordVehiclePositions_FeedsDifferingOnlyByQueryKeepTheirEpisodes(t *testing.T) {
+	logger, logs := bufferLogger()
+	h, pool, _ := newCountedHistory(t)
+	h.logger = logger
+	sfURL, acURL := vehicleFeedURL+"?agency=SF", vehicleFeedURL+"?agency=AC"
+	sf, ac := vehicleServer, vehicleServer
+	sf.AgencyID, sf.GtfsRTFeeds = "sf", []models.GtfsRTFeed{{VehiclePositionURL: sfURL}}
+	ac.AgencyID, ac.GtfsRTFeeds = "ac", []models.GtfsRTFeed{{VehiclePositionURL: acURL}}
+
+	for i := 0; i < 3; i++ {
+		at := vehicleT0.Add(time.Duration(i) * 30 * time.Second)
+		recordVehicles(h, ctx, sf, sourceSnapshot(sfURL, at, nil, zeroCoordinates(testVehicle("sf-1", at))))
+		recordVehicles(h, ctx, ac, sourceSnapshot(acURL, at, nil, zeroCoordinates(testVehicle("ac-1", at))))
+	}
+	episodes := storedVehicleEpisodes(t, pool)
+	if len(episodes) != 2 {
+		t.Fatalf("got %d episodes, want one per agency: %+v", len(episodes), episodes)
+	}
+	for _, episode := range episodes {
+		if episode.closeReason != nil {
+			t.Fatalf("an entry closed the other entry's episode: %+v", episode)
+		}
+	}
+
+	// Each entry still closes its own episode when its vehicle leaves.
+	gone := vehicleT0.Add(2 * time.Minute)
+	recordVehicles(h, ctx, sf, sourceSnapshot(sfURL, gone, nil))
+	closed := 0
+	for _, episode := range storedVehicleEpisodes(t, pool) {
+		if episode.closeReason != nil && *episode.closeReason == string(closeNotPresentInFull) {
+			closed++
+		}
+	}
+	if closed != 1 {
+		t.Fatalf("closed %d episodes, want only sf's", closed)
+	}
+	noWriteFailures(t, logs)
+}
+
+// After a restart, an episode whose feed URL has one configured source knows
+// that source, so its vehicle's absence still closes it.
+func TestRecordVehiclePositions_RestartWithOneSourceClosesOnAbsence(t *testing.T) {
+	h, pool, _ := newCountedHistory(t)
+	recordVehicles(h, ctx, vehicleServer, vehicleSnapshot(vehicleT0, zeroCoordinates(testVehicle("bus-1", vehicleT0))))
+
+	restarted := NewHistoryService(pool, discardLogger(), "test-build", []models.ObaServer{vehicleServer})
+	recordVehicles(restarted, ctx, vehicleServer, vehicleSnapshot(vehicleT0.Add(30*time.Second)))
+
+	if reason := onlyVehicleEpisode(t, pool).closeReason; reason == nil || *reason != string(closeNotPresentInFull) {
+		t.Fatalf("close_reason = %v, want not_present_in_full_dataset", reason)
+	}
+}
+
+// A response observed before the one that opened an episode, but recorded
+// after it, does not close it.
+func TestRecordVehiclePositions_OlderResponseDoesNotClose(t *testing.T) {
+	logger, logs := bufferLogger()
+	h, pool, _ := newCountedHistory(t)
+	h.logger = logger
+	newer := vehicleT0.Add(30 * time.Second)
+	recordVehicles(h, ctx, vehicleServer, vehicleSnapshot(newer, zeroCoordinates(testVehicle("bus-1", newer))))
+
+	recordVehicles(h, ctx, vehicleServer, vehicleSnapshot(vehicleT0, testVehicle("bus-1", vehicleT0)))
+
+	if onlyVehicleEpisode(t, pool).closeReason != nil {
+		t.Fatal("an older response closed the episode")
+	}
+	noWriteFailures(t, logs)
 }

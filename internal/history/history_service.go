@@ -43,6 +43,9 @@ type HistoryService struct {
 	// vehicles holds each server's open vehicle anomaly episodes, so a
 	// snapshot that changes nothing does not touch the database.
 	vehicles *openVehicleEpisodes
+	// feedSources says which raw feed sources are configured for each
+	// vehicle-position feed URL.
+	feedSources *feedSourceIndex
 	// rules holds the vehicle anomaly rule versions in effect.
 	rules *vehicleRuleVersions
 	// fetchInterval is the collection interval the stale threshold is
@@ -59,15 +62,16 @@ type HistoryService struct {
 // depends on how Watchdog parsed its input.
 func NewHistoryService(pool *pgxpool.Pool, logger *slog.Logger, version string, servers []models.ObaServer) *HistoryService {
 	return &HistoryService{
-		pool:      pool,
-		logger:    logger,
-		version:   version,
-		resolver:  NewServerNameResolver(servers),
-		static:    newCurrentStatic(),
-		stops:     newOpenStopEpisodes(),
-		vehicles:  newOpenVehicleEpisodes(),
-		rules:     &vehicleRuleVersions{},
-		startedAt: time.Now().UTC(),
+		pool:        pool,
+		logger:      logger,
+		version:     version,
+		resolver:    NewServerNameResolver(servers),
+		static:      newCurrentStatic(),
+		stops:       newOpenStopEpisodes(),
+		vehicles:    newOpenVehicleEpisodes(),
+		feedSources: newFeedSourceIndex(servers),
+		rules:       &vehicleRuleVersions{},
+		startedAt:   time.Now().UTC(),
 	}
 }
 
@@ -79,6 +83,9 @@ func (h *HistoryService) SetStaticStore(store *gtfs.StaticStore) {
 
 // SetServers updates the configured servers for canonical name resolution.
 func (h *HistoryService) SetServers(servers []models.ObaServer) {
+	if h.feedSources != nil {
+		h.feedSources.update(servers)
+	}
 	if h.resolver == nil {
 		h.resolver = NewServerNameResolver(servers)
 		return

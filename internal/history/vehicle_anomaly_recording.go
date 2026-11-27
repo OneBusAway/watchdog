@@ -181,6 +181,7 @@ func (h *HistoryService) RecordVehiclePositions(ctx context.Context, server mode
 	feeds, observations := vehicleObservations(server, snapshot, vehicleJudges{attributor: attributor, boxes: boxes, boxVersion: h.static.box, lastSeen: lastSeen})
 	plan := planVehicleAnomalies(entry.open, feeds, observations, threshold)
 	if plan.empty() {
+		noteSightings(entry.open, feeds, observations)
 		return
 	}
 
@@ -208,6 +209,81 @@ func (h *HistoryService) RecordVehiclePositions(ctx context.Context, server mode
 	for _, closed := range plan.closes {
 		delete(entry.open, closed.key)
 	}
+	noteSightings(entry.open, feeds, observations)
+}
+
+// noteSightings records, in memory only, the source and observation time of
+// the response that reported each vehicle with an open episode, so a later
+// absence or an out-of-order response is judged against them. A response
+// older than what an episode has seen is not a sighting.
+func noteSightings(open map[vehicleEpisodeKey]*openVehicleEpisode, feeds []vehicleFeed, observations []vehicleObservation) {
+	feedByURL := make(map[string]vehicleFeed, len(feeds))
+	for _, feed := range feeds {
+		feedByURL[feed.feedURL] = feed
+	}
+	for _, obs := range observations {
+		feed, ok := feedByURL[obs.feedURL]
+		if !ok {
+			continue
+		}
+		for _, anomaly := range vehicleAnomalyTypes {
+			episode := open[vehicleEpisodeKey{feedURL: obs.feedURL, vehicleID: obs.vehicleID, anomaly: anomaly}]
+			if episode == nil || episode.staleFor(feed.observedAt) {
+				continue
+			}
+			episode.sourceKey = feed.sourceKey
+			episode.observedAt = feed.observedAt
+		}
+	}
+}
+
+// feedSourceIndex maps each configured vehicle-position feed, by sanitized
+// base URL and feed URL, to the sources configured for it. After a restart
+// an open episode's source is unknown; when exactly one source is configured
+// for its feed URL, that is its source.
+type feedSourceIndex struct {
+	mu      sync.RWMutex
+	sources map[feedSourceIndexKey]map[string]struct{}
+}
+
+type feedSourceIndexKey struct{ baseURL, feedURL string }
+
+func newFeedSourceIndex(servers []models.ObaServer) *feedSourceIndex {
+	index := &feedSourceIndex{}
+	index.update(servers)
+	return index
+}
+
+func (x *feedSourceIndex) update(servers []models.ObaServer) {
+	sources := make(map[feedSourceIndexKey]map[string]struct{})
+	for _, server := range servers {
+		baseURL := utils.SanitizeServerURL(server.ObaBaseURL)
+		for _, feed := range server.GtfsRTFeeds {
+			key := feedSourceIndexKey{baseURL, utils.SanitizeServerURL(feed.VehiclePositionURL)}
+			if sources[key] == nil {
+				sources[key] = make(map[string]struct{})
+			}
+			sources[key][models.FeedSourceKey(feed.VehiclePositionURL)] = struct{}{}
+		}
+	}
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.sources = sources
+}
+
+// only returns the one source configured for a feed URL, or false when
+// there are none or several.
+func (x *feedSourceIndex) only(baseURL, feedURL string) (string, bool) {
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	set := x.sources[feedSourceIndexKey{baseURL, feedURL}]
+	if len(set) != 1 {
+		return "", false
+	}
+	for source := range set {
+		return source, true
+	}
+	return "", false
 }
 
 // loadOpenVehicleEpisodes replaces entry's open episodes with the ones in the
@@ -226,7 +302,10 @@ func (h *HistoryService) loadOpenVehicleEpisodes(ctx context.Context, server mod
 			vehicleID: row.ExternalVehicleID,
 			anomaly:   vehicleAnomalyType(row.AnomalyCode),
 		}
-		episode := &openVehicleEpisode{episodeID: row.VehicleAnomalyEpisodeID}
+		episode := &openVehicleEpisode{episodeID: row.VehicleAnomalyEpisodeID, observedAt: row.ObservedAt}
+		if source, ok := h.feedSources.only(baseURL, row.NormalizedVehiclePositionUrl); ok {
+			episode.sourceKey = source
+		}
 		if row.TripID != nil {
 			episode.tripID = *row.TripID
 		}
@@ -317,6 +396,7 @@ func vehicleObservations(server models.ObaServer, snapshot *models.RealtimeData,
 			fullDataset:        feed.FullDataset,
 			sourceTimestamp:    feed.SourceTimestamp,
 			payloadHash:        feed.PayloadHash,
+			sourceKey:          feed.SourceKey,
 			reportedVehicleIDs: feed.ReportedVehicleIDs,
 		})
 		feedURLs[feed.FeedID] = feed.FeedURL
@@ -522,10 +602,13 @@ func (w *vehicleTickWriter) open(ctx context.Context, o vehicleEpisodeOpen) (*op
 	if err := w.link(ctx, episodeID, o.key, o.observation, evidenceOpening); err != nil {
 		return nil, err
 	}
+	feed := w.feeds[o.key.feedURL]
 	return &openVehicleEpisode{
 		episodeID:     episodeID,
 		tripID:        o.observation.tripID,
 		tripStartDate: o.observation.tripStartDate,
+		sourceKey:     feed.sourceKey,
+		observedAt:    feed.observedAt,
 	}, nil
 }
 
