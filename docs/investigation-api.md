@@ -567,11 +567,13 @@ The following cannot be established from the stored data. The API must not prese
 | Closed episodes, their static contexts, and static versions | `private, max-age=86400` (they do not change, except as noted below) | Strong `ETag`; `Last-Modified` (`closed_at` for closed episodes and their static contexts; `published_at` for static versions) |
 | Other unchanging records: cluster schemes, evidence, static sources, rule versions, bounding boxes, responses, reported stops/trips, vehicles | `private, max-age=86400` (they do not change, except as noted below) | Strong `ETag` |
 | Open episodes, collections, clusters, counts | `private, max-age=<fetch interval>` (30 seconds by default) | Strong `ETag` |
+| Any response to a request with `include`, unless every resource the endpoint can include is immutable (see below) | `private, max-age=<fetch interval>` (30 seconds by default) | Strong `ETag` |
 
 - `private` keeps shared caches from storing authenticated data.
 - The `ETag` is a hash of the response body, and a matching `If-None-Match` returns `304`.
-- When `include` is requested on an unchanging record, the cache drops to one fetch interval (`max-age=30` by default) so embedded related resources stay fresh.
 - A closed episode's `previous_episode_count` drops when retention deletes an earlier episode of the same identity (D28), and its `ETag` changes with it. A day of staleness is acceptable for that count, so closed episodes keep `max-age=86400`.
+- A response is only as fresh as its most changeable part. An immutable resource can include resources that change, such as its `server` or `agency`, so a request with `include` gets the short cache, one fetch interval (30 seconds by default), whichever of the endpoint's names it requests. Caching too short costs one extra request when a client asks again; caching too long silently returns outdated data. Because the rule doesn't depend on which names an endpoint can include, it stays correct as new loaders are added.
+- An endpoint may keep `max-age=86400` with `include` only when every resource it can include is immutable. Its handler then says so in a comment, so the choice isn't mistaken for a bug or broken by a later include.
 
 ### Hypermedia links
 
