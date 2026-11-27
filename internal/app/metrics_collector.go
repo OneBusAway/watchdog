@@ -328,16 +328,9 @@ func (app *Application) collectForServerScope(ctx, campaignCtx context.Context, 
 			return
 		}
 		app.ConfigService.BackoffStore.UpdateBackoff(server.ServerKey())
+		// serverPing reports the failure to Sentry, so this only logs.
 		app.Logger.Info("Skipping server-scope collection due to ping failure",
 			"server_name", server.ServerName, "oba_base_url", sanitizedURL)
-		report.ReportErrorWithSentryOptions(
-			utils.SanitizeErrorURL(fmt.Errorf("server ping failed for %s", server.ObaBaseURL), server.ObaBaseURL, server.ObaApiKey),
-			report.SentryReportOptions{
-				Tags:         map[string]string{"server_name": server.ServerName},
-				ExtraContext: map[string]interface{}{"oba_base_url": sanitizedURL},
-				Level:        sentry.LevelError,
-			},
-		)
 		return
 	}
 	app.ConfigService.BackoffStore.ResetBackoff(server.ServerKey())
@@ -632,20 +625,9 @@ func (app *Application) agencyEntryAvailable(ctx context.Context, server models.
 				"agency_id", server.AgencyID, "server_name", server.ServerName)
 			return false
 		}
+		// serverPing reports the failure to Sentry, so this only logs.
 		app.Logger.Error("Server ping failed",
 			"agency_id", server.AgencyID, "agency_name", server.AgencyName, "server_name", server.ServerName)
-		err := fmt.Errorf("server ping failed for %s", server.ObaBaseURL)
-		report.ReportErrorWithSentryOptions(utils.SanitizeErrorURL(err, server.ObaBaseURL, server.ObaApiKey), report.SentryReportOptions{
-			Tags: map[string]string{
-				"agency_id":   server.AgencyID,
-				"agency_name": server.AgencyName,
-				"server_name": server.ServerName,
-			},
-			ExtraContext: map[string]interface{}{
-				"oba_base_url": utils.SanitizeServerURL(server.ObaBaseURL),
-			},
-			Level: sentry.LevelError,
-		})
 		app.ConfigService.BackoffStore.UpdateBackoff(server.ServerKey())
 		app.Logger.Info("Skipping further metrics collection for server due to ping failure")
 		return false
@@ -675,15 +657,10 @@ func (app *Application) agencyEntryAvailable(ctx context.Context, server models.
 func (app *Application) collectAgencyChecks(ctx context.Context, server models.ObaServer, prefetchedMetrics *metrics.OBAMetrics, prefetchedAt time.Time, withheld bool) (*metrics.OBAMetrics, time.Time) {
 	_, _, err := app.MetricsService.CheckBundleExpiration(time.Now().UTC(), server)
 	if err != nil {
+		// checkBundleExpiration reports each of its failures to Sentry.
+		// Reporting here as well would send every failure twice per tick, so
+		// this only logs.
 		app.Logger.Error("Failed to check GTFS bundle expiration", "error", err)
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{
-				"agency_id":   server.AgencyID,
-				"agency_name": server.AgencyName,
-				"server_name": server.ServerName,
-			},
-			Level: sentry.LevelError,
-		})
 	}
 
 	response, receivedAt, err := app.MetricsService.FetchObaAPIMetrics(ctx, server.AgencyID, server.AgencyName, server.ServerName, server.ObaBaseURL, server.ObaApiKey, prefetchedMetrics, prefetchedAt, withheld)
@@ -709,14 +686,9 @@ func (app *Application) collectAgencyChecks(ctx context.Context, server models.O
 			app.Logger.Info("Skipping vehicles-for-agency count due to canceled context",
 				"agency_id", server.AgencyID, "server_name", server.ServerName)
 		} else {
+			// countActiveVehiclesForAgency reports each of its failures to
+			// Sentry, so this only logs.
 			app.Logger.Error("Failed to count vehicles from VehiclesForAgency API", "error", err)
-			report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-				Tags: map[string]string{
-					"agency_id":   server.AgencyID,
-					"server_name": server.ServerName,
-				},
-				Level: sentry.LevelError,
-			})
 		}
 	}
 	return response, receivedAt
@@ -735,37 +707,18 @@ func (app *Application) collectVehicleMetrics(server models.ObaServer, agencies 
 	if agencies != nil {
 		resolver = app.MetricsService.RouteAgencyIndex.Snapshot(server.ServerKey())
 	}
+	// Each of the three passes reports its own failures to Sentry, so the
+	// errors they return are only logged here.
 	if err := app.MetricsService.CountVehiclePositions(server, agencies, resolver); err != nil {
 		app.Logger.Error("Failed to count vehicle positions from GTFS-RT", "error", err)
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{
-				"agency_id":   server.AgencyID,
-				"server_name": server.ServerName,
-			},
-			Level: sentry.LevelError,
-		})
 	}
 
 	if err := app.MetricsService.TrackVehicleTelemetry(server, agencies, resolver); err != nil {
 		app.Logger.Error("Failed to track vehicle reporting frequency", "error", err)
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{
-				"agency_id":   server.AgencyID,
-				"server_name": server.ServerName,
-			},
-			Level: sentry.LevelError,
-		})
 	}
 
 	if err := app.MetricsService.TrackInvalidVehiclesAndStoppedOutOfBounds(server, agencies, resolver); err != nil {
 		app.Logger.Error("Failed to count invalid vehicle coordinates", "error", err)
-		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{
-				"agency_id":   server.AgencyID,
-				"server_name": server.ServerName,
-			},
-			Level: sentry.LevelError,
-		})
 	}
 }
 

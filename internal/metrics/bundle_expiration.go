@@ -33,7 +33,7 @@ func checkBundleExpiration(staticStore *gtfs.StaticStore, currentTime time.Time,
 	if !hasStaticData {
 		err := fmt.Errorf("there is no bundle for server key %s", server.ServerKey())
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags:  utils.MakeMap("agency_id", server.AgencyID),
+			Tags:  bundleReportTags(server),
 			Level: sentry.LevelWarning,
 		})
 		return 0, 0, err
@@ -41,7 +41,7 @@ func checkBundleExpiration(staticStore *gtfs.StaticStore, currentTime time.Time,
 	if staticData == nil {
 		err := fmt.Errorf("static data is nil for server key %s", server.ServerKey())
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags:  utils.MakeMap("agency_id", server.AgencyID),
+			Tags:  bundleReportTags(server),
 			Level: sentry.LevelWarning,
 		})
 		return 0, 0, err
@@ -54,7 +54,7 @@ func checkBundleExpiration(staticStore *gtfs.StaticStore, currentTime time.Time,
 
 	if err != nil {
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags:  utils.MakeMap("agency_id", server.AgencyID),
+			Tags:  bundleReportTags(server),
 			Level: sentry.LevelWarning,
 		})
 		return 0, 0, err
@@ -67,4 +67,15 @@ func checkBundleExpiration(staticStore *gtfs.StaticStore, currentTime time.Time,
 	BundleLatestExpirationGauge.WithLabelValues(server.AgencyID, server.AgencyName, server.ServerName, utils.SanitizeServerURL(server.ObaBaseURL)).Set(float64(daysUntilLatestExpiration))
 
 	return daysUntilEarliestExpiration, daysUntilLatestExpiration, nil
+}
+
+// bundleReportTags returns the tags for checkBundleExpiration's Sentry reports.
+// The collector only logs the returned error, so these are the only tags the
+// event gets.
+func bundleReportTags(server models.ObaServer) map[string]string {
+	return map[string]string{
+		"agency_id":   server.AgencyID,
+		"agency_name": server.AgencyName,
+		"server_name": server.ServerName,
+	}
 }
