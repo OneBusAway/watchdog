@@ -562,7 +562,7 @@ The stored window is in UTC. The classification describes the static schedule; i
 
 Rule versions come from Watchdog code and configuration; nobody edits them in the database:
 
-1. At startup, for each anomaly type, Watchdog computes its current rule: the `rule_logic_version` constant plus the effective thresholds. For example, the stale threshold is `clamp(5 × collection interval, 60s, 300s)`, so it changes when the collection interval changes.
+1. At the first vehicle recording after startup, before it opens or closes anything, for each anomaly type Watchdog computes its current rule: the `rule_logic_version` constant plus the effective thresholds. For example, the stale threshold is `clamp(5 × collection interval, 60s, 300s)`, so it changes when the collection interval changes.
 2. Watchdog compares that with the newest row for the type (highest `effective_at`).
 3. If `rule_logic_version` or any threshold differs, or no row exists, it inserts a new row with `effective_at` set to the startup time. Otherwise it reuses the newest row.
 4. Each new episode references the row in effect when it opened. An open episode keeps its original rule version even if a later restart creates a new one.

@@ -90,6 +90,8 @@ func TestVehicleSpeedRetentionUsesDynamicGrace(t *testing.T) {
 	data.Vehicles[0].StateHash = "second"
 	data.Vehicles[0].Vehicle.Timestamp = &advanced
 	data.Vehicles[0].Vehicle.Position.Longitude = &movedLon
+	reportedSpeed := float32(5)
+	data.Vehicles[0].Vehicle.Position.Speed = &reportedSpeed
 	store.Set(server.ServerKey(), data)
 	if err := trackVehicleTelemetry(server, nil, lastSeen, store, nil); err != nil {
 		t.Fatal(err)
@@ -100,6 +102,23 @@ func TestVehicleSpeedRetentionUsesDynamicGrace(t *testing.T) {
 	if err != nil || computedAt != float64(data.ObservationAt.Unix()) {
 		t.Fatalf("speed computed timestamp = %v, %v", computedAt, err)
 	}
+	// LastSeen keeps the values the speed gauges were set to.
+	assertKeptSpeed := func(wantKept bool) {
+		t.Helper()
+		seen, _ := lastSeen.Get(server.ServerKey(), "0", "v")
+		if !wantKept {
+			if seen.ComputedSpeedMps != nil || seen.SpeedDiscrepancyRatio != nil {
+				t.Fatalf("kept speed %v, ratio %v after the gauges were deleted", seen.ComputedSpeedMps, seen.SpeedDiscrepancyRatio)
+			}
+			return
+		}
+		speed, _ := getMetricValue(VehicleSpeedGauge, labels)
+		ratio, _ := getMetricValue(VehicleSpeedDiscrepancyRatioGauge, labels)
+		if seen.ComputedSpeedMps == nil || *seen.ComputedSpeedMps != speed || seen.SpeedDiscrepancyRatio == nil || *seen.SpeedDiscrepancyRatio != ratio {
+			t.Fatalf("kept speed %v, ratio %v; gauges %v, %v", seen.ComputedSpeedMps, seen.SpeedDiscrepancyRatio, speed, ratio)
+		}
+	}
+	assertKeptSpeed(true)
 
 	// The source repeats the exact timestamp and state. The speed remains valid
 	// inside max(3*30s collection, 2*30s source) = 90s.
@@ -111,6 +130,7 @@ func TestVehicleSpeedRetentionUsesDynamicGrace(t *testing.T) {
 	if got := seriesMatching(VehicleSpeedGauge, map[string]string{"server_url": server.ObaBaseURL}); len(got) != 1 {
 		t.Fatalf("speed series inside grace = %d, want 1", len(got))
 	}
+	assertKeptSpeed(true)
 
 	data.ObservationAt = observation.Add(2*time.Minute + time.Second)
 	store.Set(server.ServerKey(), data)
@@ -123,6 +143,7 @@ func TestVehicleSpeedRetentionUsesDynamicGrace(t *testing.T) {
 	if got := seriesMatching(GtfsRtVehicleSpeedLastComputedTimestamp, map[string]string{"server_url": server.ObaBaseURL}); len(got) != 0 {
 		t.Fatalf("speed timestamp series after grace = %d, want 0", len(got))
 	}
+	assertKeptSpeed(false)
 }
 
 func TestVehicleSpeedGraceBounds(t *testing.T) {

@@ -514,7 +514,7 @@ agencyLaunch:
 		}
 		return
 	}
-	app.collectVehicleMetrics(server, reportedAgencyEntries)
+	app.collectVehicleMetrics(ctx, server, reportedAgencyEntries)
 }
 
 // CollectMetricsForServer performs all metric collection and validation logic
@@ -586,7 +586,7 @@ func (app *Application) CollectMetricsForServer(ctx context.Context, server mode
 	}
 	// nil agencies: the fetch has already filtered the store to vehicles
 	// resolved to this configured agency.
-	app.collectVehicleMetrics(server, nil)
+	app.collectVehicleMetrics(ctx, server, nil)
 }
 
 // agencyEntryAvailable applies the backoff and ping gate for one agency-scoped
@@ -695,14 +695,15 @@ func (app *Application) collectAgencyChecks(ctx context.Context, server models.O
 }
 
 // collectVehicleMetrics runs the three metric functions that read from the
-// GTFS-RT realtime store. It walks the feed once and must therefore be called
+// GTFS-RT realtime store, then records the snapshot's vehicle anomalies in
+// investigation history. It walks the feed once and must therefore be called
 // exactly once per server per tick.
 //
 // agencies is nil for an agency-scoped entry (the store is pre-filtered) and
 // holds the OBA-reported agency entries for a server-scoped one (each vehicle is
 // attributed through the route/trip index). See the
 // scope-dispatch comment at the top of internal/metrics/vehicle_metrics.go.
-func (app *Application) collectVehicleMetrics(server models.ObaServer, agencies []models.ObaServer) {
+func (app *Application) collectVehicleMetrics(ctx context.Context, server models.ObaServer, agencies []models.ObaServer) {
 	resolver := gtfs.VehicleAttributionResolver(app.MetricsService.RouteAgencyIndex)
 	if agencies != nil {
 		resolver = app.MetricsService.RouteAgencyIndex.Snapshot(server.ServerKey())
@@ -720,6 +721,8 @@ func (app *Application) collectVehicleMetrics(server models.ObaServer, agencies 
 	if err := app.MetricsService.TrackInvalidVehiclesAndStoppedOutOfBounds(server, agencies, resolver); err != nil {
 		app.Logger.Error("Failed to count invalid vehicle coordinates", "error", err)
 	}
+
+	app.recordVehicleHistory(ctx, server, agencies, resolver)
 }
 
 // serverForAgency returns a copy of `server` with the given agency_id /

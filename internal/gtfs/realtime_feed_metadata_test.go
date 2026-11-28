@@ -88,6 +88,10 @@ func TestRealtimeFeedCarriesHeaderTimeAndPayloadHash(t *testing.T) {
 				t.Errorf("PayloadHash = %q, want %q", got.PayloadHash, canonicalEntityHash(feed.Entity))
 			}
 
+			if _, ok := got.ReportedVehicleIDs["bus-1"]; !ok || len(got.ReportedVehicleIDs) != 1 {
+				t.Errorf("ReportedVehicleIDs = %v, want [bus-1]", got.ReportedVehicleIDs)
+			}
+
 			// The snapshot and the observation describe the same fetch.
 			if got.PayloadHash != observation.PayloadHash {
 				t.Errorf("snapshot hash %q differs from observation hash %q", got.PayloadHash, observation.PayloadHash)

@@ -1,6 +1,8 @@
 package models
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"time"
 
 	remoteGtfs "github.com/OneBusAway/go-gtfs"
@@ -52,12 +54,31 @@ type RealtimeVehicle struct {
 // SourceTimestamp is the FeedHeader timestamp, nil when the header has none.
 // PayloadHash is the canonical entity hash, which excludes the FeedHeader.
 // The fetch time is RealtimeData.ObservationAt.
+//
+// SourceKey is FeedSourceKey of the configured feed URL. Feeds that differ
+// only by query string share FeedURL, which drops the query, but not
+// SourceKey.
+//
+// ReportedVehicleIDs holds the ID of every vehicle position entity in the
+// response, duplicates included. Agency-mode filtering removes vehicles from
+// RealtimeData.Vehicles but never from this set, so it says whether a vehicle
+// was in the response at all.
 type RealtimeFeed struct {
-	FeedID          string
-	FeedURL         string
-	FullDataset     bool
-	SourceTimestamp *time.Time
-	PayloadHash     string
+	FeedID             string
+	FeedURL            string
+	FullDataset        bool
+	SourceTimestamp    *time.Time
+	PayloadHash        string
+	SourceKey          string
+	ReportedVehicleIDs map[string]struct{}
+}
+
+// FeedSourceKey identifies a realtime feed by its full configured URL, query
+// string included. It is a hash because the query can carry a credential:
+// hold it in memory only, and never log or store it.
+func FeedSourceKey(rawURL string) string {
+	sum := sha256.Sum256([]byte(rawURL))
+	return hex.EncodeToString(sum[:])
 }
 
 // RealtimeData represents the realtime GTFS data structure.

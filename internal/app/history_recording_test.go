@@ -14,6 +14,7 @@ import (
 
 	"watchdog.onebusaway.org/internal/config"
 	"watchdog.onebusaway.org/internal/db/dbtest"
+	"watchdog.onebusaway.org/internal/geo"
 	"watchdog.onebusaway.org/internal/history"
 	"watchdog.onebusaway.org/internal/metrics"
 	"watchdog.onebusaway.org/internal/models"
@@ -253,5 +254,47 @@ func TestReconcileHistoryAtStartup_MixedAndAgencyOnlyBaseURLs(t *testing.T) {
 	}
 	if reason := reasonByStop["4"]; reason == nil || *reason != "agency_removed" {
 		t.Errorf("removed agency's close_reason = %v, want agency_removed", reason)
+	}
+}
+
+// fakeVehicleRecorder stands in for HistoryService and records each snapshot.
+type fakeVehicleRecorder struct {
+	mu        sync.Mutex
+	snapshots []*models.RealtimeData
+	servers   []models.ObaServer
+}
+
+func (f *fakeVehicleRecorder) RecordVehiclePositions(_ context.Context, server models.ObaServer, snapshot *models.RealtimeData, _ metrics.VehicleAttributor, _ *geo.BoundingBoxStore, _ *metrics.VehicleLastSeen) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.servers = append(f.servers, server)
+	f.snapshots = append(f.snapshots, snapshot)
+}
+
+func TestCollectVehicleMetrics_RecordsTheSnapshotOnce(t *testing.T) {
+	app := newTestApplication(t)
+	recorder := &fakeVehicleRecorder{}
+	app.vehicleHistory = recorder
+	server := app.ConfigService.Config.Servers[0]
+	snapshot := &models.RealtimeData{ObservationAt: time.Now().UTC()}
+	app.MetricsService.RealtimeStore.Set(server.ServerKey(), snapshot)
+
+	app.collectVehicleMetrics(context.Background(), server, nil)
+
+	if len(recorder.snapshots) != 1 || recorder.snapshots[0] != snapshot || recorder.servers[0].ServerKey() != server.ServerKey() {
+		t.Fatalf("recorded %d snapshots, want the stored snapshot once", len(recorder.snapshots))
+	}
+}
+
+func TestCollectVehicleMetrics_NoSnapshotNoRecording(t *testing.T) {
+	app := newTestApplication(t)
+	recorder := &fakeVehicleRecorder{}
+	app.vehicleHistory = recorder
+
+	unfetched := models.ObaServer{ServerName: "unfetched", ObaBaseURL: "https://unfetched.example", AgencyID: "x"}
+	app.collectVehicleMetrics(context.Background(), unfetched, nil)
+
+	if len(recorder.snapshots) != 0 {
+		t.Fatalf("recorded %d snapshots without realtime data", len(recorder.snapshots))
 	}
 }

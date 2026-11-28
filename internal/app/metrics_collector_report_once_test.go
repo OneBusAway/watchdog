@@ -123,7 +123,7 @@ func TestCollectVehicleMetricsReportsMissingFeedOncePerPass(t *testing.T) {
 	app := newTestApplication(t)
 	server := reportOnceServer("http://oba.example.com")
 
-	app.collectVehicleMetrics(server, nil)
+	app.collectVehicleMetrics(context.Background(), server, nil)
 
 	events := sentryEventsMatching(rec, "no GTFS-RT data available")
 	if len(events) != 3 {
@@ -140,7 +140,7 @@ func TestCollectVehicleMetricsReportsMissingBoundingBoxOnce(t *testing.T) {
 	server := reportOnceServer("http://oba.example.com")
 	app.MetricsService.RealtimeStore.Set(server.ServerKey(), &models.RealtimeData{})
 
-	app.collectVehicleMetrics(server, nil)
+	app.collectVehicleMetrics(context.Background(), server, nil)
 
 	events := sentryEventsMatching(rec, "no bounding box found")
 	if len(events) != 1 {
