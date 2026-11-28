@@ -15,6 +15,7 @@ import (
 	"time"
 
 	remoteGtfs "github.com/OneBusAway/go-gtfs"
+	"github.com/getsentry/sentry-go"
 	"gopkg.in/dnaeon/go-vcr.v4/pkg/recorder"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -486,6 +487,7 @@ func TestFetchObaAPIMetrics_AgencyNotListedInResponse(t *testing.T) {
 	// The server reports per-agency stats keyed by the requested agency, but that
 	// agency is absent from the agencyIDs metadata. fetchObaAPIMetrics must report
 	// the mismatch and set none of the per-agency metrics for it.
+	rec := report.CaptureSentry(t)
 	server := setupObaServer(t, `{"code":200,"text":"OK","version":2,"currentTime":123,"data":{"entry":{"agenciesWithCoverageCount":1,"agencyIDs":["other"],"realtimeRecordsTotal":{"requested":5},"realtimeTripCountsMatched":{"requested":3},"realtimeTripCountsUnmatched":{"requested":1},"scheduledTripsCount":{"requested":4},"stopIDsMatchedCount":{"requested":2},"stopIDsUnmatchedCount":{"requested":1},"timeSinceLastRealtimeUpdate":{"requested":10},"stopIDsUnmatched":{"requested":["stop-1"]}}}}`, http.StatusOK)
 	defer server.Close()
 
@@ -500,6 +502,14 @@ func TestFetchObaAPIMetrics_AgencyNotListedInResponse(t *testing.T) {
 
 	if !strings.Contains(logBuf.String(), "Configured agency not found in OBA metrics response") {
 		t.Fatalf("expected error log about missing agency, got:\n%s", logBuf.String())
+	}
+
+	events := rec.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 Sentry event, got %d", len(events))
+	}
+	if got := events[0].Tags["agency_name"]; got != "Requested Server" {
+		t.Errorf("agency_name tag = %q, want %q", got, "Requested Server")
 	}
 
 	c := make(chan prometheus.Metric, 8)
@@ -658,6 +668,90 @@ func TestFetchObaAPIMetrics_RequestBuildFailureReportsSanitizedError(t *testing.
 			}
 		}
 	}
+}
+
+// assertNoCredentialLeak fails the test if any secret appears in the returned
+// error or anywhere in the captured Sentry event.
+func assertNoCredentialLeak(t *testing.T, err error, event *sentry.Event, secrets ...string) {
+	t.Helper()
+	for _, secret := range secrets {
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("error leaked credential %q: %v", secret, err)
+		}
+		if strings.Contains(event.Message, secret) || strings.Contains(fmt.Sprint(event.Exception), secret) {
+			t.Errorf("report leaked credential %q in message or exception", secret)
+		}
+		for _, tag := range event.Tags {
+			if strings.Contains(tag, secret) {
+				t.Errorf("report leaked credential %q in tag", secret)
+			}
+		}
+		for contextName, context := range event.Contexts {
+			for key, value := range context {
+				if strings.Contains(fmt.Sprint(value), secret) {
+					t.Errorf("report leaked credential %q in context %q field %q", secret, contextName, key)
+				}
+			}
+		}
+	}
+}
+
+// The *url.Error returned by http.Client.Do repeats the raw request URL,
+// including ?key=<api key>. The reported and returned error must not.
+func TestFetchObaAPIMetrics_NetworkErrorDoesNotLeakAPIKey(t *testing.T) {
+	rec := report.CaptureSentry(t)
+
+	// Start and close a server so its address refuses connections.
+	closed := httptest.NewServer(http.NotFoundHandler())
+	unreachableURL := closed.URL
+	closed.Close()
+
+	apiKey := "SUPERSECRETOBAKEY"
+	staticStore := gtfs.NewStaticStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	tracker := NewUnmatchedStopTracker()
+
+	_, _, err := fetchObaAPIMetrics(context.Background(), "42", "Network Error Agency", "test-server", unreachableURL, apiKey, &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil, time.Time{}, false)
+	if err == nil {
+		t.Fatal("expected error but got none")
+	}
+	if !strings.Contains(err.Error(), "failed to fetch metrics") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	events := rec.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 Sentry event, got %d", len(events))
+	}
+	assertNoCredentialLeak(t, err, events[0], apiKey, "key="+apiKey)
+}
+
+func TestFetchObaAPIMetrics_DecodeErrorDoesNotLeakAPIKey(t *testing.T) {
+	rec := report.CaptureSentry(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("not json"))
+	}))
+	defer server.Close()
+
+	apiKey := "SUPERSECRETOBAKEY"
+	serverBaseURL := strings.Replace(server.URL, "://", "://user:pass@", 1)
+	staticStore := gtfs.NewStaticStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	tracker := NewUnmatchedStopTracker()
+
+	_, _, err := fetchObaAPIMetrics(context.Background(), "42", "Decode Error Agency", "test-server", serverBaseURL, apiKey, &http.Client{Timeout: 10 * time.Second}, staticStore, logger, tracker, nil, time.Time{}, false)
+	if err == nil {
+		t.Fatal("expected error but got none")
+	}
+	if !strings.Contains(err.Error(), "failed to decode metrics") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	events := rec.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 Sentry event, got %d", len(events))
+	}
+	assertNoCredentialLeak(t, err, events[0], apiKey, "user:pass")
 }
 
 // A failing /metrics.json call must surface an error and must not emit any

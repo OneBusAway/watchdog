@@ -50,3 +50,34 @@ func TestCollectAgencyChecksReportsMetricsAPIFailureOnce(t *testing.T) {
 		t.Fatalf("metrics API 404 produced %d Sentry events, want 1", metricsEvents)
 	}
 }
+
+// In server mode, collectForServerScope logs and reports the error that
+// probeReportedAgencies returns. The *url.Error from client.Do repeats the
+// raw request URL, including ?key=, so the returned error must be sanitized.
+func TestProbeReportedAgenciesNetworkErrorDoesNotLeakAPIKey(t *testing.T) {
+	// Start and close a server so its address refuses connections.
+	closed := httptest.NewServer(http.NotFoundHandler())
+	unreachableURL := closed.URL
+	closed.Close()
+
+	app := newTestApplication(t)
+	apiKey := "SUPERSECRETOBAKEY"
+	server := models.ObaServer{
+		ServerName: "probe-network-error",
+		ObaBaseURL: strings.Replace(unreachableURL, "://", "://probe-user:probe-pass@", 1),
+		ObaApiKey:  apiKey,
+	}
+
+	_, _, _, err := app.probeReportedAgencies(context.Background(), server)
+	if err == nil {
+		t.Fatal("expected error but got none")
+	}
+	if !strings.Contains(err.Error(), "fetch /metrics.json") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, secret := range []string{apiKey, "probe-user", "probe-pass"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("error leaked credential %q: %v", secret, err)
+		}
+	}
+}
