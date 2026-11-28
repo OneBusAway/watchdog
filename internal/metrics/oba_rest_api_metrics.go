@@ -142,7 +142,9 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 		}
 		resp, err := client.Do(req)
 		if err != nil {
-			err = fmt.Errorf("failed to fetch metrics from %s: %v", sanitizedURL, err)
+			// The *url.Error from client.Do repeats the raw request URL,
+			// including ?key=, so sanitize the whole message.
+			err = utils.SanitizeErrorURL(fmt.Errorf("failed to fetch metrics from %s: %v", sanitizedURL, err), serverBaseUrl, apiKey)
 			reportUnlessCanceled(ctx, err, report.SentryReportOptions{
 				Tags: map[string]string{"agency_id": agencyID, "agency_name": agencyName, "server_name": serverName},
 				ExtraContext: map[string]interface{}{
@@ -172,7 +174,7 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 
 		var metrics OBAMetrics
 		if err := json.NewDecoder(resp.Body).Decode(&metrics); err != nil {
-			err = fmt.Errorf("failed to decode metrics from %s: %v", sanitizedURL, err)
+			err = utils.SanitizeErrorURL(fmt.Errorf("failed to decode metrics from %s: %v", sanitizedURL, err), serverBaseUrl, apiKey)
 			reportUnlessCanceled(ctx, err, report.SentryReportOptions{
 				Tags: map[string]string{"agency_id": agencyID, "agency_name": agencyName, "server_name": serverName},
 				ExtraContext: map[string]interface{}{
@@ -208,7 +210,7 @@ func fetchObaAPIMetrics(ctx context.Context, agencyID, agencyName, serverName, s
 		logger.Error("Configured agency not found in OBA metrics response",
 			"agency_id", agencyID, "server_name", serverName, "url", sanitizedURL, "reported_agency_ids", entry.AgencyIDs)
 		report.ReportErrorWithSentryOptions(err, report.SentryReportOptions{
-			Tags: map[string]string{"agency_id": agencyID, "server_name": serverName},
+			Tags: map[string]string{"agency_id": agencyID, "agency_name": agencyName, "server_name": serverName},
 			ExtraContext: map[string]interface{}{
 				"url":                 sanitizedURL,
 				"reported_agency_ids": entry.AgencyIDs,

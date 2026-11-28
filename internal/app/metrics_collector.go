@@ -759,7 +759,8 @@ func (app *Application) probeReportedAgencies(ctx context.Context, server models
 	endpoint := fmt.Sprintf("%s/api/where/metrics.json?key=%s", server.ObaBaseURL, url.QueryEscape(server.ObaApiKey))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, nil, time.Time{}, fmt.Errorf("build /metrics.json request: %w", err)
+		// The parse error can echo the endpoint, which carries the API key.
+		return nil, nil, time.Time{}, utils.SanitizeErrorURL(fmt.Errorf("build /metrics.json request: %w", err), server.ObaBaseURL, server.ObaApiKey)
 	}
 
 	client := app.MetricsService.Client
@@ -768,7 +769,9 @@ func (app *Application) probeReportedAgencies(ctx context.Context, server models
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, nil, time.Time{}, fmt.Errorf("fetch /metrics.json: %w", err)
+		// The *url.Error from client.Do repeats the raw request URL,
+		// including ?key=, and the caller logs and reports this error.
+		return nil, nil, time.Time{}, utils.SanitizeErrorURL(fmt.Errorf("fetch /metrics.json: %w", err), server.ObaBaseURL, server.ObaApiKey)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
