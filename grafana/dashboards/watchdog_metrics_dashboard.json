@@ -930,7 +930,7 @@
       "id": 502,
       "targets": [
         {
-          "expr": "gtfs_rt_invalid_vehicle_coordinates{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}",
+          "expr": "gtfs_rt_invalid_vehicle_coordinates{agency_id=~\"$agency_id\",server_url=~\"$server_url\"} or gtfs_rt_invalid_vehicle_coordinates{agency_id=\"\",server_url=~\"$server_url\"}",
           "refId": "A",
           "datasource": {
             "name": "Prometheus"
@@ -938,7 +938,7 @@
           "instant": true
         },
         {
-          "expr": "gtfs_rt_stopped_out_of_bounds_vehicles{agency_id=~\"$agency_id\",server_url=~\"$server_url\"}",
+          "expr": "gtfs_rt_stopped_out_of_bounds_vehicles{agency_id=~\"$agency_id\",server_url=~\"$server_url\"} or gtfs_rt_stopped_out_of_bounds_vehicles{agency_id=\"\",server_url=~\"$server_url\"}",
           "refId": "B",
           "datasource": {
             "name": "Prometheus"
