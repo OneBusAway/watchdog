@@ -217,6 +217,12 @@ func TestVehicle_UnjudgedVehicleKeepsEpisodeOpen(t *testing.T) {
 	noTimestamp := healthyVehicle("bus-1")
 	noTimestamp.sourceTime = nil
 
+	futureTimestamp := healthyVehicle("bus-1")
+	futureTimestamp.sourceTime = timePtr(planObservedAt.Add(5 * time.Minute))
+
+	negativeAgeTimestamp := healthyVehicle("bus-1")
+	negativeAgeTimestamp.sourceTime = timePtr(time.Unix(1732750000000, 0))
+
 	invalidCoords := healthyVehicle("bus-1")
 	invalidCoords.positionReason = geo.PositionNonFiniteCoordinate
 
@@ -229,6 +235,8 @@ func TestVehicle_UnjudgedVehicleKeepsEpisodeOpen(t *testing.T) {
 		obs     vehicleObservation
 	}{
 		{"stale without a timestamp", anomalyStaleSourceTimestamp, noTimestamp},
+		{"stale with a future timestamp", anomalyStaleSourceTimestamp, futureTimestamp},
+		{"stale with a millisecond timestamp", anomalyStaleSourceTimestamp, negativeAgeTimestamp},
 		{"out of bounds with invalid coordinates", anomalyStoppedOutOfBounds, invalidCoords},
 		{"out of bounds without a bounding box", anomalyStoppedOutOfBounds, noBox},
 	}
@@ -242,6 +250,14 @@ func TestVehicle_UnjudgedVehicleKeepsEpisodeOpen(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestVehicle_FutureTimestampOpensNothing(t *testing.T) {
+	future := healthyVehicle("bus-1")
+	future.sourceTime = timePtr(planObservedAt.Add(5 * time.Minute))
+	if plan := planVehicleAnomalies(nil, nil, fullFeed(), []vehicleObservation{future}, planThreshold); !plan.empty() {
+		t.Fatalf("future timestamp produced %+v, want empty", plan)
 	}
 }
 

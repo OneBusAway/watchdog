@@ -181,6 +181,12 @@ func evaluateRule(anomaly vehicleAnomalyType, obs vehicleObservation, observedAt
 		if obs.sourceTime == nil {
 			return ruleOutcome{}
 		}
+		if obs.sourceTime.After(observedAt) {
+			// A timestamp in the future (negative age, e.g. from clock skew or
+			// millisecond encoding) cannot be judged as fresh and must not close
+			// an open stale episode.
+			return ruleOutcome{}
+		}
 		if observedAt.Sub(*obs.sourceTime) > threshold {
 			return ruleOutcome{anomalous: true}
 		}
