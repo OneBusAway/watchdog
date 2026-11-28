@@ -205,6 +205,43 @@ func TestRecordVehiclePositions_OpensAndCloses(t *testing.T) {
 	}
 }
 
+// A vehicle with a future timestamp does not close an open stale episode.
+func TestRecordVehiclePositions_FutureTimestampDoesNotCloseStaleEpisode(t *testing.T) {
+	h, pool, _ := newCountedHistory(t)
+
+	// Tick 1: open a stale_source_timestamp episode.
+	v := testVehicle("bus-1", vehicleT0)
+	stale := vehicleT0.Add(-time.Hour)
+	v.Timestamp = &stale
+	recordVehicles(h, ctx, vehicleServer, vehicleSnapshot(vehicleT0, v))
+
+	episode := onlyVehicleEpisode(t, pool)
+	if episode.anomaly != string(anomalyStaleSourceTimestamp) || episode.closeReason != nil {
+		t.Fatalf("after open: %+v", episode)
+	}
+
+	// Tick 2: observation with a future timestamp (negative age). Episode stays open.
+	later := vehicleT0.Add(30 * time.Second)
+	vFuture := testVehicle("bus-1", later)
+	future := later.Add(5 * time.Minute)
+	vFuture.Timestamp = &future
+	recordVehicles(h, ctx, vehicleServer, vehicleSnapshot(later, vFuture))
+
+	episode = onlyVehicleEpisode(t, pool)
+	if episode.closeReason != nil {
+		t.Fatalf("future timestamp closed episode: %+v", episode)
+	}
+
+	// Tick 3: fresh timestamp legitimately closes the episode.
+	evenLater := later.Add(30 * time.Second)
+	recordVehicles(h, ctx, vehicleServer, vehicleSnapshot(evenLater, testVehicle("bus-1", evenLater)))
+
+	episode = onlyVehicleEpisode(t, pool)
+	if episode.closeReason == nil || *episode.closeReason != string(closeFreshSourceTimestamp) {
+		t.Fatalf("after genuine fresh observation: %+v", episode)
+	}
+}
+
 // One evidence row per vehicle per response is shared by every episode the
 // tick opens for it.
 func TestRecordVehiclePositions_SharesEvidenceAcrossEpisodes(t *testing.T) {
